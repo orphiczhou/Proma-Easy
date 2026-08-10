@@ -32,6 +32,9 @@ import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
+import { buildPiSessionTools } from '../agent-session-tools'
+import { buildPiRemoteSessionTools } from '../agent-remote-session-tools'
+import { buildPiTreeTools } from '../tree-mcp-tools'
 import { buildPiNanoBananaTools } from '../chat-tools/nano-banana-mcp'
 import { getVisionRelayRouteLabel, inspectImageWithVisionRelay, isVisionRelayConfigured, isVisionRelayEligibleForModel } from '../vision-relay-service'
 import {
@@ -914,6 +917,34 @@ export async function buildPiBuiltinTools(
     } catch (error) {
       console.error('[Pi 桥接] 注入 nano-banana 工具失败:', error)
     }
+  }
+
+  // session 管理工具（mcp__session__*）— 移植自 proma-patches
+  try {
+    tools.push(...buildPiSessionTools(sdk, {
+      sessionId: ctx.sessionId,
+      channelId: ctx.channelId,
+      workspaceId: ctx.workspaceId,
+    }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 session 工具失败:', error)
+  }
+
+  // remote-session 工具（mcp__remote-session__*）— 远程实例操作
+  try {
+    tools.push(...buildPiRemoteSessionTools(sdk))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 remote-session 工具失败:', error)
+  }
+
+  // tree 工具（mcp__tree__*）— 树形会话执行体系
+  try {
+    tools.push(...buildPiTreeTools(sdk, {
+      sessionId: ctx.sessionId,
+      workspaceSlug: ctx.workspaceSlug,
+    }))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 tree 工具失败:', error)
   }
 
   const cloudTools = buildPromaCloudTools(sdk, ctx)

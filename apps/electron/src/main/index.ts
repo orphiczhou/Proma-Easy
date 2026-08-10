@@ -91,6 +91,7 @@ import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
+import { startMcpHttpBridge } from './lib/agent-mcp-bridge'
 import { seedDefaultSkills } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { hasActiveAgentSessions, stopAllAgents } from './lib/agent-service'
@@ -640,6 +641,9 @@ async function bootstrap(): Promise<void> {
 
   // 收敛上次退出时遗留的运行中委派子会话（内存态丢失，无法续跑）
   safeRun('markRunningDelegationsAsInterrupted', markRunningDelegationsAsInterrupted)
+
+  // 启动外部 MCP HTTP Bridge（供外部工具如 Claude Code 通过 stdio MCP 连接操作 Proma 会话）
+  safeRun('startMcpHttpBridge', startMcpHttpBridge)
 
   // Set dock icon on macOS
   // 确保 Dock 图标可见（dev 模式下通过 spawn 启动时可能不会自动显示）

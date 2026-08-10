@@ -115,6 +115,24 @@ export function DiffPanelTabBar({
             文件改动
           </span>
         </button>
+        <button
+          type="button"
+          onClick={() => onTabChange('tree')}
+          className={cn(
+            'flex-1 px-3 h-[34px] text-xs transition-colors select-none cursor-pointer whitespace-nowrap overflow-hidden',
+            isClassic ? 'rounded-t-lg' : 'rounded-none',
+            'border-t border-l border-r',
+            activeTab === 'tree'
+              ? isClassic
+                ? 'bg-content-area text-foreground border-border/50'
+                : 'app-tab-active text-foreground border-border/80'
+              : isClassic
+                ? 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50'
+                : 'app-tab-inactive text-muted-foreground border-transparent hover:text-foreground',
+          )}
+        >
+          任务树
+        </button>
         {showChatTab && (
           <div
             className={cn(

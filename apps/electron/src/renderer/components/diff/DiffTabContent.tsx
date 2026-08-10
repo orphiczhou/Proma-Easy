@@ -58,6 +58,7 @@ import {
 const MD_EXTS = new Set(['.md', '.markdown'])
 const PLAIN_TEXT_EDIT_EXTS = new Set(['.txt', '.text', '.log'])
 const PDF_EXTS = new Set(['.pdf'])
+const HTML_EXTS = new Set(['.html', '.htm'])
 const DOCX_EXTS = new Set(['.docx'])
 const OFFICE_PREVIEW_EXTS = new Set(['.xlsx', '.pptx'])
 const LEGACY_OFFICE_EXTS = new Set(['.doc', '.xls', '.ppt'])
@@ -260,6 +261,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const isOfficePreview = previewOnly && OFFICE_PREVIEW_EXTS.has(ext)
   const isLegacyOffice = previewOnly && LEGACY_OFFICE_EXTS.has(ext)
   const isImage = previewOnly && IMAGE_EXTS.has(ext)
+  const isHtml = previewOnly && HTML_EXTS.has(ext)
   const markdownEditorCacheKey = React.useMemo(
     () => createMarkdownEditorCacheKey({ filePath, dirPath, gitRoot, basePaths }),
     [basePaths, dirPath, filePath, gitRoot],
@@ -347,6 +349,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     !activeMarkdownEditing &&
     !isMarkdown &&
     !isPdf &&
+    !isHtml &&
     !isImage &&
     !isDocx &&
     !isOfficePreview &&
@@ -949,6 +952,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     let message: string | null = null
     if (isLegacyOffice) {
       message = `暂不支持 ${ext.toUpperCase().slice(1)} 格式内联预览`
+    } else if (isHtml) {
+      // HTML preview uses proma-file:// protocol, no content loading needed
+      setLoading(false)
     } else if (isPdf && !pdfSrc) {
       message = 'PDF 文件过大，无法在此预览'
     } else if (isDocx && !docxHtml) {
@@ -1617,7 +1623,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           {loading ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
           ) : previewOnly ? (
-            isPdf ? (
+            isHtml ? (
+              <iframe
+                src={`proma-file://${encodeURIComponent(filePath)}`}
+                className="w-full h-full border-0 bg-white"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                title={filePath.split('/').pop() || 'HTML Preview'}
+              />
+            ) : isPdf ? (
               pdfSrc ? (
                 <div className="relative h-full">
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-filter backdrop-blur-sm border border-border/30 shadow-sm">

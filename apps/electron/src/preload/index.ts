@@ -1232,6 +1232,18 @@ export interface ElectronAPI {
   agentIsland: {
     markSessionViewed: (sessionId: string) => Promise<void>
   }
+
+  /** 树形会话面板：获取 tree-state 数据 */
+  getTreeStates: (workspaceSlug?: string) => Promise<unknown>
+
+  /** 南大项目：项目元数据 + 埋点 */
+  nanjuListProjects: (workspaceSlug: string) => Promise<unknown[]>
+  nanjuCreateProject: (input: Record<string, unknown>) => Promise<unknown>
+  nanjuUpdateProject: (input: Record<string, unknown>) => Promise<unknown>
+  nanjuGetProject: (input: Record<string, unknown>) => Promise<unknown>
+  nanjuDeleteProject: (input: Record<string, unknown>) => Promise<boolean>
+  nanjuRecordEvent: (input: Record<string, unknown>) => Promise<unknown>
+  nanjuReadEvents: (input: Record<string, unknown>) => Promise<unknown[]>
 }
 
 interface MigrationExportResult {
@@ -2800,6 +2812,26 @@ const electronAPI: ElectronAPI = {
     markSessionViewed: (sessionId: string) =>
       ipcRenderer.invoke(AGENT_ISLAND_IPC_CHANNELS.MARK_SESSION_VIEWED, sessionId),
   },
+
+  // ===== 树形会话面板 =====
+  getTreeStates: (workspaceSlug?: string) =>
+    ipcRenderer.invoke('proma:get-tree-states', workspaceSlug ? { workspace_slug: workspaceSlug } : {}),
+
+  // ===== 南大项目 =====
+  nanjuListProjects: (workspaceSlug: string) =>
+    ipcRenderer.invoke('nanju:list-projects', workspaceSlug),
+  nanjuCreateProject: (input: Record<string, unknown>) =>
+    ipcRenderer.invoke('nanju:create-project', input),
+  nanjuUpdateProject: (input: Record<string, unknown>) =>
+    ipcRenderer.invoke('nanju:update-project', input),
+  nanjuGetProject: (input: Record<string, unknown>) =>
+    ipcRenderer.invoke('nanju:get-project', input),
+  nanjuDeleteProject: (input: Record<string, unknown>) =>
+    ipcRenderer.invoke('nanju:delete-project', input),
+  nanjuRecordEvent: (input: Record<string, unknown>) =>
+    ipcRenderer.invoke('nanju:record-event', input),
+  nanjuReadEvents: (input: Record<string, unknown>) =>
+    ipcRenderer.invoke('nanju:read-events', input),
 }
 
 // 将 API 暴露到渲染进程的 window 对象上

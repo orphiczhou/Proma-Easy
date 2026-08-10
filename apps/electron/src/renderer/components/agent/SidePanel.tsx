@@ -41,6 +41,7 @@ import {
 } from '@/atoms/agent-atoms'
 import type { AgentSidePanelTab, AgentFileSourceFilter } from '@/atoms/agent-atoms'
 import { WorkspaceMemoryChangeDock } from '@/components/agent-skills/WorkspaceMemoryChangeDock'
+import { TreeViewPanel } from '@/components/agent/TreeViewPanel'
 import { agentSideChatMapAtom } from '@/atoms/chat-atoms'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
@@ -643,6 +644,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
               ) : (
                 <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>
               )}
+            </div>
+          ) : effectiveActiveTab === 'tree' ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <TreeViewPanel sessionId={sessionId} />
             </div>
           ) : null}
         </div>

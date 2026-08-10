@@ -155,6 +155,8 @@ import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/r
 import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
 import { registerPromaFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
+import { registerTreeViewIpc } from './lib/tree-view-ipc'
+import { registerNanjuIpc } from './lib/nanju-ipc'
 import {
   listChannels,
   createChannel,
@@ -963,6 +965,12 @@ async function withOAuthDeviceCodeQr<T extends CodexOAuthDeviceCode | XaiOAuthDe
 
 export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
+
+  // 树形会话面板 IPC
+  registerTreeViewIpc(ipcMain)
+
+  // 南大项目 IPC（项目元数据 + 埋点）
+  registerNanjuIpc(ipcMain)
 
   // ===== 运行时相关 =====
 

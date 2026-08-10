@@ -398,7 +398,7 @@ export const agentFileSourceFilterMapAtom = atomWithStorage<Record<string, Agent
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
-export type AgentSidePanelTab = 'files' | 'changes' | 'chat'
+export type AgentSidePanelTab = 'files' | 'changes' | 'chat' | 'tree'
 
 /** 侧面板当前 Tab：Files / 文件改动 / Chat（per-session Map） */
 export const agentDiffPanelTabAtom = atom<Map<string, AgentSidePanelTab>>(new Map())
