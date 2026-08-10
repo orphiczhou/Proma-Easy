@@ -10,7 +10,9 @@ import { cn } from '@/lib/utils'
 import { AgentView } from '@/components/agent/AgentView'
 import { PreviewPanel } from '@/components/diff/PreviewPanel'
 import { useAtom, useAtomValue } from 'jotai'
-import { previewPanelOpenMapAtom, previewSplitRatioAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, previewSplitRatioAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import type { PreviewFile } from '@/atoms/preview-atoms'
+import { useOpenPreview } from '@/components/diff/preview-opener'
 
 interface NanjuWorkspaceViewProps {
   sessionId: string
@@ -20,6 +22,22 @@ export function NanjuWorkspaceView({ sessionId }: NanjuWorkspaceViewProps): Reac
   const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
   const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
   const draggingRef = React.useRef(false)
+  const openPreview = useOpenPreview()
+
+  // 监听 nanju HTML 预览事件，自动打开右侧分屏
+  React.useEffect(() => {
+    const handler = (_event: unknown, data: { filePath: string; fileName: string }) => {
+      const previewFile: PreviewFile = {
+        filePath: data.filePath,
+        previewOnly: true,
+      }
+      openPreview(sessionId, previewFile)
+    }
+    window.electronAPI.onNanjuHtmlPreview?.(handler)
+    return () => {
+      window.electronAPI.offNanjuHtmlPreview?.(handler)
+    }
+  }, [sessionId, openPreview])
 
   const previewOpen = previewOpenMap.get(sessionId) ?? false
 

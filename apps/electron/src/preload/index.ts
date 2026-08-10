@@ -1244,6 +1244,13 @@ export interface ElectronAPI {
   nanjuDeleteProject: (input: Record<string, unknown>) => Promise<boolean>
   nanjuRecordEvent: (input: Record<string, unknown>) => Promise<unknown>
   nanjuReadEvents: (input: Record<string, unknown>) => Promise<unknown[]>
+
+  /** 南大项目：启动 HTML 文件监听 */
+  nanjuStartHtmlWatcher: (workspaceSlug: string) => Promise<unknown>
+
+  /** 南大 HTML 原型自动预览事件 */
+  onNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
+  offNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
 }
 
 interface MigrationExportResult {
@@ -2832,6 +2839,16 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('nanju:record-event', input),
   nanjuReadEvents: (input: Record<string, unknown>) =>
     ipcRenderer.invoke('nanju:read-events', input),
+
+  nanjuStartHtmlWatcher: (workspaceSlug: string) =>
+    ipcRenderer.invoke('nanju:start-html-watcher', workspaceSlug),
+
+  onNanjuHtmlPreview: (callback) => {
+    ipcRenderer.on('nanju:html-preview-detected', callback)
+  },
+  offNanjuHtmlPreview: (callback) => {
+    ipcRenderer.removeListener('nanju:html-preview-detected', callback)
+  },
 }
 
 // 将 API 暴露到渲染进程的 window 对象上

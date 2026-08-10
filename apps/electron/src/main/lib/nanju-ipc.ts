@@ -14,9 +14,10 @@ import {
 } from './nanju-project'
 import { recordTelemetry, readTelemetry } from './nanju-telemetry'
 import type { ProjectMode } from './nanju-project'
+import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import type { TelemetryEventType } from './nanju-telemetry'
 
-export function registerNanjuIpc(ipcMain: IpcMain): void {
+export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron.BrowserWindow | null): void {
   // ===== 项目元数据 =====
   ipcMain.handle('nanju:list-projects', async (_event, workspaceSlug: string) => {
     return listNanjuProjects(workspaceSlug)
@@ -51,6 +52,16 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     projectId: string
   }) => {
     return deleteNanjuProject(input.workspaceSlug, input.projectId)
+  })
+
+  // ===== HTML 原型监听 =====
+  ipcMain.handle('nanju:start-html-watcher', async (_event, workspaceSlug: string) => {
+    const win = getMainWindow()
+    if (win) {
+      startNanjuHtmlWatcher(win, workspaceSlug)
+      return { ok: true }
+    }
+    return { ok: false, error: 'No main window' }
   })
 
   // ===== 埋点 =====
