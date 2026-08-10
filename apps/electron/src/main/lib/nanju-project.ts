@@ -71,6 +71,20 @@ export function createNanjuProject(input: {
   projects.push(project)
   writeJsonFileAtomic(getMetaPath(input.workspaceSlug), projects)
 
+  // 创建文档目录骨架
+  const docDirs = [
+    '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE',
+    '04_API_SPEC', '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS',
+  ]
+  const wsFilesDir = getWorkspaceFilesDir(input.workspaceSlug)
+  const projectDir = input.mode === 'quick'
+    ? join(wsFilesDir, `project-${project.projectId}`)
+    : join(wsFilesDir, `project-${project.projectId}`)
+  mkdirSync(projectDir, { recursive: true })
+  for (const dir of docDirs) {
+    mkdirSync(join(projectDir, dir), { recursive: true })
+  }
+
   return project
 }
 

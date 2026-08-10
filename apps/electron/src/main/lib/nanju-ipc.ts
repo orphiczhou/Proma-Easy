@@ -15,7 +15,9 @@ import {
 import { recordTelemetry, readTelemetry } from './nanju-telemetry'
 import type { ProjectMode } from './nanju-project'
 import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
+import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
 import type { TelemetryEventType } from './nanju-telemetry'
+import type { ProjectSnapshot } from './nanju-snapshot'
 
 export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron.BrowserWindow | null): void {
   // ===== 项目元数据 =====
@@ -62,6 +64,26 @@ export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron
       return { ok: true }
     }
     return { ok: false, error: 'No main window' }
+  })
+
+  // ===== 快照管理 =====
+  ipcMain.handle('nanju:create-snapshot', async (_event, input: {
+    workspaceSlug: string; projectId: string; sessionId: string;
+    description: string; triggerType?: string;
+  }) => {
+    return createSnapshot(input.workspaceSlug, input.projectId, input.sessionId, input.description, input.triggerType as ProjectSnapshot['triggerType'])
+  })
+
+  ipcMain.handle('nanju:list-snapshots', async (_event, input: {
+    workspaceSlug: string; projectId: string;
+  }) => {
+    return listSnapshots(input.workspaceSlug, input.projectId)
+  })
+
+  ipcMain.handle('nanju:rollback-snapshot', async (_event, input: {
+    workspaceSlug: string; projectId: string; snapshotId: number;
+  }) => {
+    return rollbackToSnapshot(input.workspaceSlug, input.projectId, input.snapshotId)
   })
 
   // ===== 埋点 =====
