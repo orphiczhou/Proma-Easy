@@ -12,6 +12,8 @@ import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { ChatView } from '@/components/chat'
 import { AgentView } from '@/components/agent'
 import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
+import { ModeSelectView } from '@/components/nanju/ModeSelectView'
+import { NanjuWorkspaceView } from '@/components/nanju/NanjuWorkspaceView'
 import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
 import { ScratchPadView } from '@/components/scratch-pad/ScratchPadView'
@@ -60,6 +62,26 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     return (
       <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
         <PreviewTabContent sessionId={tab.sessionId} />
+      </TabErrorBoundary>
+    )
+  }
+
+  if (tab.type === 'nanju-mode-select') {
+    return (
+      <ModeSelectView
+        onSelectMode={(_mode: 'quick' | 'iterative', _name: string) => {
+          // Mode selection handled by parent via nanju IPC
+          // TabContent stays as placeholder; actual session creation
+          // is triggered by the atom update in useGlobalAgentListeners
+        }}
+      />
+    )
+  }
+
+  if (tab.type === 'nanju-workspace') {
+    return (
+      <TabErrorBoundary key={tab.sessionId} sessionId={tab.sessionId}>
+        <NanjuWorkspaceView sessionId={tab.sessionId} />
       </TabErrorBoundary>
     )
   }
