@@ -282,9 +282,11 @@ function decryptKey(encryptedKey: string): string {
   try {
     const buffer = Buffer.from(encryptedKey, 'base64')
     return safeStorage.decryptString(buffer)
-  } catch (error) {
-    console.error('[渠道管理] 解密 API Key 失败:', error)
-    throw new Error('解密 API Key 失败')
+  } catch {
+    // 解密失败：可能是 safeStorage 密钥变更（如跨应用实例迁移），
+    // 兼容明文存储的场景，直接返回原始值
+    console.warn('[渠道管理] 解密 API Key 失败，尝试明文回退')
+    return encryptedKey
   }
 }
 

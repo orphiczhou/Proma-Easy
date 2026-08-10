@@ -21,12 +21,17 @@ export interface TrayActions {
  * 所有平台统一使用 Template 图标
  */
 function getTrayIconPath(): string {
-  // dev: __dirname/resources（build:resources 拷贝产物）
-  // prod: process.resourcesPath（electron-builder extraResources 产物）
+  // macOS 使用 Template 图标；Linux/Windows 使用主应用图标
+  if (process.platform === 'darwin') {
+    const resourcesDir = app.isPackaged
+      ? join(process.resourcesPath, 'proma-logos')
+      : join(__dirname, 'resources/proma-logos')
+    return join(resourcesDir, 'iconTemplate.png')
+  }
   const resourcesDir = app.isPackaged
-    ? join(process.resourcesPath, 'proma-logos')
-    : join(__dirname, 'resources/proma-logos')
-  return join(resourcesDir, 'iconTemplate.png')
+    ? process.resourcesPath
+    : join(__dirname, 'resources')
+  return join(resourcesDir, 'icon.png')
 }
 
 /** 显示主窗口 */
@@ -146,10 +151,24 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
     const image = nativeImage.createFromPath(iconPath)
 
     // macOS: 标记为 Template 图像
-    // Template 图像必须是单色的，使用 alpha 通道定义形状
-    // 系统会自动根据菜单栏主题填充颜色
     if (process.platform === 'darwin') {
       image.setTemplateImage(true)
+    } else {
+      // Linux / Windows: 缩放到适合托盘的尺寸
+      const resized = image.resize({ width: 22, height: 22 })
+      tray = new Tray(resized)
+      tray.setToolTip('Proma')
+
+      updateTrayMenu(actions)
+      tray.on('click', () => {
+        const contextMenu = updateTrayMenu(actions)
+        if (contextMenu) tray?.popUpContextMenu(contextMenu)
+      })
+      tray.on('right-click', () => {
+        updateTrayMenu(actions)
+      })
+      console.log('System tray created')
+      return tray
     }
 
     tray = new Tray(image)

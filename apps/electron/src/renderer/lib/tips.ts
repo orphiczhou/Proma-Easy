@@ -5,7 +5,7 @@
  * Tips 内容可后续手动扩充。
  */
 
-export type Platform = 'mac' | 'windows'
+export type Platform = 'mac' | 'windows' | 'linux'
 
 export interface Tip {
   id: string
@@ -18,6 +18,9 @@ export interface Tip {
 export function getPlatform(): Platform {
   if (typeof navigator !== 'undefined' && navigator.userAgent.includes('Mac')) {
     return 'mac'
+  }
+  if (typeof navigator !== 'undefined' && navigator.userAgent.includes('Linux')) {
+    return 'linux'
   }
   return 'windows'
 }
@@ -51,6 +54,19 @@ export const TIPS: Tip[] = [
   { id: 'win-shortcut-close', text: '按 Ctrl+W 关闭当前标签页', platform: 'windows' },
   { id: 'win-shortcut-zoom', text: '按 Ctrl++ / Ctrl+- 可以放大或缩小界面，Ctrl+0 重置', platform: 'windows' },
   { id: 'win-shortcut-tab-switch', text: '按 Ctrl+Tab 快速切换标签，长按 Ctrl 反复按 Tab 可在标签间循环选择', platform: 'windows' },
+
+  // Linux 快捷键
+  { id: 'linux-shortcut-new', text: '按 Ctrl+N 快速创建新对话', platform: 'linux' },
+  { id: 'linux-shortcut-search', text: '按 Ctrl+Shift+F 搜索历史对话', platform: 'linux' },
+  { id: 'linux-shortcut-file-find', text: '在文件预览中按 Ctrl+F 可在当前文件内查找内容', platform: 'linux' },
+  { id: 'linux-shortcut-settings', text: '按 Ctrl+, 打开设置', platform: 'linux' },
+  { id: 'linux-shortcut-sidebar', text: '按 Ctrl+B 切换侧边栏显示', platform: 'linux' },
+  { id: 'linux-shortcut-mode', text: '按 Ctrl+Shift+M 快速切换 Chat / Agent 模式', platform: 'linux' },
+  { id: 'linux-shortcut-focus', text: '按 Ctrl+L 快速跳转到输入框', platform: 'linux' },
+  { id: 'linux-shortcut-clear', text: '按 Ctrl+K 清除当前对话上下文', platform: 'linux' },
+  { id: 'linux-shortcut-stop', text: '按 Ctrl+Shift+Backspace 中断 AI 响应', platform: 'linux' },
+  { id: 'linux-shortcut-close', text: '按 Ctrl+W 关闭当前标签页', platform: 'linux' },
+  { id: 'linux-shortcut-zoom', text: '按 Ctrl++ / Ctrl+- 可以放大或缩小界面，Ctrl+0 重置', platform: 'linux' },
 
   // 通用
   { id: 'tip-agent-file', text: 'Agent 模式下输入 @ 可以引用会话文件、项目文件和已附加目录', platform: 'all' },

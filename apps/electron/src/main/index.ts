@@ -320,13 +320,14 @@ export function getMainWindow(): BrowserWindow | null {
   return getStoredMainWindow()
 }
 
-function installWindowsZoomInFallback(win: BrowserWindow): void {
-  if (process.platform !== 'win32') return
+function installZoomInFallback(win: BrowserWindow): void {
+  // Windows 和 Linux 上主键盘的 Ctrl++ 常会以 Ctrl+= 上报（+ 键是 Shift+=），
+  // Chromium 无法正确识别为放大手势，需要手动兜底。小键盘加号同理。
+  if (process.platform === 'darwin') return
 
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
 
-    // Windows 下主键盘的 Ctrl++ 常会以 Ctrl+= 上报；小键盘加号也需要兜底。
     const key = input.key.toLowerCase()
     if (!['=', '+', 'numadd', 'add'].includes(key)) return
 
@@ -387,8 +388,9 @@ function showAndFocusMainWindow(): void {
  * Get the appropriate app icon path for the current platform
  */
 function getIconPath(): string {
-  // resources 在 build:resources 阶段被复制到 dist/ 下，与 main.cjs 同级
-  const resourcesDir = join(__dirname, 'resources')
+  // dev 模式: resources 在 build:resources 阶段被复制到 dist/ 下，与 main.cjs 同级
+  // 打包模式: electron-builder 通过 extraResources 将 icon 放到 process.resourcesPath/
+  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
 
   if (process.platform === 'darwin') {
     return join(resourcesDir, 'icon.icns')
@@ -460,7 +462,7 @@ function createWindow(): void {
     ...titleBarOptions,
   })
   setStoredMainWindow(mainWindow)
-  installWindowsZoomInFallback(mainWindow)
+  installZoomInFallback(mainWindow)
 
   // Load the renderer
   const isDev = !app.isPackaged
