@@ -14,9 +14,17 @@ import { getWorkspaceFilesDir } from './config-paths'
 // ===== 工具白名单（修正 Y9：移除 EnterPlanMode/ExitPlanMode） =====
 
 const ACTIVE_PHASE_TOOLS = new Set([
+  // collaboration 工具（Pi 运行时带 mcp__collaboration__ 前缀）
   'delegate_agent', 'delegate_agents', 'wait_for_delegations',
   'list_delegations', 'stop_delegation', 'get_delegation_results',
-  'Read', 'LS', 'Glob', 'Grep', 'AskUserQuestion',
+  'mcp__collaboration__delegate_agent', 'mcp__collaboration__delegate_agents',
+  'mcp__collaboration__wait_for_delegations', 'mcp__collaboration__list_delegations',
+  'mcp__collaboration__stop_delegation', 'mcp__collaboration__get_delegation_results',
+  'mcp__collaboration__list_available_agent_models',
+  // 只读工具
+  'Read', 'LS', 'Glob', 'Grep',
+  // 交互工具
+  'AskUserQuestion',
 ])
 
 const PHASE_TOOL_WHITELIST: Record<PhaseId, Set<string>> = {
