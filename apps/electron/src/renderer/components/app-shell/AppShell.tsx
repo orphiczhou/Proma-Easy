@@ -64,22 +64,18 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
-  // 南大向导工作区：自动打开右侧面板 + 切换到 tree Tab
+  // 南大向导工作区：自动打开右侧面板 + 启动文件监听
   const isNanjuWorkspace = currentWorkspace?.workspaceType === 'nanju'
   const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
-  const setDiffPanelTabMap = useSetAtom(agentDiffPanelTabAtom)
   const openPreview = useOpenPreview()
   React.useEffect(() => {
-    if (isNanjuWorkspace && currentSessionId) {
+    if (isNanjuWorkspace && currentWorkspace) {
+      // 打开右侧面板
       setSidePanelOpen(true)
-      setDiffPanelTabMap((prev) => {
-        if (prev.get(currentSessionId) === 'tree') return prev
-        const map = new Map(prev)
-        map.set(currentSessionId, 'tree')
-        return map
-      })
+      // 启动文件监听（PRD .md / 原型 .html 自动预览）
+      window.electronAPI.nanjuStartHtmlWatcher?.(currentWorkspace.slug).catch(() => {})
     }
-  }, [isNanjuWorkspace, currentSessionId, setSidePanelOpen, setDiffPanelTabMap])
+  }, [isNanjuWorkspace, currentWorkspace, setSidePanelOpen])
 
   // 南大向导：监听 HTML/MD 文件变化，自动打开预览分屏
   React.useEffect(() => {
