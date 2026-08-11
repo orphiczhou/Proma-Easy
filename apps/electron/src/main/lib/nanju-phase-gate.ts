@@ -34,14 +34,23 @@ export function getNanjuPhaseGatePrompt(workspaceSlug: string, sessionId: string
 项目名：${project.name}（${project.mode === 'quick' ? '快消型' : '长期迭代型'}）
 项目目录：${projectDir}
 Tree ID：${treeId}
+
+### ⚡ 立即加载 Skill
+你是树形会话执行体系的**指挥官（Commander）**。立即加载以下 Skill：
+1. **tree-commander** — 你的操作手册（5 件套契约、三步质量门、审计树）
+2. **agent-collaboration** — 判断何时委派、何时自己处理
+
+每次用 mcp__tree__* 工具前先调 \`tree_help(topic)\` 拿用法。
+用 \`tree_tree_dump(tree_id='${treeId}')\` 查看当前树状态。
 `
 
   const treeWorkflowHint = treeId ? `
-### 📋 Tree 流程管理（使用 mcp__tree__* 工具）
-- tree_id: \`${treeId}\`
-- 委派角色时，先用 \`tree_leaf_add\` 添加叶节点记录
-- 里程碑完成后，用 \`tree_audit_gate\` 设置审计判定（需要独立 auditor session）
-- 用 \`tree_tree_dump\` 查看当前树状态
+### 📋 Tree 操作要点
+- 委派 Worker 前：\`tree_leaf_add(tree_id='${treeId}', leaf={role:'worker', ...})\` 添加叶节点
+- 委派时第一条消息必须包含 5 件套契约（brief/dod/report/autonomy/self_audit）
+- Worker 子会话会自动加载 tree-worker Skill
+- 里程碑完成后：\`tree_milestone_set_result\` + \`tree_audit_gate\`（需独立 auditor session）
+- AC 审查：加载 adversarial-convergence-verification Skill，攻击者和防御者必须不同模型家族
 ` : ''
 
   const stagePrompts: Record<ProjectStage, string> = {
