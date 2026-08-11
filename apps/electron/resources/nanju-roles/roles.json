@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "roles": [
+    "requirement-analyst",
+    "ux-advisor",
+    "architect",
+    "engineering-manager"
+  ],
+  "quick_mode_sequence": [
+    "requirement-analyst",
+    "ux-advisor"
+  ],
+  "iterative_mode_sequence": [
+    "requirement-analyst",
+    "ux-advisor",
+    "architect",
+    "engineering-manager"
+  ]
+}
