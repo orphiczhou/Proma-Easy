@@ -51,7 +51,8 @@ import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, g
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
-import { getNanjuPhaseGatePrompt, checkNanjuPhaseGate } from './nanju-phase-gate'
+import { getNanjuRouterPrompt } from './nanju-router-prompt'
+import { checkNanjuRouterGate, verifyPhaseOutput } from './nanju-router-gate'
 import { resolveProjectInstructions } from './project-instruction-resolver'
 import { combinePromaInstructionFiles } from './adapters/pi-resource-loader-overrides'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
@@ -1089,10 +1090,10 @@ export class AgentOrchestrator {
           return validationFailure
         }
 
-        // ── 南大向导阶段硬门禁（优先于权限模式） ──
-        const nanjuGate = checkNanjuPhaseGate(workspaceSlug, sessionId, toolName, input)
+        // ── 南大向导路由硬门禁（优先于权限模式） ──
+        const nanjuGate = checkNanjuRouterGate(workspaceSlug, sessionId, toolName, input)
         if (nanjuGate) {
-          console.log(`[南大门禁] 拒绝工具 ${toolName}：阶段=${nanjuGate.message.split('：')[1]?.split('。')[0] ?? 'unknown'}`)
+          console.log(`[南大路由门禁] 拒绝工具 ${toolName}`)
           return nanjuGate
         }
 
@@ -1303,10 +1304,10 @@ export class AgentOrchestrator {
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
 
       // 南大向导阶段门禁：注入当前阶段的硬性指令
-      const nanjuPhaseGate = workspaceSlug && !automationContext && !input.triggeredBy
-        ? getNanjuPhaseGatePrompt(workspaceSlug, sessionId)
+      const nanjuRouterPrompt = workspaceSlug && !automationContext && !input.triggeredBy
+        ? getNanjuRouterPrompt(workspaceSlug, sessionId)
         : undefined
-      const nanjuPrompt = nanjuPhaseGate ?? ''
+      const nanjuPrompt = nanjuRouterPrompt ?? ''
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return
         titleGenerationStarted = true
@@ -1672,7 +1673,7 @@ export class AgentOrchestrator {
               }
             }
 
-            // 南大向导：检测 PHASE_COMPLETE 标记并推进阶段
+            // 南大向导：检测 PHASE_ADVANCE 标记 + 文件验证后推进阶段
             if (msg.type === 'result' && workspaceSlug && !automationContext && !input.triggeredBy) {
               try {
                 const allMsgs = getAgentSessionMessages(sessionId)
@@ -1680,12 +1681,25 @@ export class AgentOrchestrator {
                 if (lastAssistant) {
                   const textBlocks = (lastAssistant as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
                   const fullText = (textBlocks ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
-                  const phaseMatch = fullText.match(/\[PHASE_COMPLETE:([a-z-]+)\]/i)
+                  // 兼容旧标记 PHASE_COMPLETE 和新标记 PHASE_ADVANCE
+                  const phaseMatch = fullText.match(/(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)/i)
                   if (phaseMatch) {
-                    const { advanceNanjuStage } = require('./nanju-phase-gate')
                     const newStage = phaseMatch[1]?.toLowerCase()
-                    advanceNanjuStage(workspaceSlug, sessionId, newStage)
-                    console.log(`[南大门禁] 自动推进阶段: ${sessionId} → ${newStage}`)
+                    // 文件验证：检查产出文件是否存在且格式正确（修正 F6 + Y5）
+                    const { verifyPhaseOutput } = require('./nanju-router-gate')
+                    const { listNanjuProjects } = require('./nanju-project')
+                    const projects = listNanjuProjects(workspaceSlug)
+                    const project = projects.find((p: { sessionId: string }) => p.sessionId === sessionId)
+                    if (project) {
+                      const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
+                      if (verifyError) {
+                        console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
+                      } else {
+                        const { updateNanjuProject } = require('./nanju-project')
+                        updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
+                        console.log(`[南大路由] 阶段推进: ${project.name} → ${newStage}`)
+                      }
+                    }
                   }
                 }
               } catch (e) {
