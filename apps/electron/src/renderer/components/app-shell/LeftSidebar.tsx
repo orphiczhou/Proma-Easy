@@ -2237,7 +2237,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       }
 
       return nanjuWorkspaces.map((workspace) => ({
-        workspace,
+        workspace: { ...workspace, name: '项目列表' },
         sessions: sessionsByWorkspaceId.get(workspace.id) ?? [],
       }))
     },
@@ -2828,7 +2828,6 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       {/* 南大向导项目列表 */}
       {nanjuProjectGroups.length > 0 && (
         <div className="flex flex-col gap-0.5 px-2 pb-1">
-          <div className="px-2 pb-0.5 text-[11px] font-medium text-foreground/40 select-none">项目列表</div>
           {nanjuProjectGroups.map((group) => (
             <AgentProjectGroupItem
               key={group.workspace.id}
