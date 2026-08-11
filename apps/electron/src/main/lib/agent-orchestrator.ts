@@ -1665,6 +1665,27 @@ export class AgentOrchestrator {
               }
             }
 
+            // 南大向导：检测 PHASE_COMPLETE 标记并推进阶段
+            if (msg.type === 'result' && workspaceSlug && !automationContext && !input.triggeredBy) {
+              try {
+                const allMsgs = getAgentSessionMessages(sessionId)
+                const lastAssistant = [...allMsgs].reverse().find((m) => (m as { type?: string }).type === 'assistant')
+                if (lastAssistant) {
+                  const textBlocks = (lastAssistant as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
+                  const fullText = (textBlocks ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+                  const phaseMatch = fullText.match(/\[PHASE_COMPLETE:([a-z-]+)\]/i)
+                  if (phaseMatch) {
+                    const { advanceNanjuStage } = require('./nanju-phase-gate')
+                    const newStage = phaseMatch[1]?.toLowerCase()
+                    advanceNanjuStage(workspaceSlug, sessionId, newStage)
+                    console.log(`[南大门禁] 自动推进阶段: ${sessionId} → ${newStage}`)
+                  }
+                }
+              } catch (e) {
+                // 非南大会话或检测失败，静默跳过
+              }
+            }
+
             // Turn 结束时：持久化累积消息
             if (msg.type === 'result') {
               capturedResultSubtype = (msg as { subtype?: string }).subtype

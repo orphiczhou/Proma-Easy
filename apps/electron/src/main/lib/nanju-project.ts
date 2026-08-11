@@ -55,8 +55,16 @@ export function createNanjuProject(input: {
   sessionId?: string
 }): NanjuProject {
   const now = new Date().toISOString()
+  // 使用项目名生成 slug：project-{slugified-name}
+  const slugBase = input.name
+    .toLowerCase()
+    .replace(/[^a-z0-9一-鿿]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 30) || 'untitled'
+  const projectId = slugBase
   const project: NanjuProject = {
-    projectId: randomUUID().slice(0, 8),
+    projectId,
     name: input.name,
     mode: input.mode,
     status: 'active',
@@ -67,23 +75,43 @@ export function createNanjuProject(input: {
     workspaceSlug: input.workspaceSlug,
   }
 
-  const projects = listNanjuProjects(input.workspaceSlug)
-  projects.push(project)
-  writeJsonFileAtomic(getMetaPath(input.workspaceSlug), projects)
+  // 避免重名
+  const existing = listNanjuProjects(input.workspaceSlug)
+  let uniqueId = projectId
+  let counter = 2
+  while (existing.some((p) => p.projectId === uniqueId)) {
+    uniqueId = `${projectId}-${counter}`
+    counter++
+  }
+  project.projectId = uniqueId
 
-  // 创建文档目录骨架
+  existing.push(project)
+  writeJsonFileAtomic(getMetaPath(input.workspaceSlug), existing)
+
+  // 创建文档目录骨架，使用 project-{slugified-name} 格式
   const docDirs = [
     '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE',
     '04_API_SPEC', '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS',
   ]
   const wsFilesDir = getWorkspaceFilesDir(input.workspaceSlug)
-  const projectDir = input.mode === 'quick'
-    ? join(wsFilesDir, `project-${project.projectId}`)
-    : join(wsFilesDir, `project-${project.projectId}`)
+  const projectDir = join(wsFilesDir, `project-${uniqueId}`)
   mkdirSync(projectDir, { recursive: true })
   for (const dir of docDirs) {
     mkdirSync(join(projectDir, dir), { recursive: true })
   }
+
+  // 创建项目背景信息文件
+  const projectInfo = {
+    projectId: uniqueId,
+    name: input.name,
+    mode: input.mode,
+    sessionId: input.sessionId,
+    createdAt: now,
+    workspaceSlug: input.workspaceSlug,
+    projectDir: `project-${uniqueId}`,
+    docDirs,
+  }
+  writeJsonFileAtomic(join(projectDir, '_project-info.json'), projectInfo)
 
   return project
 }
