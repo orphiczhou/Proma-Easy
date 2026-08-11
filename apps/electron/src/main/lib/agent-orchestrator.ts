@@ -51,7 +51,7 @@ import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, g
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
-import { getNanjuPhaseGatePrompt } from './nanju-phase-gate'
+import { getNanjuPhaseGatePrompt, checkNanjuPhaseGate } from './nanju-phase-gate'
 import { resolveProjectInstructions } from './project-instruction-resolver'
 import { combinePromaInstructionFiles } from './adapters/pi-resource-loader-overrides'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
@@ -1087,6 +1087,13 @@ export class AgentOrchestrator {
         if (validationFailure) {
           console.warn(`[Agent 工具验证] 参数缺失: tool=${toolName}, mode=${currentMode}`)
           return validationFailure
+        }
+
+        // ── 南大向导阶段硬门禁（优先于权限模式） ──
+        const nanjuGate = checkNanjuPhaseGate(workspaceSlug, sessionId, toolName, input)
+        if (nanjuGate) {
+          console.log(`[南大门禁] 拒绝工具 ${toolName}：阶段=${nanjuGate.message.split('：')[1]?.split('。')[0] ?? 'unknown'}`)
+          return nanjuGate
         }
 
         // ── Write 大文件 token 截断防护 ──

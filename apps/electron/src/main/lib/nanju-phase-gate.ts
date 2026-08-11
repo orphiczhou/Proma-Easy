@@ -142,3 +142,168 @@ export function advanceNanjuStage(
     console.log(`[南大门禁] 阶段推进: ${project.name} → ${targetStage}`)
   }
 }
+
+// ===== 硬门禁：canUseTool 阶段工具过滤 =====
+
+/** 只读工具白名单（所有阶段都允许） */
+const READ_ONLY_TOOLS = new Set([
+  'Read', 'LS', 'Glob', 'Grep', 'find',
+])
+
+/** 委派/会话/tree 工具（所有阶段都允许） */
+const DELEGATION_TOOLS = new Set([
+  'delegate_agent', 'delegate_agents', 'wait_for_delegations',
+  'list_delegations', 'stop_delegation',
+])
+
+/**
+ * 判断工具是否以指定前缀开头（用于 mcp__tree__*, mcp__session__* 等）
+ */
+function hasPrefix(toolName: string, prefix: string): boolean {
+  return toolName.startsWith(prefix)
+}
+
+/**
+ * 南大向导阶段硬门禁。
+ *
+ * 在 canUseTool 中调用，返回 null 表示放行（不是 nanju 会话或不限制），
+ * 返回 { behavior: 'deny', message } 表示拒绝。
+ *
+ * 核心逻辑：
+ * - requirements 阶段：禁止写代码/建项目，只允许对话、委派需求分析师、tree 工具、写 PRD(.md)
+ * - prototype 阶段：只允许通过 delegate_agent 委派 UX 顾问写 HTML，禁止自己 Write .html
+ * - architecture/planning 阶段：只允许委派，禁止自己写代码
+ * - coding 阶段：全部放行
+ */
+export function checkNanjuPhaseGate(
+  workspaceSlug: string | undefined,
+  sessionId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): { behavior: 'deny'; message: string } | null {
+  if (!workspaceSlug) return null
+
+  const project = findNanjuProjectBySession(workspaceSlug, sessionId)
+  if (!project) return null
+
+  const stage = project.currentStage
+
+  // coding/testing/delivered 阶段：全部放行
+  if (stage === 'coding' || stage === 'testing' || stage === 'delivered' || stage === 'mode-select') {
+    return null
+  }
+
+  // 所有阶段都允许的工具
+  if (READ_ONLY_TOOLS.has(toolName)) return null
+  if (DELEGATION_TOOLS.has(toolName)) return null
+  if (hasPrefix(toolName, 'mcp__tree__')) return null
+  if (hasPrefix(toolName, 'mcp__session__')) return null
+  if (hasPrefix(toolName, 'mcp__remote-session__')) return null
+
+  // AskUserQuestion / ExitPlanMode 等交互工具放行
+  if (toolName === 'AskUserQuestion' || toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') return null
+
+  const projectDir = getNanjuProjectDir(workspaceSlug, project.projectId)
+
+  // requirements 阶段
+  if (stage === 'requirements') {
+    // 允许写 .md 文件（PRD）
+    if (toolName === 'Write' || toolName === 'Edit') {
+      const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+      if (filePath.toLowerCase().endsWith('.md')) return null
+    }
+    // 允许只读 Bash
+    if (toolName === 'Bash') {
+      const cmd = typeof input.command === 'string' ? input.command : ''
+      // 只允许 ls/cat/mkdir 等只读或创建目录操作
+      if (/^(ls|cat|mkdir|pwd|echo)/i.test(cmd.trim())) return null
+    }
+    // 其他全部拒绝
+    return {
+      behavior: 'deny',
+      message:
+        `🔒 南大向导门禁：当前处于「需求分析」阶段。
+` +
+        `该阶段只允许：
+` +
+        `1. 与用户对话收集需求
+` +
+        `2. 使用 delegate_agent 委派「需求分析师」子会话
+` +
+        `3. 使用 mcp__tree__* 管理流程
+` +
+        `4. 写 PRD 文档（.md 文件到 ${projectDir}/01_PRD/）
+
+` +
+        `禁止：写代码、创建代码项目、写 .html/.js/.ts/.py 等非文档文件。
+` +
+        `用户确认 PRD 后，输出 [PHASE_COMPLETE:prototype] 推进到下一阶段。`,
+    }
+  }
+
+  // prototype 阶段
+  if (stage === 'prototype') {
+    // 允许写 .md 和 .html 文件（UX 原型）
+    if (toolName === 'Write' || toolName === 'Edit') {
+      const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+      if (filePath.toLowerCase().endsWith('.md') || filePath.toLowerCase().endsWith('.html')) return null
+    }
+    if (toolName === 'Bash') {
+      const cmd = typeof input.command === 'string' ? input.command : ''
+      if (/^(ls|cat|mkdir|pwd|echo)/i.test(cmd.trim())) return null
+    }
+    return {
+      behavior: 'deny',
+      message:
+        `🔒 南大向导门禁：当前处于「UX 原型设计」阶段。
+` +
+        `该阶段只允许：
+` +
+        `1. 使用 delegate_agent 委派「UX 顾问」子会话（channelId: glm-zhipu, modelId: glm-5.2）
+` +
+        `2. 使用 mcp__tree__* 管理流程
+` +
+        `3. 写 HTML 原型文件（到 ${projectDir}/02_UX_DESIGN/）
+
+` +
+        `禁止：写代码、写 .js/.ts/.py 等。
+` +
+        `用户确认原型后，输出 [PHASE_COMPLETE:architecture] 推进（快消型输出 [PHASE_COMPLETE:delivered]）。`,
+    }
+  }
+
+  // architecture / planning 阶段
+  if (stage === 'architecture' || stage === 'planning') {
+    // 允许写 .md 文件（架构/计划文档）
+    if (toolName === 'Write' || toolName === 'Edit') {
+      const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+      if (filePath.toLowerCase().endsWith('.md')) return null
+    }
+    if (toolName === 'Bash') {
+      const cmd = typeof input.command === 'string' ? input.command : ''
+      if (/^(ls|cat|mkdir|pwd|echo)/i.test(cmd.trim())) return null
+    }
+    const phaseLabel = stage === 'architecture' ? '架构设计' : '工程规划'
+    const nextStage = stage === 'architecture' ? 'planning' : 'coding'
+    return {
+      behavior: 'deny',
+      message:
+        `🔒 南大向导门禁：当前处于「${phaseLabel}」阶段。
+` +
+        `该阶段只允许：
+` +
+        `1. 使用 delegate_agent 委派「${stage === 'architecture' ? '架构师' : '工程经理'}」子会话
+` +
+        `2. 使用 mcp__tree__* 管理流程
+` +
+        `3. 写 ${stage === 'architecture' ? '架构' : '工程计划'}文档（.md 文件）
+
+` +
+        `禁止：写代码、写 .js/.ts/.py 等。
+` +
+        `用户确认后，输出 [PHASE_COMPLETE:${nextStage}] 推进。`,
+    }
+  }
+
+  return null
+}
