@@ -748,7 +748,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   /** 记录被用户手动折叠的工作区 ID（点击当前工作区标题时折叠/展开）。刻意不持久化：折叠被视为临时查看行为，刷新/重启后恢复默认展开 */
   const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = React.useState<Set<string>>(new Set())
   /** 南大向导会话列表展开状态 */
-  const [nanjuExpanded, setNanjuExpanded] = React.useState<boolean>(true)
+
   /** 记录已展开的委派母会话；默认收起，避免批量派遣后撑满侧栏 */
   const [expandedDelegationParentIds, setExpandedDelegationParentIds] = React.useState<Set<string>>(new Set())
   /** 记录用户手动收起的委派母会话；用于覆盖“当前子会话自动展开”的兜底可见性 */
@@ -1328,13 +1328,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
   }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView])
 
-  /** 南大向导：点击切换会话列表展开/收起 */
-  const handleOpenNanju = React.useCallback((): void => {
-    setNanjuExpanded((prev) => !prev)
-  }, [setNanjuExpanded])
-
   /** 南大向导：打开分选页面（创建新项目） */
-  const handleOpenNanjuNew = React.useCallback((): void => {
+  const handleOpenNanju = React.useCallback((): void => {
     const result = openTab(tabs, { type: 'nanju-mode-select', sessionId: 'nanju-mode-select', title: '南大向导' })
     setTabs(result.tabs)
     setActiveTabId(result.activeTabId)
@@ -2811,7 +2806,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         </Tooltip>
       </div>
 
-      {/* 南大向导：可折叠的工作区会话列表 */}
+      {/* 南大向导入口 */}
       <div className="px-3 pb-0.5">
         <button
           type="button"
@@ -2827,26 +2822,13 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
             <GraduationCap size={14} className="text-purple-500" />
           </div>
           <span>南大向导</span>
-          {nanjuProjectGroups.length > 0 && (
-            <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/10 text-purple-500/70">
-              {nanjuProjectGroups.reduce((n, g) => n + g.sessions.length, 0)}
-            </span>
-          )}
-          {nanjuProjectGroups.length > 0 && (
-            <ChevronRight
-              size={14}
-              className={cn(
-                'flex-shrink-0 text-foreground/30 transition-transform',
-                nanjuExpanded && 'rotate-90',
-              )}
-            />
-          )}
         </button>
       </div>
 
-      {/* 南大向导会话列表（展开时显示在入口下方） */}
-      {nanjuExpanded && nanjuProjectGroups.length > 0 && (
+      {/* 南大向导项目列表 */}
+      {nanjuProjectGroups.length > 0 && (
         <div className="flex flex-col gap-0.5 px-2 pb-1">
+          <div className="px-2 pb-0.5 text-[11px] font-medium text-foreground/40 select-none">项目列表</div>
           {nanjuProjectGroups.map((group) => (
             <AgentProjectGroupItem
               key={group.workspace.id}
@@ -2891,13 +2873,13 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               onToggleDelegationParent={handleToggleDelegationParent}
             />
           ))}
-          {/* 新建项目按钮 */}
+          {/* 新建项目大按钮 */}
           <button
             type="button"
-            onClick={() => handleOpenNanjuNew()}
-            className="ml-4 mt-0.5 flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] text-purple-500/70 hover:text-purple-500 hover:bg-purple-500/5 transition-colors titlebar-no-drag"
+            onClick={() => handleOpenNanju()}
+            className="mt-1 mx-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-[10px] text-[13px] font-medium text-purple-600 dark:text-purple-400 bg-purple-500/8 hover:bg-purple-500/12 border border-dashed border-purple-500/25 transition-all duration-100 titlebar-no-drag"
           >
-            <Plus size={12} />
+            <Plus size={14} />
             <span>新建项目</span>
           </button>
         </div>
