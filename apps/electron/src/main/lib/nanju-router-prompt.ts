@@ -81,8 +81,14 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
      前序产出文件（请先 Read 后再工作）：${priorArtifacts.join('、') || '无（这是需求阶段）'}
      约束：${phase.constraints.join('；')}
      产出文件请写入：${projectDir}/${phase.outputPath}
-2. 用 \`wait_for_delegations\` 等待子会话完成
-3. 用 \`Read\` 检查产出文件是否存在：${projectDir}/${phase.outputPath}
+2. 用 \`wait_for_delegations\` 等待子会话完成。
+   **注意**：如果子会话需要向用户提问（AskUserQuestion），\`wait_for_delegations\` 会返回
+   \`status: "blocked"\` 并附带 \`pendingBlockedEvents\`（含子会话的问题内容）。
+   此时你必须：
+   a. 用你自己的 \`AskUserQuestion\` 向用户转述这些问题
+   b. 收到用户回答后，用 \`answer_delegation_question\` 代答子会话
+   c. 再次调用 \`wait_for_delegations\` 继续等待
+3. 子会话完成后，用 \`Read\` 检查产出文件：${projectDir}/${phase.outputPath}
 ${phase.requiresAC ? `4. 用 \`delegate_agent(inline:true)\` 发起 AC 审计（攻击者=deepseek, 防御者=glm-zhipu）
 5. 在回复中用结构化标记输出 AC 结果：
    \<!-- AC_RESULT: {\"verdict\":\"pass\"或\"required\",\"summary\":\"一句话结论\"} --\>

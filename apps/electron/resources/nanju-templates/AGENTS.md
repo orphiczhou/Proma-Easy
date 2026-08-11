@@ -22,21 +22,30 @@
 | 架构师 | deepseek | deepseek-v4-pro | 03_ARCHITECTURE/architecture.md |
 | 工程经理 | deepseek | deepseek-v4-pro | 05_PROJECT_PLAN/plan.md |
 
-## 委派示例
+## 委派与代答流程
 
 ```
+// 1. 委派角色子会话
 delegate_agent({
   title: "UX原型设计",
   task: "你是UX顾问。根据以下PRD生成HTML原型...",
   channelId: "glm-zhipu",
   modelId: "glm-5.2"
 })
+
+// 2. 等待子会话完成
+wait_for_delegations({})
+
+// 3. 如果返回 status="blocked" + pendingBlockedEvents（子会话有问题要问用户）：
+//    用你自己的 AskUserQuestion 向用户转述问题
+//    收到回答后用 answer_delegation_question 代答子会话
+//    再调 wait_for_delegations 继续等待
+
+// 4. 子会话完成后检查产出文件
 ```
 
-然后：
-```
-wait_for_delegations({})
-```
+**关键**：用户只和你（调度员）交互。子会话的问题通过 wait_for_delegations 
+返回给你，你代为提问和代答。用户不需要手动切换到子会话。
 
 ## 关键规则
 
