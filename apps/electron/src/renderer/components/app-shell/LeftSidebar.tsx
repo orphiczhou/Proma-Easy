@@ -784,6 +784,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
   const [currentWorkspaceId, setCurrentWorkspaceId] = useAtom(currentAgentWorkspaceIdAtom)
   const [workspaces, setWorkspaces] = useAtom(agentWorkspacesAtom)
+  /** 普通工作区列表（排除南大向导工作区，南大有独立入口） */
+  const regularWorkspaces = React.useMemo(
+    () => workspaces.filter((w) => w.workspaceType !== 'nanju'),
+    [workspaces],
+  )
   const setMode = useSetAtom(appModeAtom)
 
   // 当前项目能力（MCP + Skill 计数）
@@ -1350,8 +1355,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   }, [])
 
   const canDeleteWorkspace = React.useCallback(
-    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
-    [workspaces.length],
+    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && regularWorkspaces.length > 1,
+    [regularWorkspaces.length],
   )
 
   /** 请求删除项目（弹出二次确认框） */
@@ -1566,7 +1571,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     }
 
     // 构造当前显示顺序的 id 列表（真实项目 + 按当前索引插入的合成组）
-    const baseIds = workspaces.map((workspace) => workspace.id)
+    // 南大向导工作区不参与普通项目的拖拽排序
+    const baseIds = regularWorkspaces.map((workspace) => workspace.id)
     const oldAutoIndex = automationGroup
       ? Math.min(Math.max(automationGroupOrder, 0), baseIds.length)
       : -1
@@ -1619,7 +1625,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           toast.error('项目排序失败')
         })
     }
-  }, [dragProjectId, projectDropIndicator, automationGroup, automationGroupOrder, setWorkspaces, workspaces])
+  }, [dragProjectId, projectDropIndicator, automationGroup, automationGroupOrder, setWorkspaces, regularWorkspaces, workspaces])
 
   const handleProjectDragEnd = React.useCallback((): void => {
     setDragProjectId(null)
@@ -2145,7 +2151,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const agentProjectGroups = React.useMemo<AgentProjectGroup[]>(
     () => {
       const sessionsByWorkspaceId = new Map<string, AgentSessionMeta[]>()
-      for (const workspace of workspaces) {
+      // 南大向导工作区的会话不进入普通项目列表
+      const nanjuWorkspaceIds = new Set(
+        workspaces.filter((w) => w.workspaceType === 'nanju').map((w) => w.id)
+      )
+      for (const workspace of regularWorkspaces) {
         sessionsByWorkspaceId.set(workspace.id, [])
       }
 
@@ -2156,12 +2166,14 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           && !draftSessionIds.has(session.id)
           // 自动任务会话不进入项目列表，统一归到「自动任务」视图
           && !isHiddenAutomationSession(session)
+          // 南大向导工作区的会话不进入普通项目列表
+          && !nanjuWorkspaceIds.has(session.workspaceId ?? '')
           // 已被置顶母会话收纳的子会话留在置顶区的母会话下面，避免重复显示为项目根会话
           && !hasPinnedVisibleParent(session, agentSessions)
         )
       )
 
-      const defaultWsId = workspaces.find((ws) => ws.slug === 'default')?.id ?? workspaces[0]?.id
+      const defaultWsId = regularWorkspaces.find((ws) => ws.slug === 'default')?.id ?? regularWorkspaces[0]?.id
       for (const session of visibleHistory) {
         const targetId = session.workspaceId && sessionsByWorkspaceId.has(session.workspaceId)
           ? session.workspaceId
@@ -2170,12 +2182,12 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         sessionsByWorkspaceId.get(targetId)!.push(session)
       }
 
-      return workspaces.map((workspace) => ({
+      return regularWorkspaces.map((workspace) => ({
         workspace,
         sessions: sessionsByWorkspaceId.get(workspace.id) ?? [],
       }))
     },
-    [agentSessions, draftSessionIds, workspaces],
+    [agentSessions, draftSessionIds, regularWorkspaces, workspaces],
   )
 
   /**

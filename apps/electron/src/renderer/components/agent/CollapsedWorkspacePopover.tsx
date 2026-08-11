@@ -27,7 +27,9 @@ interface CollapsedWorkspacePopoverProps {
 export function CollapsedWorkspacePopover({
   children,
 }: CollapsedWorkspacePopoverProps): React.ReactElement {
-  const { workspaces, currentWorkspaceId, selectProject, createProject, createProjectFromFolder } = useProjectActions()
+  const { workspaces: allWorkspaces, currentWorkspaceId, selectProject, createProject, createProjectFromFolder } = useProjectActions()
+  /** 南大向导工作区不进入普通项目列表 */
+  const workspaces = allWorkspaces.filter((ws) => ws.workspaceType !== 'nanju')
 
   const [open, setOpen] = React.useState(false)
   const closeTimerRef = React.useRef<number | null>(null)
