@@ -233,6 +233,8 @@ interface DelegateAgentArgs {
   expectedOutput?: string
   permissionMode?: PromaPermissionMode
   modelId?: string
+  /** 南大向导扩展：跨渠道委派。指定后子会话使用此渠道而非父会话渠道。 */
+  channelId?: string
 }
 
 interface StartDelegationResult {
@@ -644,7 +646,14 @@ function startDelegation(
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
-  const child = createAgentSession(title, ctx.channelId, ctx.workspaceId, effectiveModelId)
+  const effectiveChannelId = args.channelId && args.channelId.trim()
+    ? args.channelId.trim()
+    : ctx.channelId
+  // 跨渠道时验证模型属于该渠道
+  const effectiveModelIdWithChannel = args.channelId && args.channelId !== ctx.channelId && args.modelId
+    ? assertEnabledModelForChannel({ channelId: args.channelId, modelId: args.modelId, purpose: '跨渠道协作子会话' })
+    : effectiveModelId
+  const child = createAgentSession(title, effectiveChannelId, ctx.workspaceId, effectiveModelIdWithChannel)
   const rootSessionId = parent?.rootSessionId ?? parent?.id ?? ctx.sessionId
   updateAgentSessionMeta(child.id, {
     parentSessionId: ctx.sessionId,
@@ -774,7 +783,8 @@ export function buildPiCollaborationTools(
         role: roleType,
         task: Type.String({ description: '发送给子 Agent 的完整任务说明，必须自包含必要上下文' }),
         expectedOutput: Type.Optional(Type.String({ description: '希望子 Agent 最终返回的格式或要点' })),
-        modelId: Type.Optional(Type.String({ description: '可选目标模型 ID' })),
+        modelId: Type.Optional(Type.String({ description: '可选目标模型 ID（默认继承父会话模型）' })),
+        channelId: Type.Optional(Type.String({ description: '南大向导扩展：跨渠道委派。指定后子会话使用此渠道（如 glm-zhipu, deepseek）。需配合 modelId 使用。' })),
       }),
       async execute(toolCallId: string, params: unknown) {
         const args = params as DelegateAgentArgs
