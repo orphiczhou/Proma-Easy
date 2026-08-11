@@ -13,7 +13,7 @@ import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom } from '@/atoms/agent-atoms'
+import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentSidePanelOpenAtom, agentDiffPanelTabAtom } from '@/atoms/agent-atoms'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
@@ -26,6 +26,8 @@ import { WindowControls } from '@/components/WindowControls'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
+import { previewFileMapAtom, previewPanelOpenMapAtom, type PreviewFile } from '@/atoms/preview-atoms'
+import { useOpenPreview } from '@/components/diff/preview-opener'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
@@ -61,6 +63,40 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const activeView = useAtomValue(activeViewAtom)
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
+
+  // 南大向导工作区：自动打开右侧面板 + 切换到 tree Tab
+  const isNanjuWorkspace = currentWorkspace?.workspaceType === 'nanju'
+  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
+  const setDiffPanelTabMap = useSetAtom(agentDiffPanelTabAtom)
+  const openPreview = useOpenPreview()
+  React.useEffect(() => {
+    if (isNanjuWorkspace && currentSessionId) {
+      setSidePanelOpen(true)
+      setDiffPanelTabMap((prev) => {
+        if (prev.get(currentSessionId) === 'tree') return prev
+        const map = new Map(prev)
+        map.set(currentSessionId, 'tree')
+        return map
+      })
+    }
+  }, [isNanjuWorkspace, currentSessionId, setSidePanelOpen, setDiffPanelTabMap])
+
+  // 南大向导：监听 HTML/MD 文件变化，自动打开预览分屏
+  React.useEffect(() => {
+    if (!isNanjuWorkspace || !currentSessionId) return
+    const handler = (_event: unknown, data: { filePath: string; fileName: string }): void => {
+      if (!data || !currentSessionId) return
+      const previewFile: PreviewFile = {
+        filePath: data.filePath,
+        previewOnly: true,
+      }
+      openPreview(currentSessionId, previewFile)
+    }
+    window.electronAPI.onNanjuHtmlPreview?.(handler)
+    return (): void => {
+      window.electronAPI.offNanjuHtmlPreview?.(handler)
+    }
+  }, [isNanjuWorkspace, currentSessionId, openPreview])
 
   // 左侧边栏可拖拽宽度
   const [leftSidebarWidth, setLeftSidebarWidth] = useAtom(leftSidebarWidthAtom)
