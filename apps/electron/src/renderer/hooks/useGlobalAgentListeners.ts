@@ -65,7 +65,7 @@ import { channelsAtom } from '@/atoms/chat-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta, ProviderType } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta, ProviderType, AskUserRequest, AskUserQuestion } from '@proma/shared'
 import { inferContextWindow } from '@proma/shared'
 import { buildExternalAgentRunActivation, shouldActivateExternalAgentRun } from '@/lib/external-agent-run'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
@@ -139,6 +139,8 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         return [{ type: 'ask_user_request', request: evt.request }]
       case 'ask_user_resolved':
         return [{ type: 'ask_user_resolved', requestId: evt.requestId }]
+      case 'delegation_blocked':
+        return [{ type: 'delegation_blocked', delegationId: evt.delegationId, blockedEvent: evt.blockedEvent } as unknown as AgentEvent]
       case 'exit_plan_mode_request':
         return [{ type: 'exit_plan_mode_request', request: evt.request }]
       case 'exit_plan_mode_resolved':
@@ -776,6 +778,43 @@ export function useGlobalAgentListeners(): void {
         const legacyEvents = payloadToLegacyEvents(payload)
 
         for (const event of legacyEvents) {
+          // 委派子会话被阻塞（如 AskUserQuestion）→ 将问题转发给父会话 UI
+          if ((event as AgentEvent as { type: string }).type === 'delegation_blocked') {
+            const dbEvent = event as unknown as { type: string; delegationId: string; blockedEvent: unknown }
+            const blocked = dbEvent.blockedEvent as {
+              id: string
+              type: string
+              askUserRequestId?: string
+              askUserQuestions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }> }>
+            } | undefined
+            if (blocked?.type === 'ask_user' && blocked.askUserQuestions) {
+              const fakeRequest: AskUserRequest = {
+                requestId: blocked.askUserRequestId ?? `delegation-${blocked.id}`,
+                sessionId,
+                questions: blocked.askUserQuestions.map((q) => ({
+                  question: q.question,
+                  header: q.header,
+                  options: q.options,
+                  multiSelect: false,
+                })),
+                toolInput: {},
+              }
+              store.set(allPendingAskUserRequestsAtom, (prev) => {
+                const map = new Map(prev)
+                const current = map.get(sessionId) ?? []
+                if (current.some((r) => r.requestId === fakeRequest.requestId)) return prev
+                map.set(sessionId, [...current, fakeRequest])
+                return map
+              })
+              sendBlockingNotification(
+                sessionId,
+                '子会话需要你的输入',
+                blocked.askUserQuestions[0]?.question ?? '委派的子会话有问题需要你回答',
+                'permissionRequest'
+              )
+            }
+            continue
+          }
           // 带 run 标识的 retry 事件必须在所有外围副作用前严格匹配当前流；
           // 否则旧 IPC 事件会复活已结束的 stream，或错误清掉新 run 的完成提醒。
           const eventStreamState = store.get(agentStreamingStatesAtom).get(sessionId)
