@@ -789,6 +789,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     () => workspaces.filter((w) => w.workspaceType !== 'nanju'),
     [workspaces],
   )
+  /** 南大向导工作区列表 */
+  const nanjuWorkspaces = React.useMemo(
+    () => workspaces.filter((w) => w.workspaceType === 'nanju'),
+    [workspaces],
+  )
   const setMode = useSetAtom(appModeAtom)
 
   // 当前项目能力（MCP + Skill 计数）
@@ -2205,6 +2210,38 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     [agentProjectGroups, automationGroup, automationGroupOrder],
   )
 
+  /** 南大向导工作区 + 会话分组（独立于普通项目列表） */
+  const nanjuProjectGroups = React.useMemo<AgentProjectGroup[]>(
+    () => {
+      const sessionsByWorkspaceId = new Map<string, AgentSessionMeta[]>()
+      for (const workspace of nanjuWorkspaces) {
+        sessionsByWorkspaceId.set(workspace.id, [])
+      }
+
+      const visibleSessions = sortAgentSessionsByUpdatedAtDesc(
+        agentSessions.filter((session) =>
+          !session.archived
+          && !session.pinned
+          && !draftSessionIds.has(session.id)
+          && !hasPinnedVisibleParent(session, agentSessions)
+          && nanjuWorkspaces.some((w) => w.id === session.workspaceId)
+        )
+      )
+
+      for (const session of visibleSessions) {
+        const targetId = session.workspaceId
+        if (!targetId || !sessionsByWorkspaceId.has(targetId)) continue
+        sessionsByWorkspaceId.get(targetId)!.push(session)
+      }
+
+      return nanjuWorkspaces.map((workspace) => ({
+        workspace,
+        sessions: sessionsByWorkspaceId.get(workspace.id) ?? [],
+      }))
+    },
+    [agentSessions, draftSessionIds, nanjuWorkspaces],
+  )
+
   /** Agent 归档会话按日期分组（跨项目），含委派树 */
   const archivedAgentSessionTrees = React.useMemo(() => {
     const archived = sortAgentSessionsByUpdatedAtDesc(
@@ -3074,6 +3111,62 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                 )
               })}
             </div>
+
+            {/* 南大向导工作区会话列表（独立于普通项目） */}
+            {nanjuProjectGroups.length > 0 && (
+              <div className="mt-1 pt-1 border-t border-border/40">
+                <div className="px-2 pb-1 flex items-center gap-1.5 text-[11px] font-medium text-violet-600/70 dark:text-violet-400/70">
+                  <GraduationCap size={12} />
+                  <span>南大向导</span>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  {nanjuProjectGroups.map((group) => (
+                    <AgentProjectGroupItem
+                      key={group.workspace.id}
+                      group={group}
+                      isAutomationGroup={false}
+                      currentWorkspaceId={currentWorkspaceId}
+                      expanded={(expandedExtraCountMap.get(group.workspace.id) ?? 0) > 0}
+                      extraCount={expandedExtraCountMap.get(group.workspace.id) ?? 0}
+                      collapsed={collapsedWorkspaceIds.has(group.workspace.id)}
+                      activeSessionId={activeSessionId}
+                      agentIndicatorMap={agentIndicatorMap}
+                      expandedDelegationParentIds={expandedDelegationParentIds}
+                      collapsedDelegationParentIds={collapsedDelegationParentIds}
+                      relativeTimeNow={relativeTimeNow}
+                      dragging={false}
+                      dropPosition={null}
+                      onShowMore={handleShowMoreSessions}
+                      onCollapseExtra={handleCollapseExtraSessions}
+                      onSelectProject={handleSelectProject}
+                      onNewSession={createAgentSessionInWorkspace}
+                      onDragStart={noopVoid}
+                      onDragOver={noopVoid}
+                      onDragLeave={noopVoid}
+                      onDrop={noopVoid}
+                      onDragEnd={noopVoid}
+                      onConfigureProject={(workspaceId) => {
+                        handleSelectProject(workspaceId)
+                        handleOpenMcpManagement()
+                      }}
+                      onRenameWorkspace={handleWorkspaceRename}
+                      onRelinkProjectRoot={handleRelinkProjectRoot}
+                      onRequestRestoreProjectRoot={setPendingRestoreProjectRootId}
+                      onRequestDeleteWorkspace={handleRequestDeleteWorkspace}
+                      canDeleteWorkspace={canDeleteWorkspace(group.workspace)}
+                      onSelectSession={handleSelectAgentSession}
+                      onRequestDelete={handleRequestDelete}
+                      onRequestMove={handleRequestMove}
+                      onRename={handleAgentRename}
+                      onTogglePin={handleTogglePinAgent}
+                      onToggleStar={handleToggleStarAgent}
+                      onToggleArchive={handleToggleArchiveAgent}
+                      onToggleDelegationParent={handleToggleDelegationParent}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (
