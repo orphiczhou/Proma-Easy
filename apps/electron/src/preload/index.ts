@@ -1245,6 +1245,11 @@ export interface ElectronAPI {
   nanjuRecordEvent: (input: Record<string, unknown>) => Promise<unknown>
   nanjuReadEvents: (input: Record<string, unknown>) => Promise<unknown[]>
 
+  /** 南大项目：获取当前阶段 */
+  nanjuGetProjectStage: (input: { workspaceSlug: string; sessionId: string }) => Promise<unknown>
+  /** 南大项目：推进阶段 */
+  nanjuAdvanceStage: (input: { workspaceSlug: string; sessionId: string; stage: string }) => Promise<boolean>
+
   /** 南大项目：确保南大工作区存在 */
   nanjuEnsureWorkspace: () => Promise<unknown>
 
@@ -2853,6 +2858,12 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('nanju:record-event', input),
   nanjuReadEvents: (input: Record<string, unknown>) =>
     ipcRenderer.invoke('nanju:read-events', input),
+
+  nanjuGetProjectStage: (input) =>
+    ipcRenderer.invoke('nanju:get-project-stage', input),
+
+  nanjuAdvanceStage: (input) =>
+    ipcRenderer.invoke('nanju:advance-stage', input),
 
   nanjuEnsureWorkspace: () =>
     ipcRenderer.invoke('nanju:ensure-workspace'),

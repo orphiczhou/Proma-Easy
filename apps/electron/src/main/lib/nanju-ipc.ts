@@ -17,6 +17,7 @@ import type { ProjectMode } from './nanju-project'
 import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
 import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
+import { findNanjuProjectBySession, advanceNanjuStage, getNanjuPhaseGatePrompt } from './nanju-phase-gate'
 import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } from './nanju-orchestrator'
 import type { TelemetryEventType } from './nanju-telemetry'
 import type { ProjectSnapshot } from './nanju-snapshot'
@@ -81,6 +82,17 @@ export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron
       workspaceType: 'nanju',
     })
     return ws
+  })
+
+  // ===== 阶段门禁 =====
+  ipcMain.handle('nanju:get-project-stage', async (_event, input: { workspaceSlug: string; sessionId: string }) => {
+    const project = findNanjuProjectBySession(input.workspaceSlug, input.sessionId)
+    return project ? { stage: project.currentStage, project } : null
+  })
+
+  ipcMain.handle('nanju:advance-stage', async (_event, input: { workspaceSlug: string; sessionId: string; stage: string }) => {
+    advanceNanjuStage(input.workspaceSlug, input.sessionId, input.stage as any)
+    return true
   })
 
   // ===== 角色编排 =====
