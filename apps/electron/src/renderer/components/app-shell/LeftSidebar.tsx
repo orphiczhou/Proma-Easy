@@ -1316,30 +1316,12 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
   }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView])
 
-  /** 打开南大向导：确保南大工作区存在并切换到它 */
-  const handleOpenNanju = React.useCallback(async (): Promise<void> => {
-    try {
-      const ws = await window.electronAPI.nanjuEnsureWorkspace() as { id: string; name: string; slug: string }
-      if (!ws?.id) return
-
-      // 刷新工作区列表
-      const updated = await window.electronAPI.listAgentWorkspaces()
-      setWorkspaces(updated)
-
-      // 切换到南大工作区
-      setCurrentWorkspaceId(ws.id)
-      setActiveView('conversations')
-      setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, ws.id))
-      window.electronAPI.updateSettings({ agentWorkspaceId: ws.id }).catch(console.error)
-
-      // 确保在 Agent 模式
-      if (mode !== 'agent') {
-        setMode('agent')
-      }
-    } catch (e) {
-      console.error('[南大向导] 打开失败:', e)
-    }
-  }, [mode, setCurrentWorkspaceId, setActiveView, setWorkspaces, setMode])
+  /** 打开南大向导分选页面 */
+  const handleOpenNanju = React.useCallback((): void => {
+    const result = openTab(tabs, { type: 'nanju-mode-select', sessionId: 'nanju-mode-select', title: '南大向导' })
+    setTabs(result.tabs)
+    setActiveTabId(result.activeTabId)
+  }, [tabs, setTabs, setActiveTabId])
 
   /** 合成「自动任务」组头部点击：仅折叠/展开，绝不切换当前项目（它不是真实工作区） */
   const handleToggleGroupCollapse = React.useCallback((groupId: string): void => {
@@ -2773,18 +2755,23 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         </Tooltip>
       </div>
 
-      {/* 南大向导入口：切换到南大工作区 */}
+      {/* 南大向导入口：特殊工作区，点击进入分选页面 */}
       <div className="px-3 pb-0.5">
         <button
           type="button"
-          onClick={() => { void handleOpenNanju() }}
+          onClick={() => handleOpenNanju()}
           className={cn(
-            'w-full flex items-center gap-2 px-3 py-1.5 rounded-[8px] text-[13px] font-medium transition-colors titlebar-no-drag',
-            'text-foreground/55 hover:bg-foreground/[0.055] hover:text-foreground/80'
+            'w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[13px] font-medium transition-all duration-100 titlebar-no-drag border',
+            activeTabId === 'nanju-mode-select'
+              ? 'bg-purple-500/10 text-foreground border-purple-500/20'
+              : 'text-foreground/65 hover:bg-foreground/[0.055] hover:text-foreground/85 border-transparent'
           )}
         >
-          <GraduationCap size={15} className="flex-shrink-0 text-purple-500" />
+          <div className="flex-shrink-0 w-6 h-6 rounded-md bg-purple-500/10 flex items-center justify-center">
+            <GraduationCap size={14} className="text-purple-500" />
+          </div>
           <span>南大向导</span>
+          <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/10 text-purple-500/70">向导</span>
         </button>
       </div>
 

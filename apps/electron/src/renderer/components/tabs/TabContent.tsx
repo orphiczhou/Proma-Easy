@@ -7,13 +7,16 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { tabsAtom } from '@/atoms/tab-atoms'
+import { getDefaultStore } from 'jotai'
+import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
+import type { TabItem } from '@/atoms/tab-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { ChatView } from '@/components/chat'
 import { AgentView } from '@/components/agent'
 import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
 import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
+import { ModeSelectView } from '@/components/nanju/ModeSelectView'
 import { ScratchPadView } from '@/components/scratch-pad/ScratchPadView'
 import { TabErrorBoundary } from './TabErrorBoundary'
 
@@ -64,6 +67,46 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     )
   }
 
+
+  if (tab.type === 'nanju-mode-select') {
+    return (
+      <ModeSelectView
+        onSelectMode={(mode: 'quick' | 'iterative', name: string) => {
+          void (async () => {
+            // 1. 确保南大工作区存在
+            const ws = await window.electronAPI.nanjuEnsureWorkspace() as { id: string; name: string; slug: string }
+
+            // 2. 在南大工作区内创建 Agent 会话
+            const session = await window.electronAPI.createAgentSession(name, undefined, ws.id).catch(() => null)
+            const sessionId = session?.id ?? `nanju-${Date.now()}`
+
+            // 3. 创建南大项目元数据
+            try {
+              await window.electronAPI.nanjuCreateProject({
+                name,
+                mode,
+                workspaceSlug: ws.slug,
+                sessionId,
+              })
+            } catch (e) {
+              console.error('[南大向导] 创建项目元数据失败:', e)
+            }
+
+            // 4. 替换当前 tab 为普通 agent 会话
+            const currentTabs = getDefaultStore().get(tabsAtom)
+            const filtered = currentTabs.filter((t: TabItem) => t.id !== tab.id)
+            const result = openTab(filtered, {
+              type: 'agent',
+              sessionId,
+              title: name,
+            })
+            getDefaultStore().set(tabsAtom, result.tabs)
+            getDefaultStore().set(activeTabIdAtom, result.activeTabId)
+          })()
+        }}
+      />
+    )
+  }
 
   return (
     <TabErrorBoundary key={tab.sessionId} sessionId={tab.sessionId}>
