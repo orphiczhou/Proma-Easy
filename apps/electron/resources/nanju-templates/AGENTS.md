@@ -5,15 +5,29 @@
 ## 三种委派机制
 
 ### 1. delegate_agent（子会话 — 推荐）
-创建一个可见的子会话，使用不同模型。
+创建一个子会话，使用不同渠道和模型。
+
+**可见子会话**（显示在侧边栏）：
 ```
 mcp__collaboration__delegate_agent({
   title: "UX原型设计",
   task: "根据以下PRD生成HTML原型...",
-  channelId: "glm-zhipu",      // 跨渠道（可选）
+  channelId: "glm-zhipu",      // 跨渠道
   modelId: "glm-5.2"           // 该渠道下的模型
 })
 ```
+
+**内联子Agent**（不在侧边栏显示，结果直接返回）：
+```
+mcp__collaboration__delegate_agent({
+  title: "AC审计-攻击者",
+  task: "审查以下PRD文档的缺陷...",
+  channelId: "deepseek",       // 跨渠道
+  modelId: "deepseek-v4-pro",
+  inline: true                 // 内联模式
+})
+```
+
 然后等待完成：
 ```
 mcp__collaboration__wait_for_delegations({})
