@@ -1316,6 +1316,31 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
   }, [currentWorkspaceId, setCurrentWorkspaceId, setActiveView])
 
+  /** 打开南大向导：确保南大工作区存在并切换到它 */
+  const handleOpenNanju = React.useCallback(async (): Promise<void> => {
+    try {
+      const ws = await window.electronAPI.nanjuEnsureWorkspace() as { id: string; name: string; slug: string }
+      if (!ws?.id) return
+
+      // 刷新工作区列表
+      const updated = await window.electronAPI.listAgentWorkspaces()
+      setWorkspaces(updated)
+
+      // 切换到南大工作区
+      setCurrentWorkspaceId(ws.id)
+      setActiveView('conversations')
+      setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, ws.id))
+      window.electronAPI.updateSettings({ agentWorkspaceId: ws.id }).catch(console.error)
+
+      // 确保在 Agent 模式
+      if (mode !== 'agent') {
+        setMode('agent')
+      }
+    } catch (e) {
+      console.error('[南大向导] 打开失败:', e)
+    }
+  }, [mode, setCurrentWorkspaceId, setActiveView, setWorkspaces, setMode])
+
   /** 合成「自动任务」组头部点击：仅折叠/展开，绝不切换当前项目（它不是真实工作区） */
   const handleToggleGroupCollapse = React.useCallback((groupId: string): void => {
     setCollapsedWorkspaceIds((prev) => toggleSetEntry(prev, groupId))
@@ -2748,23 +2773,17 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         </Tooltip>
       </div>
 
-      {/* 南大向导入口 */}
+      {/* 南大向导入口：切换到南大工作区 */}
       <div className="px-3 pb-0.5">
         <button
           type="button"
-          onClick={() => {
-            const result = openTab(tabs, { type: 'nanju-mode-select', sessionId: 'nanju-mode-select', title: '南大向导' })
-            setTabs(result.tabs)
-            setActiveTabId(result.activeTabId)
-          }}
+          onClick={() => { void handleOpenNanju() }}
           className={cn(
             'w-full flex items-center gap-2 px-3 py-1.5 rounded-[8px] text-[13px] font-medium transition-colors titlebar-no-drag',
-            activeTabId === 'nanju-mode-select'
-              ? 'bg-primary/10 text-foreground'
-              : 'text-foreground/55 hover:bg-foreground/[0.055] hover:text-foreground/80'
+            'text-foreground/55 hover:bg-foreground/[0.055] hover:text-foreground/80'
           )}
         >
-          <GraduationCap size={15} className="flex-shrink-0" />
+          <GraduationCap size={15} className="flex-shrink-0 text-purple-500" />
           <span>南大向导</span>
         </button>
       </div>

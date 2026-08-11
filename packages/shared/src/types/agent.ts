@@ -26,6 +26,8 @@ export interface AgentWorkspace {
   projectRootPath?: string
   /** 本地项目根目录的运行时状态；Proma 托管项目不设置此字段。 */
   projectRootStatus?: LocalProjectRootStatus
+  /** 工作区类型。默认为普通工作区；'nanju' = 南大向导（继承普通工作区 + 角色编排 + UX 预览） */
+  workspaceType?: 'default' | 'nanju'
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -38,6 +40,8 @@ export interface CreateAgentWorkspaceInput {
   name: string
   /** 可选的用户本地项目根目录 */
   projectRootPath?: string
+  /** 工作区类型。'nanju' = 南大向导工作区 */
+  workspaceType?: 'default' | 'nanju'
 }
 
 /** 创建项目后自动生成的首个 Agent 会话。 */

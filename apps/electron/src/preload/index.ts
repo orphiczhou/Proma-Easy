@@ -1245,6 +1245,9 @@ export interface ElectronAPI {
   nanjuRecordEvent: (input: Record<string, unknown>) => Promise<unknown>
   nanjuReadEvents: (input: Record<string, unknown>) => Promise<unknown[]>
 
+  /** 南大项目：确保南大工作区存在 */
+  nanjuEnsureWorkspace: () => Promise<unknown>
+
   /** 南大项目：角色编排 */
   nanjuLoadRoleConfig: (roleId: string) => Promise<unknown>
   nanjuLoadRoleSequence: () => Promise<unknown>
@@ -2850,6 +2853,9 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('nanju:record-event', input),
   nanjuReadEvents: (input: Record<string, unknown>) =>
     ipcRenderer.invoke('nanju:read-events', input),
+
+  nanjuEnsureWorkspace: () =>
+    ipcRenderer.invoke('nanju:ensure-workspace'),
 
   nanjuLoadRoleConfig: (roleId: string) =>
     ipcRenderer.invoke('nanju:load-role-config', roleId),

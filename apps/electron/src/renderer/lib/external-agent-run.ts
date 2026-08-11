@@ -3,7 +3,7 @@ import type { AgentStreamState } from '@/atoms/agent-atoms'
 
 export interface ExternalAgentRunTab {
   id: string
-  type: 'chat' | 'agent' | 'scratch' | 'preview' | 'tutorial' | 'nanju-mode-select' | 'nanju-workspace'
+  type: 'chat' | 'agent' | 'scratch' | 'preview' | 'tutorial'
   sessionId: string
   title: string
 }

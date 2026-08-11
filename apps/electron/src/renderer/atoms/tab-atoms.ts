@@ -22,7 +22,7 @@ import type { PreviewFile } from './preview-atoms'
 // ===== 类型定义 =====
 
 /** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'chat' | 'agent' | 'scratch' | 'preview' | 'tutorial' | 'nanju-mode-select' | 'nanju-workspace'
+export type TabType = 'chat' | 'agent' | 'scratch' | 'preview' | 'tutorial'
 
 /** Scratch Pad 专用的固定 sessionId */
 export const SCRATCH_PAD_ID = '__scratch-pad__'

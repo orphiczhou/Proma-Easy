@@ -16,6 +16,7 @@ import { recordTelemetry, readTelemetry } from './nanju-telemetry'
 import type { ProjectMode } from './nanju-project'
 import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
+import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
 import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } from './nanju-orchestrator'
 import type { TelemetryEventType } from './nanju-telemetry'
 import type { ProjectSnapshot } from './nanju-snapshot'
@@ -65,6 +66,21 @@ export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron
       return { ok: true }
     }
     return { ok: false, error: 'No main window' }
+  })
+
+  // ===== 南大向导工作区 =====
+  ipcMain.handle('nanju:ensure-workspace', async () => {
+    // 查找已有的南大工作区
+    const workspaces = listAgentWorkspaces()
+    const existing = workspaces.find((w) => w.workspaceType === 'nanju')
+    if (existing) return existing
+
+    // 创建南大专属工作区
+    const ws = createAgentWorkspace({
+      name: '南大向导',
+      workspaceType: 'nanju',
+    })
+    return ws
   })
 
   // ===== 角色编排 =====

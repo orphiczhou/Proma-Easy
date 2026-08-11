@@ -254,8 +254,8 @@ function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: bool
 }
 
 export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput): AgentWorkspace {
-  const { name, projectRootPath } = typeof input === 'string'
-    ? { name: input, projectRootPath: undefined }
+  const { name, projectRootPath, workspaceType } = typeof input === 'string'
+    ? { name: input, projectRootPath: undefined, workspaceType: undefined as ('default' | 'nanju' | undefined) }
     : input
   const index = readIndex()
 
@@ -289,6 +289,7 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
     name,
     slug,
     projectRootPath: normalizedProjectRootPath,
+    workspaceType: workspaceType ?? 'default',
     createdAt: now,
     updatedAt: now,
   }
@@ -296,6 +297,22 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
   try {
     getAgentWorkspacePath(slug)
     copyDefaultSkills(slug, { throwOnError: true })
+
+    // 南大向导工作区：注入调度员 AGENTS.md
+    if (workspaceType === 'nanju') {
+      const wsPath = getAgentWorkspacePath(slug)
+      const agentsMdSource = join(__dirname, '..', '..', 'resources', 'nanju-templates', 'AGENTS.md')
+      const agentsMdDest = join(wsPath, 'workspace-files', 'AGENTS.md')
+      try {
+        const fs = require('node:fs')
+        const wsFilesDir = join(wsPath, 'workspace-files')
+        if (!fs.existsSync(wsFilesDir)) fs.mkdirSync(wsFilesDir, { recursive: true })
+        fs.copyFileSync(agentsMdSource, agentsMdDest)
+        console.log('[南大向导] 已注入调度员 AGENTS.md')
+      } catch (e) {
+        console.error('[南大向导] AGENTS.md 注入失败:', e)
+      }
+    }
   } catch (error) {
     const workspacesRoot = resolve(getAgentWorkspacesDir())
     const workspaceDir = resolve(join(workspacesRoot, slug))
