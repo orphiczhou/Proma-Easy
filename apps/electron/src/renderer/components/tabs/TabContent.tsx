@@ -6,8 +6,10 @@
  */
 
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
-import { tabsAtom } from '@/atoms/tab-atoms'
+import { useAtomValue, useSetAtom } from 'jotai'
+import { getDefaultStore } from 'jotai'
+import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
+import type { TabItem } from '@/atoms/tab-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { ChatView } from '@/components/chat'
 import { AgentView } from '@/components/agent'
@@ -69,10 +71,36 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
   if (tab.type === 'nanju-mode-select') {
     return (
       <ModeSelectView
-        onSelectMode={(_mode: 'quick' | 'iterative', _name: string) => {
-          // Mode selection handled by parent via nanju IPC
-          // TabContent stays as placeholder; actual session creation
-          // is triggered by the atom update in useGlobalAgentListeners
+        onSelectMode={(mode: 'quick' | 'iterative', name: string) => {
+          void (async () => {
+            // 1. 创建 Agent 会话
+            const session = await window.electronAPI.createAgentSession(name).catch(() => null)
+
+            const sessionId = session?.id ?? `nanju-${Date.now()}`
+
+            // 2. 创建南大项目
+            try {
+              await window.electronAPI.nanjuCreateProject({
+                name,
+                mode,
+                workspaceSlug: 'default',
+                sessionId,
+              })
+            } catch (e) {
+              console.error('[南大向导] 创建项目失败:', e)
+            }
+
+            // 3. 替换当前 tab 为 nanju-workspace
+            const currentTabs = getDefaultStore().get(tabsAtom)
+            const filtered = currentTabs.filter((t: TabItem) => t.id !== tab.id)
+            const result = openTab(filtered, {
+              type: 'nanju-workspace',
+              sessionId,
+              title: name,
+            })
+            getDefaultStore().set(tabsAtom, result.tabs)
+            getDefaultStore().set(activeTabIdAtom, result.activeTabId)
+          })()
         }}
       />
     )
