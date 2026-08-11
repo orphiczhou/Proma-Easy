@@ -1245,6 +1245,17 @@ export interface ElectronAPI {
   nanjuRecordEvent: (input: Record<string, unknown>) => Promise<unknown>
   nanjuReadEvents: (input: Record<string, unknown>) => Promise<unknown[]>
 
+  /** 南大项目：角色编排 */
+  nanjuLoadRoleConfig: (roleId: string) => Promise<unknown>
+  nanjuLoadRoleSequence: () => Promise<unknown>
+  nanjuGetRoleSequence: (mode: 'quick' | 'iterative') => Promise<unknown>
+  nanjuCreateRoleSession: (input: { roleId: string; workspaceId: string; projectContext?: string }) => Promise<unknown>
+
+  /** 南大项目：快照管理 */
+  nanjuCreateSnapshot: (input: { sessionId: string; projectId: string; label?: string }) => Promise<unknown>
+  nanjuListSnapshots: (projectId: string) => Promise<unknown[]>
+  nanjuRollbackSnapshot: (input: { projectId: string; snapshotId: string }) => Promise<unknown>
+
   /** 南大项目：启动 HTML 文件监听 */
   nanjuStartHtmlWatcher: (workspaceSlug: string) => Promise<unknown>
 
@@ -2839,6 +2850,27 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('nanju:record-event', input),
   nanjuReadEvents: (input: Record<string, unknown>) =>
     ipcRenderer.invoke('nanju:read-events', input),
+
+  nanjuLoadRoleConfig: (roleId: string) =>
+    ipcRenderer.invoke('nanju:load-role-config', roleId),
+
+  nanjuLoadRoleSequence: () =>
+    ipcRenderer.invoke('nanju:load-role-sequence'),
+
+  nanjuGetRoleSequence: (mode) =>
+    ipcRenderer.invoke('nanju:get-role-sequence', mode),
+
+  nanjuCreateRoleSession: (input) =>
+    ipcRenderer.invoke('nanju:create-role-session', input),
+
+  nanjuCreateSnapshot: (input) =>
+    ipcRenderer.invoke('nanju:create-snapshot', input),
+
+  nanjuListSnapshots: (projectId) =>
+    ipcRenderer.invoke('nanju:list-snapshots', projectId),
+
+  nanjuRollbackSnapshot: (input) =>
+    ipcRenderer.invoke('nanju:rollback-snapshot', input),
 
   nanjuStartHtmlWatcher: (workspaceSlug: string) =>
     ipcRenderer.invoke('nanju:start-html-watcher', workspaceSlug),

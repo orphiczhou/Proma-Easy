@@ -16,6 +16,7 @@ import { recordTelemetry, readTelemetry } from './nanju-telemetry'
 import type { ProjectMode } from './nanju-project'
 import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
+import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } from './nanju-orchestrator'
 import type { TelemetryEventType } from './nanju-telemetry'
 import type { ProjectSnapshot } from './nanju-snapshot'
 
@@ -64,6 +65,25 @@ export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron
       return { ok: true }
     }
     return { ok: false, error: 'No main window' }
+  })
+
+  // ===== 角色编排 =====
+  ipcMain.handle('nanju:load-role-config', async (_event, roleId: string) => {
+    return loadRoleConfig(roleId)
+  })
+
+  ipcMain.handle('nanju:load-role-sequence', async () => {
+    return loadRoleSequence()
+  })
+
+  ipcMain.handle('nanju:get-role-sequence', async (_event, mode: 'quick' | 'iterative') => {
+    return getRoleSequence(mode)
+  })
+
+  ipcMain.handle('nanju:create-role-session', async (_event, input: {
+    roleId: string; workspaceId: string; projectContext?: string;
+  }) => {
+    return createRoleSession(input.roleId, input.workspaceId, input.projectContext)
   })
 
   // ===== 快照管理 =====
