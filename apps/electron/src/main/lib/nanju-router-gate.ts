@@ -5,7 +5,7 @@
  * 在 canUseTool 中调用，按阶段限制调度员可用工具。
  */
 
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, statSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { listNanjuProjects, type NanjuProject } from './nanju-project'
 import { getPhaseNode, type PhaseId, checkOutputFormat } from './nanju-router'
@@ -67,7 +67,7 @@ export function checkNanjuRouterGate(
   }
 
   // 活跃阶段
-  const whitelist = PHASE_TOOL_WHITELIST[stage] ?? PHASE_TOOL_WHITELIST.requirements
+  const whitelist = PHASE_TOOL_WHITELIST[stage] ?? PHASE_TOOL_WHITELIST.delivered
   if (whitelist.has(toolName)) return null
 
   // 阶段信息
@@ -119,7 +119,6 @@ export function verifyPhaseOutput(
   }
 
   // 最低格式检查
-  const { readFileSync } = require('node:fs')
   const content = readFileSync(filePath, 'utf-8')
   if (!checkOutputFormat(phaseId, content)) {
     return `产出文件格式不符合要求（缺少基本结构）：${phase.outputPath}`

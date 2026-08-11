@@ -185,7 +185,7 @@ export function handlePhaseResult(result: PhaseResult, phase: PhaseNode): PhaseA
     return { action: 'notify_user', reason: `${phase.title} 已重试 ${phase.retryLimit} 次仍失败，是否终止？` }
   }
   // AC 发现 red → 通知用户
-  if (result.acFindings?.some((f) => f.severity === 'red')) {
+  if (phase.requiresAC && result.acFindings?.some((f) => f.severity === 'red')) {
     return { action: 'notify_user', reason: 'AC 审计发现严重问题，请查看后决定' }
   }
   // 正常完成 → 用户确认
@@ -198,11 +198,12 @@ export function handlePhaseResult(result: PhaseResult, phase: PhaseNode): PhaseA
 
 // ===== 最低内容格式检查（修正 Y5） =====
 
-const FORMAT_CHECKS: Partial<Record<PhaseId, (content: string) => boolean>> = {
+const FORMAT_CHECKS: Record<PhaseId, (content: string) => boolean> = {
   requirements: (c) => c.includes('# ') || c.includes('## '),
   prototype: (c) => c.includes('<html') || c.includes('<!DOCTYPE') || c.includes('<div'),
   architecture: (c) => c.includes('# ') || c.includes('## '),
   planning: (c) => c.includes('# ') || c.includes('## '),
+  delivered: () => true,
 }
 
 /** 检查产出文件内容是否符合最低格式要求 */

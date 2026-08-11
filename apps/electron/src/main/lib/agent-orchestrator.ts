@@ -1090,11 +1090,13 @@ export class AgentOrchestrator {
           return validationFailure
         }
 
-        // ── 南大向导路由硬门禁（优先于权限模式） ──
-        const nanjuGate = checkNanjuRouterGate(workspaceSlug, sessionId, toolName, input)
-        if (nanjuGate) {
-          console.log(`[南大路由门禁] 拒绝工具 ${toolName}`)
-          return nanjuGate
+        // ── 南大向导路由硬门禁（优先于权限模式，automation 会话跳过） ──
+        if (!automationContext && !input.triggeredBy) {
+          const nanjuGate = checkNanjuRouterGate(workspaceSlug, sessionId, toolName, input)
+          if (nanjuGate) {
+            console.log(`[南大路由门禁] 拒绝工具 ${toolName}`)
+            return nanjuGate
+          }
         }
 
         // ── Write 大文件 token 截断防护 ──
