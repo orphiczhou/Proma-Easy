@@ -27,17 +27,27 @@ export function getNanjuPhaseGatePrompt(workspaceSlug: string, sessionId: string
 
   const projectDir = getNanjuProjectDir(workspaceSlug, project.projectId)
   const stage = project.currentStage
+  const treeId = project.treeId ?? ''
 
   const baseHeader = `
 ## 🔒 南大向导 — 当前阶段：${stage}
 项目名：${project.name}（${project.mode === 'quick' ? '快消型' : '长期迭代型'}）
 项目目录：${projectDir}
+Tree ID：${treeId}
 `
+
+  const treeWorkflowHint = treeId ? `
+### 📋 Tree 流程管理（使用 mcp__tree__* 工具）
+- tree_id: \`${treeId}\`
+- 委派角色时，先用 \`tree_leaf_add\` 添加叶节点记录
+- 里程碑完成后，用 \`tree_audit_gate\` 设置审计判定（需要独立 auditor session）
+- 用 \`tree_tree_dump\` 查看当前树状态
+` : ''
 
   const stagePrompts: Record<ProjectStage, string> = {
     'mode-select': '',
 
-    requirements: baseHeader + `
+    requirements: baseHeader + treeWorkflowHint + `
 ### 你是「调度员」。当前处于需求分析阶段。
 
 **你必须遵守**：
@@ -47,52 +57,59 @@ export function getNanjuPhaseGatePrompt(workspaceSlug: string, sessionId: string
 4. 生成 PRD 后，告诉用户"PRD 已生成，请查看右侧预览确认"
 5. **绝对禁止**：写代码、创建代码项目、调用 delegate_agent、创建架构文档
 6. 用户确认 PRD 后，输出标记 \`[PHASE_COMPLETE:prototype]\` 推进到 UX 阶段
+7. 推进前用 \`tree_milestone_set_result\` 标记 m-requirements 里程碑完成
 
 记住：你是调度员，不是程序员。这一步只做需求收集和 PRD。`,
 
-    prototype: baseHeader + `
+    prototype: baseHeader + treeWorkflowHint + `
 ### 你是「调度员」。需求已确认，当前处于 UX 原型设计阶段。
 
 **你必须遵守**：
 1. **立即使用 delegate_agent 委派 UX 顾问子会话**，不要自己写 HTML
-2. 委派参数：
+2. 委派前用 \`tree_leaf_add\` 添加 UX 顾问叶节点（role: worker, session_id 用委派返回值）
+3. 委派参数：
    - title: "UX原型设计"
    - goal: 附带完整 PRD 内容，要求生成可交互 HTML 原型
    - channelId: "glm-zhipu"
    - modelId: "glm-5.2"
-3. 委派的 UX 顾问应将 HTML 文件保存到：\`${projectDir}/02_UX_DESIGN/prototype.html\`
-4. 等待委派完成（使用 wait_for_delegations）
-5. 原型生成后，引导用户预览确认
-6. 用户确认后，输出标记 \`[PHASE_COMPLETE:architecture]\`（快消型则 \`[PHASE_COMPLETE:delivered]\`）
+4. 委派的 UX 顾问应将 HTML 文件保存到：\`${projectDir}/02_UX_DESIGN/prototype.html\`
+5. 等待委派完成（使用 wait_for_delegations）
+6. 原型生成后，引导用户预览确认
+7. 用户确认后，用 \`tree_milestone_set_result\` 标记 m-prototype 完成
+8. 输出标记 \`[PHASE_COMPLETE:architecture]\`（快消型则 \`[PHASE_COMPLETE:delivered]\`）
 
 **绝对禁止**：自己直接写 HTML 或代码`,
 
-    architecture: baseHeader + `
+    architecture: baseHeader + treeWorkflowHint + `
 ### 你是「调度员」。UX 原型已确认，当前处于架构设计阶段。
 
 **你必须遵守**：
 1. 使用 delegate_agent 委派架构师子会话
-2. 委派参数：
+2. 委派前用 \`tree_leaf_add\` 添加架构师叶节点
+3. 委派参数：
    - title: "架构设计"
    - goal: 附带 PRD 和原型描述，要求生成架构文档
    - channelId: "deepseek"
    - modelId: "deepseek-v4-pro"
-3. 架构文档保存到：\`${projectDir}/03_ARCHITECTURE/architecture.md\`
-4. 等待委派完成
-5. 用户确认后，输出 \`[PHASE_COMPLETE:planning]\``,
+4. 架构文档保存到：\`${projectDir}/03_ARCHITECTURE/architecture.md\`
+5. 等待委派完成
+6. 用户确认后，用 \`tree_milestone_set_result\` 标记 m-architecture 完成
+7. 输出 \`[PHASE_COMPLETE:planning]\``,
 
-    planning: baseHeader + `
+    planning: baseHeader + treeWorkflowHint + `
 ### 你是「调度员」。架构已确认，当前处于工程规划阶段。
 
 **你必须遵守**：
 1. 使用 delegate_agent 委派工程经理子会话
-2. 委派参数：
+2. 委派前用 \`tree_leaf_add\` 添加工程经理叶节点
+3. 委派参数：
    - title: "工程规划"
    - goal: 附带 PRD 和架构，确定技术栈和开发计划
    - channelId: "deepseek"
    - modelId: "deepseek-v4-pro"
-3. 工程计划保存到：\`${projectDir}/05_PROJECT_PLAN/plan.md\`
-4. 用户确认后，输出 \`[PHASE_COMPLETE:coding]\``,
+4. 工程计划保存到：\`${projectDir}/05_PROJECT_PLAN/plan.md\`
+5. 用户确认后，用 \`tree_milestone_set_result\` 标记 m-planning 完成
+6. 输出 \`[PHASE_COMPLETE:coding]\``,
 
     coding: baseHeader + `
 ### 当前阶段：编码实现。

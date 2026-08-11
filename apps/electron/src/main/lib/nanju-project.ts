@@ -9,7 +9,11 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
-import { getWorkspaceFilesDir } from './config-paths'
+import { getWorkspaceFilesDir, getAgentWorkspacePath } from './config-paths'
+
+// tree-engine 引擎接口（CJS require）
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const treeEngine = require('./tree-engine.cjs')
 
 // ===== 类型 =====
 
@@ -31,12 +35,83 @@ export interface NanjuProject {
   sessionId?: string
   /** 工作区 slug */
   workspaceSlug: string
+  /** 关联的 tree-engine tree_id */
+  treeId?: string
 }
 
 // ===== 路径 =====
 
 function getMetaPath(workspaceSlug: string): string {
   return join(getWorkspaceFilesDir(workspaceSlug), '_nanju-projects.json')
+}
+
+// ===== Tree Engine 初始化 =====
+
+/**
+ * 为南大项目初始化 tree-engine 树。
+ * 创建 .context/trees/ 目录 + root 叶节点 + 各阶段里程碑。
+ */
+function initProjectTree(
+  workspaceSlug: string,
+  projectId: string,
+  projectName: string,
+  mode: ProjectMode,
+  sessionId?: string,
+): string {
+  const treeId = `nanju-${projectId}`
+  const wsRoot = getAgentWorkspacePath(workspaceSlug)
+  const treesDir = join(wsRoot, 'workspace-files', '.context', 'trees')
+  mkdirSync(treesDir, { recursive: true })
+
+  try {
+    // 初始化 root 叶节点
+    treeEngine.run('init', [
+      treeId,
+      '--root-brief', JSON.stringify({
+        project: projectName,
+        mode,
+        goal: '南大向导双脑协作平台 — 调度员按角色序列推进项目',
+      }),
+      '--root-dod', JSON.stringify({
+        deliverables: [
+          '01_PRD/prd.md',
+          '02_UX_DESIGN/prototype.html',
+          '03_ARCHITECTURE/architecture.md',
+          '05_PROJECT_PLAN/plan.md',
+        ],
+      }),
+      ...(sessionId ? ['--session-id', sessionId] : []),
+    ], treesDir, sessionId)
+
+    // 添加里程碑：每个阶段一个
+    const milestones = mode === 'quick'
+      ? [
+          { id: 'm-requirements', desc: '需求分析完成', expect_outputs: ['01_PRD/prd.md'] },
+          { id: 'm-prototype', desc: 'UX原型确认', expect_outputs: ['02_UX_DESIGN/prototype.html'] },
+          { id: 'm-delivered', desc: '快消交付完成', expect_outputs: ['产品原型交付'] },
+        ]
+      : [
+          { id: 'm-requirements', desc: '需求分析完成', expect_outputs: ['01_PRD/prd.md'] },
+          { id: 'm-prototype', desc: 'UX原型确认', expect_outputs: ['02_UX_DESIGN/prototype.html'] },
+          { id: 'm-architecture', desc: '架构设计确认', expect_outputs: ['03_ARCHITECTURE/architecture.md'] },
+          { id: 'm-planning', desc: '工程计划确认', expect_outputs: ['05_PROJECT_PLAN/plan.md'] },
+          { id: 'm-coding', desc: '编码实现完成', expect_outputs: ['项目代码交付'] },
+        ]
+
+    const rootLeafId = `${treeId}-root`
+    for (const ms of milestones) {
+      treeEngine.run('milestone', [
+        'add', treeId, rootLeafId,
+        '--json', JSON.stringify(ms),
+      ], treesDir, sessionId)
+    }
+
+    console.log(`[南大向导] tree 已初始化: ${treeId} (${milestones.length} 个里程碑)`)
+    return treeId
+  } catch (err) {
+    console.error(`[南大向导] tree 初始化失败:`, err)
+    return treeId // 即使失败也返回 treeId，Agent 可手动 tree_init
+  }
 }
 
 // ===== 公开接口 =====
@@ -63,17 +138,6 @@ export function createNanjuProject(input: {
     .replace(/^-|-$/g, '')
     .slice(0, 30) || 'untitled'
   const projectId = slugBase
-  const project: NanjuProject = {
-    projectId,
-    name: input.name,
-    mode: input.mode,
-    status: 'active',
-    currentStage: 'requirements',
-    createdAt: now,
-    updatedAt: now,
-    sessionId: input.sessionId,
-    workspaceSlug: input.workspaceSlug,
-  }
 
   // 避免重名
   const existing = listNanjuProjects(input.workspaceSlug)
@@ -83,7 +147,22 @@ export function createNanjuProject(input: {
     uniqueId = `${projectId}-${counter}`
     counter++
   }
-  project.projectId = uniqueId
+
+  // 初始化 tree-engine 树（使用 uniqueId 确保 tree_id 唯一）
+  const treeId = initProjectTree(input.workspaceSlug, uniqueId, input.name, input.mode, input.sessionId)
+
+  const project: NanjuProject = {
+    projectId: uniqueId,
+    name: input.name,
+    mode: input.mode,
+    status: 'active',
+    currentStage: 'requirements',
+    createdAt: now,
+    updatedAt: now,
+    sessionId: input.sessionId,
+    workspaceSlug: input.workspaceSlug,
+    treeId,
+  }
 
   existing.push(project)
   writeJsonFileAtomic(getMetaPath(input.workspaceSlug), existing)
