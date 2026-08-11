@@ -226,6 +226,14 @@ function assertNonBlank(value: string | undefined, field: string): string {
   return trimmed
 }
 
+/** 允许子委派的会话注册表（南大向导 L2 角色子会话需要内部做 AC 审计） */
+const sessionsAllowingSubDelegation = new Set<string>()
+
+/** 检查指定会话是否允许创建协作子会话（用于 L2 内部 AC 审计） */
+export function sessionAllowsSubDelegation(sessionId: string): boolean {
+  return sessionsAllowingSubDelegation.has(sessionId)
+}
+
 interface DelegateAgentArgs {
   title?: string
   role?: AgentDelegationRole
@@ -238,6 +246,8 @@ interface DelegateAgentArgs {
   /** 南大向导扩展：内联子Agent。设为 true 时不创建侧边栏可见会话，
    *  在后台运行并将结果直接返回给调用方。用于不需要人工交互的角色委派。 */
   inline?: boolean
+  /** 南大向导扩展：允许该子会话内部继续创建 inline 子会话（用于 AC 审计）。 */
+  allowSubDelegation?: boolean
 }
 
 interface StartDelegationResult {
@@ -279,7 +289,10 @@ function assertCanCreateDelegation(
   const delegationDepth = parent?.delegationDepth ?? 0
 
   if (ctx.triggeredBy === 'delegation' || delegationDepth > 0) {
-    throw new Error('协作子会话不能继续创建新的子会话')
+    // 南大向导 L2 角色子会话允许创建 inline 子会话（用于 AC 审计）
+    if (!sessionAllowsSubDelegation(ctx.sessionId)) {
+      throw new Error('协作子会话不能继续创建新的子会话')
+    }
   }
 
   const runningCount = getRunningDelegationCount(ctx.sessionId)
@@ -659,6 +672,10 @@ function startDelegation(
     ? assertEnabledModelForChannel({ channelId: args.channelId, modelId: args.modelId, purpose: '跨渠道协作子会话' })
     : effectiveModelId
   const child = createAgentSession(title, effectiveChannelId, ctx.workspaceId, effectiveModelIdWithChannel)
+  // 南大向导：允许子会话内部创建 inline 子会话（用于 AC 审计）
+  if (args.allowSubDelegation === true) {
+    sessionsAllowingSubDelegation.add(child.id)
+  }
   if (!inlineMode) {
     const rootSessionId = parent?.rootSessionId ?? parent?.id ?? ctx.sessionId
     updateAgentSessionMeta(child.id, {
@@ -698,6 +715,7 @@ function startDelegation(
     role,
     task,
     expectedOutput: args.expectedOutput,
+    allowSubDelegation: args.allowSubDelegation === true,
   })
 
   runRegisteredHeadlessAgent(
@@ -793,6 +811,7 @@ export function buildPiCollaborationTools(
         modelId: Type.Optional(Type.String({ description: '可选目标模型 ID（默认继承父会话模型）' })),
         channelId: Type.Optional(Type.String({ description: '跨渠道委派。指定后子会话使用此渠道（如 glm-zhipu, deepseek）。' })),
         inline: Type.Optional(Type.Boolean({ description: '内联子Agent（不在侧边栏创建会话）。适合不需要人工交互的角色委派，结果直接返回。' })),
+        allowSubDelegation: Type.Optional(Type.Boolean({ description: '允许子会话内部创建 inline 子会话（南大向导 AC 审计用）。' })),
       }),
       async execute(toolCallId: string, params: unknown) {
         const args = params as DelegateAgentArgs

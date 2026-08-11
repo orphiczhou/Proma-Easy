@@ -30,6 +30,12 @@ interface PhaseNode {
   requiresAC: boolean
   retryLimit: number
   next: PhaseId | null
+  /** AC 审计攻击者配置（必须与 channel/model 不同家族） */
+  acAttackerChannel?: string
+  acAttackerModel?: string
+  /** AC 审计防御者配置（必须与攻击者不同家族） */
+  acDefenderChannel?: string
+  acDefenderModel?: string
 }
 
 /** AC 审计 finding（简化版，v2 无 Arbiter） */
@@ -70,6 +76,10 @@ const SENTINEL: PhaseNode = {
   requiresAC: false,
   retryLimit: 0,
   next: null,
+  acAttackerChannel: undefined,
+  acAttackerModel: undefined,
+  acDefenderChannel: undefined,
+  acDefenderModel: undefined,
 }
 
 const REQUIREMENTS: PhaseNode = {
@@ -85,6 +95,11 @@ const REQUIREMENTS: PhaseNode = {
   requiresAC: false,
   retryLimit: 3,
   next: 'prototype',
+  // AC: 攻击者用 GLM，防御者用 MiniMax（与 deepseek 不同家族）
+  acAttackerChannel: 'glm-zhipu',
+  acAttackerModel: 'glm-5.2',
+  acDefenderChannel: 'deepseek',
+  acDefenderModel: 'deepseek-v4-pro',
 }
 
 // ===== 工厂函数（修正 R2：显式定义所有节点） =====
@@ -98,11 +113,16 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     model: 'glm-5.2',
     task: '你是 UX 顾问。根据 PRD 生成可交互 HTML 原型。',
     outputPath: '02_UX_DESIGN/prototype.html',
-    constraints: ['单文件 HTML，内联 CSS', '简洁现代风格', '覆盖 PRD 核心功能'],
+    constraints: ['单文件 HTML，内联 CSS', '简洁现代风格', '覆盖 PRD 核心功能', '包含核心页面的可点击导航'],
     requiresUserConfirmation: true,
     requiresAC: false,
     retryLimit: 2,
     next: mode === 'quick' ? 'delivered' : 'architecture',
+    // AC: 攻击者用 deepseek，防御者用 MiniMax（与 glm 不同家族）
+    acAttackerChannel: 'deepseek',
+    acAttackerModel: 'deepseek-v4-pro',
+    acDefenderChannel: 'glm-zhipu',
+    acDefenderModel: 'glm-5.2',
   }
 
   if (mode === 'quick') {
@@ -122,6 +142,11 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresAC: true,
     retryLimit: 2,
     next: 'planning',
+    // AC: 攻击者用 GLM，防御者用 MiniMax（与 deepseek 不同家族）
+    acAttackerChannel: 'glm-zhipu',
+    acAttackerModel: 'glm-5.2',
+    acDefenderChannel: 'deepseek',
+    acDefenderModel: 'deepseek-v4-pro',
   }
 
   const planning: PhaseNode = {
@@ -137,6 +162,11 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresAC: false,
     retryLimit: 2,
     next: 'delivered',
+    // AC: 攻击者用 GLM，防御者用 MiniMax（与 deepseek 不同家族）
+    acAttackerChannel: 'glm-zhipu',
+    acAttackerModel: 'glm-5.2',
+    acDefenderChannel: 'deepseek',
+    acDefenderModel: 'deepseek-v4-pro',
   }
 
   return [REQUIREMENTS, prototype, architecture, planning, SENTINEL]

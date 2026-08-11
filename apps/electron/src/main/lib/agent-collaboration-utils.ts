@@ -106,14 +106,18 @@ export function buildDelegationPrompt(input: {
   role: AgentDelegationRole
   task: string
   expectedOutput?: string
+  allowSubDelegation?: boolean
 }): string {
   const expectedOutput = input.expectedOutput?.trim()
+  const subDelegationRule = input.allowSubDelegation
+    ? '- 可以用 delegate_agent(inline:true) 创建内联子 Agent 做审查或辅助工作，但不要创建可见的协作子会话。'
+    : '- 不要创建新的协作子会话。'
   return `你是 Proma 协作子 Agent。你由父 Agent 会话 ${input.parentSessionId} 委派创建，委派 ID 为 ${input.delegationId}。
 
 ## 工作边界
 
 - 只处理下面的子任务，不要扩展到父任务的其他部分。
-- 不要创建新的协作子会话。
+${subDelegationRule}
 - 如需修改文件，保持改动最小，并在最终回复说明文件路径和验证结果。
 - 如果信息不足，直接列出缺口，不要编造。
 

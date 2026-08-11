@@ -31,7 +31,7 @@ import { isBuiltinMcpUserEnabled } from '../builtin-mcp/settings'
 import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
-import { buildPiCollaborationTools } from '../agent-collaboration-tools'
+import { buildPiCollaborationTools, sessionAllowsSubDelegation } from '../agent-collaboration-tools'
 import { buildPiSessionTools } from '../agent-session-tools'
 import { buildPiRemoteSessionTools } from '../agent-remote-session-tools'
 import { buildPiTreeTools } from '../tree-mcp-tools'
@@ -873,9 +873,13 @@ export async function buildPiBuiltinTools(
   }
 
   // collaboration 桥接
+  // 南大向导 L2 角色子会话允许获得 collaboration 工具（用于内部 AC 审计）
+  const subDelegationAllowed = ctx.sessionId
+    ? sessionAllowsSubDelegation(ctx.sessionId)
+    : false
   const collaborationAvailable = isBuiltinMcpUserEnabled('collaboration') &&
     !!ctx.workspaceId &&
-    ctx.triggeredBy !== 'delegation'
+    (ctx.triggeredBy !== 'delegation' || subDelegationAllowed)
 
   if (collaborationAvailable) {
     try {
