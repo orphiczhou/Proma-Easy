@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Star, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, Download, Loader2, RotateCw } from 'lucide-react'
+import { Pin, PinOff, Star, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, Download, Loader2, RotateCw, GraduationCap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -70,6 +70,7 @@ import { clearPreviewCacheForSession } from '@/components/diff/DiffTabContent'
 import {
   tabsAtom,
   activeTabIdAtom,
+  openTab,
   activeSessionIdAtom,
   sidebarCollapsedAtom,
   closeTab,
@@ -2745,6 +2746,27 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           </TooltipTrigger>
           <TooltipContent side="bottom">搜索 ({getAcceleratorDisplay(getActiveAccelerator('global-search'))})</TooltipContent>
         </Tooltip>
+      </div>
+
+      {/* 南大向导入口 */}
+      <div className="px-3 pb-0.5">
+        <button
+          type="button"
+          onClick={() => {
+            const result = openTab(tabs, { type: 'nanju-mode-select', sessionId: 'nanju-mode-select', title: '南大向导' })
+            setTabs(result.tabs)
+            setActiveTabId(result.activeTabId)
+          }}
+          className={cn(
+            'w-full flex items-center gap-2 px-3 py-1.5 rounded-[8px] text-[13px] font-medium transition-colors titlebar-no-drag',
+            activeTabId === 'nanju-mode-select'
+              ? 'bg-primary/10 text-foreground'
+              : 'text-foreground/55 hover:bg-foreground/[0.055] hover:text-foreground/80'
+          )}
+        >
+          <GraduationCap size={15} className="flex-shrink-0" />
+          <span>南大向导</span>
+        </button>
       </div>
 
       {/* 任务/日程入口：作为统一规划中心入口。 */}
