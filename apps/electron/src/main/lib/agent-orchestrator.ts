@@ -1678,34 +1678,35 @@ export class AgentOrchestrator {
             // 南大向导：检测 PHASE_ADVANCE 标记 + 文件验证后推进阶段
             if (msg.type === 'result' && workspaceSlug && !automationContext && !input.triggeredBy) {
               try {
-                const allMsgs = getAgentSessionMessages(sessionId)
-                const lastAssistant = [...allMsgs].reverse().find((m) => (m as { type?: string }).type === 'assistant')
-                if (lastAssistant) {
-                  const textBlocks = (lastAssistant as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
-                  const fullText = (textBlocks ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
-                  // 兼容旧标记 PHASE_COMPLETE 和新标记 PHASE_ADVANCE
-                  const phaseMatch = fullText.match(/(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)/i)
-                  if (phaseMatch) {
-                    const newStage = phaseMatch[1]?.toLowerCase()
-                    // 文件验证：检查产出文件是否存在且格式正确（修正 F6 + Y5）
-                    const { verifyPhaseOutput } = require('./nanju-router-gate')
-                    const { listNanjuProjects } = require('./nanju-project')
-                    const projects = listNanjuProjects(workspaceSlug)
-                    const project = projects.find((p: { sessionId: string }) => p.sessionId === sessionId)
-                    if (project) {
-                      const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
-                      if (verifyError) {
-                        console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
-                      } else {
-                        const { updateNanjuProject } = require('./nanju-project')
-                        updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
-                        console.log(`[南大路由] 阶段推进: ${project.name} → ${newStage}`)
-                      }
+                // 从本轮累积的消息中提取最后一条 assistant 文本
+                const lastAccumulated = [...accumulatedMessages].reverse().find(
+                  (m) => (m as { type?: string }).type === 'assistant',
+                )
+                const textBlocks = (lastAccumulated as { message?: { content?: Array<{ type: string; text?: string }> } })?.message?.content
+                const fullText = (textBlocks ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+                const phaseMatch = fullText.match(/(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)/i)
+                if (phaseMatch) {
+                  const newStage = phaseMatch[1]?.toLowerCase()
+                  console.log(`[南大路由] 检测到 PHASE_ADVANCE: ${newStage}`)
+                  // 文件验证
+                  const { verifyPhaseOutput } = require('./nanju-router-gate')
+                  const { listNanjuProjects, updateNanjuProject } = require('./nanju-project')
+                  const projects = listNanjuProjects(workspaceSlug)
+                  const project = projects.find((p: { sessionId: string }) => p.sessionId === sessionId)
+                  if (project) {
+                    const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
+                    if (verifyError) {
+                      console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
+                    } else {
+                      updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
+                      console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
                     }
+                  } else {
+                    console.log(`[南大路由] 未找到关联的南大项目: sessionId=${sessionId}`)
                   }
                 }
               } catch (e) {
-                // 非南大会话或检测失败，静默跳过
+                console.warn(`[南大路由] PHASE_ADVANCE 检测异常:`, e instanceof Error ? e.message : String(e))
               }
             }
 
