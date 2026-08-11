@@ -33,24 +33,34 @@ mcp__collaboration__delegate_agent({
 mcp__collaboration__wait_for_delegations({})
 ```
 
-### 2. remote_session（远程会话）
-连接其他 Proma 实例，适合需要独立环境的任务。
+### 2. remote_session（远程/本实例会话）
+在本实例或其他 Proma 实例上创建**一级会话**（与调度员并列，不是子会话）。
+适合需要独立可见会话、跨渠道模型的场景。
+
+调用本实例（instance: "release"）时，会话创建在当前工作区，侧边栏可见。
+
 ```
+// 创建一级会话（指定 workspace_id 确保在同一工作区）
 mcp__remote-session__remote_create_session({
   instance: "release",
   channel_id: "glm-zhipu",
   model_id: "glm-5.2",
-  title: "UX原型设计"
+  title: "UX原型设计",
+  workspace_id: "当前工作区ID"
 })
-```
-然后发消息：
-```
+
+// 发送任务消息
 mcp__remote-session__remote_send_message({
   instance: "release",
-  session_id: "...",
-  message: "..."
+  session_id: "创建返回的ID",
+  message: "根据以下PRD生成HTML原型...",
+  wait: true              // 等待完成
 })
 ```
+
+**与 delegate_agent 的区别**：
+- delegate_agent → 子会话（嵌套在调度员下方）
+- remote_session → 一级会话（与调度员并列，独立可见）
 
 ### 3. fork_session + send_message（上下文分支）
 从当前会话 fork 一个分支，保留对话历史。
@@ -70,11 +80,16 @@ mcp__session__send_message({
 | 角色 | 推荐渠道 | 推荐模型 | 委派方式 |
 |------|----------|----------|----------|
 | 需求分析师 | （调度员自己做） | — | — |
-| UX顾问 | glm-zhipu | glm-5.2 | delegate_agent(channelId) |
-| 架构师 | deepseek | deepseek-v4-pro | delegate_agent(channelId) |
-| 工程经理 | deepseek | deepseek-v4-pro | delegate_agent(channelId) |
-| AC审计-攻击者 | deepseek | deepseek-v4-pro | delegate_agent 或 remote |
-| AC审计-防御者 | glm-zhipu | glm-5.2 | delegate_agent(channelId) |
+| UX顾问 | glm-zhipu | glm-5.2 | delegate_agent 或 remote_session |
+| 架构师 | deepseek | deepseek-v4-pro | delegate_agent 或 remote_session |
+| 工程经理 | deepseek | deepseek-v4-pro | delegate_agent 或 remote_session |
+| AC审计-攻击者 | deepseek | deepseek-v4-pro | inline 子Agent |
+| AC审计-防御者 | glm-zhipu | glm-5.2 | inline 子Agent |
+
+**选择指南**：
+- 需要用户可见/交互 → delegate_agent（子会话）或 remote_session（一级会话）
+- 后台审计/验证 → inline 子Agent
+- 需要独立环境 → remote_session
 
 ## 任务树管理
 

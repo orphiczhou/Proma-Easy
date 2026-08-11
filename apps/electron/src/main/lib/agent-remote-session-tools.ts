@@ -263,15 +263,15 @@ export function buildPiRemoteSessionTools(sdk: PiSdk): ToolDefinition[] {
     // ---- 写入工具 ----
     sdk.defineTool({
       name: 'mcp__remote-session__remote_create_session',
-      label: '远端创建会话',
-      description: '在远端 Proma 实例上创建新会话。',
-      promptSnippet: 'remote_create_session: create a session on a remote instance.',
+      label: '创建会话（本实例/远端）',
+      description: '创建一个一级会话（与调度员并列，非子会话）。instance=release 调用本实例。指定 workspace_id 让会话出现在同一工作区侧边栏。跨渠道跨模型。',
+      promptSnippet: 'remote_create_session: create a top-level session (local or remote).',
       parameters: Type.Object({
-        instance: Type.String({ description: '远端实例名' }),
-        channel_id: Type.String({ description: '远端渠道 ID' }),
+        instance: Type.String({ description: '实例名。本实例用 "release"。' }),
+        channel_id: Type.String({ description: '渠道 ID（如 deepseek, glm-zhipu）' }),
         model_id: Type.Optional(Type.String()),
         title: Type.Optional(Type.String()),
-        workspace_id: Type.Optional(Type.String()),
+        workspace_id: Type.Optional(Type.String({ description: '工作区 ID。指定后会话出现在该工作区侧边栏。' })),
       }),
       async execute(_toolCallId, params) {
         const args = params as { instance: string; channel_id: string; model_id?: string; title?: string; workspace_id?: string }
