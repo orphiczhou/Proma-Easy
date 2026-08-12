@@ -62,7 +62,7 @@ import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { previewFileMapAtom } from '@/atoms/preview-atoms'
+import { previewFileMapAtom, previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta, ProviderType, AskUserRequest, AskUserQuestion } from '@proma/shared'
@@ -452,6 +452,25 @@ export function useGlobalAgentListeners(): void {
   const store = useStore()
 
   useEffect(() => {
+    // 南大向导：全局监听文件预览事件（不依赖 AppShell re-mount）
+    const nanjuPreviewHandler = (_event: unknown, data: { filePath: string; fileName: string }): void => {
+      if (!data?.filePath) return
+      const sessionId = store.get(currentAgentSessionIdAtom)
+      if (!sessionId) return
+      console.log(`[南大预览] 渲染端收到文件变更: ${data.fileName} → session ${sessionId}`)
+      store.set(previewFileMapAtom, (prev) => {
+        const m = new Map(prev)
+        m.set(sessionId, { filePath: data.filePath, previewOnly: true })
+        return m
+      })
+      store.set(previewPanelOpenMapAtom, (prev) => {
+        const m = new Map(prev)
+        m.set(sessionId, true)
+        return m
+      })
+    }
+    window.electronAPI.onNanjuHtmlPreview?.(nanjuPreviewHandler)
+
     /** 正在执行的写工具；写入前的文件存在性用于区分新建和编辑。 */
     const pendingWriteTools = new Map<string, {
       path: string
@@ -1476,6 +1495,7 @@ export function useGlobalAgentListeners(): void {
       cleanupTitleUpdated()
       clearInterval(pruneTimer)
       window.removeEventListener('focus', onWindowFocus)
+      window.electronAPI.offNanjuHtmlPreview?.(nanjuPreviewHandler)
     }
   }, [store]) // store 引用稳定，effect 只执行一次
 }

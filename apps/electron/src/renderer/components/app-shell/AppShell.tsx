@@ -26,7 +26,7 @@ import { WindowControls } from '@/components/WindowControls'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
-import { previewFileMapAtom, previewPanelOpenMapAtom, type PreviewFile } from '@/atoms/preview-atoms'
+
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
@@ -75,34 +75,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     }
   }, [isNanjuWorkspace, currentWorkspace, setSidePanelOpen])
 
-  // 南大向导：监听 HTML/MD 文件变化，自动打开预览分屏
-  const setPreviewPanelOpenMap = useSetAtom(previewPanelOpenMapAtom)
-  const setPreviewFileMap = useSetAtom(previewFileMapAtom)
-  React.useEffect(() => {
-    if (!isNanjuWorkspace || !currentSessionId) return
-    const handler = (_event: unknown, data: { filePath: string; fileName: string }): void => {
-      if (!data || !currentSessionId) return
-      const previewFile: PreviewFile = {
-        filePath: data.filePath,
-        previewOnly: true,
-      }
-      // 直接写入 preview map + 强制 split 模式（不走 openPreview 的 tab/split 偏好）
-      setPreviewFileMap((prev) => {
-        const m = new Map(prev)
-        m.set(currentSessionId, previewFile)
-        return m
-      })
-      setPreviewPanelOpenMap((prev) => {
-        const m = new Map(prev)
-        m.set(currentSessionId, true)
-        return m
-      })
-    }
-    window.electronAPI.onNanjuHtmlPreview?.(handler)
-    return (): void => {
-      window.electronAPI.offNanjuHtmlPreview?.(handler)
-    }
-  }, [isNanjuWorkspace, currentSessionId, setPreviewFileMap, setPreviewPanelOpenMap])
+  // 南大向导预览监听已移至 useGlobalAgentListeners（全局单例，避免 re-mount 竞态）
 
   // 左侧边栏可拖拽宽度
   const [leftSidebarWidth, setLeftSidebarWidth] = useAtom(leftSidebarWidthAtom)
