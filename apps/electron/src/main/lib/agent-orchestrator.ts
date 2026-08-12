@@ -1446,6 +1446,9 @@ export class AgentOrchestrator {
       const MAX_QUERY_ATTEMPTS = 2
       const queryStartedAt = Date.now()
 
+      /** 南大向导：PHASE_ADVANCE 推进后的目标阶段（用于自动续接下一阶段） */
+      let nanjuPhaseAdvanced: string | null = null
+
       for (let attempt = 1; attempt <= MAX_QUERY_ATTEMPTS; attempt++) {
         // 回退会清除 queryOptions.resumeSessionId；新建 Pi artifact 不应再触发 prompt replay。
         const wasResuming = !!queryOptions.resumeSessionId
@@ -1700,6 +1703,7 @@ export class AgentOrchestrator {
                     } else {
                       updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                       console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
+                      nanjuPhaseAdvanced = newStage ?? null
                     }
                   } else {
                     console.log(`[南大路由] 未找到关联的南大项目: sessionId=${sessionId}`)
@@ -1811,6 +1815,52 @@ export class AgentOrchestrator {
               message: { type: 'prompt_suggestion', suggestion: '请执行该计划' } as unknown as SDKMessage,
             })
             console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
+          }
+
+          // 南大向导：阶段推进后自动续接下一阶段
+          if (nanjuPhaseAdvanced && !wasStoppedByUser) {
+            const advanceStage = nanjuPhaseAdvanced
+            console.log(`[南大路由] 阶段已推进到 ${advanceStage}，1.5 秒后自动续接...`)
+            // 注入系统提示，让用户知道已推进
+            this.eventBus.emit(sessionId, {
+              kind: 'sdk_message',
+              message: {
+                type: 'assistant',
+                message: { content: [{ type: 'text', text: `✅ 需求阶段已完成，自动进入下一阶段：${advanceStage === 'prototype' ? 'UX 原型设计' : advanceStage === 'architecture' ? '架构设计' : advanceStage === 'planning' ? '工程规划' : advanceStage}...` }] },
+                parent_tool_use_id: null,
+                uuid: randomUUID(),
+              } as unknown as SDKMessage,
+            })
+            // 释放当前会话锁，延迟自动发消息触发下一阶段
+            releaseActiveRun()
+            setTimeout(() => {
+              this.sendMessage(
+                {
+                  sessionId,
+                  userMessage: '请继续下一阶段的工作。',
+                  channelId,
+                  modelId,
+                  workspaceId,
+                  permissionModeOverride,
+                  startedAt: Date.now(),
+                },
+                {
+                  onRunStarted: () => {},
+                  onComplete: () => {
+                    // 自动续接的 onComplete 不需要额外处理——消息已持久化到 JSONL，
+                    // 渲染端通过 IPC 的 agent-session-updated 事件刷新
+                  },
+                  onError: (error: string) => {
+                    console.warn(`[南大路由] 自动续接错误:`, error)
+                  },
+                  onTitleUpdated: () => {},
+                },
+              ).catch((e: unknown) => {
+                console.warn(`[南大路由] 自动续接失败:`, e instanceof Error ? e.message : String(e))
+              })
+            }, 1500)
+            // 不走正常 completeRun（已手动释放锁）
+            return
           }
 
           // 发送完成信号

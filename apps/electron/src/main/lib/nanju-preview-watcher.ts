@@ -94,7 +94,7 @@ export function startNanjuHtmlWatcher(mainWindow: BrowserWindow, workspaceSlug: 
           if (!existsSync(fullPath)) return
 
           const ext = filename.toLowerCase().endsWith('.md') ? '文档' : 'HTML'
-          console.log(`[南大预览] 检测到${ext}文件变更: ${filename}`)
+          console.log(`[南大预览] 检测到${ext}文件变更: ${filename}（完整路径: ${fullPath}）`)
           mainWindow.webContents.send(NANJU_PREVIEW_CHANNEL, {
             filePath: fullPath,
             fileName: basename(filename),
