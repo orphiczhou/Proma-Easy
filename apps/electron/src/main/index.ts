@@ -9,6 +9,15 @@ if (!app.isPackaged) {
   const instance = process.env.PROMA_DEV_INSTANCE?.replace(/[^a-zA-Z0-9_-]/g, '')
   if (instance) app.setName(`Proma-${instance}`)
   app.setPath('userData', join(app.getPath('appData'), instance ? `@proma/electron-dev-${instance}` : '@proma/electron-dev'))
+} else {
+  // 打包模式下的多实例支持：PROMA_INSTANCE 环境变量隔离 userData（SingletonLock 随之隔离），
+  // 允许 release 与 dev 两个打包副本同时运行。配套 PROMA_DEV=1 切换 .proma-dev 配置目录。
+  const instance = process.env.PROMA_INSTANCE?.replace(/[^a-zA-Z0-9_-]/g, '')
+  if (instance) {
+    app.setName(`Proma-${instance}`)
+    app.setPath('userData', join(app.getPath('appData'), `Proma-${instance}`))
+    console.log(`[启动] 多实例模式: PROMA_INSTANCE=${instance}, userData=${app.getPath('userData')}`)
+  }
 }
 
 // 单实例锁：防止重复启动同一个版本（dev/prod 因 userData 已隔离，互不影响）
@@ -389,6 +398,11 @@ function showAndFocusMainWindow(): void {
  * Get the appropriate app icon path for the current platform
  */
 function getIconPath(): string {
+  // 多实例图标覆盖：PROMA_ICON 指定绝对路径（如 dev 副本携带橙色 DEV 角标图标）
+  const overrideIcon = process.env.PROMA_ICON
+  if (overrideIcon && existsSync(overrideIcon)) {
+    return overrideIcon
+  }
   // dev 模式: resources 在 build:resources 阶段被复制到 dist/ 下，与 main.cjs 同级
   // 打包模式: electron-builder 通过 extraResources 将 icon 放到 process.resourcesPath/
   const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
