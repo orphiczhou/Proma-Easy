@@ -391,6 +391,11 @@ function showAndFocusMainWindow(): void {
     mainWindow.restore()
   }
   mainWindow.show()
+  // X11 WM 的防抢焦点策略（Cinnamon/Muffin 等）在 second-instance 唤起场景会拒绝
+  // show() 自带的抬升：此时启动器进程已退出、无激活时间戳上下文，窗口虽映射
+  // （IsViewable）但停留在堆叠底部，被全屏窗口完全遮挡，用户感知为"双击没反应"。
+  // moveTop() 无视焦点策略强制抬到堆叠顶端；focus() 仍按策略尽力获取键盘焦点。
+  mainWindow.moveTop()
   mainWindow.focus()
 }
 
