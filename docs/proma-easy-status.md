@@ -1,6 +1,6 @@
 # Proma-Easy（南大向导）项目状态文档
 
-> 更新时间：2026-08-12 | 当前版本：v0.16.71 | 分支：linux-support
+> 更新时间：2026-08-16 | 当前版本：v0.16.72 | 分支：linux-support
 
 ---
 
@@ -85,7 +85,7 @@ L2 角色子会话（跨渠道跨模型）
 
 ---
 
-## 四、版本变更历史（v0.16.62 - v0.16.71）
+## 四、版本变更历史（v0.16.62 - v0.16.72）
 
 | 版本 | 内容 |
 |------|------|
@@ -99,6 +99,7 @@ L2 角色子会话（跨渠道跨模型）
 | v0.16.69 | **AC 从 L1 移到 L2 内部驱动 + Linux fs.watch 递归修复 + allowSubDelegation 三层放行** |
 | v0.16.70 | **PHASE_ADVANCE 后自动续接下一阶段** |
 | v0.16.71 | **预览面板监听移至全局 hook（消除竞态条件）** |
+| v0.16.72 | **打包模式多实例支持**：`PROMA_INSTANCE` 隔离 userData / `PROMA_ICON` 覆盖窗口图标；配套 `/home/orphic/proma-easy/` 双实例部署（release + dev 并存，详见第九节） |
 
 ---
 
@@ -120,6 +121,11 @@ L2 角色子会话（跨渠道跨模型）
 | PRD 文件产出 | 8805-12923 字节 markdown | ✅ |
 | Typecheck | 0 errors | ✅ |
 | 单元测试 | 508 pass / 0 fail | ✅ |
+| 双实例并存（v0.16.72） | release/dev 进程、userData、配置目录全隔离；app.asar md5 一致（同代码） | ✅ |
+| 桌面快捷方式双击启动 | gio launch 冷启动两实例 + 热实例唤起均通过 | ✅ |
+| dev 实例窗口图标 | X11 `_NET_WM_ICON` 逐像素校验（64x64, mismatch=0, cyberpunk 五色） | ✅ |
+| 跨实例会话控制（v0.16.72） | release 侧 agent（deepseek-flash）经 HTTP 桥指挥 dev 实例建会话并验证；双向隔离复核通过 | ✅ |
+| 窗口属性看门狗 | 主窗销毁重建后 2s 内自动补写 WM_CLASS/_NET_WM_ICON | ✅ |
 
 ### 5.2 已实现但未完全验证
 
@@ -137,6 +143,9 @@ L2 角色子会话（跨渠道跨模型）
 | GitHub push 失败 | 网络不稳定 + 服务端对象 52d54318 损坏 | 尝试新建空仓库推送 |
 | NanjuWorkspaceView 未使用 | TabContent 用 AgentView 渲染 | 保留或重构为 MainArea 分屏 |
 | AC 审计耗时较长 | 每轮 ~2-3 分钟，完整 4 轮 ~10 分钟 | 考虑限制最大轮次或并行化 |
+| 预览面板 UI 确认 | v0.16.71 已迁移监听，渲染端仍待肉眼确认 | 在 dev 实例 UI 跑一次南大项目验证 |
+| Electron 托盘图标不显示（dev/release 均是） | xrdp 环境下 Proma 进程无 dbus 会话连接，SNI 不注册；亦无 XEmbed 管理器 | 非阻塞：任务栏按钮图标已可用；如需托盘须让进程拿到正确 DBUS_SESSION_BUS_ADDRESS |
+| Cinnamon 面板图标按文件路径缓存 | 改图标文件内容+touch 不生效，必须换文件名 | 已用 icon-dev-cyberpunk.png 规避；后续换图标一律换新文件名 |
 
 ---
 
@@ -145,7 +154,7 @@ L2 角色子会话（跨渠道跨模型）
 | 渠道 ID | Provider | 可用模型 |
 |---------|----------|----------|
 | deepseek | deepseek | deepseek-v4-pro, deepseek-v4-flash |
-| glm-zhipu | zhipu | glm-5.2, glm-5-turbo, GLM-4.6V |
+| glm-zhipu | zhipu | glm-5.2, glm-5-turbo, GLM-4.6V, glm-5.3 |
 | ad74ac74-... | minimax | MiniMax-M3, MiniMax-M2.7-highspeed |
 
 ---
@@ -155,9 +164,10 @@ L2 角色子会话（跨渠道跨模型）
 - **Proma 配置目录**：`~/.proma/`（打包版）/ `~/.proma-dev/`（开发版）
 - **南大工作区**：`~/.proma/agent-workspaces/workspace-1786421210929/`
 - **项目元数据**：`workspace-files/_nanju-projects.json`
-- **MCP Bridge**：`http://127.0.0.1:19876`
+- **MCP Bridge**：端口动态分配 19876-19895（每实例自动错开），用 `GET /get_instance_info` 发现各实例；当前 release=19876 / dev=19877（重启后可能互换）
 - **启动注意**：必须 `unset ELECTRON_RUN_AS_NODE`（Prime Agent 环境会设置此变量）
-- **DISPLAY**：`:10.0`（Xvfb 可用）
+- **DISPLAY**：`:10.0`（xrdp Cinnamon 会话）
+- **桌面/面板操作所需 dbus**：`DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-I9B5oC7Fse`（gio set trusted 等命令需要）
 
 ---
 
@@ -175,3 +185,72 @@ L2 角色子会话（跨渠道跨模型）
 | get_session_context | POST | session_id |
 | fork_session | POST | source_session_id |
 | archive_session | POST | session_id, archived? |
+
+
+---
+
+## 九、proma-easy 双实例部署（v0.16.72 阶段总结，2026-08-16）
+
+### 9.1 部署结构
+
+`/home/orphic/proma-easy/`（非 git 管理，随 v0.16.72 一并建立）：
+
+```
+proma-easy/
+├── release/                  # 正式版实例
+│   ├── start.sh              # 清理失效锁 + exec app/proma（unset ELECTRON_RUN_AS_NODE）
+│   └── app/                  # 完整打包产物（与 dev/app 的 app.asar md5 一致 = 同代码）
+└── dev/                      # 开发版实例
+    ├── start-dev.sh          # PROMA_INSTANCE=dev PROMA_DEV=1 PROMA_ICON=... + 属性看门狗
+    ├── app/proma-dev         # 同一二进制的改名副本（Electron res_class 由二进制名决定）
+    ├── icon-dev-cyberpunk.png  # 任务栏/窗口图标（proma-logos/proma-cyberpunk 五色变体）
+    ├── icon-dev.argb         # X11 _NET_WM_ICON 直写数据（64x64 w,h+ARGB 小端）
+    └── set-window-props.py   # 幂等窗口属性修复器（ctypes libX11）
+```
+
+两实例隔离：release 用 `~/.proma` + `~/.config/Proma`；dev 用 `~/.proma-dev` + `~/.config/Proma-dev`（首启自动从 release 复制渠道配置）。
+
+### 9.2 X11 窗口属性机制（Electron 硬编码的绕行）
+
+Electron 框架把主窗 WM_CLASS 硬编码为二进制名，`app.setName`/`--class` 均无效，且主窗会被销毁重建（托盘恢复时属性回退）。方案：
+
+1. 二进制改名 `proma` → `proma-dev`（res_class 随之变，任务栏分组分离的基础）；
+2. `set-window-props.py` 遍历窗口树找 `_NET_WM_PID` 匹配窗口，幂等改写 WM_CLASS + `_NET_WM_ICON`（先比对，缺啥补啥，无差异零操作）；
+3. `start-dev.sh` 挂常驻看门狗：应用存活期间每 2s 巡检补写，随进程退出；静默期零日志。
+
+**关键坑（X11 format 32 属性）**：`XChangeProperty/XGetWindowProperty` 的 format=32 数据是 **long 数组**（LP64 每元素 8 字节，仅低 32 位有效）。写端给原始字节缓冲会把相邻像素拼进同一 long 再截断（图标变 `[w,0,0...]`）；读端按 4 字节切分会把高位垃圾当数据（h 读成 0）。必须 `(c_ulong*n)(*vals)` 写、`data[i] & 0xFFFFFFFF` 读。另：`xprop` 解析大 CARDINAL 属性会误报 Out of memory，用 ctypes 直调绕开。
+
+### 9.3 图标链路（三层，2026-08-16 定稿）
+
+| 层 | 文件 | 说明 |
+|----|------|------|
+| 任务栏按钮 / 桌面快捷方式 | `dev/icon-dev-cyberpunk.png` | `.desktop` 的 Icon= 指向；**Cinnamon 面板按路径缓存，换图标必须换文件名**（touch/改内容无效） |
+| Electron 窗口图标 | 同上（`PROMA_ICON` 注入）+ `app/resources/icon.png` 兜底 | 均为 cyberpunk 五色 |
+| X11 `_NET_WM_ICON` | `dev/icon-dev.argb` | 看门狗持续补写；`/tmp/verify-icon.py <win_hex> <argb>` 逐像素校验 |
+
+dev 图标选型：项目 `resources/proma-logos/` 有 16 个变体，选 cyberpunk（绿/青/蓝/品红五色，与 release 黑白区分度最大）。
+
+### 9.4 桌面快捷方式
+
+`~/Desktop/` 与 `~/.local/share/applications/` 双份同步（4 个文件均过 desktop-file-validate）：
+
+- `proma-easy-release.desktop`：StartupWMClass=Proma，黑白图标
+- `proma-easy-dev.desktop`：StartupWMClass=Proma-dev，cyberpunk 图标
+
+**Nemo 信任标记**：未设 `metadata::trusted true` 时双击不执行——用 `gio set <file> metadata::trusted true`（需会话 dbus）。冷启动（gio launch 双实例）与热实例（second-instance 唤起已有窗口）均实测通过。
+
+### 9.5 跨实例会话控制（实测通过）
+
+每个实例自带 HTTP MCP bridge（端口 19876-19895 自动错开），工具含 create_session/send_message/list_messages 等。实测：release 侧 agent 会话（deepseek-v4-flash，bypassPermissions）接受任务后用 curl 指挥 dev 实例（另一端口）创建会话并验证，7.5s 完成；dev/release 会话存储双向隔离复核通过。**这意味着可以让一个实例的 agent 编排另一个实例的会话**（跨实例联动的基础设施已就绪）。
+
+### 9.6 验证工具（均在 /tmp，重启后需重建）
+
+- `/tmp/verify-icon.py <win_hex> <expected.argb>`：读 `_NET_WM_ICON` 与期望 argb 逐像素比对 + 色相统计
+- 窗口定位：`xdotool search --class proma`（注意过滤辅助窗口，主窗看 IsViewable）
+
+### 9.7 后续待办
+
+1. 南大向导预览面板 UI 端确认（5.2 节遗留，建议在 dev 实例跑真实项目）
+2. Electron 托盘图标在本环境不显示（进程无 dbus 连接）——如需修复，启动时注入正确 `DBUS_SESSION_BUS_ADDRESS`
+3. GLM 渠道 modelId=None 自动选模（5.3 节遗留）
+4. GitHub push（remote `easy`）网络问题
