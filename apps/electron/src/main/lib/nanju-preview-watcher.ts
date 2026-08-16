@@ -11,11 +11,11 @@
  * 并为每个目录分别创建 watcher。
  */
 
-import type { BrowserWindow } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { join, basename } from 'node:path'
-import { readdirSync, statSync, existsSync } from 'node:fs'
+import { readdirSync, existsSync } from 'node:fs'
 import { getWorkspaceFilesDir } from './config-paths'
+import { getMainWindow as getStoredMainWindow } from './main-window-store'
 
 const NANJU_PREVIEW_CHANNEL = 'nanju:html-preview-detected'
 
@@ -62,8 +62,14 @@ function shouldNotify(filename: string): boolean {
 /**
  * 启动文件监听（递归，跨平台兼容）。
  * 当工作区中出现新的 .html 或 .md 文件时，通知渲染进程。
+ *
+ * 注意：不接收 BrowserWindow 引用，而是在事件到达时动态获取主窗——
+ * 1) 主窗可能被销毁重建（托盘恢复 / second-instance 唤起等），启动时捕获的引用会失效；
+ * 2) 必须使用 main-window-store 维护的主窗引用，禁止 BrowserWindow.getAllWindows()[0]——
+ *    quick-task 等辅助窗口一旦排到窗口列表首位（主窗重建后即如此），
+ *    预览事件会全部发给用户看不见的隐藏窗口，导致预览面板永远不弹出。
  */
-export function startNanjuHtmlWatcher(mainWindow: BrowserWindow, workspaceSlug: string): void {
+export function startNanjuHtmlWatcher(workspaceSlug: string): void {
   stopNanjuHtmlWatcher()
 
   const watchDir = getWorkspaceFilesDir(workspaceSlug)
@@ -95,7 +101,14 @@ export function startNanjuHtmlWatcher(mainWindow: BrowserWindow, workspaceSlug: 
 
           const ext = filename.toLowerCase().endsWith('.md') ? '文档' : 'HTML'
           console.log(`[南大预览] 检测到${ext}文件变更: ${filename}（完整路径: ${fullPath}）`)
-          mainWindow.webContents.send(NANJU_PREVIEW_CHANNEL, {
+          // 事件到达时动态取主窗引用：避免窗口销毁重建后闭包内旧引用失效，
+          // 以及 getAllWindows()[0] 在辅助窗口（quick-task）排首时发错目标的问题
+          const win = getStoredMainWindow()
+          if (!win) {
+            console.warn('[南大预览] 主窗口当前不可用，跳过本次预览通知')
+            return
+          }
+          win.webContents.send(NANJU_PREVIEW_CHANNEL, {
             filePath: fullPath,
             fileName: basename(filename),
           })

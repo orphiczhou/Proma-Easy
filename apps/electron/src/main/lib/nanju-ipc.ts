@@ -22,7 +22,7 @@ import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } 
 import type { TelemetryEventType } from './nanju-telemetry'
 import type { ProjectSnapshot } from './nanju-snapshot'
 
-export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron.BrowserWindow | null): void {
+export function registerNanjuIpc(ipcMain: IpcMain): void {
   // ===== 项目元数据 =====
   ipcMain.handle('nanju:list-projects', async (_event, workspaceSlug: string) => {
     return listNanjuProjects(workspaceSlug)
@@ -60,13 +60,11 @@ export function registerNanjuIpc(ipcMain: IpcMain, getMainWindow: () => Electron
   })
 
   // ===== HTML 原型监听 =====
+  // 主窗引用由 watcher 内部在事件到达时动态获取（main-window-store），
+  // 避免 BrowserWindow.getAllWindows()[0] 取到 quick-task 等辅助窗口导致预览事件发错目标
   ipcMain.handle('nanju:start-html-watcher', async (_event, workspaceSlug: string) => {
-    const win = getMainWindow()
-    if (win) {
-      startNanjuHtmlWatcher(win, workspaceSlug)
-      return { ok: true }
-    }
-    return { ok: false, error: 'No main window' }
+    startNanjuHtmlWatcher(workspaceSlug)
+    return { ok: true }
   })
 
   // ===== 南大向导工作区 =====

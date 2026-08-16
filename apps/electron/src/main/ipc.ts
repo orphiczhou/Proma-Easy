@@ -970,7 +970,7 @@ export function registerIpcHandlers(): void {
   registerTreeViewIpc(ipcMain)
 
   // 南大项目 IPC（项目元数据 + 埋点）
-  registerNanjuIpc(ipcMain, () => BrowserWindow.getAllWindows()[0] ?? null)
+  registerNanjuIpc(ipcMain)
 
   // ===== 运行时相关 =====
 
