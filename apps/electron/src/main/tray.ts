@@ -1,4 +1,5 @@
 import { Tray, Menu, app, nativeImage, BrowserWindow } from 'electron'
+import { execFile } from 'node:child_process'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { listAgentSessions } from './lib/agent-session-manager'
@@ -7,6 +8,49 @@ import { isAgentSessionActive } from './lib/agent-service'
 import { createTrayMenuModel, type TrayRecentSessionItem } from './lib/tray-menu-model'
 
 let tray: Tray | null = null
+// Linux 下托盘图标是否真正注册成功（DBus 上存在本进程的 StatusNotifierItem name）。
+// Electron 构造 Tray 不会报错，但在远程桌面（xrdp）/无托盘面板环境下 SNI 注册
+// 静默失败，图标无处显示、菜单无从访问——此时 close-to-tray 会让用户无法退出应用。
+let trayRegistered = process.platform !== 'linux'
+
+/** 托盘图标是否真实可用（非 Linux 平台恒 true，Linux 以 SNI 注册实测为准） */
+export function isTrayRegistered(): boolean {
+  return trayRegistered
+}
+
+/**
+ * Linux: 延迟检测 SNI 注册结果。Electron 注册的 well-known name 形如
+ * org.kde.StatusNotifierItem-<pid>-1；若 ListNames 中查不到，说明托盘
+ * 不可用（watcher 不存在或未接受注册）。
+ */
+function checkTrayRegistration(): void {
+  if (process.platform !== 'linux' || !tray) return
+  execFile(
+    'dbus-send',
+    [
+      '--session',
+      '--print-reply',
+      '--dest=org.freedesktop.DBus',
+      '/org/freedesktop/DBus',
+      'org.freedesktop.DBus.ListNames',
+    ],
+    { timeout: 3000 },
+    (error, stdout) => {
+      if (error) {
+        console.warn('[托盘] 无法查询 DBus（' + error.message + '），按托盘不可用处理')
+        trayRegistered = false
+        return
+      }
+      const marker = `StatusNotifierItem-${process.pid}-`
+      trayRegistered = stdout.includes(marker)
+      if (trayRegistered) {
+        console.log('[托盘] SNI 注册确认，关闭按钮将隐藏到托盘')
+      } else {
+        console.warn('[托盘] SNI 未注册成功（无托盘面板/远程桌面环境），关闭按钮将直接退出')
+      }
+    },
+  )
+}
 
 export interface TrayActions {
   showMainWindow: () => void
@@ -167,6 +211,8 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
       tray.on('right-click', () => {
         updateTrayMenu(actions)
       })
+      // SNI 注册是异步的，延迟检测注册结果（决定 close 按钮语义）
+      setTimeout(checkTrayRegistration, 1500)
       console.log('System tray created')
       return tray
     }
@@ -205,6 +251,7 @@ export function destroyTray(): void {
   if (tray) {
     tray.destroy()
     tray = null
+    trayRegistered = process.platform !== 'linux'
   }
 }
 

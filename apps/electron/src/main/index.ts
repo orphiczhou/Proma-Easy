@@ -3,6 +3,21 @@ import { execFile } from 'node:child_process'
 import { join } from 'path'
 import { existsSync } from 'fs'
 
+// 未捕获异常兜底：Electron 默认行为是弹 Error 对话框并挂起进程——在退出流程中
+// 出现异常时会导致 quit 卡死、进程僵而不死。这里改为记日志；若正处于退出流程，
+// 强制立即退出，保证“退出一定能退出去”。
+process.on('uncaughtException', (err) => {
+  console.error('[未捕获异常]', err)
+  try {
+    if (getIsQuitting()) app.exit(1)
+  } catch {
+    /* 忽略 */
+  }
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[未处理的 Promise 拒绝]', reason)
+})
+
 // Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
 // 必须在任何会读取 userData 路径的模块加载之前执行
 if (!app.isPackaged) {
@@ -103,7 +118,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
-import { createTray, destroyTray, getTray } from './tray'
+import { createTray, destroyTray, getTray, isTrayRegistered } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { startMcpHttpBridge } from './lib/agent-mcp-bridge'
 import { seedDefaultSkills } from './lib/config-paths'
@@ -273,6 +288,9 @@ async function recoverEnabledDingTalkBots(): Promise<void> {
 }
 
 let mainWindow: BrowserWindow | null = null
+// 主窗重建中标志：X 失联兜底 destroy()+createWindow() 期间为 true，
+// 防止主窗 'closed' 处理器误判为用户关闭而触发 app.quit()
+let isRebuildingMainWindow = false
 let startupSplashWindow: BrowserWindow | null = null
 
 /**
@@ -425,6 +443,7 @@ function showAndFocusMainWindow(): void {
         if (winRef.isDestroyed()) return
         if (error) {
           console.warn(`[启动] 主窗 X 窗口 0x${xWindowId} 已失联，执行销毁重建`)
+          isRebuildingMainWindow = true
           winRef.destroy()
           createWindow()
         }
@@ -473,6 +492,12 @@ function isDevServerNavigation(url: string): boolean {
 }
 
 function createWindow(): void {
+  // 退出流程中禁止重建主窗：before-quit 清理链（停止 Agent/桥接等）可能问接触发
+  // UI 唤起逻辑，若此时重建窗口，quit 序列会被新窗口卡住，进程僵而不死。
+  if (getIsQuitting() && process.platform === 'linux') {
+    console.warn('[退出] 退出流程中拒绝重建主窗')
+    return
+  }
   const iconPath = getIconPath()
   const iconExists = existsSync(iconPath)
 
@@ -557,6 +582,7 @@ function createWindow(): void {
 
   // 窗口就绪后，按保存的状态决定是否最大化
   mainWindow.once('ready-to-show', () => {
+    isRebuildingMainWindow = false
     if (savedState?.isMaximized ?? true) {
       mainWindow?.maximize()
     }
@@ -617,16 +643,18 @@ function createWindow(): void {
     })
   }
 
-  // Linux: 点击关闭按钮时隐藏窗口到托盘，而不是销毁主窗
-  // （无此拦截时主窗销毁后，进程因隐藏的快速任务窗残留成无头僵尸并持有单实例锁，
-  //   second-instance 只能走 createWindow 重建路径，状态丢失且时序上易被用户感知为"双击没反应"）
-  // 注意：不能用 hide()——hide 会把 X 窗口 Withdrawn，本环境（xrdp/Muffin）下底层 X 窗口
-  // 会被 WM 回收，之后 show()/restore() 无法重新映射（Electron isVisible 返回 true 但
-  // X 层 IsUnMapped，双击图标永远唤不回）。改用 minimize + skipTaskbar：X 窗口保持 Iconic
-  // 映射不被回收，任务栏按钮同时隐藏，视觉等效"隐藏到托盘"，且可被 restore() 可靠唤回。
+  // Linux: 点击关闭按钮时的行为取决于托盘图标是否真实可用：
+  // - 托盘已注册成功（DBus 上能查到本进程的 org.kde.StatusNotifierItem-<pid>-*）：
+  //   隐藏到托盘（minimize + skipTaskbar），可从托盘菜单唤回/退出。
+  //   注意：不能用 hide()——hide 会把 X 窗口 Withdrawn，本环境（xrdp/Muffin）下底层
+  //   X 窗口会被 WM 回收，之后 show()/restore() 无法重新映射（Electron isVisible
+  //   返回 true 但 X 层 IsUnMapped，双击图标永远唤不回）。
+  // - 托盘未注册成功（远程桌面/无托盘面板等，图标根本不显示）：
+  //   不拦截 close，主窗直接销毁并在 'closed' 里退出整个进程——否则窗口“消失”了
+  //   但托盘菜单无从访问，用户将没有任何途径退出应用。
   if (process.platform === 'linux') {
     mainWindow.on('close', (event) => {
-      if (!getIsQuitting() && getTray()) {
+      if (!getIsQuitting() && getTray() && isTrayRegistered()) {
         // 隐藏前先刷新挂起的窗口状态保存
         if (windowStateSaveTimer) {
           clearTimeout(windowStateSaveTimer)
@@ -659,6 +687,16 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     setStoredMainWindow(null)
     mainWindow = null
+    // Linux 无可用托盘时，close 不拦截、主窗直接销毁；此时进程不应靠隐藏的
+    // 快速任务窗苟活（window-all-closed 因辅助窗常驻不会触发），显式退出。
+    // 重建路径（X 失联兜底 destroy+createWindow）用标志位豁免。
+    if (process.platform === 'linux' && !getIsQuitting() && !isRebuildingMainWindow) {
+      // 延迟启动退出：closed 触发时窗口销毁回调链尚未完全落地，同步 app.quit()
+      // 会与销毁流程嵌套，导致 quit 序列异常。等当前事件循环风暴结束再退。
+      setTimeout(() => {
+        if (!getIsQuitting()) app.quit()
+      }, 100)
+    }
   })
 }
 
