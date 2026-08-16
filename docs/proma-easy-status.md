@@ -1,6 +1,6 @@
 # Proma-Easy（南大向导）项目状态文档
 
-> 更新时间：2026-08-16 | 当前版本：v0.16.75 | 分支：linux-support
+> 更新时间：2026-08-16 | 当前版本：v0.16.76 | 分支：linux-support
 
 ---
 
@@ -103,6 +103,7 @@ L2 角色子会话（跨渠道跨模型）
 | v0.16.73 | **Linux close-to-tray**：主窗关闭时隐藏而非销毁（此前销毁后隐藏的快速任务窗使进程残留成无头僵尸持锁，双击快捷方式表现为"没反应"；现关闭→hide，双击→show 秒回）。配套 start 脚本增加孤儿清扫 + SingletonSocket 清理 |
 | v0.16.74 | （版本号被 74237e2 预览面板修复使用，内容见上行 v0.16.73 描述合并） |
 | v0.16.75 | **second-instance 唤起窗口 moveTop 强制置顶**：Muffin 防抢焦点策略拒绝 show() 的抬升请求（启动器已退出无激活上下文），窗口映射但停在堆叠底部被全屏窗口（如 VSCode）遮挡，表现为"双击转圈后无窗口"；moveTop() 无视策略强制抬升 |
+| v0.16.76 | **无条件 restore() 修复 WM 最小化后唤不回**：窗口被任务栏/WN 最小化（WM_STATE=Iconic）后 Electron isMinimized() 仍为 false（只跟踪自身 API），showAndFocusMainWindow 跳过 restore 直接 show() 对 Iconic 无效 → 双击无反应（任务栏有图标）。改为无条件 restore()（对正常窗口 no-op）。另：桌面旧 proma.desktop（仓库构建入口，与 release 抢锁）已删除 |
 
 ---
 
