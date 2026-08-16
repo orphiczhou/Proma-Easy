@@ -387,9 +387,11 @@ function showAndFocusMainWindow(): void {
     return
   }
   ensureWindowOnScreen(mainWindow)
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore()
-  }
+  // X11 下窗口可被 WM/任务栏最小化（WM_STATE=Iconic），而 Electron 的
+  // isMinimized() 只跟踪自身 API 的最小化，与 WM 状态不同步——此时跳过
+  // restore() 直接 show() 对 Iconic 窗口无效，用户感知为"双击没反应"。
+  // 因此无条件 restore()（对非最小化窗口是 no-op）。
+  mainWindow.restore()
   mainWindow.show()
   // X11 WM 的防抢焦点策略（Cinnamon/Muffin 等）在 second-instance 唤起场景会拒绝
   // show() 自带的抬升：此时启动器进程已退出、无激活时间戳上下文，窗口虽映射
