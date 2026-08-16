@@ -27,11 +27,15 @@ if (!app.isPackaged) {
 // 卡在启动期，second-instance 也唤不起窗口，用户表现就是"双击应用没反应"。
 // 改为：留下 stderr 排查线索后正常退出，让 Electron 触发已存在实例的
 // second-instance 事件，由主实例负责显示窗口。
+/** 是否因单实例锁被占而即将退出（阻止 whenReady 回调继续跑 bootstrap） */
+let isDuplicateInstanceQuitPending = false
+
 if (!app.requestSingleInstanceLock()) {
   console.warn(
     '[启动] 已有 Proma 进程持有单实例锁，本次启动将退出。\n' +
       '  如果窗口未出现，可能旧进程已卡死。请运行 `killall Proma` 后重试。',
   )
+  isDuplicateInstanceQuitPending = true
   app.quit()
 } else {
   // 主流程：正常启动（单实例锁已获取）
@@ -651,6 +655,12 @@ app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
  * 单点失败不应阻止窗口和托盘的创建（用户至少要能看到界面）。
  */
 async function bootstrap(): Promise<void> {
+  // 单实例锁失败的重复实例：app.quit() 是异步的，whenReady 回调可能先于退出流程触发。
+  // 不短路的话，托盘/快速任务窗/MCP bridge 端口等全套服务会在退出前完成启动，
+  // 然后随进程退出被销毁——用户感知为“双击图标后窗口/托盘闪烁一下又全部消失”，
+  // 还会抢注新的 bridge 端口。因此必须在此立即返回，让重复实例安静退出。
+  if (isDuplicateInstanceQuitPending) return
+
   // 初始化 Proma 版本号（供 User-Agent 等全局标识使用）
   setPromaVersion(app.getVersion())
 
