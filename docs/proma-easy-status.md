@@ -1,6 +1,6 @@
 # Proma-Easy（南大向导）项目状态文档
 
-> 更新时间：2026-08-16 | 当前版本：v0.16.76 | 分支：linux-support
+> 更新时间：2026-08-17 | 当前版本：v0.16.81 | 分支：linux-support
 
 ---
 
@@ -104,6 +104,10 @@ L2 角色子会话（跨渠道跨模型）
 | v0.16.74 | （版本号被 74237e2 预览面板修复使用，内容见上行 v0.16.73 描述合并） |
 | v0.16.75 | **second-instance 唤起窗口 moveTop 强制置顶**：Muffin 防抢焦点策略拒绝 show() 的抬升请求（启动器已退出无激活上下文），窗口映射但停在堆叠底部被全屏窗口（如 VSCode）遮挡，表现为"双击转圈后无窗口"；moveTop() 无视策略强制抬升 |
 | v0.16.76 | **无条件 restore() 修复 WM 最小化后唤不回**：窗口被任务栏/WN 最小化（WM_STATE=Iconic）后 Electron isMinimized() 仍为 false（只跟踪自身 API），showAndFocusMainWindow 跳过 restore 直接 show() 对 Iconic 无效 → 双击无反应（任务栏有图标）。改为无条件 restore()（对正常窗口 no-op）。另：桌面旧 proma.desktop（仓库构建入口，与 release 抢锁）已删除 |
+| v0.16.77 | **单实例锁失败进程 bootstrap 短路**：拿不到锁的第二实例在 `app.quit()`（异步）生效前跑完整初始化（二次托盘/快速任务窗/抢 bridge 端口）成僵尸。锁失败置 `isDuplicateInstanceQuitPending` 标志，`bootstrap()` 开头短路 |
+| v0.16.80 | **second-instance 唤起加 X 层失联校验（核心）**：主窗关闭/隐藏后 Electron 对象存活（isDestroyed=false、isVisible 恒 true）但底层 X 窗口已被 WM 回收——restore()/show() 全部无效，双击唤不出窗口。修复：Linux 下用 `xprop` 校验 `getNativeWindowHandle()` 对应 X 窗口是否仍有 WM_STATE，失联则 destroy()+createWindow() 重建；close-to-tray 由 hide()（制造失联态）改为 minimize()+skipTaskbar（X 窗口保持 Iconic 不被回收） |
+| v0.16.81 | **无托盘环境点关闭真退出 + quit 防挂死**：Tray 构造不报错但 xrdp 下 SNI 注册静默失败（图标不显示），close-to-tray 使点 X 后进程持有单实例锁苟活、UI 零退出路径。修复：启动 1.5s 后 dbus-send 查 SNI 注册结果（isTrayRegistered()），托盘不可用则不拦截 close、closed 里延迟 100ms app.quit()；createWindow 在退出流程短路；uncaughtException 兜底 app.exit(1) 保证退出必达。另：v0.16.74~81 完整故障树与验证矩阵见 `docs/pr-linux-desktop-launch-fix.md` |
+| (docs) | PR 文档 `docs/pr-linux-desktop-launch-fix.md`（提交 452e858）：桌面启动修复的故障树/逐提交说明/8 项验证矩阵/风险评估 |
 
 ---
 
@@ -147,9 +151,14 @@ L2 角色子会话（跨渠道跨模型）
 | GitHub push 失败 | 网络不稳定 + 服务端对象 52d54318 损坏 | 尝试新建空仓库推送 |
 | NanjuWorkspaceView 未使用 | TabContent 用 AgentView 渲染 | 保留或重构为 MainArea 分屏 |
 | AC 审计耗时较长 | 每轮 ~2-3 分钟，完整 4 轮 ~10 分钟 | 考虑限制最大轮次或并行化 |
-| 预览面板 UI 确认 | v0.16.71 已迁移监听，渲染端仍待肉眼确认 | 在 dev 实例 UI 跑一次南大项目验证 |
-| Electron 托盘图标不显示（dev/release 均是） | xrdp 环境下 Proma 进程无 dbus 会话连接，SNI 不注册；亦无 XEmbed 管理器 | 非阻塞：任务栏按钮图标已可用；如需托盘须让进程拿到正确 DBUS_SESSION_BUS_ADDRESS |
+| Electron 托盘图标不显示（dev/release 均是） | xrdp 环境下 SNI 注册静默失败 | v0.16.81 已兼容：托盘不可用时点 X 直接退出，不再死局；如需真托盘须让进程拿到正确 DBUS_SESSION_BUS_ADDRESS |
 | Cinnamon 面板图标按文件路径缓存 | 改图标文件内容+touch 不生效，必须换文件名 | 已用 icon-dev-cyberpunk.png 规避；后续换图标一律换新文件名 |
+| nemo-desktop 启动竞争致桌面图标不渲染 | 会话启动时多实例竞争，后到者报 "Desktop already managed" 弃权（xrdp 环境层问题，非 Proma） | 应急脚本 `~/proma-easy/fix-desktop-icons.sh`；启动追踪见 `/tmp/proma-dev-launch.log`（无记录=桌面层问题） |
+
+**2026-08-17 已解决**：
+- 预览面板 UI 确认 → v0.16.73 修复（74237e2，事件改发主窗），CDP 验证弹出 ✓
+- 无托盘环境退出死局 → v0.16.81（见版本历史）✓
+- 桌面双击启动不了 → v0.16.77/80/81 四层修复，用户实测 dev 双击可启动 ✓（另：桌面层 nemo 竞争问题见上表）
 
 ---
 
@@ -263,9 +272,9 @@ dev 图标选型：项目 `resources/proma-logos/` 有 16 个变体，选 cyberp
 2. `release/start.sh` / `dev/start-dev.sh`：失效锁清理时同时清 `SingletonSocket/SingletonCookie`，并清扫 PPID=1 的 `--type=` 孤儿子进程。
 3. 部署副本 app.asar 已重打包（主进程 main.cjs 替换，asarUnpack 结构与 electron-builder 配置一致），版本 0.16.73。
 
-### 9.8 后续待办
+### 9.8 后续待办（2026-08-17 更新）
 
-1. 南大向导预览面板 UI 端确认（5.2 节遗留，建议在 dev 实例跑真实项目）
-2. Electron 托盘图标在本环境不显示（进程无 dbus 连接）——如需修复，启动时注入正确 `DBUS_SESSION_BUS_ADDRESS`
-3. GLM 渠道 modelId=None 自动选模（5.3 节遗留）
-4. GitHub push（remote `easy`）网络问题
+1. ~~南大向导预览面板 UI 端确认~~ → v0.16.73 已修复验证（见 5.3 已解决清单）
+2. Electron 托盘图标在本环境不显示——v0.16.81 已做兼容处理（不可用时点 X 直接退出）；如需真托盘，启动时注入正确 `DBUS_SESSION_BUS_ADDRESS`
+3. GLM 渠道 modelId=None 自动选模（进行中）
+4. GitHub push（remote `easy`）：fork 服务端对象库损坏（幽灵对象 52d54318），待删 fork 重建 + 网络窗口期推送；linux-support 待推 5 个提交（含 PR 文档 452e858）
