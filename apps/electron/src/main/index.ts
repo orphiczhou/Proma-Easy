@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell } from 'electron'
+import { execFile } from 'node:child_process'
 import { join } from 'path'
 import { existsSync } from 'fs'
 
@@ -391,6 +392,9 @@ function showAndFocusMainWindow(): void {
     return
   }
   ensureWindowOnScreen(mainWindow)
+  // 恢复任务栏按钮可见性（close-to-tray 以 minimize+skipTaskbar 方式隐藏，
+  // 唤起时必须把 skipTaskbar 关掉，否则窗口回来但任务栏按钮永久消失）
+  mainWindow.setSkipTaskbar(false)
   // X11 下窗口可被 WM/任务栏最小化（WM_STATE=Iconic），而 Electron 的
   // isMinimized() 只跟踪自身 API 的最小化，与 WM 状态不同步——此时跳过
   // restore() 直接 show() 对 Iconic 窗口无效，用户感知为"双击没反应"。
@@ -403,6 +407,30 @@ function showAndFocusMainWindow(): void {
   // moveTop() 无视焦点策略强制抬到堆叠顶端；focus() 仍按策略尽力获取键盘焦点。
   mainWindow.moveTop()
   mainWindow.focus()
+
+  // [Linux X11 兼容] 本环境（xrdp/Cinnamon）下被隐藏/关闭过的主窗，底层 X 窗口可能
+  // 已被 WM 回收，而 Electron 窗口对象存活且 isVisible() 恒返回 true（Chromium 状态
+  // 与 X 映射脱节）——restore()/show() 全部无效，用户感知"双击图标没反应"。
+  // Electron API 层无法检测，改用 X 层校验：xprop 查询窗口 id 是否仍有 WM_STATE 属性
+  // （被 X server 回收的窗口查询会失败）。若已失联，销毁壳对象并重建窗口。
+  if (process.platform === 'linux') {
+    const winRef = mainWindow
+    const nativeHandle = winRef.getNativeWindowHandle()
+    const xWindowId = nativeHandle.length >= 4 ? nativeHandle.readUInt32LE(0).toString(16) : ''
+    execFile(
+      'xprop',
+      ['-id', `0x${xWindowId}`, 'WM_STATE'],
+      { timeout: 1500 },
+      (error) => {
+        if (winRef.isDestroyed()) return
+        if (error) {
+          console.warn(`[启动] 主窗 X 窗口 0x${xWindowId} 已失联，执行销毁重建`)
+          winRef.destroy()
+          createWindow()
+        }
+      },
+    )
+  }
 }
 
 /**
@@ -592,6 +620,10 @@ function createWindow(): void {
   // Linux: 点击关闭按钮时隐藏窗口到托盘，而不是销毁主窗
   // （无此拦截时主窗销毁后，进程因隐藏的快速任务窗残留成无头僵尸并持有单实例锁，
   //   second-instance 只能走 createWindow 重建路径，状态丢失且时序上易被用户感知为"双击没反应"）
+  // 注意：不能用 hide()——hide 会把 X 窗口 Withdrawn，本环境（xrdp/Muffin）下底层 X 窗口
+  // 会被 WM 回收，之后 show()/restore() 无法重新映射（Electron isVisible 返回 true 但
+  // X 层 IsUnMapped，双击图标永远唤不回）。改用 minimize + skipTaskbar：X 窗口保持 Iconic
+  // 映射不被回收，任务栏按钮同时隐藏，视觉等效"隐藏到托盘"，且可被 restore() 可靠唤回。
   if (process.platform === 'linux') {
     mainWindow.on('close', (event) => {
       if (!getIsQuitting() && getTray()) {
@@ -602,7 +634,8 @@ function createWindow(): void {
         }
         saveMainWindowState()
         event.preventDefault()
-        mainWindow?.hide()
+        mainWindow?.setSkipTaskbar(true)
+        mainWindow?.minimize()
       }
     })
   }
