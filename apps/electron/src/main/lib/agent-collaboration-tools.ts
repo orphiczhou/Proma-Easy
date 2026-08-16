@@ -36,7 +36,7 @@ import {
   createToolCallIdempotencyCache,
   resolveDelegationPermissionMode,
 } from './agent-collaboration-utils'
-import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel } from './agent-model-selection'
+import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel, pickDefaultModelForChannel } from './agent-model-selection'
 
 interface CollaborationToolContext {
   sessionId: string
@@ -652,26 +652,30 @@ function startDelegation(
     parentPermissionMode,
     args.permissionMode,
   )
+  // 目标渠道：未传则继承父会话渠道
+  const effectiveChannelId = args.channelId && args.channelId.trim()
+    ? args.channelId.trim()
+    : ctx.channelId
+  // 目标模型：
+  // - 显式传了 modelId → 校验属于目标渠道且已启用
+  // - 跨渠道但未传 modelId → 自动选目标渠道第一个 enabled 模型
+  //   （若沿用父会话 modelId，它属于另一个渠道，下游会以 API 400 失败）
+  // - 同渠道且未传 → 继承父会话模型
   const effectiveModelId = args.modelId !== undefined
     ? assertEnabledModelForChannel({
-        channelId: ctx.channelId,
+        channelId: effectiveChannelId,
         modelId: args.modelId,
         purpose: '创建协作子会话',
       })
-    : ctx.modelId?.trim() || undefined
+    : effectiveChannelId !== ctx.channelId
+      ? pickDefaultModelForChannel({ channelId: effectiveChannelId, purpose: '跨渠道协作子会话' })
+      : ctx.modelId?.trim() || undefined
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
   // 内联模式：不创建可见的父子关系
   const inlineMode = args.inline === true
-  const effectiveChannelId = args.channelId && args.channelId.trim()
-    ? args.channelId.trim()
-    : ctx.channelId
-  // 跨渠道时验证模型属于该渠道
-  const effectiveModelIdWithChannel = args.channelId && args.channelId !== ctx.channelId && args.modelId
-    ? assertEnabledModelForChannel({ channelId: args.channelId, modelId: args.modelId, purpose: '跨渠道协作子会话' })
-    : effectiveModelId
-  const child = createAgentSession(title, effectiveChannelId, ctx.workspaceId, effectiveModelIdWithChannel)
+  const child = createAgentSession(title, effectiveChannelId, ctx.workspaceId, effectiveModelId)
   // 南大向导：允许子会话内部创建 inline 子会话（用于 AC 审计）
   if (args.allowSubDelegation === true) {
     sessionsAllowingSubDelegation.add(child.id)
@@ -695,7 +699,7 @@ function startDelegation(
     delegationId,
     parentSessionId: ctx.sessionId,
     childSessionId: child.id,
-    channelId: ctx.channelId,
+    channelId: effectiveChannelId,
     modelId: effectiveModelId,
     title,
     role,

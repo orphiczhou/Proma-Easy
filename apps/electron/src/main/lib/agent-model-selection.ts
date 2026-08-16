@@ -68,3 +68,29 @@ export function listEnabledAgentModelsForChannel(
       })),
   }
 }
+
+/**
+ * 选出渠道的默认可用模型：取第一个 enabled 模型。用于 delegate_agent
+ * 跨渠道且未显式传 modelId 的场景——此时若沿用父会话的 modelId（属于另一个
+ * 渠道），下游会以 API 400 失败。渠道无任何 enabled 模型时抛错。
+ */
+export function pickDefaultModelForChannel(input: {
+  channelId?: string
+  purpose: string
+}): string {
+  if (!input.channelId) {
+    throw new Error(`${input.purpose}需要可用的 channelId`)
+  }
+
+  const channel = getChannelById(input.channelId)
+  if (!channel || !channel.enabled) {
+    throw new Error(`${input.purpose}引用的渠道不存在或未启用: ${input.channelId}`)
+  }
+
+  const enabledModels = channel.models.filter((model) => model.enabled)
+  if (enabledModels.length === 0) {
+    throw new Error(`${input.purpose}渠道下没有任何已启用的模型: ${input.channelId}`)
+  }
+
+  return enabledModels[0].id
+}
