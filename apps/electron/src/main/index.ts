@@ -578,6 +578,24 @@ function createWindow(): void {
     })
   }
 
+  // Linux: 点击关闭按钮时隐藏窗口到托盘，而不是销毁主窗
+  // （无此拦截时主窗销毁后，进程因隐藏的快速任务窗残留成无头僵尸并持有单实例锁，
+  //   second-instance 只能走 createWindow 重建路径，状态丢失且时序上易被用户感知为"双击没反应"）
+  if (process.platform === 'linux') {
+    mainWindow.on('close', (event) => {
+      if (!getIsQuitting() && getTray()) {
+        // 隐藏前先刷新挂起的窗口状态保存
+        if (windowStateSaveTimer) {
+          clearTimeout(windowStateSaveTimer)
+          windowStateSaveTimer = null
+        }
+        saveMainWindowState()
+        event.preventDefault()
+        mainWindow?.hide()
+      }
+    })
+  }
+
   // Windows: 点击关闭按钮时隐藏窗口到托盘，而不是退出
   if (process.platform === 'win32') {
     mainWindow.on('close', (event) => {

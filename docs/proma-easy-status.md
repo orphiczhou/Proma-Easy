@@ -1,6 +1,6 @@
 # Proma-Easy（南大向导）项目状态文档
 
-> 更新时间：2026-08-16 | 当前版本：v0.16.72 | 分支：linux-support
+> 更新时间：2026-08-16 | 当前版本：v0.16.73 | 分支：linux-support
 
 ---
 
@@ -100,6 +100,7 @@ L2 角色子会话（跨渠道跨模型）
 | v0.16.70 | **PHASE_ADVANCE 后自动续接下一阶段** |
 | v0.16.71 | **预览面板监听移至全局 hook（消除竞态条件）** |
 | v0.16.72 | **打包模式多实例支持**：`PROMA_INSTANCE` 隔离 userData / `PROMA_ICON` 覆盖窗口图标；配套 `/home/orphic/proma-easy/` 双实例部署（release + dev 并存，详见第九节） |
+| v0.16.73 | **Linux close-to-tray**：主窗关闭时隐藏而非销毁（此前销毁后隐藏的快速任务窗使进程残留成无头僵尸持锁，双击快捷方式表现为"没反应"；现关闭→hide，双击→show 秒回）。配套 start 脚本增加孤儿清扫 + SingletonSocket 清理 |
 
 ---
 
@@ -248,7 +249,18 @@ dev 图标选型：项目 `resources/proma-logos/` 有 16 个变体，选 cyberp
 - `/tmp/verify-icon.py <win_hex> <expected.argb>`：读 `_NET_WM_ICON` 与期望 argb 逐像素比对 + 色相统计
 - 窗口定位：`xdotool search --class proma`（注意过滤辅助窗口，主窗看 IsViewable）
 
-### 9.7 后续待办
+### 9.7 v0.16.73 修复：双击快捷方式无反应（2026-08-16 下午）
+
+**现象**：关闭主窗后双击桌面快捷方式，两实例都"启动不起来"。
+
+**根因**：Linux 版缺少 close-to-tray 拦截（源码只有 darwin/win32 分支）。点 X → 主窗销毁 → 隐藏的快速任务窗（680x320 预创建窗）仍存在 → `window-all-closed` 不触发 → 进程残留成无头僵尸并持有 SingletonLock；偶发叠加主进程被杀后孤儿子进程（NetworkService 等，PPID=1）继承 SingletonSocket，进一步干扰新实例接管。
+
+**修复**（三处）：
+1. `index.ts`：新增 Linux 分支——`close` 时若非退出且有 tray 则 `preventDefault() + hide()`（与 win32 对齐）。实测：Alt+F4 → 主窗 IsUnMapped（不销毁）→ 双击快捷方式 → 同进程 `show()` 秒回（无需走 createWindow 重建）。
+2. `release/start.sh` / `dev/start-dev.sh`：失效锁清理时同时清 `SingletonSocket/SingletonCookie`，并清扫 PPID=1 的 `--type=` 孤儿子进程。
+3. 部署副本 app.asar 已重打包（主进程 main.cjs 替换，asarUnpack 结构与 electron-builder 配置一致），版本 0.16.73。
+
+### 9.8 后续待办
 
 1. 南大向导预览面板 UI 端确认（5.2 节遗留，建议在 dev 实例跑真实项目）
 2. Electron 托盘图标在本环境不显示（进程无 dbus 连接）——如需修复，启动时注入正确 `DBUS_SESSION_BUS_ADDRESS`

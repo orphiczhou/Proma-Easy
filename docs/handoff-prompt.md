@@ -10,7 +10,7 @@
 
 ## 二、项目位置与当前状态
 
-- **代码**：`/home/orphic/proma-source`，分支 `linux-support`，版本 v0.16.72，工作区干净（本交接文档已提交）
+- **代码**：`/home/orphic/proma-source`，分支 `linux-support`，版本 v0.16.73，工作区干净（本交接文档已提交）
 - **双实例部署**：`/home/orphic/proma-easy/`（release + dev 两份打包副本并存运行）
   - release：黑白图标，配置 `~/.proma`，userData `~/.config/Proma`
   - dev：cyberpunk 五色图标，配置 `~/.proma-dev`，userData `~/.config/Proma-dev`
