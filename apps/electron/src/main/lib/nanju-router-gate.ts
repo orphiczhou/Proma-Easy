@@ -29,6 +29,8 @@ const ACTIVE_PHASE_TOOLS = new Set([
   'AskUserQuestion',
   // 预览工具（确认环节调度员主动打开右侧分屏展示产出；v0.16.89 起确认步骤强制调用）
   'open_preview', 'mcp__preview__open_preview',
+  // 受管浏览器（v0.17.28 起对话式设计迭代：Observe 获取元素 ref / Screenshot 看原型 / PreviewOpen 打开本地 HTML）
+  'BrowserPreviewOpen', 'BrowserObserve', 'BrowserScreenshot', 'BrowserListTabs', 'BrowserNewTab',
 ])
 
 const PHASE_TOOL_WHITELIST: Record<PhaseId, Set<string>> = {
