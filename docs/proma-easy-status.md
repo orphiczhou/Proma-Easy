@@ -1,6 +1,6 @@
 # Proma-Easy（南大向导）项目状态文档
 
-> 更新时间：2026-08-17 | 当前版本：v0.16.82 | 分支：linux-support
+> 更新时间：2026-08-17 | 当前版本：v0.16.87 | 分支：linux-support
 
 ---
 
@@ -107,6 +107,10 @@ L2 角色子会话（跨渠道跨模型）
 | v0.16.77 | **单实例锁失败进程 bootstrap 短路**：拿不到锁的第二实例在 `app.quit()`（异步）生效前跑完整初始化（二次托盘/快速任务窗/抢 bridge 端口）成僵尸。锁失败置 `isDuplicateInstanceQuitPending` 标志，`bootstrap()` 开头短路 |
 | v0.16.80 | **second-instance 唤起加 X 层失联校验（核心）**：主窗关闭/隐藏后 Electron 对象存活（isDestroyed=false、isVisible 恒 true）但底层 X 窗口已被 WM 回收——restore()/show() 全部无效，双击唤不出窗口。修复：Linux 下用 `xprop` 校验 `getNativeWindowHandle()` 对应 X 窗口是否仍有 WM_STATE，失联则 destroy()+createWindow() 重建；close-to-tray 由 hide()（制造失联态）改为 minimize()+skipTaskbar（X 窗口保持 Iconic 不被回收） |
 | v0.16.81 | **无托盘环境点关闭真退出 + quit 防挂死**：Tray 构造不报错但 xrdp 下 SNI 注册静默失败（图标不显示），close-to-tray 使点 X 后进程持有单实例锁苟活、UI 零退出路径。修复：启动 1.5s 后 dbus-send 查 SNI 注册结果（isTrayRegistered()），托盘不可用则不拦截 close、closed 里延迟 100ms app.quit()；createWindow 在退出流程短路；uncaughtException 兜底 app.exit(1) 保证退出必达。另：v0.16.74~81 完整故障树与验证矩阵见 `docs/pr-linux-desktop-launch-fix.md` |
+| v0.16.84 | **跨渠道委派 channelId 误用父渠道**（与 v82 同缺陷两半）：startDelegation 运行渠道传了 ctx.channelId，形成「父渠道端点+子渠道模型名」错配。本地 CONNECT 代理抓包实锤定位。详见 `docs/pr-agent-preview-and-delegation-channel-fix.md` |
+| v0.16.85 | **Agent 会话工具 open_preview**：Agent 可主动在 UI 右侧分屏打开文档/图片预览（与南大 watcher 共享后半段链路）；M3 会话+release 双实测通过 |
+| v0.16.86 | **内置预览面板 HTML 渲染修复**（上游 73e9d01 移植）：旧 iframe 直拼绝对路径当 hostname 必 404 白屏；改为 file:resolve-html-preview-path IPC 注册目录 token，相对 CSS/JS 可加载，含源码⇄渲染切换 |
+| v0.16.87 | **AC 审计分级 + UX 视觉闭环 + 运行锁泄漏修复**：① taskWeight 分级（quick=light：攻 ds-flash/防 glm-turbo；iterative=medium：攻 ds-pro/防 GLM-5.3；家族断言防御者≠作者）；② prototype 作者改 MiniMax-M3（运行时解析 minimax 渠道），截图渲染循环+独立视觉裁决，AC 追加视觉/交互维度；③ 修复委派失败后调度员运行锁不释放挂死（锁抢占后未保护窗口包入 failRun） |
 | (docs) | PR 文档 `docs/pr-linux-desktop-launch-fix.md`（提交 452e858）：桌面启动修复的故障树/逐提交说明/8 项验证矩阵/风险评估 |
 
 ---

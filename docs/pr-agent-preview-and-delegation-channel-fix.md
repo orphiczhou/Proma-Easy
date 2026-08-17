@@ -117,3 +117,30 @@ bun run build:main && bun run build:preload && bun run build:renderer && bunx el
   `xclip -selection clipboard` + `Ctrl+V` 粘贴 + `Return`
 - 会话切换点击可用（Chromium 处理 XTEST click 正常；GTK 应用不行）
 - 截图识读链路：scrot -u + 视觉模型定位坐标 → 迭代点击 → 识读验证
+
+---
+
+## 六、第二轮改进（v0.16.86/87，2026-08-17 批1+批2）
+
+### v0.16.86（3d6f560）：HTML 预览修复（上游 73e9d01 / PR #1552 精确移植）
+- 根因：DiffTabContent iframe src=`proma-file://${encodeURIComponent(绝对路径)}` 把路径当 hostname，protocol handler 查 token 注册表必 404 → HTML 白屏
+- 修复：IPC `file:resolve-html-preview-path`（fileAccess 校验 → registerPromaDirectoryPath 目录级 token）；渲染端 htmlPreviewUrl + 源码⇄渲染切换；sandbox 收紧 allow-scripts allow-forms
+- 执行者调研修正：原计划的 browser-preview-service.ts 属浏览器自动化功能（e16ae50）零消费者，不移植
+
+### v0.16.87（9c0c0ce）：AC 分级 + 视觉闭环 + E6
+- **AC 配置表**（quick=light / iterative=medium；显式字段可覆盖；家族断言防御者≠作者、攻击≠防御）：
+  | 模式 | 阶段 | 作者 | 攻击 | 防御 | 视觉裁决 |
+  |---|---|---|---|---|---|
+  | quick | requirements | ds-v4-pro | ds-v4-flash | glm-5-turbo | — |
+  | quick | prototype | MiniMax-M3 | ds-v4-flash | glm-5-turbo | M3 |
+  | iterative | requirements | ds-v4-pro | ds-v4-pro | GLM-5.3 | — |
+  | iterative | prototype | MiniMax-M3 | ds-v4-pro | GLM-5.3 | M3 |
+  | iterative | architecture/planning | ds-v4-pro | ds-v4-pro | GLM-5.3 | — |
+- **M3 作者**：resolveMinimaxM3Channel 运行时按 provider+模型正则解析（渠道 UUID 不硬编码，release/dev 各自解析）
+- **视觉闭环指令**：截图渲染循环（chrome-devtools new_page file:// → take_screenshot → read 视觉比对用户故事 → 修复 → 连续 2 轮无缺陷）+ 独立 M3 视觉裁决 + AC 追加视觉/交互维度
+- **E6 运行锁**：sendMessage 锁抢占与主 try/finally 之间存在未保护窗口（onRunStarted/proxyEnv/runtimeEnv），异常带着锁逃逸 → 会话永久"正在处理中"。修法：窗口包入 try/catch + failRun
+- 测试：420 pass（388+32 新增：AC 预设/覆盖/默认映射/断言/minimax 解析/prompt 构建）
+
+### 验证状态
+- v0.16.86/87 已构建并同步 release asar（下次重启生效）；dev 待当前调度员会话空闲后重启部署
+- 实机全链验证（闪念Tips prototype 重跑新 AC 配置）待 dev 部署后执行
