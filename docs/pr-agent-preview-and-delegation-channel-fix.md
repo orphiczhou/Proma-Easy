@@ -95,3 +95,25 @@ f419d8f fix: v0.16.83 - glm-5.3 纳入 1M 上下文计量（并行提交）
 1. 修复委派失败后父会话运行锁不释放（dispatcher 挂死）
 2. `open_preview` 渲染端加自动化回归（Playwright/CDP）
 3. 渲染端关键事件（预览收到/写入 atom）增加可观测日志开关
+
+## 五、E2E 实测记录（2026-08-17 13:30 补充）
+
+M3（MiniMax）会话在 dev 实例 UI 输入指令 → 调用 open_preview → 右侧分屏成功渲染
+`m3-preview-verify.md`（唯一标记 OPENVIEW-8848-PROMA，视觉识读确认）。
+
+### 部署注意事项（重要）
+
+electron 构建产物分三层：`build:main`（主进程）、`build:preload`、`build:renderer`（vite）。
+**只跑 build:main + electron-builder 会把旧 preload/renderer 打进 asar**——主进程日志
+显示"open_preview 已发送"但 UI 无反应，正是此因。改 preload/renderer 后必须：
+```bash
+bun run build:main && bun run build:preload && bun run build:renderer && bunx electron-builder --dir
+```
+验证方法：`grep -c onAgentOpenPreview <asar>` 应 ≥2。
+
+### UI 自动化备注（xrdp 环境）
+
+- Chromium 输入框对 `xdotool type` 合成键不稳定（文字滞留/丢失）；可靠路径是
+  `xclip -selection clipboard` + `Ctrl+V` 粘贴 + `Return`
+- 会话切换点击可用（Chromium 处理 XTEST click 正常；GTK 应用不行）
+- 截图识读链路：scrot -u + 视觉模型定位坐标 → 迭代点击 → 识读验证
