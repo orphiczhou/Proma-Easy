@@ -27,6 +27,8 @@ const ACTIVE_PHASE_TOOLS = new Set([
   'Read', 'LS', 'Glob', 'Grep',
   // 交互工具
   'AskUserQuestion',
+  // 预览工具（确认环节调度员主动打开右侧分屏展示产出；v0.16.89 起确认步骤强制调用）
+  'open_preview', 'mcp__preview__open_preview',
 ])
 
 const PHASE_TOOL_WHITELIST: Record<PhaseId, Set<string>> = {
