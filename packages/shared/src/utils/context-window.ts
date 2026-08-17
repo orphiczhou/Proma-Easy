@@ -52,8 +52,9 @@ const ONE_MILLION_CONTEXT_RULES = {
   ],
   // DeepSeek
   deepseek: ['deepseek-v4'],
-  // 智谱 GLM
-  glm: ['glm-5.2'],
+  // 智谱 GLM：5.2 与 5.3 均为官方 1M 上下文（最大输出 128K）；
+  // 5.1 / 5-turbo 仍为 200K，不加入。OpenAI 协议端点无需 [1m] 后缀（那是 Anthropic 协议的开关）。
+  glm: ['glm-5.2', 'glm-5.3'],
   // 小米 MiMo
   mimo: ['mimo-v2.5'],
   // MiniMax
