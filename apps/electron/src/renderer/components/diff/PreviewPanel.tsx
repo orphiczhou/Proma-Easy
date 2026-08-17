@@ -178,7 +178,7 @@ export function PreviewPanel({ sessionId }: PreviewPanelProps): React.ReactEleme
       <div className="flex-1 min-h-0 overflow-hidden">
         {currentFile ? (
           <DiffTabContent
-            key={`${sessionId}:${currentFile.filePath}`}
+            key={`${sessionId}:${currentFile.filePath}:${currentFile.previewVersion ?? 0}`}}
             filePath={currentFile.filePath}
             dirPath={currentFile.dirPath || sessionPath}
             sessionId={sessionId}

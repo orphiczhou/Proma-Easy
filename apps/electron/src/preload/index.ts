@@ -1275,8 +1275,8 @@ export interface ElectronAPI {
   offNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
 
   /** Agent 会话工具 open_preview 触发的预览请求事件 */
-  onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string }) => void) => void
-  offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string }) => void) => void
+  onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
+  offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
 }
 
 interface MigrationExportResult {

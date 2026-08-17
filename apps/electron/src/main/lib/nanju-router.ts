@@ -198,7 +198,12 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     model: 'MiniMax-M3',
     task: '你是 UX 顾问。根据 PRD 生成可交互 HTML 原型。',
     outputPath: '02_UX_DESIGN/prototype.html',
-    constraints: ['单文件 HTML，内联 CSS', '简洁现代风格', '覆盖 PRD 核心功能', '包含核心页面的可点击导航'],
+    constraints: [
+      '单文件 HTML，内联 CSS',
+      '简洁现代风格',
+      '覆盖 PRD 核心功能',
+      '多场景导航规范：场景索引一律用顶部横向分页窄条（tab，高度≤48px，sticky 置顶，命名=用户故事 US-xx）；禁止纵向全屏索引页；≤6 个场景全部展示，>6 横向滚动不换行；核心场景在 1280x720 首屏不滚动即可见',
+    ],
     requiresUserConfirmation: true,
     requiresAC: false,
     retryLimit: 2,

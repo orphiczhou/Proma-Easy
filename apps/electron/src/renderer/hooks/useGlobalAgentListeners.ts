@@ -473,12 +473,13 @@ export function useGlobalAgentListeners(): void {
 
     // Agent 会话工具 open_preview：主动在右侧分屏打开预览（与南大预览同一套 atom 写入）。
     // 事件携带发起会话 ID：即使该会话不是当前激活会话，也预先写入其预览状态，切回时可见。
-    const agentOpenPreviewHandler = (_event: unknown, data: { sessionId: string; filePath: string }): void => {
+    const agentOpenPreviewHandler = (_event: unknown, data: { sessionId: string; filePath: string; version?: number }): void => {
       if (!data?.sessionId || !data?.filePath) return
       console.log(`[Agent 预览] 渲染端收到 open_preview: ${data.filePath} → session ${data.sessionId}`)
       store.set(previewFileMapAtom, (prev) => {
         const m = new Map(prev)
-        m.set(data.sessionId, { filePath: data.filePath, previewOnly: true })
+        // version 随每次 open 递增：同路径重开时 key 变化驱动 DiffTabContent 重挂载，拉取最新内容
+        m.set(data.sessionId, { filePath: data.filePath, previewOnly: true, previewVersion: data.version ?? Date.now() })
         return m
       })
       store.set(previewPanelOpenMapAtom, (prev) => {

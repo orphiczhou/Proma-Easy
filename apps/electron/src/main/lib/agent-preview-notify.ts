@@ -68,6 +68,8 @@ export function sendAgentOpenPreview(sessionId: string, filePath: string, baseDi
   win.webContents.send(AGENT_OPEN_PREVIEW_CHANNEL, {
     sessionId,
     filePath: validated.filePath,
+    // 刷新版本号：同路径重复 open 时驱动渲染端重挂载预览组件，拉取最新文件内容
+    version: Date.now(),
   })
   console.log(`[Agent 预览] open_preview 已发送: ${validated.filePath}（session ${sessionId}）`)
   return { ok: true, filePath: validated.filePath }
