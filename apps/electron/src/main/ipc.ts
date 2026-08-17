@@ -153,7 +153,7 @@ import type {
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
-import { registerPromaFilePath } from './lib/local-file-protocol'
+import { registerPromaDirectoryPath, registerPromaFilePath } from './lib/local-file-protocol'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import { registerTreeViewIpc } from './lib/tree-view-ipc'
 import { registerNanjuIpc } from './lib/nanju-ipc'
@@ -3410,7 +3410,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 仅解析文件路径（供 PDF/图片等用 file:// 加载）
+  // 仅解析文件路径（供 PDF/图片等用 proma-file:// 加载）
   ipcMain.handle(
     'file:resolve-path',
     async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<ResolvedFileUrl | null> => {
@@ -3424,6 +3424,25 @@ export function registerIpcHandlers(): void {
         return { url: registerPromaFilePath(result) }
       } catch (err) {
         console.warn('[IPC] file:resolve-path 无法注册为文件，跳过:', result, err instanceof Error ? err.message : err)
+        return null
+      }
+    }
+  )
+
+  // 为 HTML 预览注册所在目录，使相对 CSS、脚本和图片资源保持可加载。
+  // 返回的仍是 token-gated proma-file URL，不向渲染进程泄露本机绝对路径。
+  ipcMain.handle(
+    'file:resolve-html-preview-path',
+    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<ResolvedFileUrl | null> => {
+      const { resolveFilePath } = await import('./lib/file-preview-service')
+      const options = normalizeFileAccessOptions(access)
+      const result = resolveFilePath(filePath, getPreviewCandidateBasePaths(options))
+      if (!result) return null
+      try {
+        const directoryUrl = registerPromaDirectoryPath(dirname(result))
+        return { url: `${directoryUrl}/${encodeURIComponent(basename(result))}` }
+      } catch (err) {
+        console.warn('[IPC] file:resolve-html-preview-path 无法注册预览目录，跳过:', result, err instanceof Error ? err.message : err)
         return null
       }
     }
