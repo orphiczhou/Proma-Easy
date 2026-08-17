@@ -471,6 +471,24 @@ export function useGlobalAgentListeners(): void {
     }
     window.electronAPI.onNanjuHtmlPreview?.(nanjuPreviewHandler)
 
+    // Agent 会话工具 open_preview：主动在右侧分屏打开预览（与南大预览同一套 atom 写入）。
+    // 事件携带发起会话 ID：即使该会话不是当前激活会话，也预先写入其预览状态，切回时可见。
+    const agentOpenPreviewHandler = (_event: unknown, data: { sessionId: string; filePath: string }): void => {
+      if (!data?.sessionId || !data?.filePath) return
+      console.log(`[Agent 预览] 渲染端收到 open_preview: ${data.filePath} → session ${data.sessionId}`)
+      store.set(previewFileMapAtom, (prev) => {
+        const m = new Map(prev)
+        m.set(data.sessionId, { filePath: data.filePath, previewOnly: true })
+        return m
+      })
+      store.set(previewPanelOpenMapAtom, (prev) => {
+        const m = new Map(prev)
+        m.set(data.sessionId, true)
+        return m
+      })
+    }
+    window.electronAPI.onAgentOpenPreview?.(agentOpenPreviewHandler)
+
     /** 正在执行的写工具；写入前的文件存在性用于区分新建和编辑。 */
     const pendingWriteTools = new Map<string, {
       path: string
@@ -1496,6 +1514,7 @@ export function useGlobalAgentListeners(): void {
       clearInterval(pruneTimer)
       window.removeEventListener('focus', onWindowFocus)
       window.electronAPI.offNanjuHtmlPreview?.(nanjuPreviewHandler)
+      window.electronAPI.offAgentOpenPreview?.(agentOpenPreviewHandler)
     }
   }, [store]) // store 引用稳定，effect 只执行一次
 }

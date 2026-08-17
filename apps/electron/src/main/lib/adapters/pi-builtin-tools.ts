@@ -33,6 +33,7 @@ import { fetchInstallerManifest, findInstallerSource } from '../installer-manife
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { buildPiCollaborationTools, sessionAllowsSubDelegation } from '../agent-collaboration-tools'
 import { buildPiSessionTools } from '../agent-session-tools'
+import { sendAgentOpenPreview } from '../agent-preview-notify'
 import { buildPiRemoteSessionTools } from '../agent-remote-session-tools'
 import { buildPiTreeTools } from '../tree-mcp-tools'
 import { buildPiNanoBananaTools } from '../chat-tools/nano-banana-mcp'
@@ -484,6 +485,24 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
 
 // ===== Pi 专属任务 / 日程工具 =====
 
+/** open_preview：Agent 主动打开 UI 右侧分屏预览（文档/图片） */
+function buildPreviewTool(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition {
+  return sdk.defineTool({
+    name: 'mcp__preview__open_preview', label: '打开预览',
+    description: '在用户界面右侧分屏打开一个文档/图片的预览面板（与用户点击“预览”按钮等价）。适用于：生成了 PRD/报告后主动展示、需要用户查看某个文件时。支持 md/html/txt/json/csv/常见图片格式。预览面板归属当前会话。仅 Pi Agent 可用。',
+    parameters: Type.Object({
+      file_path: Type.String({ description: '要预览的文件路径（绝对路径，或相对当前工作目录的相对路径）' }),
+    }),
+    async execute(_id: string, params: unknown) {
+      const { file_path: filePath } = params as { file_path: string }
+      if (!filePath || !filePath.trim()) throw new Error('file_path 不能为空')
+      const result = sendAgentOpenPreview(ctx.sessionId, filePath.trim(), ctx.agentCwd)
+      if (!result.ok) throw new Error(result.error)
+      return jsonToolResult({ opened: true, filePath: result.filePath, note: '已在右侧分屏打开预览（若用户偏好为标签页模式，可在预览顶栏切换）' })
+    },
+  })
+}
+
 function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
   const optionalPlanningFields = {
     notes: Type.Optional(Type.String({ description: '补充说明' })),
@@ -870,6 +889,13 @@ export async function buildPiBuiltinTools(
     tools.push(...buildPlanningTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入任务/日程工具失败:', error)
+  }
+
+  // 文档预览：Agent 主动在 UI 右侧分屏打开文件（与用户点“预览”按钮等价）
+  try {
+    tools.push(buildPreviewTool(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 open_preview 工具失败:', error)
   }
 
   // collaboration 桥接

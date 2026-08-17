@@ -1270,6 +1270,10 @@ export interface ElectronAPI {
   /** 南大 HTML 原型自动预览事件 */
   onNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
   offNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
+
+  /** Agent 会话工具 open_preview 触发的预览请求事件 */
+  onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string }) => void) => void
+  offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string }) => void) => void
 }
 
 interface MigrationExportResult {
@@ -2897,6 +2901,13 @@ const electronAPI: ElectronAPI = {
   },
   offNanjuHtmlPreview: (callback) => {
     ipcRenderer.removeListener('nanju:html-preview-detected', callback)
+  },
+
+  onAgentOpenPreview: (callback) => {
+    ipcRenderer.on('agent:open-preview-request', callback)
+  },
+  offAgentOpenPreview: (callback) => {
+    ipcRenderer.removeListener('agent:open-preview-request', callback)
   },
 }
 

@@ -88,9 +88,10 @@ export function pickDefaultModelForChannel(input: {
   }
 
   const enabledModels = channel.models.filter((model) => model.enabled)
-  if (enabledModels.length === 0) {
+  const firstEnabled = enabledModels[0]
+  if (!firstEnabled) {
     throw new Error(`${input.purpose}渠道下没有任何已启用的模型: ${input.channelId}`)
   }
 
-  return enabledModels[0].id
+  return firstEnabled.id
 }
