@@ -11,6 +11,7 @@ import { CHUNK_BYTES, concatAudioBuffers, floatTo16BitPcm, splitChunk } from './
 import { mergeVoiceDictationTranscript } from './voice-transcript-merge'
 import type { VoiceDictationTranscriptMergeState } from './voice-transcript-merge'
 import { useVoiceWindowLayout } from './use-voice-window-layout'
+import { resumeAudioContextForCapture } from './audio-context'
 import {
   VOICE_DICTATION_STATUS_EVENT,
   resolveVoiceDictationSessionInputIds,
@@ -51,6 +52,7 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
   const previewTextRef = React.useRef('')
   const dictationIdRef = React.useRef<string | null>(null)
   const recordingAttemptRef = React.useRef(0)
+  const audioCaptureReadyRef = React.useRef(false)
   const lastReportedVolumeAtRef = React.useRef(0)
   /** 本次听写会话归属的输入框 ID，仅用于同步内嵌按钮状态。 */
   const dictationSourceRef = React.useRef<string | null>(null)
@@ -131,6 +133,7 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
       pendingAudioRef.current = []
       queuedAudioRef.current = []
       asrReadyRef.current = false
+      audioCaptureReadyRef.current = false
     }
     setVolume(0)
   }, [])
@@ -184,21 +187,22 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
     const outputContextId = dictationOutputContextRef.current
     discardCurrentTranscript()
     if (!text) {
-      setStatus('idle')
       setMessage('没有识别到语音内容')
-      setDictationSource(null)
-      setDictationTarget(null)
-      setDictationOutputContext(null)
       cleanupAudio()
       if (asrSessionId) {
-        window.electronAPI.cancelVoiceDictation({
+        await window.electronAPI.cancelVoiceDictation({
           sessionId: asrSessionId,
           previewSessionId: dictationSessionId ?? undefined,
           targetInputId,
           outputContextId: outputContextId ?? undefined,
         }).catch(console.error)
       }
-      setTimeout(() => window.electronAPI.hideVoiceDictation().catch(console.error), 180)
+      // 主进程复位完成后再让按钮恢复 idle，避免下一次点击被旧会话吞掉。
+      await window.electronAPI.hideVoiceDictation().catch(console.error)
+      setStatus('idle')
+      setDictationSource(null)
+      setDictationTarget(null)
+      setDictationOutputContext(null)
       return
     }
 
@@ -211,6 +215,8 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
         targetInputId,
         outputContextId: outputContextId ?? undefined,
       })
+      // 先让主进程释放旧会话，再把按钮恢复为可开始状态。
+      await window.electronAPI.hideVoiceDictation().catch(console.error)
       setCommitResult(result)
       setStatus('completed')
       setMessage(result.message)
@@ -222,7 +228,6 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
       setDictationTarget(null)
       setDictationOutputContext(null)
       cleanupAudio()
-      setTimeout(() => window.electronAPI.hideVoiceDictation().catch(console.error), 280)
     } catch (error) {
       commitInFlightRef.current = false
       const textMessage = error instanceof Error ? error.message : '未知错误'
@@ -351,6 +356,13 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
     }
   }, [])
 
+  const markAudioCaptureReady = React.useCallback(() => {
+    if (audioCaptureReadyRef.current) return
+    audioCaptureReadyRef.current = true
+    setStatus('recording')
+    setMessage('正在听写')
+  }, [])
+
   const startAudioCapture = React.useCallback(async (attempt: number) => {
     const stream = await requestMicrophoneStream()
     if (attempt !== recordingAttemptRef.current || stoppingRef.current) {
@@ -407,14 +419,18 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
 
     source.connect(processor)
     processor.connect(audioContext.destination)
-    if (audioContext.state === 'suspended') {
-      try {
-        await audioContext.resume()
-      } catch {
-        throw new Error('音频处理启动失败，请重新触发语音输入或检查系统音频权限')
-      }
+    await resumeAudioContextForCapture(audioContext)
+    if (!stream.getAudioTracks().some((track) => track.readyState === 'live' && track.enabled)) {
+      throw new Error('麦克风未就绪，请检查系统麦克风权限与设备连接')
     }
-  }, [requestMicrophoneStream, sendAudioChunk])
+
+    // getUserMedia 已授予并启用音轨，且音频图已恢复即可认定采集就绪。
+    // 不再依赖首个 ScriptProcessor 回调：某些系统/设备会延后该回调，导致
+    // 实际已打开的麦克风永久停在“准备麦克风”。
+    if (attempt === recordingAttemptRef.current && !stoppingRef.current) {
+      markAudioCaptureReady()
+    }
+  }, [markAudioCaptureReady, requestMicrophoneStream, sendAudioChunk])
 
   const startRecording = React.useCallback(async () => {
     const refreshSettings = window.electronAPI.getVoiceDictationSettings()
@@ -438,6 +454,7 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
       commitTimerRef.current = null
     }
     asrReadyRef.current = false
+    audioCaptureReadyRef.current = false
     lastReportedVolumeAtRef.current = 0
     queuedAudioRef.current = []
     pendingAudioRef.current = []
@@ -450,8 +467,8 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
       currentSessionId: '',
     }
     setCommitResult(null)
-    setStatus('recording')
-    setMessage('请开始说话')
+    setStatus('connecting')
+    setMessage('准备麦克风...')
     const recordingAttempt = ++recordingAttemptRef.current
 
     const isCurrentAttempt = (): boolean => recordingAttempt === recordingAttemptRef.current
@@ -516,8 +533,6 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
           scheduleCommit(STOP_COMMIT_TIMEOUT_MS)
           return
         }
-        setStatus('recording')
-        setMessage('正在听写')
       })
       .catch((error) => {
         if (!isCurrentAttempt() || sessionIdRef.current !== nextSessionId || stoppingRef.current) return
@@ -546,6 +561,7 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
         const textMessage = getMicrophoneErrorMessage(error)
         setStatus('error')
         setMessage(textMessage)
+        toast.error(textMessage)
         cleanupAudio()
       })
     })
@@ -583,8 +599,11 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
     const cleanupState = window.electronAPI.onVoiceDictationState((event: VoiceDictationStateEvent) => {
       if (event.sessionId && event.sessionId !== sessionIdRef.current) return
       if (stoppingRef.current && event.status === 'error') return
-      if (event.status === 'connecting') {
-        setStatus('recording')
+      if (event.status === 'connecting' || event.status === 'recording') {
+        if (!audioCaptureReadyRef.current) {
+          setStatus('connecting')
+          setMessage('准备麦克风...')
+        }
         return
       }
       if (event.status === 'idle' && event.message === 'asr_session_ended') {
@@ -737,7 +756,11 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
               <div className="whitespace-pre-wrap break-words overflow-hidden">
                 {transcript || (
                   <span className="text-muted-foreground/60">
-                    {status === 'idle' ? '等待 Ctrl+～ 唤起' : '请开始说话'}
+                    {status === 'idle'
+                      ? '等待 Ctrl+～ 唤起'
+                      : status === 'connecting'
+                        ? '准备麦克风...'
+                        : '请开始说话'}
                   </span>
                 )}
               </div>

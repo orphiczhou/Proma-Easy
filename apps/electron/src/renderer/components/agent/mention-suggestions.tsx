@@ -11,7 +11,7 @@ import type { SuggestionOptions } from '@tiptap/suggestion'
 import { CalendarDays, ListTodo, MessageSquareText, Sparkles, Server } from 'lucide-react'
 import { MentionList } from './MentionList'
 import type { MentionListRef } from './MentionList'
-import { createLatestSuggestionRequestGuard, createMentionPopup, positionPopup, isSuggestionTriggerPresent, shouldSuppressEscTrigger, shouldClearEscSuppressionOnExit, type EscSuppressedTrigger } from './mention-popup-utils'
+import { createDebouncedSuggestionLoader, createLatestSuggestionRequestGuard, createMentionPopup, positionPopup, isSuggestionTriggerPresent, shouldSuppressEscTrigger, shouldClearEscSuppressionOnExit, type EscSuppressedTrigger } from './mention-popup-utils'
 import type { AgentSessionReferenceSearchResult } from '@proma/shared'
 import { shouldAllowMentionTrigger, shouldShowMentionSuggestion } from '@/components/ai-elements/mention-utils'
 import {
@@ -56,6 +56,7 @@ function createMentionSuggestion<T>(
   // 用文本而非位置判断：删除触发符前的字符导致位置移动时，片段仍延续，继续抑制。
   let suppressedTrigger: EscSuppressedTrigger | null = null
   const requestGuard = createLatestSuggestionRequestGuard<T>()
+  const queryLoader = createDebouncedSuggestionLoader(requestGuard)
 
   return {
     char: config.char,
@@ -81,19 +82,11 @@ function createMentionSuggestion<T>(
       })
     },
 
-    items: async ({ query }): Promise<T[]> => {
-      const requestId = requestGuard.startRequest()
+    items: ({ query }): Promise<T[]> => queryLoader.load(async () => {
       const slug = workspaceSlugRef.current
-      if (config.requiresContext !== false && !slug) return requestGuard.attachResult(requestId, [])
-      try {
-        return requestGuard.attachResult(
-          requestId,
-          await config.fetchItems(slug ?? '', (query ?? '').toLowerCase()),
-        )
-      } catch {
-        return requestGuard.attachResult(requestId, [])
-      }
-    },
+      if (config.requiresContext !== false && !slug) return []
+      return config.fetchItems(slug ?? '', (query ?? '').toLowerCase())
+    }),
 
     render: () => {
       let renderer: ReactRenderer<MentionListRef> | null = null
@@ -102,6 +95,7 @@ function createMentionSuggestion<T>(
       let editorDom: HTMLElement | null = null
 
       function cleanup() {
+        queryLoader.cancel()
         if (blurHandler && editorDom) {
           editorDom.removeEventListener('blur', blurHandler, true)
           blurHandler = null
@@ -117,7 +111,9 @@ function createMentionSuggestion<T>(
 
       return {
         onStart(props) {
-          if (!requestGuard.isLatest(props.items)) {
+          // TipTap 3.29 会在 items() 异步读取前以未登记的空数组调用 onStart。
+          // 仅拒绝已知的旧请求，不能用 isLatest() 拒绝该初始生命周期，否则弹窗永远不会创建。
+          if (requestGuard.isStale(props.items)) {
             return
           }
           if (popup || renderer) {

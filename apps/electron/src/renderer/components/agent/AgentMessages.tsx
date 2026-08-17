@@ -7,13 +7,13 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Bot, RotateCw, AlertTriangle, CheckCircle2, Ban, ChevronDown, ChevronRight } from 'lucide-react'
+import { RotateCw, AlertTriangle, CheckCircle2, Ban, ChevronDown, ChevronRight } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
-  Message,
-  MessageHeader,
-  MessageContent,
   BasePathsProvider,
+  Message,
+  MessageContent,
+  MessageHeader,
 } from '@/components/ai-elements/message'
 import {
   Conversation,
@@ -22,9 +22,9 @@ import {
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
-import { useSmoothStream } from '@proma/ui'
+import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
-import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
+import { resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
@@ -32,15 +32,18 @@ import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, buildTaskProgressDataForTurn, type MessageGroup } from './SDKMessageRenderer'
+import { groupIntoTurns, AssistantLogo, MessageGroupRenderer, getGroupId, getGroupPreview, extractUserText, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, buildTaskProgressDataForTurn, type MessageGroup } from './SDKMessageRenderer'
 import { buildLiveGroupSet } from './live-group-set'
-import { ContentBlock } from './ContentBlock'
-import { parseThinkTagsFromText } from './thinking-tag-parser'
+import { AgentBrowserLinkProvider } from '@/components/browser/AgentBrowserLinkProvider'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import { TaskProgressOverlay, type ContextCompactionProgress } from './TaskProgressOverlay'
-import type { AgentEventUsage, RetryAttempt, SDKMessage, SDKSystemMessage } from '@proma/shared'
+import { createMessageGroupRenderCache, groupMessagesForRendering } from './message-group-rendering'
+import type { AgentEventUsage, RetryAttempt, SDKAssistantMessage, SDKMessage, SDKSystemMessage, SDKTextBlock, SDKThinkingBlock } from '@proma/shared'
 import { getSDKCompactStatus } from '@proma/shared'
-import type { AgentStreamState } from '@/atoms/agent-atoms'
+import { agentLiveMessagesAtomFamily, agentSessionStreamingStateAtomFamily, type AgentStreamState } from '@/atoms/agent-atoms'
+import type { QuotedSelection } from '@/atoms/preview-atoms'
+
+const EMPTY_SDK_MESSAGES: SDKMessage[] = []
 
 function stableStringify(value: unknown): string {
   if (value == null || typeof value !== 'object') return JSON.stringify(value) ?? String(value)
@@ -91,6 +94,24 @@ function getSDKMessageStableKey(message: SDKMessage): string {
 export function isCompactionControlHistoryGroup(group: MessageGroup): boolean {
   if (group.type === 'system') return getSDKCompactStatus(group.message) != null
   return group.type === 'user' && (extractUserText(group.message) ?? '').trim() === '/compact'
+}
+
+function hasRenderableAssistantMessage(message: SDKAssistantMessage): boolean {
+  if (message.error != null) return true
+
+  return message.message.content.some((block) => {
+    if (block.type === 'text') return Boolean((block as SDKTextBlock).text)
+    if (block.type === 'thinking') return Boolean((block as SDKThinkingBlock).thinking)
+    return true
+  })
+}
+
+export function hasRenderableAssistantTurnContent(group: MessageGroup): boolean {
+  return group.type === 'assistant-turn' && group.assistantMessages.some(hasRenderableAssistantMessage)
+}
+
+export function shouldRenderLiveAssistantTurn(group: MessageGroup, isLive: boolean): boolean {
+  return !isLive || group.type !== 'assistant-turn' || hasRenderableAssistantTurnContent(group)
 }
 
 export function getContextCompactionProgress(
@@ -176,6 +197,12 @@ export function getContextCompactionProgress(
   return undefined
 }
 
+export interface AgentHistoryQuoteNavigationRequest {
+  sessionId: string
+  quote: QuotedSelection
+  requestId: number
+}
+
 /** AgentMessages 属性接口 */
 interface AgentMessagesProps {
   sessionId: string
@@ -185,10 +212,6 @@ interface AgentMessagesProps {
   messagesLoaded?: boolean
   /** Phase 4: 持久化的 SDKMessage（新格式） */
   persistedSDKMessages?: SDKMessage[]
-  streaming: boolean
-  streamState?: AgentStreamState
-  /** Phase 2: 实时 SDKMessage 列表（流式期间累积） */
-  liveMessages?: SDKMessage[]
   /** 当前会话工作目录，用于解析相对文件路径 */
   sessionPath?: string | null
   /** 附加目录列表（与 sessionPath 一并用作相对路径解析候选） */
@@ -203,29 +226,92 @@ interface AgentMessagesProps {
   onRewind?: (assistantMessageUuid: string) => void
   onCreateTodo?: (text: string) => void
   onCompact?: () => void
+  /** 将单条 Agent 历史选区写为当前 RichTextInput 的内联 mention。 */
+  onAddHistoryQuote?: (quote: QuotedSelection) => boolean
+  /** 已发送的 Agent 历史引用 chip 点击后请求定位与高亮。 */
+  onAgentHistoryQuoteClick?: (quote: QuotedSelection) => void
+  /** 输入框 quote chip 请求定位时的精确范围。 */
+  historyQuoteNavigation?: AgentHistoryQuoteNavigationRequest | null
+}
+
+const AGENT_HISTORY_QUOTE_HIGHLIGHT_NAME = 'proma-agent-history-quote'
+
+interface TextPosition {
+  node: Node
+  offset: number
+}
+
+interface CustomHighlightRegistry {
+  set: (name: string, highlight: unknown) => void
+  delete: (name: string) => boolean
+}
+
+type HighlightConstructor = new (...ranges: Range[]) => unknown
+
+function getMessageTextPosition(messageElement: HTMLElement, offset: number): TextPosition | null {
+  if (!Number.isInteger(offset) || offset < 0) return null
+
+  const walker = document.createTreeWalker(messageElement, NodeFilter.SHOW_TEXT)
+  let consumed = 0
+  let lastTextNode: Node | null = null
+  let node = walker.nextNode()
+  while (node) {
+    const length = node.textContent?.length ?? 0
+    if (offset <= consumed + length) {
+      return { node, offset: offset - consumed }
+    }
+    consumed += length
+    lastTextNode = node
+    node = walker.nextNode()
+  }
+
+  if (offset === consumed && lastTextNode) {
+    return { node: lastTextNode, offset: lastTextNode.textContent?.length ?? 0 }
+  }
+  return null
+}
+
+function getAgentHistoryQuoteRange(messageElement: HTMLElement, quote: QuotedSelection): Range | null {
+  if (
+    quote.sourceType !== 'agent-history'
+    || quote.selectionStart == null
+    || quote.selectionEnd == null
+    || quote.selectionEnd <= quote.selectionStart
+  ) {
+    return null
+  }
+
+  const start = getMessageTextPosition(messageElement, quote.selectionStart)
+  const end = getMessageTextPosition(messageElement, quote.selectionEnd)
+  if (!start || !end) return null
+
+  const range = document.createRange()
+  range.setStart(start.node, start.offset)
+  range.setEnd(end.node, end.offset)
+  return range
+}
+
+function getCustomHighlightRegistry(): CustomHighlightRegistry | undefined {
+  return (globalThis.CSS as unknown as { highlights?: CustomHighlightRegistry }).highlights
+}
+
+function applyAgentHistoryQuoteHighlight(range: Range): boolean {
+  const registry = getCustomHighlightRegistry()
+  const Highlight = (globalThis as unknown as { Highlight?: HighlightConstructor }).Highlight
+  if (registry && Highlight) {
+    registry.set(AGENT_HISTORY_QUOTE_HIGHLIGHT_NAME, new Highlight(range))
+    return false
+  }
+
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  return true
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
 function EmptyState(): React.ReactElement {
   return <WelcomeEmptyState />
-}
-
-function AssistantLogo({ model }: { model?: string }): React.ReactElement {
-  const channels = useAtomValue(channelsAtom)
-  if (model) {
-    return (
-      <img
-        src={getModelLogo(model, resolveModelProvider(model, channels))}
-        alt={model}
-        className="size-[35px] rounded-[25%] object-cover"
-      />
-    )
-  }
-  return (
-    <div className="size-[35px] rounded-[25%] bg-primary/10 flex items-center justify-center">
-      <Bot size={18} className="text-primary" />
-    </div>
-  )
 }
 
 /** 重试提示组件 - 折叠式 */
@@ -496,145 +582,447 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onRelinkProjectRoot, onRestoreProjectRoot, onFork, onRewind, onCreateTodo, onCompact }: AgentMessagesProps): React.ReactElement {
+interface AgentTranscriptHistoryHandle {
+  scrollToMessage: (messageId: string, onMounted?: (target: HTMLElement) => void) => void
+}
+
+interface AgentTranscriptHistoryProps {
+  groups: MessageGroup[]
+  liveGroupSet: ReadonlySet<MessageGroup>
+  allMessages: SDKMessage[]
+  taskNotificationSignature: string
+  sessionPath?: string | null
+  sessionModelId?: string
+  groupHistoryTurns: Map<string, number>
+  streaming: boolean
+  stoppedByUser?: boolean
+  onFork?: (upToMessageUuid: string) => void
+  onRewind?: (assistantMessageUuid: string) => void
+  onAgentHistoryQuoteClick?: (quote: QuotedSelection) => void
+  onCreateTodo?: (text: string) => void
+  onRetry?: () => void
+  onRetryInNewSession?: () => void
+  onRelinkProjectRoot?: () => void
+  onRestoreProjectRoot?: () => void
+  onCompact?: () => void
+}
+
+const EMPTY_LIVE_GROUP_SET: ReadonlySet<MessageGroup> = new Set()
+const EMPTY_MESSAGE_GROUPS: MessageGroup[] = []
+
+/**
+ * 比较两批 group 的“结构身份”是否一致。
+ *
+ * 流式期间只有活跃 turn 的 group 是新引用，历史前缀由 stabilizeMessageGroups 保持原引用。
+ * 因此这里以引用比较为主路径，只对确实变化的位置回退到 type/id 比较，避免每帧构造签名字符串。
+ */
+function haveSameGroupIdentities(previous: MessageGroup[], next: MessageGroup[]): boolean {
+  if (previous.length !== next.length) return false
+  for (let index = 0; index < previous.length; index++) {
+    const previousGroup = previous[index]
+    const nextGroup = next[index]
+    if (previousGroup === nextGroup) continue
+    if (!previousGroup || !nextGroup) return false
+    if (previousGroup.type !== nextGroup.type) return false
+    if (getGroupId(previousGroup) !== getGroupId(nextGroup)) return false
+  }
+  return true
+}
+
+function areTranscriptRowsEqual(
+  previous: AgentTranscriptHistoryProps,
+  next: AgentTranscriptHistoryProps,
+): boolean {
+  if (
+    previous.groups.length !== next.groups.length
+    || previous.liveGroupSet !== next.liveGroupSet
+    || previous.taskNotificationSignature !== next.taskNotificationSignature
+    || previous.sessionPath !== next.sessionPath
+    || previous.sessionModelId !== next.sessionModelId
+    || previous.streaming !== next.streaming
+    || previous.stoppedByUser !== next.stoppedByUser
+    || previous.onFork !== next.onFork
+    || previous.onRewind !== next.onRewind
+    || previous.onAgentHistoryQuoteClick !== next.onAgentHistoryQuoteClick
+    || previous.onCreateTodo !== next.onCreateTodo
+    || previous.onRetry !== next.onRetry
+    || previous.onRetryInNewSession !== next.onRetryInNewSession
+    || previous.onRelinkProjectRoot !== next.onRelinkProjectRoot
+    || previous.onRestoreProjectRoot !== next.onRestoreProjectRoot
+    || previous.onCompact !== next.onCompact
+  ) {
+    return false
+  }
+  return previous.groups.every((group, index) => group === next.groups[index])
+}
+
+const AgentTranscriptRows = React.memo(function AgentTranscriptRows({
+  groups,
+  liveGroupSet,
+  allMessages,
+  taskNotificationSignature,
+  sessionPath,
+  sessionModelId,
+  groupHistoryTurns,
+  streaming,
+  stoppedByUser,
+  onFork,
+  onRewind,
+  onAgentHistoryQuoteClick,
+  onCreateTodo,
+  onRetry,
+  onRetryInNewSession,
+  onRelinkProjectRoot,
+  onRestoreProjectRoot,
+  onCompact,
+}: AgentTranscriptHistoryProps): React.ReactElement {
+  const lastAssistantTurnIndex = React.useMemo(
+    () => groups.findLastIndex((group) => group.type === 'assistant-turn'),
+    [groups],
+  )
+
+  return (
+    <>
+      {groups.map((group, index) => {
+        const isLive = liveGroupSet.has(group)
+        const isErrorGroup = group.type === 'assistant-turn'
+          && group.assistantMessages.some((message) => !!message.error)
+        const shouldDisableActions = isLive && !isErrorGroup
+        const isLastAssistantTurn = !streaming && stoppedByUser
+          && group.type === 'assistant-turn'
+          && index === lastAssistantTurnIndex
+        const groupId = getGroupId(group)
+
+        return (
+          <div key={groupId} className="w-full pb-1">
+            <MessageGroupRenderer
+              group={group}
+              allMessages={group.type === 'assistant-turn' ? allMessages : EMPTY_SDK_MESSAGES}
+              externalMetadataSignature={group.type === 'assistant-turn' ? taskNotificationSignature : ''}
+              basePath={sessionPath || undefined}
+              onFork={shouldDisableActions ? undefined : onFork}
+              onRewind={shouldDisableActions ? undefined : onRewind}
+              onAgentHistoryQuoteClick={onAgentHistoryQuoteClick}
+              onCreateTodo={shouldDisableActions ? undefined : onCreateTodo}
+              onRetry={shouldDisableActions ? undefined : onRetry}
+              onRetryInNewSession={shouldDisableActions ? undefined : onRetryInNewSession}
+              onRelinkProjectRoot={shouldDisableActions ? undefined : onRelinkProjectRoot}
+              onRestoreProjectRoot={shouldDisableActions ? undefined : onRestoreProjectRoot}
+              onCompact={shouldDisableActions ? undefined : onCompact}
+              historyTurn={groupHistoryTurns.get(groupId)}
+              isStreaming={isLive || undefined}
+              stoppedByUser={isLastAssistantTurn || undefined}
+              sessionModelId={sessionModelId}
+            />
+          </div>
+        )
+      })}
+    </>
+  )
+}, areTranscriptRowsEqual)
+
+/**
+ * Agent 历史消息使用普通 DOM 列表，避免滚动期间反复挂载和测量重型消息组件。
+ * 稳定历史前缀与实时 tail 分开 memo，token 更新时不重新协调整个历史 DOM。
+ */
+const AgentTranscriptHistory = React.forwardRef<AgentTranscriptHistoryHandle, AgentTranscriptHistoryProps>(function AgentTranscriptHistory({
+  groups,
+  liveGroupSet,
+  allMessages,
+  taskNotificationSignature,
+  sessionPath,
+  sessionModelId,
+  groupHistoryTurns,
+  streaming,
+  stoppedByUser,
+  onFork,
+  onRewind,
+  onAgentHistoryQuoteClick,
+  onCreateTodo,
+  onRetry,
+  onRetryInNewSession,
+  onRelinkProjectRoot,
+  onRestoreProjectRoot,
+  onCompact,
+}, ref): React.ReactElement {
+  const { scrollRef, isAtBottom, stopScroll } = useStickToBottomContext()
+  const previousLayoutRef = React.useRef<{
+    count: number
+    firstGroupId: string | undefined
+    scrollHeight: number
+    isAtBottom: boolean
+  } | null>(null)
+
+  const firstGroupId = groups[0] ? getGroupId(groups[0]) : undefined
+  const groupCount = groups.length
+
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+
+    const previous = previousLayoutRef.current
+    if (
+      previous
+      && previous.firstGroupId !== undefined
+      && groupCount > previous.count
+      && firstGroupId !== previous.firstGroupId
+      && !previous.isAtBottom
+    ) {
+      const heightDelta = element.scrollHeight - previous.scrollHeight
+      if (heightDelta > 0) element.scrollTop += heightDelta
+    }
+
+    previousLayoutRef.current = {
+      count: groupCount,
+      firstGroupId,
+      scrollHeight: element.scrollHeight,
+      isAtBottom,
+    }
+  }, [firstGroupId, groupCount, isAtBottom, scrollRef])
+
+  const firstLiveIndex = groups.findIndex((group) => liveGroupSet.has(group))
+  const historyEnd = firstLiveIndex >= 0 ? firstLiveIndex : groups.length
+  const stableHistoryGroupsRef = React.useRef<MessageGroup[]>([])
+  const historyGroups = React.useMemo(() => {
+    const previous = stableHistoryGroupsRef.current
+    if (
+      previous.length === historyEnd
+      && previous.every((group, index) => group === groups[index])
+    ) {
+      return previous
+    }
+    const next = groups.slice(0, historyEnd)
+    stableHistoryGroupsRef.current = next
+    return next
+  }, [groups, historyEnd])
+  const liveGroups = historyEnd < groups.length ? groups.slice(historyEnd) : EMPTY_MESSAGE_GROUPS
+
+  React.useImperativeHandle(ref, () => ({
+    scrollToMessage: (messageId, onMounted) => {
+      const target = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])
+        .find((element) => element.dataset.messageId === messageId)
+      if (!target) return
+
+      stopScroll()
+      if (onMounted) {
+        onMounted(target)
+        return
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    },
+  }), [scrollRef, stopScroll])
+
+  return (
+    <div className="w-full shrink-0">
+      <AgentTranscriptRows
+        groups={historyGroups}
+        liveGroupSet={EMPTY_LIVE_GROUP_SET}
+        allMessages={allMessages}
+        taskNotificationSignature={taskNotificationSignature}
+        sessionPath={sessionPath}
+        sessionModelId={sessionModelId}
+        groupHistoryTurns={groupHistoryTurns}
+        streaming={false}
+        stoppedByUser={liveGroups.length === 0 ? stoppedByUser : undefined}
+        onFork={onFork}
+        onRewind={onRewind}
+        onAgentHistoryQuoteClick={onAgentHistoryQuoteClick}
+        onCreateTodo={onCreateTodo}
+        onRetry={onRetry}
+        onRetryInNewSession={onRetryInNewSession}
+        onRelinkProjectRoot={onRelinkProjectRoot}
+        onRestoreProjectRoot={onRestoreProjectRoot}
+        onCompact={onCompact}
+      />
+      {liveGroups.length > 0 && (
+        <AgentTranscriptRows
+          groups={liveGroups}
+          liveGroupSet={liveGroupSet}
+          allMessages={allMessages}
+          taskNotificationSignature={taskNotificationSignature}
+          sessionPath={sessionPath}
+          sessionModelId={sessionModelId}
+          groupHistoryTurns={groupHistoryTurns}
+          streaming={streaming}
+          stoppedByUser={stoppedByUser}
+          onFork={onFork}
+          onRewind={onRewind}
+          onAgentHistoryQuoteClick={onAgentHistoryQuoteClick}
+          onCreateTodo={onCreateTodo}
+          onRetry={onRetry}
+          onRetryInNewSession={onRetryInNewSession}
+          onRelinkProjectRoot={onRelinkProjectRoot}
+          onRestoreProjectRoot={onRestoreProjectRoot}
+          onCompact={onCompact}
+        />
+      )}
+    </div>
+  )
+})
+
+export const AgentMessages = React.memo(function AgentMessages({
+  sessionId,
+  sessionModelId,
+  messagesLoaded,
+  persistedSDKMessages,
+  sessionPath,
+  attachedDirs,
+  stoppedByUser,
+  onRetry,
+  onRetryInNewSession,
+  onRelinkProjectRoot,
+  onRestoreProjectRoot,
+  onFork,
+  onRewind,
+  onCreateTodo,
+  onCompact,
+  onAddHistoryQuote,
+  onAgentHistoryQuoteClick,
+  historyQuoteNavigation,
+}: AgentMessagesProps): React.ReactElement {
+  // 高频 token/live message 状态在历史区内闭环，避免唤醒 AgentView 输入框和工具栏。
+  const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
+  const liveMessages = useAtomValue(agentLiveMessagesAtomFamily(sessionId))
+  const streaming = streamState?.running ?? false
   const userProfile = useAtomValue(userProfileAtom)
-  const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
+  const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const historySelectionRootRef = React.useRef<HTMLDivElement>(null)
-  /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
-  const [ready, setReady] = React.useState(false)
-  // 空会话无需淡入过渡（无消息则无滚动位置问题）
-  const [skipFadeIn, setSkipFadeIn] = React.useState(false)
-  const prevSessionIdRef = React.useRef<string | null>(null)
-
-  React.useEffect(() => {
-    if (sessionId !== prevSessionIdRef.current) {
-      prevSessionIdRef.current = sessionId
-      setReady(false)
-      setSkipFadeIn(false)
+  const historyRef = React.useRef<AgentTranscriptHistoryHandle>(null)
+  const visibleGroupsRef = React.useRef<MessageGroup[]>([])
+  const selectionHighlightUsesBrowserSelectionRef = React.useRef(false)
+  const clearHistoryQuoteHighlight = React.useCallback((): void => {
+    getCustomHighlightRegistry()?.delete(AGENT_HISTORY_QUOTE_HIGHLIGHT_NAME)
+    if (selectionHighlightUsesBrowserSelectionRef.current) {
+      window.getSelection()?.removeAllRanges()
+      selectionHighlightUsesBrowserSelectionRef.current = false
     }
-  }, [sessionId])
+  }, [])
+  // 消息和布局恢复完成后才显示会话。隐藏期间不让用户看到 StickToBottom 初始化时
+  // 可能出现的临时底部位置；显示前 ScrollPositionManager 已经直接设置了 scrollTop。
+  const [readySessionId, setReadySessionId] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    if (messagesLoaded === false) {
+      setReadySessionId(null)
+      return
+    }
+    setReadySessionId(sessionId)
+  }, [messagesLoaded, sessionId])
+  const ready = messagesLoaded !== false && readySessionId === sessionId
 
   React.useEffect(() => {
-    if (ready) return
+    const root = historySelectionRootRef.current
+    if (!root) return
+    const clearOnPointerDown = (): void => {
+      // 仅清理已存在的高亮；不读取 Selection 或触发历史渲染。
+      clearHistoryQuoteHighlight()
+    }
+    // 保留根外点击的高亮清理；该监听不参与选区捕获热路径。
+    document.addEventListener('pointerdown', clearOnPointerDown, true)
+    return () => {
+      document.removeEventListener('pointerdown', clearOnPointerDown, true)
+      clearHistoryQuoteHighlight()
+    }
+  }, [clearHistoryQuoteHighlight])
 
-    // 必须等消息加载完成，否则空 SDK 消息会被误判为空对话
-    if (messagesLoaded === false) return
-
-    // 流式进行中且有实时内容 → 跳过 fade 直接显示
-    if (streaming && liveMessages && liveMessages.length > 0) {
-      setReady(true)
+  React.useEffect(() => {
+    clearHistoryQuoteHighlight()
+    if (
+      !historyQuoteNavigation
+      || historyQuoteNavigation.sessionId !== sessionId
+      || historyQuoteNavigation.quote.sourceType !== 'agent-history'
+      || !historyQuoteNavigation.quote.messageId
+    ) {
       return
     }
 
-    if ((!persistedSDKMessages || persistedSDKMessages.length === 0) && !streaming) {
-      setSkipFadeIn(true)
-      setReady(true)
-      return
-    }
-    let cancelled = false
-    requestAnimationFrame(() => {
-      if (!cancelled) setReady(true)
+    const navigation = historyQuoteNavigation
+    const messageId = navigation.quote.messageId
+    if (!messageId) return
+    const frame = window.requestAnimationFrame(() => {
+      const root = historySelectionRootRef.current
+      if (!root) return
+
+      const applyNavigation = (target: HTMLElement): void => {
+        const range = getAgentHistoryQuoteRange(target, navigation.quote)
+        if (!range) return
+        target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+        selectionHighlightUsesBrowserSelectionRef.current = applyAgentHistoryQuoteHighlight(range)
+      }
+
+      const targetIndex = visibleGroupsRef.current.findIndex((group) => getGroupId(group) === messageId)
+      if (targetIndex >= 0) {
+        historyRef.current?.scrollToMessage(messageId, applyNavigation)
+        return
+      }
+
+      const target = Array.from(root.querySelectorAll<HTMLElement>('[data-message-id]')).find(
+        (element) => element.dataset.messageId === messageId,
+      )
+      if (target) applyNavigation(target)
     })
-    return () => { cancelled = true }
-  }, [streaming, liveMessages, persistedSDKMessages, messagesLoaded])
 
-  // 从 streamState 属性中计算派生值
-  const streamingContent = streamState?.content ?? ''
-  const streamingModelId = streamState?.model || sessionModelId
-  const agentStreamingModel = streamingModelId ? resolveModelDisplayName(streamingModelId, channels) : undefined
+    return () => window.cancelAnimationFrame(frame)
+  }, [clearHistoryQuoteHighlight, historyQuoteNavigation, sessionId])
+
+  // 实时文本仅从 liveMessages 读取。AgentStreamState 只保留运行/控制状态，
+  // 避免每个 sdk_delta 同时更新 transcript 和 legacy content 两条路径。
   const retrying = streamState?.retrying
   const startedAt = streamState?.startedAt
+  const optimisticModelId = streamState?.model || sessionModelId
+  const optimisticModel = optimisticModelId
+    ? resolveModelDisplayName(optimisticModelId, channels)
+    : undefined
+  const optimisticTime = startedAt ? formatMessageTime(startedAt) : undefined
 
-  const { displayedContent: rawSmoothContent } = useSmoothStream({
-    content: streamingContent,
-    isStreaming: streaming,
-  })
-
-  // 防闪屏守卫：useSmoothStream 通过 useEffect 重置 displayedContent，比 render 晚一帧。
-  // 当 streamingContent 已清空但 smoothContent 仍持有旧值时，
-  // 会导致 fallback 气泡与持久化消息同时渲染一帧（重复内容闪烁）。
-  // 用原始 streamingContent 作为守卫：内容已清空且不在流式中，立即归零。
-  const smoothContent = (streaming || streamingContent) ? rawSmoothContent : ''
-  const smoothContentBlocks = React.useMemo(() => {
-    if (!smoothContent) return []
-    return parseThinkTagsFromText(smoothContent)
-  }, [smoothContent])
-  const hasSmoothTextContent = smoothContentBlocks.some((block) => block.type === 'text')
-
-  /**
-   * 流式完成过渡：streaming 结束到持久化消息加载完成之间，
-   * 强制 resize="instant" 避免中间高度变化触发平滑滚动动画。
-   *
-   * 使用 render-phase 计算避免 useEffect 延迟一帧的问题：
-   * - streaming 变 false 的第一帧就能立即切到 instant，防止闪动
-   * - 后续通过 ref+timeout 延迟 150ms 才允许切回 smooth
-   */
-  const [transitioningCooldown, setTransitioningCooldown] = React.useState(false)
-  const wasStreamingRef = React.useRef(streaming)
-
-  // render-phase 判断：是否处于需要 instant resize 的过渡期
-  // liveMessages 非空说明持久化消息还没加载完（加载完后会清空 liveMessages）
-  const needsInstant = !streaming && (!!streamingContent || !!smoothContent || (liveMessages != null && liveMessages.length > 0))
-
-  React.useEffect(() => {
-    // 刚从 streaming → not-streaming：启动 cooldown
-    if (wasStreamingRef.current && !streaming) {
-      setTransitioningCooldown(true)
-    }
-    wasStreamingRef.current = streaming
-  }, [streaming])
-
-  React.useEffect(() => {
-    if (needsInstant) return
-    // 过渡完成后延迟 150ms 才关闭 cooldown，给 StickToBottom 时间稳定
-    const timer = setTimeout(() => setTransitioningCooldown(false), 150)
-    return () => clearTimeout(timer)
-  }, [needsInstant])
-
-  const transitioning = needsInstant || transitioningCooldown
-
-  // 合并持久化 + 实时 SDKMessage（供 ContentBlock 内查找工具结果）
+  // Agent 消息区不使用 StickToBottom 的 smooth resize。切换会话、虚拟列表测量和
+  // 历史消息加载都必须立即定位，避免 ResizeObserver 触发滚动 spring 动画。
+  // 合并持久化 + 实时 SDKMessage：同一 UUID 的 live 消息替换历史快照，避免
+  // 历史会话快速续跑时 live atom 尚未清空而把同一 assistant 渲染两次。
   const allSDKMessages = React.useMemo(() => {
     const persisted = persistedSDKMessages ?? []
     const live = liveMessages ?? []
     const stampStableKey = (message: SDKMessage): SDKMessage => {
       const key = getSDKMessageStableKey(message)
-      ;(message as Record<string, unknown>)._promaStableKey = key
+      const record = message as Record<string, unknown>
+      // 已标记且未变化时不重写：对老世代消息对象的属性写入会触发 GC 写屏障，
+      // 在数百条历史 × 高频 partial 下形成持续开销。
+      if (record._promaStableKey !== key) record._promaStableKey = key
       return message
     }
-    const keyOf = (message: SDKMessage): string =>
-      (message as Record<string, unknown>)._promaStableKey as string
-
-    const persistedWithKeys = persisted.map(stampStableKey)
-    const liveWithKeys = live.map(stampStableKey)
-    if (streaming || liveWithKeys.length === 0 || persistedWithKeys.length === 0) {
-      return [...persistedWithKeys, ...liveWithKeys]
+    const hasUuid = (message: SDKMessage): boolean => {
+      const uuid = (message as Record<string, unknown>).uuid
+      return typeof uuid === 'string' && uuid.length > 0
     }
-
-    // 流式结束后的刷新中，持久化消息尾部可能已经包含 live 序列。
-    // 只替换有序尾部重叠，避免按内容全局去重误删历史中的相同问答。
-    let overlap = Math.min(persistedWithKeys.length, liveWithKeys.length)
-    for (; overlap > 0; overlap--) {
-      const persistedStart = persistedWithKeys.length - overlap
-      const liveStart = liveWithKeys.length - overlap
-      let matches = true
-      for (let i = 0; i < overlap; i++) {
-        if (keyOf(persistedWithKeys[persistedStart + i]!) !== keyOf(liveWithKeys[liveStart + i]!)) {
-          matches = false
-          break
+    const result: SDKMessage[] = []
+    const uuidIndexes = new Map<string, number>()
+    const upsert = (message: SDKMessage): void => {
+      const stamped = stampStableKey(message)
+      if (hasUuid(stamped)) {
+        const key = (stamped as Record<string, unknown>)._promaStableKey as string
+        const existingIndex = uuidIndexes.get(key)
+        if (existingIndex != null) {
+          result[existingIndex] = stamped
+          return
         }
+        uuidIndexes.set(key, result.length)
       }
-      if (matches) break
+      result.push(stamped)
     }
 
-    if (overlap === 0) return [...persistedWithKeys, ...liveWithKeys]
-    return [
-      ...persistedWithKeys.slice(0, persistedWithKeys.length - overlap),
-      ...liveWithKeys,
-    ]
-  }, [persistedSDKMessages, liveMessages, streaming])
+    for (const message of persisted) upsert(message)
+    for (const message of live) upsert(message)
+    return result
+  }, [persistedSDKMessages, liveMessages])
   const hasContent = allSDKMessages.length > 0
+  // 跨 turn task_notification 是历史 Task 卡片唯一需要追踪的外部元数据。
+  // 普通 token/live snapshot 不改变此签名，MessageGroupRenderer comparator 因而可忽略全消息数组新引用。
+  const taskNotificationSignature = React.useMemo(() => (
+    allSDKMessages
+      .filter((message) => message.type === 'system' && message.subtype === 'task_notification')
+      .map((message) => getSDKMessageStableKey(message))
+      .join('\u0000')
+  ), [allSDKMessages])
 
   // 仅扫描当前 live turn；不从持久化历史恢复任务，避免跨 turn 显示旧进度。
   const liveTaskActivities = React.useMemo(() => {
@@ -654,28 +1042,62 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
   const suppressAgentRunning = streamState?.isCompacting
     || (streamState?.compactInFlight && contextCompaction != null)
 
-  // 统一分组：将持久化 + 实时消息合并后再分组，确保 system 消息（如压缩分割线）出现在正确位置
+  // 流式更新只重新分组当前 turn；已完成历史复用 group 引用，使 memoized renderer
+  // 跳过历史 Markdown/代码高亮/工具结果树。非流式刷新仍保持完整 groupIntoTurns 语义。
+  const messageGroupCacheRef = React.useRef(createMessageGroupRenderCache())
   const allGroups = React.useMemo(() => {
-    return groupIntoTurns(allSDKMessages, sessionModelId)
-  }, [allSDKMessages, sessionModelId])
-  // 压缩过程由底部 Progress Overlay 独立承载，不占用对话历史、迷你地图或用户锚点。
-  const visibleGroups = React.useMemo(
-    () => allGroups.filter((group) => !isCompactionControlHistoryGroup(group)),
-    [allGroups],
-  )
-
-  // 标记哪些 group 属于实时流式消息（用于 isStreaming / onFork 差异化渲染）
+    const result = groupMessagesForRendering(
+      allSDKMessages,
+      sessionModelId,
+      streaming,
+      messageGroupCacheRef.current,
+    )
+    messageGroupCacheRef.current = result.cache
+    return result.groups
+  }, [allSDKMessages, sessionModelId, streaming])
+  // 标记哪些 group 属于实时流式消息（用于 isStreaming / onFork 差异化渲染）。
+  // 该集合必须先于 visibleGroups 计算，让空 assistant snapshot 能在真正渲染前被过滤。
   const liveGroupSet = React.useMemo(() => {
     return buildLiveGroupSet({
       allGroups,
       liveMessages,
       streaming,
+      activeRunStartedAt: streamState?.startedAt,
     })
-  }, [allGroups, liveMessages, streaming])
+  }, [allGroups, liveMessages, streaming, streamState?.startedAt])
 
-  // 迷你地图数据 — 直接使用统一的 allGroups（无需去重）
+  // 压缩过程由底部 Progress Overlay 独立承载，不占用对话历史、迷你地图或用户锚点。
+  // Pi 的 text_start/thinking_start 会产生没有可见 DOM 的空内容块；过滤掉对应的 live turn，
+  // 直到有实际内容时再交给 transcript 渲染，避免与乐观计时器壳重复显示 assistant header。
+  const visibleGroups = React.useMemo(
+    () => allGroups.filter((group) => (
+      !isCompactionControlHistoryGroup(group)
+      && shouldRenderLiveAssistantTurn(group, liveGroupSet.has(group))
+    )),
+    [allGroups, liveGroupSet],
+  )
+  visibleGroupsRef.current = visibleGroups
+
+  // 结构派生（迷你地图、用户锚点、turn 编号、sticky 布局）只关心 group 身份，不关心流式 token。
+  // 流式期间活跃 group 每帧都是新引用；若直接依赖 visibleGroups，getGroupPreview 与
+  // parseAttachedFiles 的正则会按 partial 帧率重跑整段历史。此处在身份未变时保持旧数组引用，
+  // 让这些派生只在真正新增/删除消息时重算。
+  const structuralGroupsRef = React.useRef<MessageGroup[]>(visibleGroups)
+  const structuralStreamingRef = React.useRef(streaming)
+  // 流式开始/结束时必须刷新一次：活跃 group 的 id 不变但正文从空到完整，
+  // 否则本轮迷你地图 preview 会永久停留在空值。
+  if (
+    structuralStreamingRef.current !== streaming
+    || !haveSameGroupIdentities(structuralGroupsRef.current, visibleGroups)
+  ) {
+    structuralStreamingRef.current = streaming
+    structuralGroupsRef.current = visibleGroups
+  }
+  const structuralGroups = structuralGroupsRef.current
+
+  // 迷你地图数据 — 只依赖结构快照，流式 token 不触发 getGroupPreview 正则
   const minimapItems: MinimapItem[] = React.useMemo(
-    () => visibleGroups.map((group) => ({
+    () => structuralGroups.map((group) => ({
       id: getGroupId(group),
       role: group.type === 'user' ? 'user' as const
         : group.type === 'system' ? 'status' as const
@@ -684,23 +1106,24 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
       avatar: group.type === 'user' ? userProfile.avatar : undefined,
       model: group.type === 'assistant-turn' ? group.model : undefined,
     })),
-    [visibleGroups, userProfile.avatar]
+    [structuralGroups, userProfile.avatar]
   )
 
-  // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）
+  // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）。
+  // 流式期间不写：本轮结束后统一同步一次，避免高频写入全局 atom 唤醒其他订阅者。
   React.useEffect(() => {
-    if (minimapItems.length > 0) {
-      setMinimapCache((prev) => {
-        const next = new Map(prev)
-        next.set(sessionId, minimapItems)
-        return next
-      })
-    }
-  }, [sessionId, minimapItems, setMinimapCache])
+    if (streaming || minimapItems.length === 0) return
+    setMinimapCache((prev) => {
+      const next = new Map(prev)
+      next.set(sessionId, minimapItems)
+      return next
+    })
+  }, [sessionId, minimapItems, streaming, setMinimapCache])
 
-  // 所有用户消息的数据 — 供 StickyUserMessage 使用
+  // 所有用户消息的数据 — 供 StickyUserMessage 使用；只依赖结构快照，
+  // 避免流式期间重复解析已存在用户消息的附件标记。
   const allUserMessagesData = React.useMemo(() => {
-    return visibleGroups
+    return structuralGroups
       .filter((g): g is MessageGroup & { type: 'user' } => g.type === 'user')
       .map((g) => {
         const rawText = extractUserText(g.message) ?? ''
@@ -711,25 +1134,49 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           attachments: files.map((f) => ({ filename: f.filename, isImage: sdkIsImageFile(f.filename) })),
         }
       })
-  }, [visibleGroups])
+  }, [structuralGroups])
 
-  // 实时消息中是否已有可渲染的助手内容
-  // 流式中：通过 liveGroupSet 精确判断（只有 streaming 时 liveGroupSet 才非空）
-  // 流式结束后：直接检查 liveMessages 中是否有助手消息，
-  // 防止 streaming→false 到 liveMessages 被清除之间的过渡帧中 fallback 气泡重复渲染
+  // 只有 assistant turn 产生实际内容后，才把计时器从乐观消息壳迁移到历史区。
+  // Pi 会先推送空 assistant snapshot；若立即迁移，空消息头会把计时器下推，
+  // 直到首个过程/文本块到达才填补空白。
   const hasLiveAssistantContent = streaming
-    ? allGroups.some((g) => g.type === 'assistant-turn' && liveGroupSet.has(g))
-    : (liveMessages != null && liveMessages.some((m) => (m as { type: string }).type === 'assistant'))
+    ? allGroups.some((group) => liveGroupSet.has(group) && hasRenderableAssistantTurnContent(group))
+    : (liveMessages != null && liveMessages.some((message) => (
+      message.type === 'assistant' && hasRenderableAssistantMessage(message as SDKAssistantMessage)
+    )))
 
   const messageBasePaths = React.useMemo(
     () => [sessionPath, ...(attachedDirs ?? [])].filter((path): path is string => Boolean(path)),
     [sessionPath, attachedDirs],
   )
 
+  // turn 在消息渲染时一次性标注到 DOM；历史划选只需读取锚点属性，绝不回扫全部消息。
+  const groupHistoryTurns = React.useMemo(() => {
+    let turn = 0
+    const turns = new Map<string, number>()
+    for (const group of structuralGroups) {
+      if (group.type === 'user') turn += 1
+      turns.set(getGroupId(group), Math.max(turn, 1))
+    }
+    return turns
+  }, [structuralGroups])
+
+  const stickyLayoutSignature = React.useMemo(() => {
+    const firstGroup = structuralGroups[0]
+    return `${structuralGroups.length}:${firstGroup ? getGroupId(firstGroup) : ''}`
+  }, [structuralGroups])
+
   return (
     <BasePathsProvider basePaths={messageBasePaths}>
-    <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
-      <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
+      <AgentBrowserLinkProvider sessionId={sessionId}>
+        <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
+      <style>{`
+        ::highlight(${AGENT_HISTORY_QUOTE_HIGHLIGHT_NAME}) {
+          background-color: hsl(var(--primary) / 0.28);
+          color: inherit;
+        }
+      `}</style>
+          <Conversation resize="instant" className={ready ? 'opacity-100' : 'opacity-0'}>
         <ScrollPositionManager id={sessionId} ready={ready} />
         <ConversationContent>
           {!hasContent && !streaming ? (
@@ -737,35 +1184,27 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           ) : (
             <>
               {/* 统一消息渲染（持久化 + 实时合并为一个列表，确保 system 消息位置正确） */}
-              {visibleGroups.map((group, idx) => {
-                const isLive = liveGroupSet.has(group)
-                const isErrorGroup = group.type === 'assistant-turn'
-                  && group.assistantMessages.some((m) => !!m.error)
-                const shouldDisableActions = isLive && !isErrorGroup
-                // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge
-                const isLastAssistantTurn = !streaming && stoppedByUser
-                  && group.type === 'assistant-turn'
-                  && idx === visibleGroups.findLastIndex((g) => g.type === 'assistant-turn')
-                return (
-                  <MessageGroupRenderer
-                    key={getGroupId(group)}
-                    group={group}
-                    allMessages={allSDKMessages}
-                    basePath={sessionPath || undefined}
-                    onFork={shouldDisableActions ? undefined : onFork}
-                    onRewind={shouldDisableActions ? undefined : onRewind}
-                    onCreateTodo={shouldDisableActions ? undefined : onCreateTodo}
-                    onRetry={shouldDisableActions ? undefined : onRetry}
-                    onRetryInNewSession={shouldDisableActions ? undefined : onRetryInNewSession}
-                    onRelinkProjectRoot={shouldDisableActions ? undefined : onRelinkProjectRoot}
-                    onRestoreProjectRoot={shouldDisableActions ? undefined : onRestoreProjectRoot}
-                    onCompact={shouldDisableActions ? undefined : onCompact}
-                    isStreaming={isLive || undefined}
-                    stoppedByUser={isLastAssistantTurn || undefined}
-                    sessionModelId={sessionModelId}
-                  />
-                )
-              })}
+              <AgentTranscriptHistory
+                ref={historyRef}
+                groups={visibleGroups}
+                liveGroupSet={liveGroupSet}
+                allMessages={allSDKMessages}
+                taskNotificationSignature={taskNotificationSignature}
+                sessionPath={sessionPath}
+                sessionModelId={sessionModelId}
+                groupHistoryTurns={groupHistoryTurns}
+                streaming={streaming}
+                stoppedByUser={stoppedByUser}
+                onFork={onFork}
+                onRewind={onRewind}
+                onAgentHistoryQuoteClick={onAgentHistoryQuoteClick}
+                onCreateTodo={onCreateTodo}
+                onRetry={onRetry}
+                onRetryInNewSession={onRetryInNewSession}
+                onRelinkProjectRoot={onRelinkProjectRoot}
+                onRestoreProjectRoot={onRestoreProjectRoot}
+                onCompact={onCompact}
+              />
 
               {/* 有实时助手内容时：显示运行指示器或占位（防止 streaming 结束到 Actions Bar 出现之间的高度跳动） */}
               {/* 不使用 mt：ConversationContent 的 gap-1(4px) 已提供间距，
@@ -777,38 +1216,17 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                 </div>
               )}
 
-              {/* 无实时助手内容时：显示完整气泡（含头像/名称/时间） */}
-              {/* 注意：工具活动已通过 SDK 渲染路径（liveGroups）展示 */}
-              {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || smoothContent || retrying) && (
+              {/* 首个 live assistant block 到达前，先乐观渲染 assistant 外壳和 Logo；文本仍完全由 SDKMessage 渲染。 */}
+              {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || retrying) && (
                 <Message from="assistant">
                   <MessageHeader
-                    model={agentStreamingModel}
-                    time={formatMessageTime(Date.now())}
-                    logo={<AssistantLogo model={streamingModelId} />}
+                    model={optimisticModel}
+                    time={optimisticTime}
+                    logo={<AssistantLogo model={optimisticModelId} />}
                   />
                   <MessageContent>
                     {retrying && <RetryingNotice retrying={retrying} />}
-                    {smoothContent ? (
-                      <>
-                        <div className={cn('space-y-2')}>
-                          {smoothContentBlocks.map((block, index) => (
-                            <ContentBlock
-                              key={index}
-                              block={block}
-                              allMessages={allSDKMessages}
-                              basePath={sessionPath || undefined}
-                              basePaths={attachedDirs}
-                              index={index}
-                              dimmed={hasSmoothTextContent && block.type !== 'text'}
-                              isStreaming={streaming}
-                            />
-                          ))}
-                        </div>
-                        {streaming && <AgentRunningIndicator startedAt={startedAt} />}
-                      </>
-                    ) : (
-                      streaming && <AgentRunningIndicator startedAt={startedAt} />
-                    )}
+                    {streaming && <AgentRunningIndicator startedAt={startedAt} />}
                   </MessageContent>
                 </Message>
               )}
@@ -824,11 +1242,19 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           contextCompaction={contextCompaction}
         />
         {allUserMessagesData.length > 0 && (
-          <StickyUserMessage userMessages={allUserMessagesData} />
+          <StickyUserMessage
+            userMessages={allUserMessagesData}
+            layoutSignature={stickyLayoutSignature}
+          />
         )}
-      </Conversation>
-      <AgentHistorySelectionLayer sessionId={sessionId} rootRef={historySelectionRootRef} />
-    </div>
+          </Conversation>
+          <AgentHistorySelectionLayer
+            sessionId={sessionId}
+            rootRef={historySelectionRootRef}
+            onAddToAgent={onAddHistoryQuote}
+          />
+        </div>
+      </AgentBrowserLinkProvider>
     </BasePathsProvider>
   )
-}
+})

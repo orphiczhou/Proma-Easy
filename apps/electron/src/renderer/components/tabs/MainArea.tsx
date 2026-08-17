@@ -7,6 +7,7 @@
  */
 
 import * as React from 'react'
+import type { BrowserStateChange, BrowserViewState } from '@proma/shared'
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
 import {
   tabsAtom,
@@ -31,6 +32,8 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
+import { browserPanelOpenMapAtom, browserPendingNavigationMapAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { BrowserPanel } from '@/components/browser/BrowserPanel'
 
 export function MainArea(): React.ReactElement {
   // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
@@ -50,19 +53,61 @@ export function MainArea(): React.ReactElement {
   // DiffTabContent → ProseMirror editor mount + Shiki tokenize）让出主线程，避免点击 tab
   // 后必须等主区域渲染完才能看到 tab 切换效果
   const deferredActiveTabId = React.useDeferredValue(activeTabId)
+  // Agent 历史当前是完整 DOM，切换时使用当前 active tab，避免 deferred value 让旧会话继续占屏。
+  // Chat/Preview 仍保留 deferred 渲染，避免它们的重型编辑器阻塞 TabBar 响应。
+  const contentTabId = activeTab?.type === 'agent' ? activeTabId : deferredActiveTabId
 
   const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
+  const [browserOpenMap, setBrowserOpenMap] = useAtom(browserPanelOpenMapAtom)
+  const [browserStateMap, setBrowserStateMap] = useAtom(browserStateMapAtom)
+  const setPendingNavigationMap = useSetAtom(browserPendingNavigationMapAtom)
   const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
   const [rightWorkspaceRatio, setRightWorkspaceRatio] = useAtom(rightWorkspaceSplitRatioAtom)
   const previewDragging = React.useRef(false)
   const rightWorkspaceDragging = React.useRef(false)
+  const browserSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
 
+  const publishBrowserState = React.useCallback((state: BrowserStateChange) => {
+    if ('closed' in state) {
+      setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(state.sessionId, false); return next })
+      setBrowserStateMap((previous) => { const next = new Map(previous); next.delete(state.sessionId); return next })
+      setPendingNavigationMap((previous) => { const next = new Map(previous); next.delete(state.sessionId); return next })
+      return
+    }
+    setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
+    setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(state.sessionId, true); return next })
+  }, [setBrowserOpenMap, setBrowserStateMap, setPendingNavigationMap])
+
+  React.useEffect(() => {
+    // Vite renderer 可在 preload 热重载前先更新；旧 bridge 时浏览器功能不可用，
+    // 但绝不能让整个主界面崩溃。完整 Electron preload 就绪后会正常订阅。
+    const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onAgentBrowserStateChanged
+    if (typeof subscribe !== 'function') return
+    return subscribe(publishBrowserState)
+  }, [publishBrowserState])
+
+  React.useEffect(() => {
+    if (!browserSessionId) return
+    const getState = (window.electronAPI as Partial<typeof window.electronAPI>).getAgentBrowserState
+    if (typeof getState !== 'function') return
+    let cancelled = false
+    void getState(browserSessionId)
+      .then((state) => {
+        if (!cancelled && state) publishBrowserState(state)
+      })
+      // 后台会话及已删除会话会被主进程拒绝或返回空状态；无需打断当前界面。
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [browserSessionId, publishBrowserState])
+
+  const showBrowserPanel = !!browserSessionId && (browserOpenMap.get(browserSessionId) ?? false) && activeView === 'conversations'
+  const browserState = browserSessionId ? browserStateMap.get(browserSessionId) ?? null : null
   const previewOpen =
-    activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false)
+    activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false) && !showBrowserPanel
   const previewSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
   const scratchPanelOpen = useAtomValue(scratchPadPanelOpenAtom)
   const showScratchPanel =
-    activeTab?.type === 'agent' && scratchPanelOpen && activeView === 'conversations'
+    activeTab?.type === 'agent' && scratchPanelOpen && activeView === 'conversations' && !showBrowserPanel
 
   // 关闭动画状态：当 previewOpen 从 true → false 时，播放退出动画再移除 DOM
   // 在 render 阶段同步派生 closing，避免中间帧出现 flex: 1 1 auto 导致左侧瞬间跳到 100% 宽
@@ -195,7 +240,7 @@ export function MainArea(): React.ReactElement {
 
   // 左侧容器宽度：右侧工作区打开时固定占 splitRatio；其他情况（含 closing 动画期间）
   // 直接 1 1 auto 占满——closing 时右侧 absolute 脱离 flex 流，所以左侧自然占 100%。
-  const showRightPanel = showScratchPanel || showPreviewPane
+  const showRightPanel = showBrowserPanel || showScratchPanel || showPreviewPane
   const leftFlexStyle: React.CSSProperties = showRightPanel
     ? { flex: `0 0 calc(${splitRatio * 100}% - 6px)` }
     : { flex: '1 1 auto' }
@@ -239,9 +284,9 @@ export function MainArea(): React.ReactElement {
                   <AutomationFormView />
                 ) : tabs.length === 0 ? (
                   <WelcomeView />
-                ) : deferredActiveTabId ? (
+                ) : contentTabId ? (
                   <div className="flex-1 min-h-0 titlebar-no-drag">
-                    <TabContent tabId={deferredActiveTabId} />
+                    <TabContent tabId={contentTabId} />
                   </div>
                 ) : null}
               </>
@@ -264,8 +309,21 @@ export function MainArea(): React.ReactElement {
                 />
               )}
               <div className="flex flex-1 min-w-0 h-full overflow-hidden" data-right-workspace>
+                {showBrowserPanel && browserSessionId && (
+                  <div className="min-w-0 h-full overflow-hidden flex-1">
+                    <BrowserPanel
+                      sessionId={browserSessionId}
+                      state={browserState}
+                      onClose={() => {
+                        setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(browserSessionId, false); return next })
+                        setBrowserStateMap((previous) => { const next = new Map(previous); next.delete(browserSessionId); return next })
+                        setPendingNavigationMap((previous) => { const next = new Map(previous); next.delete(browserSessionId); return next })
+                      }}
+                    />
+                  </div>
+                )}
                 {showPreviewPane && previewSessionId && (
-                  <div className="min-w-[260px] h-full overflow-hidden" style={previewPaneStyle}>
+                  <div className="min-w-0 h-full overflow-hidden" style={previewPaneStyle}>
                     <PreviewPanel sessionId={previewSessionId} />
                   </div>
                 )}
@@ -276,7 +334,7 @@ export function MainArea(): React.ReactElement {
                   />
                 )}
                 {showScratchPanel && (
-                  <div className="min-w-[260px] h-full overflow-hidden" style={scratchPaneStyle}>
+                  <div className="min-w-0 h-full overflow-hidden" style={scratchPaneStyle}>
                     <ScratchPadPane onClose={handleCloseScratchPanel} />
                   </div>
                 )}

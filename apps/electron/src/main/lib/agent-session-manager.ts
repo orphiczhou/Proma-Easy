@@ -8,12 +8,12 @@
  * 照搬 conversation-manager.ts 的模式。
  */
 
-import { readFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, createReadStream, createWriteStream, type WriteStream } from 'node:fs'
+import { readFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, createReadStream, createWriteStream, statSync, type WriteStream } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { writeJsonFileAtomic, writeTextFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
 import { rmSyncWithRetry, renameWithRetry } from './fs-retry'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import {
   getAgentSessionsIndexPath,
   getAgentSessionsDir,
@@ -33,15 +33,18 @@ import type {
   AgentSessionMeta,
   AgentMessage,
   SDKMessage,
+  SDKUserMessage,
+  SkillActivation,
   AgentWorkspace,
   ForkSessionInput,
   AgentMessageSearchResult,
   AgentSessionReferenceSearchInput,
   AgentSessionReferenceSearchResult,
   AgentCwdMode,
+  AgentActiveWorktree,
   SessionWorkbenchLayout,
 } from '@proma/shared'
-import { migratePermissionMode } from '@proma/shared'
+import { migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
 // 旧格式 → SDKMessage 的转换逻辑下沉到 @proma/session-core 作为唯一真源，避免主进程与渲染层各存一份。
 import { convertLegacyMessage } from '@proma/session-core'
@@ -71,6 +74,10 @@ const INDEX_VERSION = 2
  * 同时避免极端会话数量下向渲染进程传输过大列表。
  */
 const MAX_SESSION_REFERENCE_LIMIT = 200
+
+/** 全局 Agent 会话正文搜索的结果预算。 */
+const MAX_SEARCH_SESSIONS = 100
+const MAX_SEARCH_HITS_PER_SESSION = 2
 
 /**
  * 会话引用的正文搜索是输入框补全路径，必须有独立 I/O 预算。
@@ -199,10 +206,42 @@ function migrateRetiredClaudeRuntime(index: AgentSessionsIndex): boolean {
 }
 
 /**
+ * 会话索引的内存缓存。
+ *
+ * 重度使用后索引可达数 MB（实测 3600 个会话约 6.4MB），单次 JSON.parse 约 11ms。
+ * 一轮 Agent 会多次读写索引，累计上百毫秒全部同步阻塞主进程，而键盘事件需要经主进程
+ * IPC 转发到 renderer，因此表现为“renderer 内无长任务但输入延迟尖尖”。
+ * 用 mtime+size 校验缓存：既避免重复解析，也允许测试与外部直接改写索引文件后被正确感知。
+ */
+let indexCache: { data: AgentSessionsIndex; mtimeMs: number; size: number } | null = null
+
+/** 按当前索引文件状态记录缓存；stat 失败时丢弃缓存而不是保留可疑数据。 */
+function cacheIndex(data: AgentSessionsIndex): void {
+  try {
+    const stat = statSync(getAgentSessionsIndexPath())
+    indexCache = { data, mtimeMs: stat.mtimeMs, size: stat.size }
+  } catch {
+    indexCache = null
+  }
+}
+
+/**
  * 读取会话索引文件
  */
 function readIndex(): AgentSessionsIndex {
   const indexPath = getAgentSessionsIndexPath()
+
+  if (indexCache) {
+    try {
+      const stat = statSync(indexPath)
+      if (indexCache.mtimeMs === stat.mtimeMs && indexCache.size === stat.size) {
+        return indexCache.data
+      }
+    } catch {
+      indexCache = null
+    }
+  }
+
   const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
   if (data) {
     const permissionModeMigrated = migrateLegacyPermissionMode(data)
@@ -210,6 +249,7 @@ function readIndex(): AgentSessionsIndex {
     const retiredClaudeRuntimeMigrated = migrateRetiredClaudeRuntime(data)
     if (permissionModeMigrated || thinkingDefaultMigrated || retiredClaudeRuntimeMigrated || data.version < INDEX_VERSION) {
       data.version = INDEX_VERSION
+      // writeIndex 会按写入后的文件状态刷新缓存。
       writeIndex(data)
       if (permissionModeMigrated) {
         console.log('[Agent 会话] 已迁移历史权限模式 auto → bypassPermissions')
@@ -220,6 +260,8 @@ function readIndex(): AgentSessionsIndex {
       if (retiredClaudeRuntimeMigrated) {
         console.log('[Agent 会话] 已将历史 Claude 会话迁移为 Pi transcript-only 会话')
       }
+    } else {
+      cacheIndex(data)
     }
     return data
   }
@@ -238,18 +280,40 @@ function writeIndex(index: AgentSessionsIndex): void {
 
   try {
     writeJsonFileAtomic(indexPath, index)
+    cacheIndex(index)
   } catch (error) {
     console.error('[Agent 会话] 写入索引文件失败:', error)
     throw new Error('写入 Agent 会话索引失败')
   }
 }
 
-/**
- * 获取所有会话（按 updatedAt 降序）
- */
+/** 按最近更新时间排序会话副本，避免修改索引数组本身。 */
+function sortSessionsByUpdatedAtDesc(sessions: AgentSessionMeta[]): AgentSessionMeta[] {
+  return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/** 获取所有会话（按 updatedAt 降序） */
 export function listAgentSessions(): AgentSessionMeta[] {
   const index = readIndex()
-  return index.sessions.sort((a, b) => b.updatedAt - a.updatedAt)
+  return sortSessionsByUpdatedAtDesc(index.sessions)
+}
+
+/** 获取未归档会话，供侧栏 active 视图按需读取。 */
+export function listActiveAgentSessions(): AgentSessionMeta[] {
+  const index = readIndex()
+  return sortSessionsByUpdatedAtDesc(index.sessions.filter((session) => !session.archived))
+}
+
+/** 获取归档会话，只有用户进入归档视图时才调用。 */
+export function listArchivedAgentSessions(): AgentSessionMeta[] {
+  const index = readIndex()
+  return sortSessionsByUpdatedAtDesc(index.sessions.filter((session) => session.archived))
+}
+
+/** 获取归档数量，不把归档会话元数据传到 renderer。 */
+export function countArchivedAgentSessions(): number {
+  const index = readIndex()
+  return index.sessions.reduce((count, session) => count + (session.archived ? 1 : 0), 0)
 }
 
 /**
@@ -263,6 +327,19 @@ export function getAgentSessionMeta(id: string): AgentSessionMeta | undefined {
 /** 缺少标记的存量会话必须保持升级前的私有 workbench cwd。 */
 export function getAgentCwdMode(meta?: Pick<AgentSessionMeta, 'agentCwdMode'>): AgentCwdMode {
   return meta?.agentCwdMode ?? 'session'
+}
+
+/** 只接受仍存在的绝对目录；Git 归属校验由调用主进程在启动 Agent 前完成。 */
+export function getActiveWorktreePath(
+  meta?: Pick<AgentSessionMeta, 'activeWorktree'>,
+): string | undefined {
+  const activeWorktree = meta?.activeWorktree
+  if (!activeWorktree?.path || !isAbsolute(activeWorktree.path)) return undefined
+  try {
+    return statSync(activeWorktree.path).isDirectory() ? activeWorktree.path : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** 缺少标记的历史会话继续使用 `.context/`，避免失效的计划和工具历史路径。 */
@@ -288,8 +365,11 @@ export function resolveAgentCwd(
   workspace: Pick<AgentWorkspace, 'slug'> | undefined,
   sessionId: string,
   agentCwdMode?: AgentCwdMode,
+  activeWorktree?: AgentActiveWorktree,
 ): string | undefined {
   if (!workspace) return undefined
+  const activeWorktreePath = getActiveWorktreePath({ activeWorktree })
+  if (activeWorktreePath) return activeWorktreePath
   return getAgentCwdMode({ agentCwdMode }) === 'project'
     ? getProjectFilesPath(workspace.slug)
     : getAgentSessionWorkspacePath(workspace.slug, sessionId)
@@ -416,9 +496,14 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
   const filePath = getAgentSessionMessagesPath(id)
 
   try {
+    // 整批只做一次同步追写：逐条 appendFileSync 会为每条消息各做一次 open/write/close，
+    // 一轮输出常见几十条消息，在多 Agent 并发下会持续阶段性阻塞主进程，
+    // 进而延迟键盘事件的 IPC 转发（表现为 renderer 内无长任务但输入延迟高）。
+    let payload = ''
     for (const message of messages) {
-      appendFileSync(filePath, serializeSDKMessageForStorage(message) + '\n', 'utf-8')
+      payload += serializeSDKMessageForStorage(message) + '\n'
     }
+    appendFileSync(filePath, payload, 'utf-8')
   } catch (error) {
     console.error(`[Agent 会话] 追加 SDKMessage 失败 (${id}):`, error)
     throw new Error('追加 SDKMessage 失败')
@@ -505,7 +590,7 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'codexFastMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'codexFastMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'activeWorktree' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -686,6 +771,8 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
       sdkSessionId: undefined,
       piSessionFile: undefined,
       piEntryBindings: undefined,
+      // 已切换到另一项目，不能沿用旧项目授权下选择的 worktree。
+      activeWorktree: undefined,
       updatedAt: now,
     }
     index.sessions[i] = updated
@@ -771,7 +858,8 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
   const workspace = sourceMeta.workspaceId ? getAgentWorkspace(sourceMeta.workspaceId) : undefined
   const sourceCwdMode = getAgentCwdMode(sourceMeta)
   const sourceWorkbenchLayout = getSessionWorkbenchLayout(sourceMeta)
-  const sourceDir = resolveAgentCwd(workspace, sourceMeta.id, sourceCwdMode)
+  const sourceActiveWorktree = getActiveWorktreePath(sourceMeta) ? sourceMeta.activeWorktree : undefined
+  const sourceDir = resolveAgentCwd(workspace, sourceMeta.id, sourceCwdMode, sourceActiveWorktree)
   const sourceWorkbenchDir = resolveAgentWorkbenchDir(workspace, sourceMeta.id)
   const newMeta = createAgentSession(
     `${sourceMeta.title} (fork)`,
@@ -781,7 +869,7 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
     sourceCwdMode,
     sourceWorkbenchLayout,
   )
-  const destDir = resolveAgentCwd(workspace, newMeta.id, newMeta.agentCwdMode)
+  const destDir = resolveAgentCwd(workspace, newMeta.id, newMeta.agentCwdMode, sourceActiveWorktree)
   const destWorkbenchDir = resolveAgentWorkbenchDir(workspace, newMeta.id)
 
   try {
@@ -805,11 +893,13 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
       sdkSessionId: forkedManager.getSessionId(),
       piSessionFile,
       piEntryBindings: branchBindings,
+      activeWorktree: sourceActiveWorktree,
       forkSourceDir: sourceDir,
     })
     newMeta.sdkSessionId = forkedManager.getSessionId()
     newMeta.piSessionFile = piSessionFile
     newMeta.piEntryBindings = branchBindings
+    newMeta.activeWorktree = sourceActiveWorktree
 
     if (sourceWorkbenchDir && destWorkbenchDir) copyForkWorkspaceFiles(sourceWorkbenchDir, destWorkbenchDir)
     await copyForkStoredSDKMessages({
@@ -851,7 +941,7 @@ export async function rewindPiAgentSession(sessionId: string, assistantMessageUu
   const truncatedContent = kept.map((message) => JSON.stringify(message)).join('\n') + (kept.length > 0 ? '\n' : '')
 
   const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
-  const cwd = resolveAgentCwd(workspace, meta.id, meta.agentCwdMode) ?? process.cwd()
+  const cwd = resolveAgentCwd(workspace, meta.id, meta.agentCwdMode, meta.activeWorktree) ?? process.cwd()
   const sdk = await import('@earendil-works/pi-coding-agent')
   const manager = sdk.SessionManager.open(meta.piSessionFile, join(getSdkConfigDir(), 'sessions'), cwd)
   const branchFile = manager.createBranchedSession(entryId)
@@ -1070,6 +1160,40 @@ export function removeSDKErrorMessage(id: string, errorUuid: string): boolean {
 }
 
 /**
+ * Persist successful Skill loading on the human input that Pi actually consumed.
+ * This is intentionally a targeted JSONL rewrite: native Pi queues can produce
+ * several logical user turns before a single terminal result arrives.
+ */
+export function updateSDKUserMessageSkillActivations(
+  id: string,
+  userMessageUuid: string,
+  activations: SkillActivation[],
+): boolean {
+  if (activations.length === 0) return false
+  const filePath = getAgentSessionMessagesPath(id)
+  if (!existsSync(filePath)) return false
+
+  const raw = readFileSync(filePath, 'utf-8')
+  const lines = raw.split('\n').filter((line) => line.trim())
+  const messages = parseJsonlStrict<unknown>(lines, `更新用户 Skill metadata (${id})`)
+    .map(normalizePersistedSDKMessage)
+  const targetIndex = messages.findIndex((message) => (
+    message.type === 'user'
+    && (message as SDKUserMessage).uuid === userMessageUuid
+  ))
+  if (targetIndex < 0) return false
+
+  const target = messages[targetIndex] as SDKUserMessage
+  const merged = mergeSkillActivations(target.skill_activations ?? [], activations)
+  if (JSON.stringify(merged) === JSON.stringify(target.skill_activations ?? [])) return true
+
+  messages[targetIndex] = { ...target, skill_activations: merged }
+  const content = messages.map((message) => JSON.stringify(message)).join('\n') + '\n'
+  writeTextFileAtomic(filePath, content)
+  return true
+}
+
+/**
  * 自动归档超过指定天数未更新的 Agent 会话
  *
  * 置顶会话不会被归档。
@@ -1169,29 +1293,28 @@ export function cleanupStaleAttachedPaths(): number {
 }
 
 /**
- *
- * 按行流式读取每个会话的 JSONL 文件，命中即早退。兼容旧 AgentMessage 和新 SDKMessage 格式。
- * 每个会话最多返回 1 条匹配，总计达到 maxResults 即停止扫描后续会话。
- *
- * @param query 搜索关键词
- * @returns 匹配结果列表
+ * 搜索 Agent 会话正文。
+ * 每个会话最多返回 2 个用户/助手正文命中，最多返回 100 个命中会话。
  */
 export async function searchAgentSessionMessages(query: string): Promise<AgentMessageSearchResult[]> {
   if (!query || query.length < 2) return []
 
   const index = readIndex()
   const results: AgentMessageSearchResult[] = []
-  const queryLower = query.toLowerCase()
-  const maxResults = 30
+  let matchedSessionCount = 0
 
-  for (const session of index.sessions) {
-    if (results.length >= maxResults) break
+  const sortedSessions = [...index.sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  for (const session of sortedSessions) {
+    if (matchedSessionCount >= MAX_SEARCH_SESSIONS) break
 
     const filePath = getAgentSessionMessagesPath(session.id)
     if (!existsSync(filePath)) continue
 
-    const hit = await findFirstMatchInAgentJsonl(filePath, queryLower, query.length)
-    if (hit) {
+    const hits = await findMatchesInAgentJsonl(filePath, query)
+    if (hits.length === 0) continue
+    matchedSessionCount++
+
+    for (const hit of hits.slice(0, MAX_SEARCH_HITS_PER_SESSION)) {
       results.push({
         sessionId: session.id,
         sessionTitle: session.title,
@@ -1199,13 +1322,111 @@ export async function searchAgentSessionMessages(query: string): Promise<AgentMe
         role: hit.role,
         snippet: hit.snippet,
         matchStart: hit.matchStart,
-        matchLength: query.length,
+        matchLength: hit.matchLength,
         archived: session.archived,
       })
     }
   }
 
   return results
+}
+
+interface AgentSearchHit {
+  messageId: string
+  role: Extract<AgentMessageSearchResult['role'], 'user' | 'assistant'>
+  snippet: string
+  matchStart: number
+  matchLength: number
+  score: number
+}
+
+/** 在单个 Agent JSONL 中收集用户文本和助手 text block 的命中。 */
+async function findMatchesInAgentJsonl(
+  filePath: string,
+  query: string,
+): Promise<AgentSearchHit[]> {
+  const stream = createReadStream(filePath, { encoding: 'utf-8' })
+  const rl = createInterface({ input: stream, crlfDelay: Infinity })
+  const hitsByMessageId = new Map<string, AgentSearchHit>()
+  const anonymousHits: AgentSearchHit[] = []
+
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue
+      let parsed: {
+        role?: string
+        id?: string
+        uuid?: string
+        content?: unknown
+        type?: string
+        message?: {
+          role?: string
+          id?: string
+          content?: Array<{ type: string; text?: string }>
+        }
+      }
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        continue
+      }
+
+      let role: AgentSearchHit['role'] | null = null
+      let messageId = parsed.id ?? parsed.uuid ?? parsed.message?.id ?? ''
+      let textContent = ''
+
+      // 兼容旧 AgentMessage：只接受 user/assistant 的顶层 content。
+      if (!parsed.type && typeof parsed.content === 'string') {
+        if (parsed.role !== 'user' && parsed.role !== 'assistant') continue
+        role = parsed.role
+        textContent = parsed.content
+      } else if (parsed.type === 'user' || parsed.type === 'assistant') {
+        role = parsed.type
+        if (Array.isArray(parsed.message?.content)) {
+          textContent = parsed.message.content
+            .filter((block) => block.type === 'text' && typeof block.text === 'string')
+            .map((block) => block.text!)
+            .join('\n')
+        }
+      }
+
+      if (!role || !textContent) continue
+      const match = findBestSearchMatch(textContent, query)
+      if (!match) continue
+
+      const snippetStart = Math.max(0, match.matchStart - 40)
+      const snippetEnd = Math.min(textContent.length, match.matchStart + match.matchLength + 40)
+      const snippet = (snippetStart > 0 ? '...' : '') +
+        textContent.slice(snippetStart, snippetEnd) +
+        (snippetEnd < textContent.length ? '...' : '')
+      const matchStart = match.matchStart - snippetStart + (snippetStart > 0 ? 3 : 0)
+      const hit = { messageId, role, snippet, matchStart, matchLength: match.matchLength, score: match.score }
+      if (messageId) {
+        const existingHit = hitsByMessageId.get(messageId)
+        if (!existingHit) {
+          hitsByMessageId.set(messageId, hit)
+        } else {
+          const bestHit = [existingHit]
+          insertTopSearchResult(bestHit, hit, 1)
+          hitsByMessageId.set(messageId, bestHit[0]!)
+        }
+      } else {
+        insertTopSearchResult(anonymousHits, hit, MAX_SEARCH_HITS_PER_SESSION)
+      }
+    }
+  } finally {
+    rl.close()
+    stream.destroy()
+  }
+
+  const hits: AgentSearchHit[] = []
+  for (const hit of hitsByMessageId.values()) {
+    insertTopSearchResult(hits, hit, MAX_SEARCH_HITS_PER_SESSION)
+  }
+  for (const hit of anonymousHits) {
+    insertTopSearchResult(hits, hit, MAX_SEARCH_HITS_PER_SESSION)
+  }
+  return hits
 }
 
 /**

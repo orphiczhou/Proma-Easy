@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell } from 'electron'
 import { execFile } from 'node:child_process'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { existsSync } from 'fs'
 
 // 未捕获异常兜底：Electron 默认行为是弹 Error 对话框并挂起进程——在退出流程中
@@ -71,23 +72,13 @@ function registerProtocolsAndHandlers(): void {
     app.commandLine.appendSwitch('disable-lcd-text')
   }
 
-  // macOS 文件关联：在 app ready 之前注册 open-file 事件
-  app.on('open-file', (event, filePath) => {
-    event.preventDefault()
-    handleMigrationFileOpen(filePath)
-  })
-
-  // Windows 文件关联：当用户双击文件时，新实例的参数会通过 second-instance 传给已有实例
+  // Windows 等平台通过 second-instance 唤起已有主窗口。
   app.on('second-instance', (_event, argv) => {
     if (hasOpenPlanningArgument(argv)) {
       showPlanningWindow()
       return
     }
     showAndFocusMainWindow()
-    const fileArg = argv.find((arg) => arg.endsWith('.proma-backup') || arg.endsWith('.proma-share'))
-    if (fileArg) {
-      handleMigrationFileOpen(fileArg)
-    }
   })
 }
 
@@ -118,13 +109,14 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
-import { createTray, destroyTray, getTray, isTrayRegistered } from './tray'
+import { createTray, destroyTray, getTray, isTrayRegistered, setTrayFlash } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { startMcpHttpBridge } from './lib/agent-mcp-bridge'
 import { seedDefaultSkills } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { hasActiveAgentSessions, stopAllAgents } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
+import { browserController } from './lib/browser-controller'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
 import { stopAllGenerations } from './lib/chat-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
@@ -151,12 +143,14 @@ import { getDingTalkMultiBotConfig } from './lib/dingtalk-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWeChatConfig } from './lib/wechat-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
+import { getAgentStatusHoverWindow, destroyAgentStatusHoverWindow } from './agent-status-hover-window'
 import { destroyPlanningWindow, showPlanningWindow } from './lib/planning-window'
 import { configurePlanningQuickEntries } from './lib/planning-quick-entry'
 import { hasOpenPlanningArgument } from './lib/planning-quick-entry-model'
 import { handleNativeAgentIslandEvent, initAgentIslandService, disposeAgentIslandService, publishAgentIslandNow } from './lib/agent-island-service'
 import { disposeMacAgentIslandNativeHost, startMacAgentIslandNativeHost, isMacAgentIslandNativeHostReady } from './lib/mac-agent-island-native-host'
-import { isAgentIslandSupported } from './lib/macos-version'
+import { isAgentIslandServiceSupported, isMacAgentIslandSurfaceSupported } from './lib/macos-version'
+import { getWindowsAgentIslandSurface, processNotification, type SurfaceDeps } from './lib/windows-agent-island-surface'
 import {
   createVoiceDictationWindow,
   toggleVoiceDictationWindow,
@@ -165,13 +159,12 @@ import {
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
 import { setPromaVersion } from '@proma/core'
-import { TRAY_IPC_CHANNELS } from '../types'
-
-const MIGRATION_IPC_OPEN = 'migration:open-import-file'
+import { canRecoverRenderer, RENDERER_RECOVERY_WINDOW_MS } from './lib/renderer-process-recovery'
+import { TRAY_IPC_CHANNELS, WINDOWS_AGENT_ISLAND_IPC_CHANNELS } from '../types'
 
 /** macOS 26+ 使用 Swift/AppKit NSPanel；其他平台不创建 Agent Island surface。 */
 function startAgentIslandSurface(): void {
-  if (!isAgentIslandSupported()) {
+  if (!isMacAgentIslandSurfaceSupported()) {
     console.info('[agent-island] 当前平台或 macOS 版本不支持，已禁用')
     return
   }
@@ -188,13 +181,6 @@ function startAgentIslandSurface(): void {
   })
   if (!startedNative) {
     console.warn('[agent-island] macOS 原生 helper 启动失败，已禁用')
-  }
-}
-
-/** 检查文件路径是否为迁移文件，如果是则通知渲染进程打开导入流程 */
-function handleMigrationFileOpen(filePath: string): void {
-  if (filePath.endsWith('.proma-backup') || filePath.endsWith('.proma-share')) {
-    sendToMainWindow(MIGRATION_IPC_OPEN, { filePath })
   }
 }
 
@@ -534,26 +520,33 @@ function createWindow(): void {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      // 排队消息的自动投递依赖 renderer 消费 STREAM_COMPLETE；窗口被遮挡、最小化或失焦时
-      // 不能让 Chromium 降速该事件循环，否则下一条消息会等到用户重新激活窗口才发送。
-      backgroundThrottling: false,
+      // 实验：恢复 Chromium 的后台调度节流，避免隐藏窗口的 renderer 持续占用主线程。
+      // 当前排队消息自动投递仍由 renderer 消费 STREAM_COMPLETE；隐藏窗口下可能延后，
+      // 这是本分支需要与卡顿改善一起验证的行为代价。
+      backgroundThrottling: true,
     },
     ...titleBarOptions,
   })
   setStoredMainWindow(mainWindow)
   installZoomInFallback(mainWindow)
+  browserController.setOwnerWindow(mainWindow)
 
   // Load the renderer
   const isDev = !app.isPackaged
-  if (isDev) {
-    mainWindow.loadURL('http://127.0.0.1:5173')
-    mainWindow.webContents.openDevTools()
-  } else {
-    mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
+  const rendererPath = join(__dirname, 'renderer', 'index.html')
+  const rendererEntryUrl = isDev ? 'http://127.0.0.1:5173' : pathToFileURL(rendererPath).toString()
+  const loadMainRenderer = (): Promise<void> => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return Promise.reject(new Error('主窗口已销毁'))
+    }
+    return isDev
+      ? mainWindow.loadURL(rendererEntryUrl)
+      : mainWindow.loadFile(rendererPath)
   }
 
-  // 主 Renderer 无法加载或崩溃时，不能让启动页无限停留；切换为轻量错误页告知用户。
+  // 主 Renderer 无法加载或崩溃时，不能让启动页无限停留；优先有限次数自动恢复。
   let hasShownRendererFailure = false
+  let rendererRecoveryAttempts: number[] = []
   const showRendererFailure = (reason: string): void => {
     if (!mainWindow || mainWindow.isDestroyed()) return
 
@@ -564,8 +557,14 @@ function createWindow(): void {
     }
 
     hasShownRendererFailure = true
-    const message = encodeURIComponent(`Proma 无法加载主界面\n\n${reason}\n\n请重试；若问题持续，请检查应用安装文件。`)
-    mainWindow.loadURL(`data:text/plain;charset=utf-8,${message}`).catch((error) => {
+    const escapeHtml = (value: string): string => value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+    const page = `<!doctype html><html><head><meta charset="utf-8"><title>Proma 无法加载</title><style>body{font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:48px;color:#222;background:#fff}main{max-width:680px;margin:auto}h1{font-size:20px;font-weight:600}pre{white-space:pre-wrap;background:#f3f3f3;padding:16px;border-radius:8px}a{display:inline-block;margin-top:12px;padding:9px 14px;border-radius:6px;background:#222;color:#fff;text-decoration:none}</style></head><body><main><h1>Proma 无法加载主界面</h1><pre>${escapeHtml(reason)}</pre><a href="${escapeHtml(rendererEntryUrl)}">重新加载主界面</a></main></body></html>`
+    mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page)}`).catch((error) => {
       console.error('[启动] 降级错误页加载失败:', error)
       mainWindow?.show()
     })
@@ -575,9 +574,51 @@ function createWindow(): void {
     console.error(`[启动] 主 Renderer 加载失败 (${errorCode}): ${errorDescription} (${validatedURL})`)
     showRendererFailure(errorDescription)
   })
+  mainWindow.webContents.on('did-finish-load', () => {
+    // 主 Renderer 成功恢复后重新开始计数；只有连续失败才应进入错误页。
+    if (!hasShownRendererFailure) rendererRecoveryAttempts = []
+  })
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error(`[启动] 主 Renderer 进程异常退出: ${details.reason}`)
-    showRendererFailure(`Renderer 进程异常退出：${details.reason}`)
+    // clean-exit 和应用退出不属于 Renderer 故障；避免退出过程中重新加载主窗口。
+    if (getIsQuitting() || details.reason === 'clean-exit') return
+
+    const now = Date.now()
+    rendererRecoveryAttempts = rendererRecoveryAttempts.filter(
+      (attemptAt) => now - attemptAt < RENDERER_RECOVERY_WINDOW_MS,
+    )
+    const processId = (() => {
+      try {
+        return mainWindow?.webContents.getProcessId()
+      } catch {
+        return undefined
+      }
+    })()
+    const rendererUrl = (() => {
+      try {
+        return mainWindow?.webContents.getURL()
+      } catch {
+        return undefined
+      }
+    })()
+    const crashContext = {
+      reason: details.reason,
+      exitCode: details.exitCode,
+      url: rendererUrl,
+      processId,
+    }
+    console.error('[启动] 主 Renderer 进程异常退出:', crashContext)
+
+    if (!hasShownRendererFailure && canRecoverRenderer(rendererRecoveryAttempts, now)) {
+      rendererRecoveryAttempts.push(now)
+      console.warn(`[启动] 尝试恢复主 Renderer（${rendererRecoveryAttempts.length}/2）`)
+      void loadMainRenderer().catch((error) => {
+        console.error('[启动] 主 Renderer 自动恢复失败:', error)
+        showRendererFailure(`Renderer 进程异常退出：${details.reason}`)
+      })
+      return
+    }
+
+    showRendererFailure(`Renderer 进程异常退出：${details.reason}\n退出码：${details.exitCode}`)
   })
 
   // 窗口就绪后，按保存的状态决定是否最大化
@@ -608,6 +649,12 @@ function createWindow(): void {
 
   // 拦截页面内导航，外部链接用系统浏览器打开，防止 Electron 窗口被覆盖
   mainWindow.webContents.on('will-navigate', (event, url) => {
+    // 错误页上的“重新加载主界面”需要放行回到原始入口。
+    if (url === rendererEntryUrl) {
+      hasShownRendererFailure = false
+      rendererRecoveryAttempts = []
+      return
+    }
     // 允许开发模式下的 Vite HMR 热重载
     if (isDev && isDevServerNavigation(url)) return
     event.preventDefault()
@@ -622,6 +669,12 @@ function createWindow(): void {
       shell.openExternal(url)
     }
     return { action: 'deny' }
+  })
+
+  if (isDev) mainWindow.webContents.openDevTools()
+  void loadMainRenderer().catch((error) => {
+    console.error('[启动] 主 Renderer 初始加载失败:', error)
+    showRendererFailure(error instanceof Error ? error.message : String(error))
   })
 
   // macOS: 点击关闭按钮时隐藏窗口+应用，而不是退出
@@ -686,6 +739,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     setStoredMainWindow(null)
+    browserController.dispose()
     mainWindow = null
     // Linux 无可用托盘时，close 不拦截、主窗直接销毁；此时进程不应靠隐藏的
     // 快速任务窗苟活（window-all-closed 因辅助窗常驻不会触发），显式退出。
@@ -792,6 +846,9 @@ async function bootstrap(): Promise<void> {
   if (hasOpenPlanningArgument(process.argv)) showPlanningWindow()
 
   // Create system tray icon
+  const hoverWin = process.platform === 'win32' ? getAgentStatusHoverWindow() : null
+  if (hoverWin) safeRun('ensureHoverWindow', () => hoverWin.ensureCreated())
+
   createTray({
     showMainWindow: showAndFocusMainWindow,
     showPlanningWindow,
@@ -804,7 +861,29 @@ async function bootstrap(): Promise<void> {
     createAgentSession: () => {
       sendToMainWindow(TRAY_IPC_CHANNELS.CREATE_SESSION, { mode: 'agent' })
     },
+    onTrayMouseEnter: hoverWin ? (bounds) => hoverWin.onTrayMouseEnter(bounds) : undefined,
+    onTrayMouseMove: hoverWin ? (bounds) => hoverWin.onTrayMouseMove(bounds) : undefined,
+    onTrayMouseLeave: hoverWin ? () => hoverWin.onTrayMouseLeave() : undefined,
   })
+
+  // Windows: 将 Agent Island surface 的 pill 状态接入托盘图标 + tooltip + 通知
+  if (process.platform === 'win32') {
+    const surface = getWindowsAgentIslandSurface()
+    surface.onTrayFlash = (flashing) => setTrayFlash(flashing)
+
+    const notificationDeps: SurfaceDeps = {
+      sendPlaySound: (type) => {
+        const win = getMainWindow()
+        if (win) win.webContents.send(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.PLAY_SOUND, { type })
+      },
+      soundEnabled: () => getSettings().notificationSoundEnabled ?? true,
+    }
+    surface.onNotification = (transition) => processNotification(transition, notificationDeps)
+
+    if (hoverWin) {
+      surface.onHoverWindowUpdate = (snapshot) => hoverWin.updateSnapshot(snapshot)
+    }
+  }
 
   // 启动工作区文件监听（Agent MCP/Skills + 文件浏览器自动刷新）
   if (mainWindow) {
@@ -826,8 +905,8 @@ async function bootstrap(): Promise<void> {
     safeRun('createVoiceDictationWindow', createVoiceDictationWindow)
   }
 
-  // Agent Island 仅在 macOS 26+ 原生 surface 上初始化；Windows/Linux 不注册服务、窗口或事件监听。
-  if (isAgentIslandSupported()) {
+  // Agent Island 状态机在 macOS 和 Windows 都初始化；Swift surface 仅 macOS 26+。
+  if (isAgentIslandServiceSupported()) {
     safeRun('initAgentIslandService', () => {
       initAgentIslandService({
         showAndFocusMainWindow,
@@ -835,9 +914,12 @@ async function bootstrap(): Promise<void> {
           sendToMainWindow(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, { sessionId, title })
         },
         openPlanning: showPlanningWindow,
-        enabled: () => isMacAgentIslandNativeHostReady() && getSettings().agentIsland?.enabled !== false,
+        enabled: () => getSettings().agentIsland?.enabled !== false,
       })
     })
+  }
+
+  if (isMacAgentIslandSurfaceSupported()) {
     safeRun('startAgentIslandSurface', startAgentIslandSurface)
   }
 
@@ -948,6 +1030,7 @@ app.on('before-quit', () => {
 
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
+  browserController.dispose()
   stopAllGenerations()
   // 清理更新器定时器
   cleanupUpdater()
@@ -970,6 +1053,7 @@ app.on('before-quit', () => {
   destroyQuickTaskWindow()
   destroyPlanningWindow()
   destroyVoiceDictationWindow()
+  destroyAgentStatusHoverWindow()
   // 销毁原生 macOS 灵动岛服务（其他平台从未创建 surface）
   disposeMacAgentIslandNativeHost()
   disposeAgentIslandService()

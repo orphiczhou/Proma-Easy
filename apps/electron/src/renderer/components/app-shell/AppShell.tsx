@@ -13,7 +13,7 @@ import { RightSidePanel } from './RightSidePanel'
 import { MainArea } from '@/components/tabs/MainArea'
 import { AppShellProvider, type AppShellContextType } from '@/contexts/AppShellContext'
 import { appModeAtom } from '@/atoms/app-mode'
-import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentSidePanelOpenAtom, agentDiffPanelTabAtom } from '@/atoms/agent-atoms'
+import { agentSidePanelWidthAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, agentDiffPanelTabAtom } from '@/atoms/agent-atoms'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
@@ -65,7 +65,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
   // 南大向导工作区：自动打开右侧面板 + 启动文件监听
   const isNanjuWorkspace = currentWorkspace?.workspaceType === 'nanju'
-  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
+  const setSidePanelOpen = useSetAtom(currentSessionSidePanelOpenAtom)
   React.useEffect(() => {
     if (isNanjuWorkspace && currentWorkspace) {
       // 打开右侧面板
@@ -228,7 +228,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             {showRightPanel && (
               <div
                 className={cn(
-                  'relative z-[60] flex items-stretch crt-sidebar',
+                  'relative z-[60] flex flex-shrink-0 items-stretch crt-sidebar',
                   isClassic
                     ? 'transition-[padding] duration-300 ease-in-out'
                     : '',

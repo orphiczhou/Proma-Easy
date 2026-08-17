@@ -58,11 +58,23 @@ export interface TrayActions {
   openAgentSession: (sessionId: string, title: string) => void
   createChatSession: () => void
   createAgentSession: () => void
+  onTrayMouseEnter?: (bounds: Electron.Rectangle) => void
+  onTrayMouseMove?: (bounds: Electron.Rectangle) => void
+  onTrayMouseLeave?: () => void
+}
+
+let flashTimer: ReturnType<typeof setInterval> | null = null
+
+function clearTrayFlashTimer(): void {
+  if (flashTimer) {
+    clearInterval(flashTimer)
+    flashTimer = null
+  }
 }
 
 /**
  * 获取托盘图标路径
- * 所有平台统一使用 Template 图标
+ * 所有平台统一使用 Template 图标（PNG）
  */
 function getTrayIconPath(): string {
   // macOS 使用 Template 图标；Linux/Windows 使用主应用图标
@@ -185,47 +197,35 @@ function updateTrayMenu(actions: TrayActions): Menu | null {
 export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
   const iconPath = getTrayIconPath()
   const actions = { ...getDefaultTrayActions(), ...actionsInput }
+  const hasIcon = existsSync(iconPath)
 
-  if (!existsSync(iconPath)) {
+  if (!hasIcon && process.platform !== 'win32') {
     console.warn('Tray icon not found at:', iconPath)
     return null
   }
 
   try {
-    const image = nativeImage.createFromPath(iconPath)
+    const image = hasIcon ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty()
 
-    // macOS: 标记为 Template 图像
+    // macOS: 标记为 Template 图像；Linux / Windows: 缩放到适合托盘的尺寸
     if (process.platform === 'darwin') {
       image.setTemplateImage(true)
     } else {
-      // Linux / Windows: 缩放到适合托盘的尺寸
       const resized = image.resize({ width: 22, height: 22 })
       tray = new Tray(resized)
-      tray.setToolTip('Proma')
-
-      updateTrayMenu(actions)
-      tray.on('click', () => {
-        const contextMenu = updateTrayMenu(actions)
-        if (contextMenu) tray?.popUpContextMenu(contextMenu)
-      })
-      tray.on('right-click', () => {
-        updateTrayMenu(actions)
-      })
-      // SNI 注册是异步的，延迟检测注册结果（决定 close 按钮语义）
-      setTimeout(checkTrayRegistration, 1500)
-      console.log('System tray created')
-      return tray
     }
 
-    tray = new Tray(image)
+    if (!tray) tray = new Tray(image)
 
-    // 设置 tooltip
-    tray.setToolTip('Proma')
+    tray.setToolTip(process.platform === 'win32' ? '' : 'Proma')
 
     updateTrayMenu(actions)
 
-    // 点击行为：始终弹出菜单（与右键一致）
     tray.on('click', () => {
+      if (process.platform === 'win32') {
+        actions.showMainWindow()
+        return
+      }
       const contextMenu = updateTrayMenu(actions)
       if (contextMenu) {
         tray?.popUpContextMenu(contextMenu)
@@ -235,6 +235,23 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
     tray.on('right-click', () => {
       updateTrayMenu(actions)
     })
+
+    if (process.platform === 'win32') {
+      tray.on('mouse-enter', () => {
+        if (!tray) return
+        actions.onTrayMouseEnter?.(tray.getBounds())
+      })
+      tray.on('mouse-move', () => {
+        if (!tray) return
+        actions.onTrayMouseMove?.(tray.getBounds())
+      })
+      tray.on('mouse-leave', () => {
+        actions.onTrayMouseLeave?.()
+      })
+    }
+
+    // SNI 注册是异步的，延迟检测注册结果（决定 Linux close 按钮语义）
+    setTimeout(checkTrayRegistration, 1500)
 
     console.log('System tray created')
     return tray
@@ -248,6 +265,7 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
  * 销毁系统托盘
  */
 export function destroyTray(): void {
+  clearTrayFlashTimer()
   if (tray) {
     tray.destroy()
     tray = null
@@ -260,4 +278,23 @@ export function destroyTray(): void {
  */
 export function getTray(): Tray | null {
   return tray
+}
+
+/**
+ * 切换托盘图标闪烁（仅 Windows）
+ */
+export function setTrayFlash(on: boolean): void {
+  if (process.platform !== 'win32') return
+  clearTrayFlashTimer()
+  const baseIcon = nativeImage.createFromPath(getTrayIconPath())
+  if (!on) {
+    tray?.setImage(baseIcon)
+    return
+  }
+  if (!tray) return
+  let showIdle = true
+  flashTimer = setInterval(() => {
+    showIdle = !showIdle
+    tray?.setImage(showIdle ? baseIcon : nativeImage.createEmpty())
+  }, 500)
 }

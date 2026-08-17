@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, CodexOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, CodexOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -33,11 +33,15 @@ import {
   inferContextWindow,
   inferReasoningTransport,
   resolveReasoningProfile,
+  collectSkillActivations,
+  mergeSkillActivations,
 } from '@proma/shared'
 import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@proma/shared'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
+import { getMainRepoRoot } from './git-diff-service'
 import { getPiAssistantErrorDetails, hasPiAssistantTextContent, stripPiAssistantError } from './adapters/pi-message-adapter'
 import { friendlyErrorMessage, isPromptTooLongError, isThinkingSignatureError, mapAgentErrorToTypedError } from './agent-error-utils'
+import { getActiveRunRejectionMessage, shouldPersistInitialUserMessage } from './agent-send-message-policy'
 import { isSessionNotFoundError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels, persistCodexOAuthCredentials, persistXaiOAuthCredentials, resolveChannelRuntimeApiKey, resolveCodexOAuthCredentials, resolveXaiOAuthCredentials } from './channel-manager'
@@ -45,7 +49,7 @@ import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, rewindPiAgentSession, resolveAgentCwd, getAgentCwdMode, getSessionWorkbenchLayout } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout } from './agent-session-manager'
 import { getAgentWorkspace, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { getRuntimeStatus } from './runtime-init'
@@ -64,8 +68,6 @@ import { askUserService } from './agent-ask-user-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
-import { injectChromeDevtoolsMcpServer } from './builtin-mcp/chrome-devtools'
-import { isBuiltinMcpUserEnabled } from './builtin-mcp/settings'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { buildAgentRuntimeEnv, type AgentRuntimeEnv } from './agent-runtime-env'
@@ -75,6 +77,7 @@ import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
 import { claimWorkspaceMemoryRefreshOpportunity } from './agent-memory-refresh-service'
+import { browserController } from './browser-controller'
 
 // ===== 类型定义 =====
 
@@ -117,6 +120,19 @@ function isPartialSDKMessage(message: SDKMessage): boolean {
   return (message as Record<string, unknown>)._partial === true
 }
 
+function isAssistantDeltaSDKMessage(message: SDKMessage): message is SDKMessage & {
+  type: 'assistant_delta'
+  uuid: string
+  delta: AgentAssistantDeltaPayload['deltas'][number]
+  session_id?: string
+  _channelModelId?: string
+} {
+  const record = message as Record<string, unknown>
+  return record.type === 'assistant_delta'
+    && typeof record.uuid === 'string'
+    && !!record.delta
+}
+
 /** 默认会话标题（用于判断是否需要自动生成） */
 const DEFAULT_SESSION_TITLE = '新 Agent 会话'
 
@@ -145,6 +161,7 @@ function collectAttachedDirectories(params: {
   }
 
   for (const d of extraDirs ?? []) push(d)
+  if (sessionMeta?.activeWorktree?.path) push(sessionMeta.activeWorktree.path)
   if (workspaceSlug && sessionMeta) push(getAgentSessionWorkspacePath(workspaceSlug, sessionMeta.id))
   for (const d of sessionMeta?.attachedDirectories ?? []) push(d)
   for (const file of sessionMeta?.attachedFiles ?? []) push(dirname(file))
@@ -217,9 +234,13 @@ export class AgentOrchestrator {
 
   /** 队列消息本地记录（sessionId → UUID 集合，用于防重） */
   private queuedMessageUuids = new Map<string, Set<string>>()
+  /** Skill callback may precede queue-message JSONL persistence by one event loop. */
+  private pendingUserSkillActivations = new Map<string, Map<string, SkillActivation[]>>()
 
   /** 被用户手动中止的运行代际（在 stop 中标记，在对应运行的终态路径消费）。 */
   private stoppedBySessions = new Map<string, number>()
+  /** 队列启动投影已显示、但运行槽尚未占用时的停止请求。 */
+  private stoppedBeforeRunSessions = new Set<string>()
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, PromaPermissionMode>()
@@ -362,16 +383,17 @@ export class AgentOrchestrator {
       if (!result) {
         console.warn('[Agent 标题生成] API 未返回可用标题')
         // OpenCode Go 的推理模型可能把输出预算全花在推理上返回空正文，或
-        // 内容块为数组；任何取不到可用标题的情况都回退到首行兜底，保证会话一定被重命名。
-        return channel.provider === 'opencode-go-openai' ? createFallbackTitle(userMessage) : null
+        // 内容块为数组；自定义渠道（custom）也可能返回空/异常；任何取不到可用标题的情况
+        // 都回退到首行兜底，保证会话一定被重命名。
+        return (channel.provider === 'opencode-go-openai' || channel.provider === 'custom') ? createFallbackTitle(userMessage) : null
       }
 
       console.log(`[Agent 标题生成] 生成标题成功: "${result}"`)
       return result
     } catch (error) {
       console.warn('[Agent 标题生成] 生成失败:', error)
-      // OpenCode Go 的服务端偶发返回空标题/异常响应/超时，异常路径同样要完成重命名。
-      return channel.provider === 'opencode-go-openai' ? createFallbackTitle(userMessage) : null
+      // OpenCode Go / 自定义渠道的服务端偶发返回空标题/异常响应/超时，异常路径同样要完成重命名。
+      return (channel.provider === 'opencode-go-openai' || channel.provider === 'custom') ? createFallbackTitle(userMessage) : null
     }
   }
 
@@ -529,9 +551,16 @@ export class AgentOrchestrator {
     appendSDKMessages(sessionId, withTimestamps)
   }
 
-  private persistUserMessage(sessionId: string, userMessage: string, createdAt = Date.now()): void {
+  private persistUserMessage(
+    sessionId: string,
+    userMessage: string,
+    createdAt = Date.now(),
+    uuid?: string,
+  ): string {
+    const persistedUuid = uuid ?? randomUUID()
     const userSDKMsg: SDKMessage = {
       type: 'user',
+      uuid: persistedUuid,
       message: {
         content: [{ type: 'text', text: userMessage }],
       },
@@ -539,6 +568,50 @@ export class AgentOrchestrator {
       _createdAt: createdAt,
     } as unknown as SDKMessage
     appendSDKMessages(sessionId, [userSDKMsg])
+    return persistedUuid
+  }
+
+  private recordUserSkillActivations(
+    sessionId: string,
+    userMessageUuid: string,
+    activations: SkillActivation[],
+  ): void {
+    try {
+      if (updateSDKUserMessageSkillActivations(sessionId, userMessageUuid, activations)) return
+    } catch (error) {
+      console.warn(`[Agent 编排] 写入用户 Skill metadata 失败，将等待消息落盘后重试:`, error)
+    }
+
+    const byMessage = this.pendingUserSkillActivations.get(sessionId) ?? new Map<string, SkillActivation[]>()
+    byMessage.set(
+      userMessageUuid,
+      mergeSkillActivations(byMessage.get(userMessageUuid) ?? [], activations),
+    )
+    this.pendingUserSkillActivations.set(sessionId, byMessage)
+  }
+
+  private flushPendingUserSkillActivations(sessionId: string, userMessageUuid: string): void {
+    const byMessage = this.pendingUserSkillActivations.get(sessionId)
+    const activations = byMessage?.get(userMessageUuid)
+    if (!activations?.length) return
+    try {
+      if (!updateSDKUserMessageSkillActivations(sessionId, userMessageUuid, activations)) return
+      byMessage?.delete(userMessageUuid)
+      if (byMessage?.size === 0) this.pendingUserSkillActivations.delete(sessionId)
+    } catch (error) {
+      console.warn(`[Agent 编排] 补写用户 Skill metadata 失败:`, error)
+    }
+  }
+
+  private clearPendingUserSkillActivations(sessionId: string, userMessageUuid?: string): void {
+    if (!userMessageUuid) {
+      this.pendingUserSkillActivations.delete(sessionId)
+      return
+    }
+    const byMessage = this.pendingUserSkillActivations.get(sessionId)
+    if (!byMessage) return
+    byMessage.delete(userMessageUuid)
+    if (byMessage.size === 0) this.pendingUserSkillActivations.delete(sessionId)
   }
 
   private persistEmptyResponseError(
@@ -586,28 +659,46 @@ export class AgentOrchestrator {
     callbacks: SessionCallbacks,
     extensions: { piCustomTools?: ToolDefinition[] } = {},
   ): Promise<void> {
-    const { sessionId, userMessage, rawUserMessage, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid } = input
+    const { sessionId, userMessage, rawUserMessage, userMessageUuid, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid } = input
     const streamStartedAt = input.startedAt ?? Date.now()
     let userMessagePersisted = false
+    let initialUserMessageUuid: string | undefined
     let sessionMeta = getAgentSessionMeta(sessionId)
+
+    const completeBeforeRun = (options: {
+      stoppedByUser?: boolean
+      startedAt?: number
+    } = {}): void => {
+      const stoppedByUser = this.stoppedBeforeRunSessions.delete(sessionId)
+      callbacks.onComplete([], {
+        ...options,
+        startedAt: options.startedAt ?? streamStartedAt,
+        stoppedByUser: options.stoppedByUser === true || stoppedByUser,
+      })
+    }
 
     const persistInitialUserMessage = (): void => {
       if (userMessagePersisted) return
       // rawUserMessage 保留展示/持久化用的原始文本（@file 编码原文，remarkMentions 解码显示）；
       // userMessage 是传给 Agent 的 SDK 文本（@file 路径已解码为真实路径）。
-      this.persistUserMessage(sessionId, rawUserMessage ?? userMessage)
+      initialUserMessageUuid = this.persistUserMessage(
+        sessionId,
+        rawUserMessage ?? userMessage,
+        Date.now(),
+        userMessageUuid,
+      )
       userMessagePersisted = true
     }
 
     // 0. 并发保护
-    if (this.activeSessions.has(sessionId)) {
-      console.warn(`[Agent 编排] 会话 ${sessionId} 正在处理中，拒绝新请求`)
-      try {
-        persistInitialUserMessage()
-      } catch (error) {
-        console.error('[Agent 编排] 持久化被拒绝的用户消息失败:', error)
-      }
-      callbacks.onError('上一条消息仍在处理中，请稍候再试')
+    const hasActiveRun = this.activeSessions.has(sessionId)
+    const shouldPersistUserMessage = shouldPersistInitialUserMessage({ hasActiveRun, retryOfErrorUuid })
+    if (hasActiveRun) {
+      // 并发请求没有真正启动新的 Agent run，绝不能把它当作新用户输入写入 JSONL。
+      // 尤其在用户点击停止后、底层 query 尚未完全退出的短暂窗口内，否则同一条
+      // 后续消息会随每次点击重复落盘。
+      console.warn(`[Agent 编排] 会话 ${sessionId} 正在处理中，拒绝新请求且不保存用户消息`)
+      callbacks.onError(getActiveRunRejectionMessage())
       callbacks.onComplete([], { startedAt: streamStartedAt })
       return
     }
@@ -622,14 +713,16 @@ export class AgentOrchestrator {
       }
     }
 
-    try {
-      persistInitialUserMessage()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error('[Agent 编排] 持久化用户消息失败:', error)
-      callbacks.onError(`消息保存失败：${message}`)
-      callbacks.onComplete([], { startedAt: streamStartedAt })
-      return
+    if (shouldPersistUserMessage) {
+      try {
+        persistInitialUserMessage()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error('[Agent 编排] 持久化用户消息失败:', error)
+        callbacks.onError(`消息保存失败：${message}`)
+        completeBeforeRun()
+        return
+      }
     }
 
     // 0.5 清除上一轮中断标记
@@ -659,7 +752,7 @@ export class AgentOrchestrator {
         console.error('[Agent 编排] 持久化 preflight error 失败:', e)
       }
       callbacks.onError(errorContent)
-      callbacks.onComplete([], { startedAt: streamStartedAt })
+      completeBeforeRun()
     }
 
     // 会话元数据是运行项目的权威来源。渲染端的当前项目只是导航状态，不能
@@ -783,6 +876,10 @@ export class AgentOrchestrator {
     // 2.1 立即抢占会话槽位（在所有同步检查通过后、第一个 await 之前）
     // 防止 buildSdkEnv 等 await 期间并发调用绕过上方的检查，导致多条重复消息写入 JSONL
     // finally 块会通过 generation 匹配来安全清理，不影响正常流程
+    if (this.stoppedBeforeRunSessions.has(sessionId)) {
+      completeBeforeRun({ stoppedByUser: true })
+      return
+    }
     const runGeneration = ++this.nextRunGeneration
     this.activeSessions.set(sessionId, runGeneration)
 
@@ -844,6 +941,14 @@ export class AgentOrchestrator {
 
     // 5. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
+    let pendingSkillActivations: SkillActivation[] = []
+    const recordSkillActivation = (
+      activations: SkillActivation[],
+      userMessageUuid: string,
+    ): void => {
+      pendingSkillActivations = mergeSkillActivations(pendingSkillActivations, activations)
+      this.recordUserSkillActivations(sessionId, userMessageUuid, activations)
+    }
     // 委派子会话必须继承当前实际运行的模型；未显式传入时与 runtime 的默认值保持一致。
     const selectedModelId = modelId || DEFAULT_MODEL_ID
     let resolvedModel = selectedModelId
@@ -866,12 +971,23 @@ export class AgentOrchestrator {
         if (!ws) {
           throw new Error(`指定的 Agent 项目不存在或已删除: ${workspaceId}`)
         }
-        agentCwd = resolveAgentCwd(ws, sessionId, sessionMeta?.agentCwdMode) ?? homedir()
+        let activeWorktree = sessionMeta?.activeWorktree
+        if (activeWorktree) {
+          const activeWorktreePath = getActiveWorktreePath(sessionMeta)
+          const currentMainRepoRoot = activeWorktreePath ? await getMainRepoRoot(activeWorktreePath) : null
+          if (!activeWorktreePath || !currentMainRepoRoot || normalizePathForCompare(currentMainRepoRoot) !== normalizePathForCompare(activeWorktree.mainRepoRoot)) {
+            console.warn(`[Agent 编排] 活动 worktree 已失效，回退默认 cwd: ${activeWorktree.path}`)
+            sessionMeta = updateAgentSessionMeta(sessionId, { activeWorktree: undefined })
+            activeWorktree = undefined
+          }
+        }
+        agentCwd = resolveAgentCwd(ws, sessionId, sessionMeta?.agentCwdMode, activeWorktree) ?? homedir()
         workspaceSlug = ws.slug
         workspace = ws
         runtimeEnv.env.PROMA_WORKSPACE_DIR = getAgentWorkspacePath(ws.slug)
         runtimeEnv.env.PROMA_WORKSPACE_SLUG = ws.slug
-        console.log(`[Agent 编排] 使用 ${getAgentCwdMode(sessionMeta)} cwd: ${agentCwd} (${ws.name}/${sessionId})`)
+        const cwdKind = activeWorktree ? `worktree ${activeWorktree.branch}` : getAgentCwdMode(sessionMeta)
+        console.log(`[Agent 编排] 使用 ${cwdKind} cwd: ${agentCwd} (${ws.name}/${sessionId})`)
 
 
         if (existingSdkSessionId) {
@@ -890,8 +1006,11 @@ export class AgentOrchestrator {
         sessionMeta,
         workspaceSlug,
       })
-
-      // 9.6 直接信任已保存的 sdkSessionId，跳过 listSessions 预验证
+      const browserAllowedRoots = [...new Set([
+        workspaceId ? agentCwd : undefined,
+        workspaceSlug ? getProjectFilesPath(workspaceSlug) : undefined,
+        ...allAdditionalDirectories,
+      ].filter((root): root is string => typeof root === 'string' && root.length > 0))]
       // 原因：listSessions({ dir }) 基于 cwd 路径哈希查找，但 session 级别的 cwd
       // （如 ~/.proma/agent-workspaces/workspace-xxx/sessionId）与 SDK 内部存储的路径哈希可能不匹配，
       // 导致 listSessions 始终返回 0 个会话，误杀有效的 resume。
@@ -902,9 +1021,6 @@ export class AgentOrchestrator {
 
       // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
       const mcpServers = this.buildMcpServers(workspaceSlug)
-      if (isBuiltinMcpUserEnabled('chrome-devtools')) {
-        injectChromeDevtoolsMcpServer(mcpServers, runtimeEnv.env)
-      }
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
       const piSdk = await import('@earendil-works/pi-coding-agent')
@@ -915,7 +1031,7 @@ export class AgentOrchestrator {
         workspaceId,
         workspaceSlug,
         agentCwd,
-        allowedRoots: allAdditionalDirectories,
+        allowedRoots: browserAllowedRoots,
         permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? PROMA_DEFAULT_PERMISSION_MODE,
         triggeredBy: input.triggeredBy,
         windowsShellAvailable: process.platform !== 'win32' || runtimeEnv.shellKind != null,
@@ -939,6 +1055,7 @@ export class AgentOrchestrator {
         workspaceName: workspace?.name,
         workspaceSlug,
         agentCwd,
+        userBrowserContext: browserController.getUserContext(sessionId),
       })
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅影响 prompt，不影响持久化
       let enrichedMessage = userMessage
@@ -1074,6 +1191,8 @@ export class AgentOrchestrator {
         'mcp__planning__list_groups', 'mcp__planning__list_tags',
         'mcp__planning__list_active_reminders',
       ])
+      // Pi-native 浏览器工具不是 MCP：必须显式分类，避免被通用 mcp__ 调研放行规则遗漏。
+      const PLAN_MODE_READ_ONLY_BROWSER_TOOLS = new Set(['BrowserObserve', 'BrowserScreenshot', 'BrowserListTabs', 'BrowserPreviewOpen'])
       const runTriggeredBy = input.triggeredBy
 
       /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
@@ -1184,6 +1303,17 @@ export class AgentOrchestrator {
             return { behavior: 'deny' as const, message: '计划模式下不能将本地图片发送给视觉模型，请在计划获批后执行。' }
           }
           return { behavior: 'allow' as const }
+        }
+
+        // 所有 Pi 会话均可使用受管浏览器。主进程仍隔离网页来源并默认拒绝网页权限；下载和弹窗留在受管浏览器内，
+        // 页面内容始终视为不可信输入。计划模式仅允许只读浏览器操作。
+        if (toolName.startsWith('Browser')) {
+          if (currentMode === 'plan') {
+            return PLAN_MODE_READ_ONLY_BROWSER_TOOLS.has(toolName)
+              ? { behavior: 'allow' as const, updatedInput: input }
+              : { behavior: 'deny' as const, message: '计划模式下只能观察受管浏览器，请在计划获批后再进行网页交互。' }
+          }
+          return { behavior: 'allow' as const, updatedInput: input }
         }
 
         const planningDeletionPermission = resolvePlanningDeletionPermission(
@@ -1407,11 +1537,16 @@ export class AgentOrchestrator {
           },
         }),
         resumeSessionId: existingSdkSessionId,
+        initialUserMessageUuid,
         piAgentDir: getSdkConfigDir(),
         piSessionDir: join(getSdkConfigDir(), 'sessions'),
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
-        ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
+        ...(workspaceSlug ? {
+          additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)],
+          skillWorkspaceSlug: workspaceSlug,
+        } : {}),
         ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
+        onSkillActivated: recordSkillActivation,
         ...(isCompactCommand ? { compactRequest: true } : {}),
         ...(sessionMeta?.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
         ...(codexOAuthCredentials && {
@@ -1465,6 +1600,8 @@ export class AgentOrchestrator {
       let nanjuPhaseAdvanced: string | null = null
 
       for (let attempt = 1; attempt <= MAX_QUERY_ATTEMPTS; attempt++) {
+        // A recovery query starts a fresh turn; activations from a failed attempt must not leak.
+        pendingSkillActivations = []
         // 回退会清除 queryOptions.resumeSessionId；新建 Pi artifact 不应再触发 prompt replay。
         const wasResuming = !!queryOptions.resumeSessionId
         let shouldRetryFromError = false
@@ -1517,8 +1654,39 @@ export class AgentOrchestrator {
             if (!iterResult || iterResult.done) break
 
             pendingNext = null
-            const msg = iterResult.value
+            let msg = iterResult.value
+            if (isAssistantDeltaSDKMessage(msg)) {
+              this.eventBus.emit(sessionId, {
+                kind: 'sdk_delta',
+                delta: {
+                  uuid: msg.uuid,
+                  deltas: [msg.delta],
+                  session_id: msg.session_id,
+                  runStartedAt: streamStartedAt,
+                  _channelModelId: msg._channelModelId,
+                },
+              })
+              continue
+            }
             const isPartialMessage = isPartialSDKMessage(msg)
+            if (msg.type === 'result') {
+              const skillActivations = mergeSkillActivations(
+                pendingSkillActivations,
+                collectSkillActivations(
+                  [...accumulatedMessages, msg],
+                  workspaceSlug
+                    ? { workspaceSlug, workspaceSkillsRoot: getWorkspaceSkillsDir(workspaceSlug) }
+                    : undefined,
+                ),
+              )
+              if (skillActivations.length > 0) {
+                msg = {
+                  ...(msg as Record<string, unknown>),
+                  skill_activations: skillActivations,
+                } as unknown as SDKMessage
+              }
+              pendingSkillActivations = []
+            }
             // isVisibleRunMessage 已抽到独立模块，不含 partial 判断；
             // pi runtime 的流式 partial 消息不应计入可见消息数，故在此显式排除。
             if (!isPartialMessage && isVisibleRunMessage(msg)) {
@@ -1613,6 +1781,10 @@ export class AgentOrchestrator {
                   const partialOutput = stripPiAssistantError(assistantMsg)
                   if (modelId) partialOutput._channelModelId = modelId
                   partialOutput._channelProvider = channel.provider
+                  const partialRecord = partialOutput as SDKAssistantMessage & { _createdAt?: number }
+                  if (typeof partialRecord._createdAt !== 'number') {
+                    partialRecord._createdAt = streamStartedAt
+                  }
                   accumulatedMessages.push(partialOutput)
                   // Reuse the Pi UUID to replace the latest partial frame with normal markdown output.
                   this.eventBus.emit(sessionId, { kind: 'sdk_message', message: partialOutput })
@@ -1678,10 +1850,14 @@ export class AgentOrchestrator {
                   }
                   // 为 assistant 消息注入渠道信息，确保持久化后能正确匹配模型显示名与上下文窗口
                   if (msg.type === 'assistant') {
-                    if (modelId) {
-                      (msg as Record<string, unknown>)._channelModelId = modelId
+                    const assistantRecord = msg as Record<string, unknown>
+                    if (typeof assistantRecord._createdAt !== 'number') {
+                      assistantRecord._createdAt = streamStartedAt
                     }
-                    ;(msg as Record<string, unknown>)._channelProvider = channel.provider
+                    if (modelId) {
+                      assistantRecord._channelModelId = modelId
+                    }
+                    assistantRecord._channelProvider = channel.provider
                   }
                   accumulatedMessages.push(msg)
                 }
@@ -2050,11 +2226,18 @@ export class AgentOrchestrator {
    * 先从 activeSessions 移除（供 sendMessage catch 块检测用户中止），
    * 再调用 adapter.abort() 中止底层 SDK 进程。
    */
-  stop(sessionId: string): void {
+  stop(sessionId: string, stopBeforeRun = false): void {
     const runGeneration = this.activeSessions.get(sessionId)
     this.activeSessions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
-    if (runGeneration != null) this.stoppedBySessions.set(sessionId, runGeneration)
+    browserController.cancelSession(sessionId)
+    if (runGeneration != null) {
+      this.stoppedBySessions.set(sessionId, runGeneration)
+    } else if (stopBeforeRun) {
+      // 队列启动状态已投影给 renderer 后，run 仍可能卡在预检阶段。
+      // 记录这次停止，防止预检完成后错误地创建一个无法终止的新 query。
+      this.stoppedBeforeRunSessions.add(sessionId)
+    }
     this.queuedMessageUuids.delete(sessionId)
     this.adapter.abort(sessionId)
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
@@ -2157,7 +2340,9 @@ export class AgentOrchestrator {
     this.adapter.dispose()
     this.activeSessions.clear()
     this.sessionPermissionModes.clear()
+    this.stoppedBeforeRunSessions.clear()
     this.queuedMessageUuids.clear()
+    this.pendingUserSkillActivations.clear()
   }
 
   // ===== 队列消息管理 =====
@@ -2197,7 +2382,12 @@ export class AgentOrchestrator {
       ? getAgentWorkspace(meta.workspaceId)?.slug
       : undefined
 
-    let enrichedText = text
+    const userBrowserContext = browserController.getUserContext(sessionId)
+    // 运行中的 Agent 收到队列消息时也必须看到用户刚刚主动打开的页面。
+    // 未打开浏览器时保持既有消息形态，避免给每条插队消息重复注入无关环境块。
+    let enrichedText = userBrowserContext
+      ? `${buildDynamicContext({ userBrowserContext })}\n\n${text}`
+      : text
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceSlug)
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
@@ -2243,27 +2433,24 @@ export class AgentOrchestrator {
     }
 
     try {
-      // 用户希望"立即打断当前输出并续跑新消息"：先软中断，再把消息压入通道
-      // - interrupt() 让 SDK 结束当前 turn 并 yield 一个 aborted result
-      // - 随后通道里的 'now' 消息会作为下一轮 turn 的用户输入被消费
-      // 例外：会话有挂起的 AskUserQuestion（横幅等待用户点选）时不软中断——
+      // 用户希望"立即打断当前输出并续跑新消息"：interrupt 由 adapter 在消息
+      // 入队时统一处理（abort 压制内部 aborted 终态 + prompt chain 续跑新消息）。
+      // 例外：会话有挂起的 AskUserQuestion（横幅等待用户点选）时不传 interrupt——
       // 软中断会把挂起的 toolCall 连同后续队列消息一起杀死（stopReason=aborted
       // 清空通道），用户在横幅上提交的回答将无接收方（e2e-v89 实测事故）。
       // 保持排队：用户答完横幅 → turn 正常收尾 → 队列消息在下一 turn 自动消费。
-      if (opts?.interrupt && this.adapter.interruptQuery) {
+      let shouldInterrupt = !!opts?.interrupt
+      if (shouldInterrupt) {
         const hasPendingAskUser = askUserService.getPendingRequests().some((r) => r.sessionId === sessionId)
         if (hasPendingAskUser) {
+          shouldInterrupt = false
           console.log(`[Agent 编排] 会话有挂起的用户交互横幅，跳过软中断（消息保持排队，横幅应答后自动消费）: sessionId=${sessionId}`)
-        } else {
-          try {
-            await this.adapter.interruptQuery(sessionId)
-          } catch (error) {
-            console.warn(`[Agent 编排] 软中断失败（将继续追加消息）:`, error)
-          }
         }
       }
-
-      await this.adapter.sendQueuedMessage(sessionId, sdkMessage)
+      await this.adapter.sendQueuedMessage(sessionId, sdkMessage, {
+        ...(shouldInterrupt ? { interrupt: true } : {}),
+        ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
+      })
       console.log(`[Agent 编排] 追加消息已注入: sessionId=${sessionId}, uuid=${uuid}, interrupt=${!!opts?.interrupt}`)
 
       // 立即持久化到 JSONL — 仅存原始文本，不含 prompt 工程块（与 sendMessage 路径一致）
@@ -2277,8 +2464,10 @@ export class AgentOrchestrator {
         _createdAt: Date.now(),
       } as unknown as SDKMessage
       appendSDKMessages(sessionId, [persistMsg])
+      this.flushPendingUserSkillActivations(sessionId, uuid)
     } catch (error) {
       uuids.delete(uuid)
+      this.clearPendingUserSkillActivations(sessionId, uuid)
       if (isMissingActiveQueueChannelError(error)) {
         console.warn(`[Agent 编排] 队列注入失败且消息通道已失效，释放陈旧运行状态: sessionId=${sessionId}`)
         this.activeSessions.delete(sessionId)

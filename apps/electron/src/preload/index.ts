@@ -38,6 +38,7 @@ import type {
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
+  SetAgentSessionActiveWorktreeInput,
   SDKMessage,
   AgentSendInput,
   AgentThinkingLevel,
@@ -109,7 +110,12 @@ import type {
   WeChatConfig,
   WeChatBridgeState,
   AgentQueueMessageInput,
+  AgentDeferredQueueMessageInput,
+  AgentQueuedMessageControlInput,
+  AgentMoveQueuedMessageInput,
+  AgentQueuedMessageStatus,
   PendingRequestsSnapshot,
+  NativeAgentIslandSnapshot,
   Automation,
   CreateAutomationInput,
   UpdateAutomationInput,
@@ -170,8 +176,9 @@ import type {
   MicPermissionResult,
   TrayCreateSessionData,
   TrayOpenAgentSessionData,
+  NotificationSoundType,
 } from '../types'
-import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS } from '../types'
+import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, WINDOWS_AGENT_ISLAND_IPC_CHANNELS } from '../types'
 
 /**
  * 暴露给渲染进程的 API 接口定义
@@ -218,6 +225,21 @@ export interface ElectronAPI {
   openDetachedPreview: (input: DetachedPreviewWindowInput) => Promise<string | null>
   /** 获取独立预览窗口数据 */
   getDetachedPreviewData: (previewId: string) => Promise<DetachedPreviewWindowData | null>
+
+  // ===== Pi 受管浏览器（主进程 WebContentsView） =====
+  openAgentBrowser: (sessionId: string) => Promise<import('@proma/shared').BrowserViewState>
+  listAgentBrowserTabs: (sessionId: string) => Promise<import('@proma/shared').BrowserViewState>
+  createAgentBrowserTab: (input: import('@proma/shared').BrowserCreateTabInput) => Promise<import('@proma/shared').BrowserViewState>
+  selectAgentBrowserTab: (input: import('@proma/shared').BrowserTabInput) => Promise<import('@proma/shared').BrowserViewState>
+  closeAgentBrowserTab: (input: import('@proma/shared').BrowserTabInput) => Promise<import('@proma/shared').BrowserViewState | null>
+  getAgentBrowserState: (sessionId: string) => Promise<import('@proma/shared').BrowserViewState | null>
+  setAgentBrowserLayout: (layout: import('@proma/shared').BrowserViewLayout) => Promise<void>
+  navigateAgentBrowser: (input: import('@proma/shared').BrowserNavigateInput) => Promise<import('@proma/shared').BrowserViewState>
+  goBackAgentBrowser: (sessionId: string) => Promise<import('@proma/shared').BrowserViewState>
+  goForwardAgentBrowser: (sessionId: string) => Promise<import('@proma/shared').BrowserViewState>
+  reloadAgentBrowser: (sessionId: string) => Promise<import('@proma/shared').BrowserViewState>
+  closeAgentBrowser: (sessionId: string) => Promise<void>
+  onAgentBrowserStateChanged: (callback: (state: import('@proma/shared').BrowserStateChange) => void) => () => void
 
   // ===== 通用工具 =====
 
@@ -486,6 +508,15 @@ export interface ElectronAPI {
   /** 获取 Agent 会话列表 */
   listAgentSessions: () => Promise<AgentSessionMeta[]>
 
+  /** 获取未归档会话列表，供左侧 active 视图使用 */
+  listActiveAgentSessions: () => Promise<AgentSessionMeta[]>
+
+  /** 获取归档会话列表，进入归档视图时按需调用 */
+  listArchivedAgentSessions: () => Promise<AgentSessionMeta[]>
+
+  /** 获取归档会话数量，不返回归档元数据 */
+  countArchivedAgentSessions: () => Promise<number>
+
   /** 创建 Agent 会话 */
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => Promise<AgentSessionMeta>
 
@@ -508,6 +539,9 @@ export interface ElectronAPI {
 
   /** 更新 Agent 会话模型选择 */
   updateAgentSessionModel: (id: string, channelId?: string, modelId?: string) => Promise<AgentSessionMeta>
+
+  /** 选择或清除当前会话的活动 worktree */
+  setAgentSessionActiveWorktree: (input: SetAgentSessionActiveWorktreeInput) => Promise<AgentSessionMeta>
 
   /** 删除 Agent 会话 */
   deleteAgentSession: (id: string) => Promise<void>
@@ -555,6 +589,11 @@ export interface ElectronAPI {
 
   /** 流式追加发送 Agent 消息（Agent 运行中） */
   queueAgentMessage: (input: AgentQueueMessageInput) => Promise<string>
+  /** 将等待当前 run 结束的消息交给主进程 */
+  enqueueAgentQueuedMessage: (input: AgentDeferredQueueMessageInput) => Promise<void>
+  cancelAgentQueuedMessage: (input: AgentQueuedMessageControlInput) => Promise<boolean>
+  moveAgentQueuedMessage: (input: AgentMoveQueuedMessageInput) => Promise<boolean>
+  onAgentQueuedMessageStatus: (callback: (status: AgentQueuedMessageStatus) => void) => () => void
 
   // ===== Agent 后台任务管理 =====
 
@@ -697,6 +736,9 @@ export interface ElectronAPI {
   /** 记录用户对 Agent 主动维护两份 AGENTS.md 的明确授权。 */
   approveWorkspaceProjectKnowledgeMaintenance: (workspaceSlug: string) => Promise<void>
 
+
+  /** renderer 报告当前可见的 Agent 会话，用于提升其流式更新频率。 */
+  setVisibleAgentStreamSession: (sessionId: string | null) => Promise<void>
 
   /** 订阅 Agent 流式事件（返回清理函数） */
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => () => void
@@ -846,7 +888,7 @@ export interface ElectronAPI {
   showItemInFolder: (filePath: string, candidateBasePaths?: string[]) => Promise<boolean>
 
   /** 解析文件路径并读取内容（供内联预览使用） */
-  resolveAndReadFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<{ resolvedPath: string; content: string } | null>
+  resolveAndReadFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => Promise<{ resolvedPath: string; content: string; isBinary: boolean; isTooLarge: boolean } | null>
 
   /** 写入文本文件（供 Markdown 内联编辑使用） */
   writeTextFile: (filePath: string, content: string, access?: import('@proma/shared').FileAccessOptions) => Promise<boolean>
@@ -952,9 +994,10 @@ export interface ElectronAPI {
   listReleases: (options?: GitHubReleaseListOptions) => Promise<GitHubRelease[]>
   getReleaseByTag: (tag: string) => Promise<GitHubRelease | null>
 
-  // 工作区文件变化通知
+  /** 工作区能力变化通知 */
   onCapabilitiesChanged: (callback: () => void) => () => void
-  onWorkspaceFilesChanged: (callback: () => void) => () => void
+  /** 工作区文件变化通知；可选携带 debounce 窗口内的实际变化绝对路径 */
+  onWorkspaceFilesChanged: (callback: (changedPaths?: string[]) => void) => () => void
 
   // ===== 飞书集成 =====
 
@@ -1145,24 +1188,8 @@ export interface ElectronAPI {
 
   // ===== 数据迁移 =====
 
-  /** 获取工作区导出预览信息 */
-  migrationGetExportPreview: (workspaceId: string) => Promise<unknown>
-  /** 获取所有工作区的 Skills/MCP 预览（团队分发模式） */
-  migrationGetShareExportPreview: () => Promise<unknown>
-  /** 执行导出 */
-  migrationExport: (options: unknown) => Promise<MigrationExportResult>
-  /** 执行 v2 多工作区导出 */
-  migrationExportV2: (options: unknown) => Promise<MigrationExportResult>
-  /** 解析导入文件，返回预览信息 */
-  migrationParseImportFile: (filePath: string) => Promise<unknown>
-  /** 确认导入 */
-  migrationConfirmImport: (options: unknown) => Promise<{ success: boolean }>
-  /** 打开文件选择对话框（选择 .proma-backup 或 .proma-share） */
-  migrationOpenFileDialog: () => Promise<string | null>
-  /** 打开文件保存对话框（选择导出路径） */
-  migrationSaveFileDialog: (mode: string) => Promise<string | null>
-  /** 订阅双击迁移文件触发的导入事件 */
-  onMigrationOpenImportFile: (callback: (data: { filePath: string }) => void) => () => void
+  /** 在系统文件管理器中打开 Proma 数据文件夹 */
+  openMigrationDataFolder: () => Promise<void>
 
   // ===== 存储管理 =====
 
@@ -1172,8 +1199,6 @@ export interface ElectronAPI {
   cleanupStorage: (options: unknown) => Promise<unknown>
   /** 清理临时文件（快速） */
   cleanupTempStorage: () => Promise<unknown>
-  /** 取消迁移导入（清理临时解压目录） */
-  migrationCancelImport: (tempDir: string) => Promise<void>
 
   // ===== 定时任务（Automation）=====
   /** 获取全部定时任务 */
@@ -1277,12 +1302,18 @@ export interface ElectronAPI {
   /** Agent 会话工具 open_preview 触发的预览请求事件 */
   onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
   offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
-}
 
-interface MigrationExportResult {
-  success: boolean
-  filePath: string
-  warnings?: string[]
+  // ===== Windows Agent Island =====
+
+  /** Windows: 主进程委托渲染进程播放提示音 */
+  onWindowsAgentIslandPlaySound: (callback: (data: { type: NotificationSoundType }) => void) => () => void
+  /** Windows: 主进程推送全量 snapshot 到悬停窗（Step 5 接入） */
+  onWindowsAgentIslandPushSnapshot: (callback: (snapshot: NativeAgentIslandSnapshot) => void) => () => void
+  /** Windows: 悬停窗点击跳转到指定会话 */
+  openAgentIslandSession: (sessionId: string, title: string) => Promise<void>
+  /** Windows: 悬停窗鼠标进入/离开通知主进程 */
+  hoverMouseEnter: () => void
+  hoverMouseLeave: () => void
 }
 
 /**
@@ -1340,6 +1371,32 @@ const electronAPI: ElectronAPI = {
 
   getDetachedPreviewData: (previewId: string) => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DETACHED_PREVIEW_DATA, previewId) as Promise<DetachedPreviewWindowData | null>
+  },
+
+  openAgentBrowser: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_BROWSER, sessionId)
+  },
+  listAgentBrowserTabs: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_BROWSER_TABS, sessionId),
+  createAgentBrowserTab: (input: import('@proma/shared').BrowserCreateTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_BROWSER_TAB, input),
+  selectAgentBrowserTab: (input: import('@proma/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SELECT_BROWSER_TAB, input),
+  closeAgentBrowserTab: (input: import('@proma/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER_TAB, input),
+  getAgentBrowserState: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_STATE, sessionId)
+  },
+  setAgentBrowserLayout: (layout: import('@proma/shared').BrowserViewLayout) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT, layout)
+  },
+  navigateAgentBrowser: (input: import('@proma/shared').BrowserNavigateInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.NAVIGATE_BROWSER, input)
+  },
+  goBackAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, sessionId),
+  goForwardAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, sessionId),
+  reloadAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RELOAD_BROWSER, sessionId),
+  closeAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER, sessionId),
+  onAgentBrowserStateChanged: (callback: (state: import('@proma/shared').BrowserStateChange) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: import('@proma/shared').BrowserStateChange) => callback(state)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, listener)
   },
 
   // 通用工具
@@ -1698,6 +1755,18 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
   },
 
+  listActiveAgentSessions: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ACTIVE_SESSIONS)
+  },
+
+  listArchivedAgentSessions: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ARCHIVED_SESSIONS)
+  },
+
+  countArchivedAgentSessions: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.COUNT_ARCHIVED_SESSIONS)
+  },
+
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId)
   },
@@ -1726,6 +1795,10 @@ const electronAPI: ElectronAPI = {
 
   updateAgentSessionModel: (id: string, channelId?: string, modelId?: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_MODEL, id, channelId, modelId)
+  },
+
+  setAgentSessionActiveWorktree: (input: SetAgentSessionActiveWorktreeInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_ACTIVE_WORKTREE, input)
   },
 
   deleteAgentSession: (id: string) => {
@@ -1787,6 +1860,20 @@ const electronAPI: ElectronAPI = {
   // Agent 队列消息
   queueAgentMessage: (input: AgentQueueMessageInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.QUEUE_MESSAGE, input)
+  },
+  enqueueAgentQueuedMessage: (input: AgentDeferredQueueMessageInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ENQUEUE_QUEUED_MESSAGE, input)
+  },
+  cancelAgentQueuedMessage: (input: AgentQueuedMessageControlInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CANCEL_QUEUED_MESSAGE, input)
+  },
+  moveAgentQueuedMessage: (input: AgentMoveQueuedMessageInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_QUEUED_MESSAGE, input)
+  },
+  onAgentQueuedMessageStatus: (callback: (status: AgentQueuedMessageStatus) => void) => {
+    const listener = (_: unknown, status: AgentQueuedMessageStatus): void => callback(status)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.QUEUED_MESSAGE_STATUS, listener) }
   },
 
   // Agent 后台任务管理
@@ -2007,6 +2094,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.APPROVE_WORKSPACE_PROJECT_KNOWLEDGE_MAINTENANCE, workspaceSlug)
   },
 
+  setVisibleAgentStreamSession: (sessionId: string | null) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_VISIBLE_STREAM_SESSION, sessionId)
+  },
+
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => {
     const listener = (_: unknown, event: AgentStreamEvent): void => callback(event)
     ipcRenderer.on(AGENT_IPC_CHANNELS.STREAM_EVENT, listener)
@@ -2098,8 +2189,12 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.CAPABILITIES_CHANGED, listener) }
   },
 
-  onWorkspaceFilesChanged: (callback: () => void) => {
-    const listener = (): void => callback()
+  onWorkspaceFilesChanged: (callback: (changedPaths?: string[]) => void) => {
+    const listener = (_event: unknown, changedPaths?: unknown): void => {
+      callback(Array.isArray(changedPaths)
+        ? changedPaths.filter((path): path is string => typeof path === 'string')
+        : undefined)
+    }
     ipcRenderer.on(AGENT_IPC_CHANNELS.WORKSPACE_FILES_CHANGED, listener)
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.WORKSPACE_FILES_CHANGED, listener) }
   },
@@ -2224,7 +2319,7 @@ const electronAPI: ElectronAPI = {
   },
 
   resolveAndReadFile: (filePath: string, access?: import('@proma/shared').FileAccessOptions) => {
-    return ipcRenderer.invoke('file:resolve-and-read', filePath, access) as Promise<{ resolvedPath: string; content: string } | null>
+    return ipcRenderer.invoke('file:resolve-and-read', filePath, access) as Promise<{ resolvedPath: string; content: string; isBinary: boolean; isTooLarge: boolean } | null>
   },
 
   writeTextFile: (filePath: string, content: string, access?: import('@proma/shared').FileAccessOptions) => {
@@ -2718,43 +2813,7 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(TRAY_IPC_CHANNELS.CREATE_SESSION, listener) }
   },
 
-  migrationGetExportPreview: (workspaceId: string) => {
-    return ipcRenderer.invoke('migration:getExportPreview', workspaceId)
-  },
-
-  migrationGetShareExportPreview: () => {
-    return ipcRenderer.invoke('migration:getShareExportPreview')
-  },
-
-  migrationExport: (options: unknown) => {
-    return ipcRenderer.invoke('migration:export', options)
-  },
-
-  migrationExportV2: (options: unknown) => {
-    return ipcRenderer.invoke('migration:exportV2', options)
-  },
-
-  migrationParseImportFile: (filePath: string) => {
-    return ipcRenderer.invoke('migration:parseImportFile', filePath)
-  },
-
-  migrationConfirmImport: (options: unknown) => {
-    return ipcRenderer.invoke('migration:confirmImport', options)
-  },
-
-  migrationOpenFileDialog: () => {
-    return ipcRenderer.invoke('migration:openFileDialog')
-  },
-
-  migrationSaveFileDialog: (mode: string) => {
-    return ipcRenderer.invoke('migration:saveFileDialog', mode)
-  },
-
-  onMigrationOpenImportFile: (callback: (data: { filePath: string }) => void) => {
-    const listener = (_: unknown, data: { filePath: string }): void => callback(data)
-    ipcRenderer.on('migration:open-import-file', listener)
-    return () => { ipcRenderer.removeListener('migration:open-import-file', listener) }
-  },
+  openMigrationDataFolder: () => ipcRenderer.invoke('migration:open-data-folder'),
 
   // ===== 存储管理 =====
 
@@ -2768,10 +2827,6 @@ const electronAPI: ElectronAPI = {
 
   cleanupTempStorage: () => {
     return ipcRenderer.invoke(STORAGE_IPC_CHANNELS.CLEANUP_TEMP)
-  },
-
-  migrationCancelImport: (tempDir: string) => {
-    return ipcRenderer.invoke('migration:cancelImport', tempDir)
   },
 
   // ===== 定时任务（Automation）=====
@@ -2916,6 +2971,23 @@ const electronAPI: ElectronAPI = {
   offAgentOpenPreview: (callback) => {
     ipcRenderer.removeListener('agent:open-preview-request', callback)
   },
+
+  // ===== Windows Agent Island =====
+  onWindowsAgentIslandPlaySound: (callback: (data: { type: NotificationSoundType }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { type: NotificationSoundType }): void => callback(data)
+    ipcRenderer.on(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.PLAY_SOUND, listener)
+    return () => { ipcRenderer.removeListener(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.PLAY_SOUND, listener) }
+  },
+  onWindowsAgentIslandPushSnapshot: (callback: (snapshot: NativeAgentIslandSnapshot) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, snapshot: NativeAgentIslandSnapshot): void => callback(snapshot)
+    ipcRenderer.on(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.PUSH_SNAPSHOT, listener)
+    return () => { ipcRenderer.removeListener(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.PUSH_SNAPSHOT, listener) }
+  },
+  openAgentIslandSession: (sessionId: string, title: string) => {
+    return ipcRenderer.invoke(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.OPEN_SESSION, sessionId, title)
+  },
+  hoverMouseEnter: () => { ipcRenderer.send(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.MOUSE_ENTER) },
+  hoverMouseLeave: () => { ipcRenderer.send(WINDOWS_AGENT_ISLAND_IPC_CHANNELS.MOUSE_LEAVE) },
 }
 
 // 将 API 暴露到渲染进程的 window 对象上

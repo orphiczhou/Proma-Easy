@@ -17,10 +17,18 @@ import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { FileDown, List, ListTodo, PanelRight, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { scratchPadContentAtom, scratchPadLoadedAtom, tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
+import {
+  scratchPadContentAtom,
+  scratchPadLoadedAtom,
+  scratchPadScrollPositionsAtom,
+  updateScratchPadScrollPosition,
+  tabsAtom,
+  activeTabIdAtom,
+} from '@/atoms/tab-atoms'
+import type { ScratchPadViewVariant } from '@/atoms/tab-atoms'
 import {
   agentDiffPanelTabAtom,
-  agentSidePanelOpenAtom,
+  currentSessionSidePanelOpenAtom,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
   agentSessionsAtom,
@@ -87,7 +95,14 @@ interface ScratchPadPaneProps {
 }
 
 interface ScratchPadEditorProps {
-  variant: 'page' | 'pane'
+  variant: ScratchPadViewVariant
+}
+
+function hasSameScrollPosition(
+  left: { top: number; left: number },
+  right: { top: number; left: number },
+): boolean {
+  return Math.abs(left.top - right.top) < 0.5 && Math.abs(left.left - right.left) < 0.5
 }
 
 function normalizeSelectionText(text: string): string {
@@ -142,6 +157,11 @@ function ScratchPadEditor({ variant }: ScratchPadEditorProps): React.ReactElemen
   const loaded = useAtomValue(scratchPadLoadedAtom)
   const store = useStore()
   const containerRef = React.useRef<HTMLDivElement>(null)
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null)
+  const pendingScrollRestoreRef = React.useRef<{ top: number; left: number } | null>(null)
+  const hasUserScrolledRef = React.useRef(false)
+  const hasUserScrollIntentRef = React.useRef(false)
+  const isRestoringScrollRef = React.useRef(true)
   const [selection, setSelection] = React.useState<ScratchPadSelection | null>(null)
   const pointerSelectingRef = React.useRef(false)
   const captureTimerRef = React.useRef<number | null>(null)
@@ -156,13 +176,118 @@ function ScratchPadEditor({ variant }: ScratchPadEditorProps): React.ReactElemen
   // 用 ref 追踪最新内容，避免在 useEffect deps 里包含 content 导致循环
   const contentRef = React.useRef(content)
   contentRef.current = content
+  // TipTap 的 transaction 可以比屏幕刷新更密集；只在下一帧向全局 atom 发布一次
+  // 完整 HTML，避免每键驱动整个 Scratch Pad 容器及持久化监听器更新。
+  const pendingContentRef = React.useRef(content)
+  const pendingContentEditorRef = React.useRef<NonNullable<ReturnType<typeof useEditor>> | null>(null)
+  const contentSyncFrameRef = React.useRef<number | null>(null)
+
+  const flushContentSync = React.useCallback((): void => {
+    if (contentSyncFrameRef.current !== null) {
+      cancelAnimationFrame(contentSyncFrameRef.current)
+      contentSyncFrameRef.current = null
+    }
+    // 连续输入期间不在每个 transaction 中序列化完整文档；离开页面时再强制拿最新值。
+    if (pendingContentEditorRef.current) {
+      pendingContentRef.current = pendingContentEditorRef.current.getHTML()
+    }
+    const nextContent = pendingContentRef.current
+    if (contentRef.current !== nextContent) {
+      // beforeunload 的同步落盘紧接着读取 atom；直接写入 Jotai store，避免等待 React state flush。
+      contentRef.current = nextContent
+      store.set(scratchPadContentAtom, nextContent)
+    }
+  }, [store])
+
+  const scheduleContentSync = React.useCallback((editor: NonNullable<ReturnType<typeof useEditor>>): void => {
+    pendingContentEditorRef.current = editor
+    if (contentSyncFrameRef.current !== null) return
+    contentSyncFrameRef.current = requestAnimationFrame(() => {
+      contentSyncFrameRef.current = null
+      const pendingEditor = pendingContentEditorRef.current
+      if (pendingEditor) pendingContentRef.current = pendingEditor.getHTML()
+      const nextContent = pendingContentRef.current
+      if (contentRef.current !== nextContent) setContent(nextContent)
+    })
+  }, [setContent])
+
+  React.useEffect(() => {
+    // Electron 的 beforeunload 会先由全局持久化器同步读取 atom；用 capture 阶段先 flush
+    // 当前 TipTap 文档，避免 rAF 尚未执行就退出时丢最后一笔输入。
+    window.addEventListener('beforeunload', flushContentSync, { capture: true })
+    return () => {
+      window.removeEventListener('beforeunload', flushContentSync, { capture: true })
+      // 卸载时不能丢弃最后一笔输入（例如快速切出 Scratch Pad）。
+      flushContentSync()
+    }
+  }, [flushContentSync])
+
+  const persistScrollPosition = React.useCallback((element?: HTMLElement | null): void => {
+    const scrollContainer = element ?? scrollContainerRef.current
+    if (!scrollContainer) return
+
+    const nextPosition = {
+      top: scrollContainer.scrollTop,
+      left: scrollContainer.scrollLeft,
+    }
+    store.set(scratchPadScrollPositionsAtom, (previous) =>
+      updateScratchPadScrollPosition(previous, variant, nextPosition),
+    )
+  }, [store, variant])
+
+  const handleScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>): void => {
+    const scrollContainer = event.currentTarget
+    const pendingPosition = pendingScrollRestoreRef.current
+    const currentPosition = {
+      top: scrollContainer.scrollTop,
+      left: scrollContainer.scrollLeft,
+    }
+
+    // 富媒体加载和浏览器 scroll anchoring 也会派发 scroll。恢复期间只接受
+    // 明确的用户输入，避免布局变化被误写为新的滚动位置并提前结束恢复。
+    if (isRestoringScrollRef.current && hasUserScrollIntentRef.current) {
+      pendingScrollRestoreRef.current = null
+      hasUserScrolledRef.current = true
+      isRestoringScrollRef.current = false
+      persistScrollPosition(scrollContainer)
+      return
+    }
+
+    const isPendingRestore = pendingPosition && hasSameScrollPosition(pendingPosition, currentPosition)
+
+    if (isPendingRestore) {
+      pendingScrollRestoreRef.current = null
+      return
+    }
+
+    // 初始内容同步或异步布局触发的 scroll 没有用户输入意图时，继续等待后续恢复。
+    if (isRestoringScrollRef.current) return
+
+    // 无用户输入意图的 scroll 来自异步布局时不写回状态；相应的 observer 或
+    // 媒体事件会重新应用保存位置。真实用户滚动会先通过输入事件标记接管。
+    if (!hasUserScrollIntentRef.current) return
+
+    pendingScrollRestoreRef.current = null
+    hasUserScrolledRef.current = true
+    isRestoringScrollRef.current = false
+    persistScrollPosition(scrollContainer)
+  }, [persistScrollPosition])
+
+  const markUserScrollIntent = React.useCallback((): void => {
+    hasUserScrollIntentRef.current = true
+  }, [])
+
+  const handleScrollKeyDown = React.useCallback((): void => {
+    // 编辑文本也意味着用户已开始主动操控此视图，不能再因迟到的媒体布局移动视口。
+    markUserScrollIntent()
+  }, [markUserScrollIntent])
 
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
   const selectedChatModel = useAtomValue(selectedModelAtom)
   const setConversations = useSetAtom(conversationsAtom)
   const setConversationDrafts = useSetAtom(conversationDraftsAtom)
   const setAgentSideChatMap = useSetAtom(agentSideChatMapAtom)
-  const setAgentSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
+  const setAgentSidePanelOpen = useSetAtom(currentSessionSidePanelOpenAtom)
   const setAgentSidePanelTabMap = useSetAtom(agentDiffPanelTabAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const setAppMode = useSetAtom(appModeAtom)
@@ -212,7 +337,7 @@ function ScratchPadEditor({ variant }: ScratchPadEditorProps): React.ReactElemen
       },
     },
     onUpdate: ({ editor }) => {
-      setContent(editor.getHTML())
+      scheduleContentSync(editor)
     },
     immediatelyRender: false,
   })
@@ -543,7 +668,7 @@ function ScratchPadEditor({ variant }: ScratchPadEditorProps): React.ReactElemen
   // content 不加入 deps：用户每次输入都会更新 atom，若加入 deps 会导致
   // setContent → onUpdate → atom 变化 → setContent 死循环，
   // HTML 规范化解析会吞掉尾部空格和空段落，并重置光标位置。
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!loaded || !editor) return
     const latestContent = contentRef.current
     if (latestContent && editor.getHTML() !== latestContent) {
@@ -551,6 +676,130 @@ function ScratchPadEditor({ variant }: ScratchPadEditorProps): React.ReactElemen
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, editor])
+
+  // Tab 切换会卸载草稿编辑器。恢复期间保留原目标位置，待内容/媒体尺寸变化后重试；
+  // 用户手动滚动后立即停止自动恢复，避免异步布局反过来抢走用户的位置。
+  React.useLayoutEffect(() => {
+    if (!loaded || !editor) return
+    const scrollContainer = scrollContainerRef.current
+    if (!scrollContainer) return
+
+    const savedPosition = { ...store.get(scratchPadScrollPositionsAtom)[variant] }
+    hasUserScrolledRef.current = false
+    hasUserScrollIntentRef.current = false
+    pendingScrollRestoreRef.current = null
+    isRestoringScrollRef.current = true
+    let disposed = false
+    let restoreComplete = false
+    let restoreSettleTimer: number | null = null
+
+    const scheduleRestoreSettlement = (): void => {
+      if (restoreSettleTimer !== null) {
+        window.clearTimeout(restoreSettleTimer)
+      }
+      restoreSettleTimer = window.setTimeout(() => {
+        restoreSettleTimer = null
+        if (disposed || hasUserScrolledRef.current || hasUserScrollIntentRef.current || restoreComplete) return
+
+        const currentPosition = {
+          top: scrollContainer.scrollTop,
+          left: scrollContainer.scrollLeft,
+        }
+        if (!hasSameScrollPosition(currentPosition, savedPosition)) {
+          applySavedPosition()
+          return
+        }
+
+        restoreComplete = true
+        isRestoringScrollRef.current = false
+        pendingScrollRestoreRef.current = null
+      }, 250)
+    }
+
+    const applySavedPosition = (): void => {
+      if (disposed || hasUserScrolledRef.current || restoreComplete) return
+      const maxTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight)
+      const maxLeft = Math.max(0, scrollContainer.scrollWidth - scrollContainer.clientWidth)
+      const nextPosition = {
+        top: Math.max(0, Math.min(savedPosition.top, maxTop)),
+        left: Math.max(0, Math.min(savedPosition.left, maxLeft)),
+      }
+
+      pendingScrollRestoreRef.current = nextPosition
+      scrollContainer.scrollTop = nextPosition.top
+      scrollContainer.scrollLeft = nextPosition.left
+      const targetReached = hasSameScrollPosition(nextPosition, savedPosition)
+        && hasSameScrollPosition(
+          { top: scrollContainer.scrollTop, left: scrollContainer.scrollLeft },
+          savedPosition,
+        )
+      isRestoringScrollRef.current = true
+      if (targetReached) {
+        // 内容节点、图片或浏览器 scroll anchoring 仍可能在本次赋值后改变位置；
+        // 只有在最后一次布局信号后的稳定窗口结束，才视为真正恢复完成。
+        scheduleRestoreSettlement()
+      }
+    }
+
+    const scheduleRestore = (): void => {
+      if (disposed || hasUserScrolledRef.current || hasUserScrollIntentRef.current) return
+      if (restoreComplete) {
+        const currentPosition = {
+          top: scrollContainer.scrollTop,
+          left: scrollContainer.scrollLeft,
+        }
+        if (hasSameScrollPosition(currentPosition, savedPosition)) return
+        restoreComplete = false
+        isRestoringScrollRef.current = true
+      }
+      applySavedPosition()
+    }
+
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(scheduleRestore)
+    resizeObserver?.observe(scrollContainer)
+    resizeObserver?.observe(editor.view.dom)
+
+    // ProseMirror 正文常有固定容器高度，纯文本/节点插入只会增加 scrollHeight，
+    // 未必触发 ResizeObserver；直接观察正文变化以便布局稳定后重新恢复目标位置。
+    const mutationObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(scheduleRestore)
+    mutationObserver?.observe(editor.view.dom, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
+
+    const handleMediaLoad = (): void => {
+      scheduleRestore()
+    }
+    scrollContainer.addEventListener('load', handleMediaLoad, true)
+    scrollContainer.addEventListener('loadeddata', handleMediaLoad, true)
+    scheduleRestore()
+    // EditorContent 会在挂载后的数帧内完成 ProseMirror 正文插入；此时它的外层高度
+    // 可能不变而 scrollHeight 才变大。有限重试避免首次 clamp 把有效位置固定为顶部。
+    const restoreRetryTimers = [50, 150, 400].map((delay) => window.setTimeout(scheduleRestore, delay))
+
+    return () => {
+      disposed = true
+      restoreRetryTimers.forEach((timer) => window.clearTimeout(timer))
+      if (restoreSettleTimer !== null) {
+        window.clearTimeout(restoreSettleTimer)
+      }
+      resizeObserver?.disconnect()
+      mutationObserver?.disconnect()
+      scrollContainer.removeEventListener('load', handleMediaLoad, true)
+      scrollContainer.removeEventListener('loadeddata', handleMediaLoad, true)
+      isRestoringScrollRef.current = false
+      pendingScrollRestoreRef.current = null
+      hasUserScrollIntentRef.current = false
+      if (hasUserScrolledRef.current) {
+        persistScrollPosition(scrollContainer)
+      }
+    }
+  }, [editor, loaded, persistScrollPosition, store, variant])
 
   // ===== 语音输入路由 =====
 
@@ -729,7 +978,15 @@ function ScratchPadEditor({ variant }: ScratchPadEditorProps): React.ReactElemen
 
   return (
     <div ref={containerRef} className="relative flex flex-col h-full">
-      <div className={scrollClassName}>
+      <div
+        ref={scrollContainerRef}
+        className={scrollClassName}
+        onScroll={handleScroll}
+        onWheelCapture={markUserScrollIntent}
+        onPointerDownCapture={markUserScrollIntent}
+        onTouchStartCapture={markUserScrollIntent}
+        onKeyDownCapture={handleScrollKeyDown}
+      >
         <div className={contentClassName}>
           {isPane ? (
             <div className="mb-3 text-[11px] text-muted-foreground">自动保存到本地</div>

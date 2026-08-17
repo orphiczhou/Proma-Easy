@@ -21,13 +21,17 @@ import type {
   ProviderType,
   SendQueuedMessageOptions,
   SDKMessage,
+  AgentAssistantDelta,
+  AgentToolCallDelta,
   SDKUserMessageInput,
+  SkillActivation,
 } from '@proma/shared'
 import {
   calculatePiAutoCompactionReserveTokens,
   inferReasoningTransport,
   isCodexFastModeSupportedModel,
   resolveReasoningProfile,
+  createSkillActivationFromPath,
 } from '@proma/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { isPromptTooLongError } from '../agent-error-utils'
@@ -40,6 +44,7 @@ import type {
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
 import type { Transport as PiAgentTransport } from '@earendil-works/pi-ai'
+import type { AssistantMessageEvent } from '@earendil-works/pi-ai'
 import type { AgentToolResult, AgentToolUpdateCallback } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
 import { Type, type TSchema } from 'typebox'
@@ -59,6 +64,7 @@ import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
+import { sanitizePiMessageImageContent, sanitizeToolResultImageContent } from '../image-content-validation'
 import {
   convertPiMessage,
   convertResultMessage,
@@ -71,7 +77,7 @@ import {
   restorePiInput,
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
-import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
+import { PendingPromptSkillActivationTracker } from './pi-skill-activation-tracker'
 import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
 import {
   closePiRequestProxyDispatcher,
@@ -86,10 +92,7 @@ type BashToolOptions = import('@earendil-works/pi-coding-agent').BashToolOptions
 type SkillLoadResult = ReturnType<ResourceLoader['getSkills']>
 
 const PI_NATIVE_MAX_RETRIES = 8
-const PI_NATIVE_MAX_TOTAL_RETRIES = 8
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
-const PI_NATIVE_MAX_TOTAL_DELAY_MS = 5 * 60_000
-const PI_NATIVE_RETRY_JITTER_RATIO = 0.2
 const MAX_AUTOMATIC_COMPACTION_CONTINUATIONS = 20
 
 /** Pi SDK 查询选项（扩展通用 AgentQueryInput） */
@@ -135,6 +138,12 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   additionalSkillPaths?: string[]
   /** 当前用户输入显式引用的 Skill name（兼容历史 slug 已在编排层归一化） */
   skillMentions?: string[]
+  /** Persisted user-message UUID for turn-scoped Skill attribution. */
+  initialUserMessageUuid?: string
+  /** Workspace that owns `additionalSkillPaths`, used for relocatable Skill previews. */
+  skillWorkspaceSlug?: string
+  /** Skill 成功加载并注入 prompt 后回调。 */
+  onSkillActivated?: (activations: SkillActivation[], userMessageUuid: string) => void
   proxyUrl?: string
   /** Pi 模型请求传输策略：auto / sse / websocket / websocket-cached */
   transport?: PiAgentTransport
@@ -172,10 +181,14 @@ interface ActivePiSession {
   readySettled: boolean
   disposed: boolean
   runtimeGuard?: AgentRuntimeGuard
+  skillWorkspaceSlug?: string
+  pendingSkillActivations: PendingPromptSkillActivationTracker
+  onSkillActivated?: (activations: SkillActivation[], userMessageUuid: string) => void
 }
 
 interface PendingInterruptPrompt {
   content: string
+  skillActivationId?: number
   resolveAccepted: () => void
   rejectAccepted: (error: unknown) => void
 }
@@ -213,6 +226,49 @@ export function createPiAssistantUuidTracker(createUuid: () => string = randomUU
   }
 }
 
+function toolCallDeltaFromPartial(event: Extract<AssistantMessageEvent, { type: 'toolcall_start' | 'toolcall_delta' }>): AgentToolCallDelta | undefined {
+  const block = event.partial.content[event.contentIndex]
+  if (!block || block.type !== 'toolCall') return undefined
+  return {
+    id: block.id,
+    name: displayToolName(block.name, block.arguments as Record<string, unknown>),
+    ...(event.type === 'toolcall_delta' ? {} : { arguments: {} }),
+  }
+}
+
+/** Extract only the small structured delta from Pi's cumulative message_update event. */
+export function serializePiAssistantDelta(event: AssistantMessageEvent): AgentAssistantDelta | undefined {
+  switch (event.type) {
+    case 'start': return { type: 'start' }
+    case 'text_start': return { type: 'text_start', contentIndex: event.contentIndex }
+    case 'text_delta': return { type: 'text_delta', contentIndex: event.contentIndex, delta: event.delta }
+    case 'text_end': return { type: 'text_end', contentIndex: event.contentIndex, content: event.content }
+    case 'thinking_start': return { type: 'thinking_start', contentIndex: event.contentIndex }
+    case 'thinking_delta': return { type: 'thinking_delta', contentIndex: event.contentIndex, delta: event.delta }
+    case 'thinking_end': return { type: 'thinking_end', contentIndex: event.contentIndex, content: event.content }
+    case 'toolcall_start': {
+      const toolCall = toolCallDeltaFromPartial(event)
+      return { type: 'toolcall_start', contentIndex: event.contentIndex, ...(toolCall ? { toolCall } : {}) }
+    }
+    case 'toolcall_delta': {
+      const toolCall = toolCallDeltaFromPartial(event)
+      return { type: 'toolcall_delta', contentIndex: event.contentIndex, delta: event.delta, ...(toolCall ? { toolCall } : {}) }
+    }
+    case 'toolcall_end':
+      return {
+        type: 'toolcall_end',
+        contentIndex: event.contentIndex,
+        toolCall: {
+          id: event.toolCall.id,
+          name: displayToolName(event.toolCall.name, event.toolCall.arguments as Record<string, unknown>),
+          arguments: event.toolCall.arguments as Record<string, unknown>,
+        },
+      }
+    default:
+      return undefined
+  }
+}
+
 export interface PiRemoteConnectionSettings {
   httpProxy?: string
   transport?: PiAgentTransport
@@ -226,9 +282,6 @@ interface AsyncQueue<T> {
   close: () => void
   next: () => Promise<IteratorResult<T>>
 }
-
-/** Pi 原生每个 delta 都携带累计消息；20fps 足够流畅，同时避免 IPC/React 事件风暴。 */
-const PI_PARTIAL_UPDATE_INTERVAL_MS = 50
 
 function getCaseInsensitiveRuntimeEnvValue(env: Record<string, string> | undefined, key: string): string | undefined {
   if (!env) return undefined
@@ -348,6 +401,7 @@ function createActivePiSession(): ActivePiSession {
     abortRequested: false,
     interrupting: false,
     pendingInterruptPrompts: [],
+    pendingSkillActivations: new PendingPromptSkillActivationTracker(),
     readySettled: false,
     disposed: false,
   }
@@ -374,6 +428,7 @@ function createAbortError(): Error {
 function rejectPendingInterruptPrompts(active: ActivePiSession, error: unknown): void {
   const pending = active.pendingInterruptPrompts.splice(0)
   for (const prompt of pending) {
+    active.pendingSkillActivations.discard(prompt.skillActivationId)
     prompt.rejectAccepted(error)
   }
 }
@@ -480,18 +535,25 @@ function formatSkillForPrompt(skill: Skill): string | undefined {
   }
 }
 
+interface PreparedPromptWithSkills {
+  content: string
+  activations: SkillActivation[]
+}
+
 async function preparePromptWithPromaSkills(
   resourceLoader: ResourceLoader,
   prompt: string,
   explicitSkillNames?: string[],
-): Promise<string> {
+  workspaceSlug?: string,
+): Promise<PreparedPromptWithSkills> {
   await resourceLoader.reload()
 
   const requestedNames = explicitSkillNames?.length ? explicitSkillNames : extractSkillCommandNames(prompt)
-  if (requestedNames.length === 0) return prompt
+  if (requestedNames.length === 0) return { content: prompt, activations: [] }
 
   const skillLookup = buildSkillLookup(resourceLoader.getSkills().skills)
   const blocks: string[] = []
+  const activations: SkillActivation[] = []
   const injectedSkillNames = new Set<string>()
 
   for (const requestedName of requestedNames) {
@@ -500,11 +562,47 @@ async function preparePromptWithPromaSkills(
     const block = formatSkillForPrompt(skill)
     if (!block) continue
     injectedSkillNames.add(skill.name)
+    const activation = createSkillActivationFromPath(
+      skill.filePath,
+      'explicit',
+      skill.name,
+      workspaceSlug,
+    )
+    if (activation) activations.push(activation)
     blocks.push(block)
   }
 
-  if (blocks.length === 0) return prompt
-  return `${blocks.join('\n\n')}\n\n${prompt}`
+  if (blocks.length === 0) return { content: prompt, activations: [] }
+  return {
+    content: `${blocks.join('\n\n')}\n\n${prompt}`,
+    activations,
+  }
+}
+
+function getPiUserMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== 'object') return undefined
+  const userMessage = message as { role?: unknown; content?: unknown }
+  if (userMessage.role !== 'user' || !Array.isArray(userMessage.content)) return undefined
+  const text = userMessage.content
+    .filter((block): block is { type: 'text'; text: string } => (
+      Boolean(block)
+      && typeof block === 'object'
+      && (block as { type?: unknown }).type === 'text'
+      && typeof (block as { text?: unknown }).text === 'string'
+    ))
+    .map((block) => block.text)
+    .join('')
+  return text || undefined
+}
+
+function registerPromptSkillActivations(
+  active: ActivePiSession,
+  prompt: string,
+  userMessageUuid: string | undefined,
+  activations: SkillActivation[],
+): number | undefined {
+  if (!userMessageUuid) return undefined
+  return active.pendingSkillActivations.register(prompt, userMessageUuid, activations)
 }
 
 function realpathIfExists(path: string): string | undefined {
@@ -634,6 +732,13 @@ export function canRunCurrentSessionCompaction(toolNames: string[]): boolean {
   return toolNames.length === 1 && toolNames[0] === 'CompactContext'
 }
 
+/** AskUserQuestion 必须暂停整个工具批次，不能与后续动作混合执行。 */
+export function shouldBlockToolForAskUserQuestion(toolNames: string[], toolName: string): boolean {
+  return toolName !== 'AskUserQuestion'
+    && toolNames.includes('AskUserQuestion')
+    && toolNames.length > 1
+}
+
 /**
  * Pi emits `agent_end` before it decides whether an error needs overflow
  * compaction. Keep this one error class local until the matching compaction
@@ -671,11 +776,19 @@ function installCurrentSessionCompactionHooks(session: AgentSession): void {
   const previousBeforeToolCall = session.agent.beforeToolCall
   session.agent.beforeToolCall = async (context, signal) => {
     const previousResult = await previousBeforeToolCall?.(context, signal)
-    if (previousResult?.block || context.toolCall.name !== 'CompactContext') return previousResult
+    if (previousResult?.block) return previousResult
 
     const toolNames = context.assistantMessage.content
       .filter((block) => block.type === 'toolCall')
       .map((block) => block.name)
+    if (shouldBlockToolForAskUserQuestion(toolNames, context.toolCall.name)) {
+      return {
+        block: true,
+        reason: 'AskUserQuestion 会暂停 Agent，不能与其他工具在同一批次执行。请在收到用户回答后再调用后续工具。',
+      }
+    }
+
+    if (context.toolCall.name !== 'CompactContext') return previousResult
     if (canRunCurrentSessionCompaction(toolNames)) return previousResult
 
     // Pi only honors terminate when every tool in a batch is terminating. Rejecting
@@ -1159,14 +1272,23 @@ export function installRuntimeGuardHooks(session: AgentSession, guard: AgentRunt
       details: previousResult?.details ?? context.result.details,
       terminate: previousResult?.terminate ?? context.result.terminate,
     }
-    const guardedResult = guard.applyToolResult(resultAfterPreviousHooks)
+    const sanitizedContent = sanitizeToolResultImageContent(resultAfterPreviousHooks.content)
+    const guardedResult = guard.applyToolResult({
+      ...resultAfterPreviousHooks,
+      content: sanitizedContent,
+    })
 
-    if (!previousResult && guardedResult.terminate === context.result.terminate) {
+    if (
+      !previousResult
+      && guardedResult.terminate === context.result.terminate
+      && sanitizedContent === context.result.content
+    ) {
       return undefined
     }
 
     return {
       ...previousResult,
+      content: sanitizedContent,
       terminate: guardedResult.terminate,
     }
   }
@@ -1194,19 +1316,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     // 同一 session 的新请求可能在旧 IPC 事件之后开始；所有 retry 生命周期均携带这一轮标识。
     const retryRunStartedAt = input.retryRunStartedAt ?? Date.now()
     active.runtimeGuard = runtimeGuard
+    active.skillWorkspaceSlug = input.skillWorkspaceSlug
+    active.onSkillActivated = input.onSkillActivated
     let unsubscribe: (() => void) | undefined
     let requestProxyDispatcher: Dispatcher | undefined
-    let partialAssistantCoalescer: PartialMessageCoalescer<{ message: AssistantMessage; uuid: string }> | undefined
 
     const cleanupActiveSession = (): void => {
       try {
         unsubscribe?.()
         unsubscribe = undefined
-        partialAssistantCoalescer?.dispose()
-        partialAssistantCoalescer = undefined
         if (!active.disposed) {
           active.disposed = true
           rejectPendingInterruptPrompts(active, createAbortError())
+          active.pendingSkillActivations.clear()
           active.session?.dispose()
         }
         if (this.activeSessions.get(input.sessionId) === active) {
@@ -1271,15 +1393,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         compaction: { enabled: true, reserveTokens: autoCompactionReserveTokens },
         // Pi 原生 retry 通过 agent.continue() 在同一 transcript 中恢复，能保留已完成的
         // tool_result；不能用外层重投原始 prompt 替代，否则会重复执行副作用工具。
-        // 单段和整轮均最多 8 次；累计 backoff 最多 5 分钟。±20% jitter 避免多个
-        // 客户端在固定指数退避边界同时重试。provider retry 保持默认 0，避免嵌套计数。
         retry: {
           enabled: true,
           maxRetries: PI_NATIVE_MAX_RETRIES,
-          maxTotalRetries: PI_NATIVE_MAX_TOTAL_RETRIES,
           baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS,
-          maxTotalDelayMs: PI_NATIVE_MAX_TOTAL_DELAY_MS,
-          jitterRatio: PI_NATIVE_RETRY_JITTER_RATIO,
         },
         ...buildPiRemoteConnectionSettings(input),
       })
@@ -1353,6 +1470,12 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         customTools,
       })
       session.agent.toolExecution = 'sequential'
+      // Pi session artifact 可以来自旧版本，不能假设其历史 tool_result 已通过当前校验。
+      // transformContext 在每个 provider 请求前执行，能隔离 resume 的坏图片而不篡改原 artifact。
+      const previousTransformContext = session.agent.transformContext
+      session.agent.transformContext = async (messages, signal) => sanitizePiMessageImageContent(
+        await previousTransformContext?.(messages, signal) ?? messages,
+      )
       if (projectInstructionScope) {
         const previousPrepareNextTurnWithContext = session.agent.prepareNextTurnWithContext
         session.agent.prepareNextTurnWithContext = async (context, signal) => {
@@ -1421,7 +1544,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       } as unknown as SDKMessage)
 
       const assistantUuidTracker = createPiAssistantUuidTracker()
-      let lastPartialAssistant: AssistantMessage | undefined
       // Pi 会在 native retry 前先发出 error assistant，再以 agent_end.willRetry 标记。
       // 延迟向 orchestrator 透传该 error，避免它先触发外层重试而重放整个 prompt。
       const retryTerminalGate = createPiRetryTerminalGate<{
@@ -1447,7 +1569,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const assistantUuidFor = (): string => assistantUuidTracker.get()
       const resetAssistantStream = (): void => {
         assistantUuidTracker.reset()
-        lastPartialAssistant = undefined
       }
 
       const emitTerminalRetryError = (terminalRetryError: {
@@ -1461,42 +1582,43 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         resetAssistantStream()
       }
 
-      partialAssistantCoalescer = createPartialMessageCoalescer(({ message, uuid }) => {
-        const converted = convertPiMessage(message, session.sessionId, input.model, {
-          final: false,
-          uuid,
-        })
-        if (converted?.type === 'assistant') queue.push(converted)
-      }, PI_PARTIAL_UPDATE_INTERVAL_MS)
-
       unsubscribe = session.subscribe((event: AgentSessionEvent) => {
         try {
           switch (event.type) {
+            case 'message_start': {
+              const prompt = getPiUserMessageText(event.message)
+              if (!prompt) break
+              const pending = active.pendingSkillActivations.consume(prompt)
+              if (pending) active.onSkillActivated?.(pending.activations, pending.userMessageUuid)
+              break
+            }
             case 'message_update': {
               if (!isAssistantPiMessage(event.message)) break
-              lastPartialAssistant = event.message
-              // Pi 的 partial 是累计全文。合并为最多 20fps 的最新帧，避免每 token 都在
-              // main → IPC → renderer 路径重复复制整段消息；message_end 始终立即透传。
-              partialAssistantCoalescer?.schedule({ message: event.message, uuid: assistantUuidFor() })
+              const assistantUuid = assistantUuidFor()
+              const delta = serializePiAssistantDelta(event.assistantMessageEvent)
+              if (delta) {
+                queue.push({
+                  type: 'assistant_delta',
+                  uuid: assistantUuid,
+                  delta,
+                  session_id: session.sessionId,
+                  ...(input.model && { _channelModelId: input.model }),
+                } as unknown as SDKMessage)
+              }
               break
             }
             case 'message_end': {
-              partialAssistantCoalescer?.flush()
               if (active.interrupting && isAbortedAssistantMessage(event.message)) {
-                if (lastPartialAssistant) {
-                  const converted = convertPiMessage(lastPartialAssistant, session.sessionId, input.model, {
-                    final: true,
-                    uuid: assistantUuidFor(),
-                  })
-                  if (converted?.type === 'assistant') queue.push(converted)
-                }
+                const converted = convertPiMessage(event.message, session.sessionId, input.model, {
+                  uuid: assistantUuidFor(),
+                })
+                if (converted?.type === 'assistant') queue.push(converted)
                 resetAssistantStream()
                 break
               }
               const isAssistant = isAssistantPiMessage(event.message)
               const assistantUuid = isAssistant ? assistantUuidFor() : undefined
               const converted = convertPiMessage(event.message, session.sessionId, input.model, {
-                final: true,
                 ...(assistantUuid && { uuid: assistantUuid }),
               })
               const shouldDeferNativeOverflow = isAssistant
@@ -1563,7 +1685,6 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               )
               break
             case 'auto_retry_start':
-            case 'auto_retry_attempt_start':
             case 'auto_retry_end':
               for (const retry of mapPiNativeRetryEvent(event, { runStartedAt: retryRunStartedAt })) input.onRetry?.(retry)
               break
@@ -1676,9 +1797,16 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           .finally(cleanupActiveSession)
       } else {
         const runPromptChain = async (): Promise<void> => {
-          let nextPrompt: { content: string; skipSkillExpansion: boolean } | undefined = {
+          let nextPrompt: {
+            content: string
+            skipSkillExpansion: boolean
+            skillMentions?: string[]
+            userMessageUuid?: string
+          } | undefined = {
             content: appendOutputFormatInstruction(input.prompt, input.outputFormat),
             skipSkillExpansion: false,
+            skillMentions: input.skillMentions,
+            userMessageUuid: input.initialUserMessageUuid,
           }
           let nextInterrupt: PendingInterruptPrompt | undefined
           while (nextPrompt !== undefined) {
@@ -1690,18 +1818,31 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               return
             }
             const promptInput = nextPrompt
-            let prompt: string
+            let preparedPrompt: PreparedPromptWithSkills
             try {
-              prompt = promptInput.skipSkillExpansion
-                ? promptInput.content
-                : await preparePromptWithPromaSkills(resourceLoader, promptInput.content, input.skillMentions)
+              preparedPrompt = promptInput.skipSkillExpansion
+                ? { content: promptInput.content, activations: [] }
+                : await preparePromptWithPromaSkills(
+                  resourceLoader,
+                  promptInput.content,
+                  promptInput.skillMentions,
+                  input.skillWorkspaceSlug,
+                )
             } catch (error) {
               currentInterrupt?.rejectAccepted(error)
               throw error
             }
+            const prompt = preparedPrompt.content
+            const skillActivationId = registerPromptSkillActivations(
+              active,
+              prompt,
+              promptInput.userMessageUuid,
+              preparedPrompt.activations,
+            )
             nextPrompt = undefined
             try {
               if (active.abortRequested) {
+                active.pendingSkillActivations.discard(skillActivationId)
                 currentInterrupt?.rejectAccepted(createAbortError())
                 rejectPendingInterruptPrompts(active, createAbortError())
                 return
@@ -1759,7 +1900,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             const pendingInterrupt = active.pendingInterruptPrompts.shift()
             nextInterrupt = pendingInterrupt
             if (pendingInterrupt) {
-              nextPrompt = { content: pendingInterrupt.content, skipSkillExpansion: false }
+              nextPrompt = { content: pendingInterrupt.content, skipSkillExpansion: true }
             } else if (pendingCompactionContinuation) {
               nextPrompt = { content: pendingCompactionContinuation, skipSkillExpansion: true }
               pendingCompactionContinuation = undefined
@@ -1812,10 +1953,23 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const stopOverride = active.runtimeGuard.getLimitResultOverride()
       throw new Error(stopOverride?.errors[0] ?? 'Agent 已达到运行限制，无法继续追加消息')
     }
-    const content = active.resourceLoader
-      ? await preparePromptWithPromaSkills(active.resourceLoader, message.message.content, options?.skillMentions)
-      : message.message.content
+    const preparedPrompt = active.resourceLoader
+      ? await preparePromptWithPromaSkills(
+        active.resourceLoader,
+        message.message.content,
+        options?.skillMentions,
+        active.skillWorkspaceSlug,
+      )
+      : { content: message.message.content, activations: [] }
+    const content = preparedPrompt.content
+    const skillActivationId = registerPromptSkillActivations(
+      active,
+      content,
+      message.uuid,
+      preparedPrompt.activations,
+    )
     if (active.runtimeGuard?.shouldStopBeforeNextTurn()) {
+      active.pendingSkillActivations.discard(skillActivationId)
       session.agent.clearAllQueues()
       const stopOverride = active.runtimeGuard.getLimitResultOverride()
       throw new Error(stopOverride?.errors[0] ?? 'Agent 已达到运行限制，无法继续追加消息')
@@ -1824,6 +1978,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const accepted = new Promise<void>((resolve, reject) => {
         active.pendingInterruptPrompts.push({
           content,
+          skillActivationId,
           resolveAccepted: resolve,
           rejectAccepted: reject,
         })
@@ -1843,10 +1998,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       options.onAccepted?.()
       return
     }
-    if (message.priority === 'now') {
-      await session.steer(content)
-    } else {
-      await session.followUp(content)
+    try {
+      if (message.priority === 'now') {
+        await session.steer(content)
+      } else {
+        await session.followUp(content)
+      }
+    } catch (error) {
+      active.pendingSkillActivations.discard(skillActivationId)
+      throw error
     }
     options?.onAccepted?.()
   }
@@ -1864,6 +2024,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       if (!active.disposed) {
         active.disposed = true
         rejectPendingInterruptPrompts(active, createAbortError())
+        active.pendingSkillActivations.clear()
         active.session?.dispose()
       }
       rejectActiveReady(active, createAbortError())

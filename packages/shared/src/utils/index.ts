@@ -7,6 +7,14 @@ export function noop(): void {
   // no-op
 }
 
+export {
+  createAgentRuntimeRequest,
+  createAgentRuntimeResponse,
+  isAgentRuntimeEnvelope,
+  isAgentRuntimeError,
+  serializeAgentRuntimeError,
+} from './agent-runtime'
+
 export { diffCapabilities } from './capabilities-diff'
 export type { CapabilityChange } from './capabilities-diff'
 export {
@@ -39,6 +47,13 @@ export {
 } from './thinking-signature-error'
 export { normalizePathForCompare } from './normalize-path'
 export {
+  findBestSearchMatch,
+  insertTopSearchResult,
+  type SearchMatch,
+  type SearchMatchKind,
+  type SearchResultRank,
+} from './search-matching'
+export {
   AUTOMATION_OCCURRENCE_SAMPLES_PER_DAY,
   getAutomationOccurrencesByDay,
 } from './automation-schedule'
@@ -51,3 +66,10 @@ export {
   isPersistableSDKSystemMessage,
   type SDKCompactStatus,
 } from './agent-system-message'
+export {
+  getSkillSlugFromEntryPath,
+  createSkillActivationFromPath,
+  mergeSkillActivations,
+  collectSuccessfulSkillReadActivations,
+  collectSkillActivations,
+} from './skill-usage'

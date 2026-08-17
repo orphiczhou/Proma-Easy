@@ -84,6 +84,7 @@ import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import { PromaLogo } from './lib/model-logo'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
+import { initializePerformanceMonitor } from './lib/performance-monitor'
 import './styles/globals.css'
 import 'katex/dist/katex.min.css'
 
@@ -93,7 +94,10 @@ const isVoiceDictationIndicatorWindow = new URLSearchParams(window.location.sear
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
 const isWorkspaceMemoryWindow = new URLSearchParams(window.location.search).get('window') === 'workspace-memory'
-const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isWorkspaceMemoryWindow
+const isAgentStatusHoverWindow = new URLSearchParams(window.location.search).get('window') === 'agent-status-hover'
+const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isWorkspaceMemoryWindow && !isAgentStatusHoverWindow
+
+initializePerformanceMonitor()
 
 // 主窗口和独立规划窗口均由内部面板管理滚动，避免页面本身出现第二层滚动。
 if (isMainWindow || isPlanningWindow || isWorkspaceMemoryWindow) {
@@ -524,7 +528,7 @@ function AutomationInitializer(): null {
   useEffect(() => {
     const load = (): void => {
       window.electronAPI.listAutomations().then(setAutomations).catch(console.error)
-      window.electronAPI.listAgentSessions().then(setAgentSessions).catch(console.error)
+      window.electronAPI.listActiveAgentSessions().then(setAgentSessions).catch(console.error)
     }
     load()
     const unsub = window.electronAPI.onAutomationChanged(load)
@@ -831,16 +835,24 @@ function TabStatePersistenceInitializer(): null {
 
   // 启动恢复：读取 settings.tabState + 校验会话有效性
   useEffect(() => {
-    Promise.all([
-      window.electronAPI.getSettings(),
-      window.electronAPI.listConversations(),
-      window.electronAPI.listAgentSessions(),
-    ]).then(([settings, conversations, agentSessions]) => {
+    const restore = async (): Promise<void> => {
+      const [settings, conversations, activeAgentSessions] = await Promise.all([
+        window.electronAPI.getSettings(),
+        window.electronAPI.listConversations(),
+        window.electronAPI.listActiveAgentSessions(),
+      ])
       const tabState = settings.tabState
-      if (!tabState?.tabs?.length) {
-        restoredRef.current = true
-        return
-      }
+      if (!tabState?.tabs?.length) return
+
+      // 已归档会话仅在上次打开的标签引用它时才读取，以兼容恢复该标签。
+      const activeAgentSessionIds = new Set(activeAgentSessions.map((session) => session.id))
+      const hasArchivedAgentTab = tabState.tabs.some(
+        (tab) => tab.type === 'agent' && !activeAgentSessionIds.has(tab.sessionId),
+      )
+      const archivedAgentSessions = hasArchivedAgentTab
+        ? await window.electronAPI.listArchivedAgentSessions()
+        : []
+      const agentSessions = [...activeAgentSessions, ...archivedAgentSessions]
 
       // 构建有效 sessionId 集合
       const validSessionIds = new Set([
@@ -860,10 +872,7 @@ function TabStatePersistenceInitializer(): null {
           (t.type === 'chat' || t.type === 'agent') &&
           validSessionIds.has(t.sessionId),
       )
-      if (validTabs.length === 0) {
-        restoredRef.current = true
-        return
-      }
+      if (validTabs.length === 0) return
 
       const validTabIds = new Set(validTabs.map((t) => t.id))
 
@@ -897,7 +906,9 @@ function TabStatePersistenceInitializer(): null {
       }
 
       console.log(`[TabRestore] 已恢复当前会话入口，历史标签 ${validTabs.length} 个已收敛到左侧列表`)
-    }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
+    }
+
+    restore().catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
       .finally(() => { restoredRef.current = true })
   }, [store])
 
@@ -1108,6 +1119,15 @@ if (isQuickTaskWindow) {
         <ThemeInitializer />
         <WorkspaceMemoryWindowApp />
         <Toaster position="bottom-right" />
+      </React.StrictMode>
+    )
+  })
+} else if (isAgentStatusHoverWindow) {
+  import('./components/agent-status-hover/HoverPanel').then(({ HoverPanel }) => {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <ThemeInitializer />
+        <HoverPanel />
       </React.StrictMode>
     )
   })

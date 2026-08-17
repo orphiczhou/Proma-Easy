@@ -89,7 +89,7 @@ const PROVIDER_TEST_MODEL_PRESETS: Partial<Record<ProviderType, string[]>> = {
   'opencode-go-openai': ['grok-4.5', 'glm-5.2', 'kimi-k3'],
   xiaomi: ['mimo-v2.5-pro', 'mimo-v2-pro', 'mimo-v2.5', 'mimo-v2-omni', 'mimo-v2-flash'],
   'xiaomi-token-plan': ['mimo-v2.5-pro', 'mimo-v2-pro', 'mimo-v2.5', 'mimo-v2-omni', 'mimo-v2-flash'],
-  'qwen-token-plan': ['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.6-flash'],
+  'qwen-token-plan': ['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.7-flash', 'qwen3.6-flash'],
 }
 
 /** 供应商选项（用于 SettingsSelect） */
@@ -419,6 +419,7 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
       } else if (p === 'opencode-go-openai') {
         setModels([
           { id: 'grok-4.5', name: 'Grok 4.5', enabled: true },
+          { id: 'glm-5.3', name: 'GLM-5.3', enabled: true },
           { id: 'glm-5.2', name: 'GLM-5.2', enabled: true },
           { id: 'glm-5.1', name: 'GLM-5.1', enabled: true },
           { id: 'kimi-k3', name: 'Kimi K3', enabled: true },
@@ -431,14 +432,18 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         ])
       } else if (p === 'zhipu' || p === 'zhipu-coding' || p === 'zhipu-coding-team') {
         setModels([
+          { id: 'glm-5.3', name: 'GLM-5.3', enabled: true },
           { id: 'glm-5.2', name: 'GLM-5.2', enabled: true },
           { id: 'glm-5.1', name: 'GLM-5.1', enabled: false },
         ])
       } else if (p === 'ark-coding-plan') {
         setModels([
+          { id: 'doubao-seed-2.1-pro', name: 'Doubao Seed 2.1 Pro', enabled: true },
+          { id: 'doubao-seed-2.1-turbo', name: 'Doubao Seed 2.1 Turbo', enabled: true },
           { id: 'doubao-seed-2.0-code', name: 'Doubao Seed 2.0 Code', enabled: true },
           { id: 'doubao-seed-2.0-pro', name: 'Doubao Seed 2.0 Pro', enabled: true },
           { id: 'doubao-seed-2.0-lite', name: 'Doubao Seed 2.0 Lite', enabled: true },
+          { id: 'glm-5.3', name: 'GLM-5.3', enabled: true },
           { id: 'glm-5.2', name: 'GLM-5.2', enabled: true },
           { id: 'k3', name: 'Kimi K3', enabled: true },
           { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', enabled: true },
@@ -468,6 +473,7 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         setModels([
           { id: 'qwen3.8-max-preview', name: 'Qwen3.8 Max Preview', enabled: true },
           { id: 'qwen3.7-max', name: 'Qwen3.7 Max', enabled: true },
+          { id: 'qwen3.7-flash', name: 'Qwen3.7 Flash', enabled: true },
           { id: 'qwen3.6-flash', name: 'Qwen3.6 Flash', enabled: true },
         ])
       }

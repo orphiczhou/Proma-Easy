@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
+import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './ProcessBlockGroup'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
@@ -63,7 +64,8 @@ import { environmentCheckDialogOpenAtom } from '@/atoms/environment'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { getFileParentPath } from '@/lib/file-utils'
-import { parseQuotedSelectionRefs } from '@/lib/quoted-selection'
+import { parseQuotedSelectionRefs, replaceAgentHistoryQuoteMentionsWithLabels } from '@/lib/quoted-selection'
+import type { QuotedSelection } from '@/atoms/preview-atoms'
 import type { ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
 import type {
   SDKMessage,
@@ -264,7 +266,7 @@ function extractToolResultForTask(message: SDKUserMessage, resultBlock: SDKToolR
 
 // ===== 助手头像 =====
 
-function AssistantLogo({ model }: { model?: string }): React.ReactElement {
+export function AssistantLogo({ model }: { model?: string }): React.ReactElement {
   const channels = useAtomValue(channelsAtom)
   if (model) {
     return (
@@ -363,8 +365,6 @@ export function buildTaskProgressDataForTurn(turn: AssistantTurn): { taskActivit
   return { taskActivities }
 }
 
-
-// ===== AssistantTurnRenderer — 渲染一个完整的 assistant turn =====
 
 export interface AssistantTurnRendererProps {
   turn: AssistantTurn
@@ -545,15 +545,19 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
 
             const groupBlocks = item.items.map((groupItem) => groupItem.block)
             const firstIndex = item.items[0]?.index ?? 0
+            const groupKey = `process-${firstIndex}`
             return (
               <ProcessBlockGroup
-                key={`process-${firstIndex}`}
+                key={groupKey}
                 blocks={groupBlocks}
                 isStreaming={isStreaming}
+                renderChildren={() => item.items.map((groupItem) => (
+                  <React.Fragment key={groupItem.index}>
+                    {renderProcessGroupBlock(groupItem.block, groupItem.index)}
+                  </React.Fragment>
+                ))}
                 isMessageTail={itemIndex === renderItems.length - 1}
-              >
-                {item.items.map((groupItem) => renderProcessGroupBlock(groupItem.block, groupItem.index))}
-              </ProcessBlockGroup>
+              />
             )
           })}
         </div>
@@ -570,9 +574,15 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
         )}
         </TurnFileMapProvider>
       </MessageContent>
-      {/* 文件改动汇总：流式结束后展示本轮所有 Edit/Write/MultiEdit/NotebookEdit 文件 */}
+      {/* 完成态汇总：Skill 使用记录与文件改动 chip */}
       {!isStreaming && (
-        <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
+        <>
+          <TurnSkillUsageSummary
+            inputMessage={turn.inputMessage}
+            turnMessages={turn.turnMessages}
+          />
+          <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
+        </>
       )}
       {/* 操作栏：流式输出完成后显示操作按钮 */}
       {!isStreaming && (() => {
@@ -742,8 +752,11 @@ export interface AttachedFileRef {
 export type QuotedFileRef = ParsedQuotedSelectionRef
 
 /** 解析消息中的 <attached_files>、<quoted_file> 和 <quoted_context> 块，返回文件列表、引用列表和剩余文本 */
-export function parseAttachedFiles(content: string): { files: AttachedFileRef[]; quotes: QuotedFileRef[]; text: string } {
-  const parsedQuotes = parseQuotedSelectionRefs(content)
+export function parseAttachedFiles(
+  content: string,
+  options: { inlineAgentHistoryQuotes?: boolean } = {},
+): { files: AttachedFileRef[]; quotes: QuotedFileRef[]; text: string } {
+  const parsedQuotes = parseQuotedSelectionRefs(content, options)
   const quotes: QuotedFileRef[] = parsedQuotes.quotes
 
   const regex = /<attached_files>\n?([\s\S]*?)\n?<\/attached_files>\n*/
@@ -863,6 +876,7 @@ function AttachedFileChip({ file }: { file: AttachedFileRef }): React.ReactEleme
   )
 }
 
+
 /** 引用文件 Chip（显示在用户消息中，表示该消息引用了某个文件的选中内容） */
 function QuoteChip({ quote }: { quote: QuotedFileRef }): React.ReactElement {
   const label = quote.label ?? quote.filename
@@ -917,11 +931,17 @@ function ScheduledRunBadge(): React.ReactElement {
   )
 }
 
-function UserInputMessage({ message }: { message: SDKUserMessage }): React.ReactElement {
+function UserInputMessage({ message, onAgentHistoryQuoteClick }: {
+  message: SDKUserMessage
+  onAgentHistoryQuoteClick?: (quote: QuotedSelection) => void
+}): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
-  const { files: attachedFiles, quotes, text } = parseAttachedFiles(stripScheduledRunMarker(rawText))
+  const { files: attachedFiles, quotes, text } = parseAttachedFiles(
+    stripScheduledRunMarker(rawText),
+    { inlineAgentHistoryQuotes: true },
+  )
   const imageFiles = attachedFiles.filter((f) => isImageFile(f.filename))
   const activeSessionId = useAtomValue(activeSessionIdAtom)
   const setSessionPendingFiles = useSetAtom(agentSessionPendingFilesAtom)
@@ -1000,11 +1020,13 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
       </div>
       <MessageContent>
         {/* 引用文件 Chip */}
-        {quotes.length > 0 && (
+        {quotes.filter((quote) => quote.sourceType !== 'agent-history').length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-2">
-            {quotes.map((q, i) => (
-              <QuoteChip key={`${q.path}:${i}`} quote={q} />
-            ))}
+            {quotes
+              .filter((quote) => quote.sourceType !== 'agent-history')
+              .map((q, i) => (
+                <QuoteChip key={`${q.path}:${i}`} quote={q} />
+              ))}
           </div>
         )}
         {/* 图片缩略图 */}
@@ -1029,7 +1051,11 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
             ))}
           </div>
         )}
-        {text && <UserMessageContent>{text}</UserMessageContent>}
+        {text && (
+          <UserMessageContent onAgentHistoryQuoteClick={onAgentHistoryQuoteClick}>
+            {text}
+          </UserMessageContent>
+        )}
       </MessageContent>
       {/* 共享大图预览 — 单图时无翻页，行为同以前 */}
       {imageFiles.length > 0 && (
@@ -1043,7 +1069,7 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
       )}
       {text && (
         <MessageActions className="pl-[46px] mt-0.5">
-          <CopyButton content={text} />
+          <CopyButton content={replaceAgentHistoryQuoteMentionsWithLabels(text)} />
         </MessageActions>
       )}
     </Message>
@@ -1359,9 +1385,13 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact, onReli
 export interface MessageGroupRendererProps {
   group: MessageGroup
   allMessages: SDKMessage[]
+  /** 仅跨 turn 工具元数据变化时更新历史 assistant；普通 live 数组新引用不触发重渲染。 */
+  externalMetadataSignature?: string
   basePath?: string
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
+  /** 已发送的 Agent 历史引用 chip 请求定位时的精确范围。 */
+  onAgentHistoryQuoteClick?: (quote: QuotedSelection) => void
   /** 将 assistant 回复标记为 Todo */
   onCreateTodo?: (text: string) => void
   /** 错误重试回调（传入本轮开始前应删除的错误 UUID） */
@@ -1372,6 +1402,8 @@ export interface MessageGroupRendererProps {
   onCompact?: () => void
   onRelinkProjectRoot?: () => void
   onRestoreProjectRoot?: () => void
+  /** 当前历史轮次；直接写入消息 DOM，避免划选时回扫整段历史。 */
+  historyTurn?: number
   /** 是否正在流式输出中（隐藏操作栏） */
   isStreaming?: boolean
   /** 是否被用户中断 */
@@ -1426,27 +1458,38 @@ export function getGroupId(group: MessageGroup): string {
 
 // getGroupPreview 已迁移至 @proma/session-core（本文件从该包 import 并 re-export）
 
-export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export const MessageGroupRenderer = React.memo(function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onAgentHistoryQuoteClick, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, historyTurn, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
     return (
-      <div data-message-id={groupId} data-message-role="user">
-        <UserInputMessage message={group.message} />
+      <div data-message-id={groupId} data-message-role="user" data-message-turn={historyTurn}>
+        <UserInputMessage message={group.message} onAgentHistoryQuoteClick={onAgentHistoryQuoteClick} />
       </div>
     )
   }
 
   if (group.type === 'system') {
     const subtype = group.message.subtype
-    if (getSDKCompactStatus(group.message)) return <div data-message-id={groupId}><CompactStatusNotice message={group.message} /></div>
-    if (subtype === 'permission_denied') return <div data-message-id={groupId}><PermissionDeniedNotice message={group.message} /></div>
+    // system 消息同样需要稳定 DOM 锚点，保留既有历史引用与精确回跳能力。
+    const historySelectionAttributes = {
+      'data-message-id': groupId,
+      'data-message-role': 'system',
+      'data-message-turn': historyTurn,
+    }
+    if (getSDKCompactStatus(group.message)) return <div {...historySelectionAttributes}><CompactStatusNotice message={group.message} /></div>
+    if (subtype === 'permission_denied') return <div {...historySelectionAttributes}><PermissionDeniedNotice message={group.message} /></div>
     return null
   }
 
   // assistant-turn
   return (
-    <div data-message-id={groupId} data-message-role="assistant">
+    <div
+      data-message-id={groupId}
+      data-message-role="assistant"
+      data-message-turn={historyTurn}
+      data-agent-live={isStreaming ? 'true' : undefined}
+    >
       <AssistantTurnRenderer
         turn={group}
         allMessages={allMessages}
@@ -1465,4 +1508,21 @@ export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onR
       />
     </div>
   )
-}
+}, (previous, next) => (
+  previous.group === next.group
+  && previous.basePath === next.basePath
+  && previous.onFork === next.onFork
+  && previous.onRewind === next.onRewind
+  && previous.onAgentHistoryQuoteClick === next.onAgentHistoryQuoteClick
+  && previous.onCreateTodo === next.onCreateTodo
+  && previous.onRetry === next.onRetry
+  && previous.onRetryInNewSession === next.onRetryInNewSession
+  && previous.onCompact === next.onCompact
+  && previous.onRelinkProjectRoot === next.onRelinkProjectRoot
+  && previous.onRestoreProjectRoot === next.onRestoreProjectRoot
+  && previous.historyTurn === next.historyTurn
+  && previous.isStreaming === next.isStreaming
+  && previous.stoppedByUser === next.stoppedByUser
+  && previous.sessionModelId === next.sessionModelId
+  && previous.externalMetadataSignature === next.externalMetadataSignature
+))

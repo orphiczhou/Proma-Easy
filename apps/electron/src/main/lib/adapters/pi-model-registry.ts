@@ -24,6 +24,7 @@ import {
   getPromaUserAgent,
   normalizeAnthropicBaseUrlForSdk,
   normalizeOpenAIBaseUrlForSdk,
+  normalizeVersionedAnthropicBaseUrl,
   resolveAnthropicMessagesUrl,
 } from '@proma/core'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
@@ -51,7 +52,12 @@ interface PiModelDefaults {
 const ZERO_MODEL_COST: PiModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 export const DEFAULT_CONTEXT_WINDOW = 200_000
 const DEFAULT_MAX_TOKENS = 64_000
-const VOLCENGINE_GLM_52_MAX_TOKENS = 128_000
+const VOLCENGINE_GLM_MAX_TOKENS = 128_000
+/**
+ * 当 Pi catalog 尚未包含 GLM-5.3 时，补回其官方最大输出上限，避免落到默认 64K。
+ * 智谱官方文档标注 GLM-5.3 最大输出 128K，与目录中 GLM-5.2 的 131072 同一口径。
+ */
+const GLM_53_MAX_TOKENS = 131_072
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api'
 const CODEX_MAX_TOKENS = 128_000
 /**
@@ -116,6 +122,18 @@ function compilePiReasoningCapabilities(
         },
         thinkingLevelMap,
       }
+    case 'zai-toggle':
+      return {
+        compat: {
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          thinkingFormat: 'zai',
+          zaiToolStream: true,
+        },
+        thinkingLevelMap,
+      }
+    case 'anthropic-manual':
+      return { thinkingLevelMap }
   }
 }
 
@@ -333,9 +351,12 @@ function candidatePiProviders(provider: ProviderType): KnownProvider[] {
       return ['moonshotai-cn', 'moonshotai']
     case 'kimi-coding':
       return ['kimi-coding', 'moonshotai-cn', 'moonshotai']
+    case 'opencode-go-openai':
+      return ['opencode-go']
     case 'zhipu':
       return ['zai']
     case 'zhipu-coding':
+    case 'zhipu-coding-team':
       return ['zai-coding-cn', 'zai']
     case 'minimax':
       return ['minimax', 'minimax-cn']
@@ -350,8 +371,9 @@ function candidatePiProviders(provider: ProviderType): KnownProvider[] {
 
 function findCatalogModelById(models: readonly PiCatalogModel[], modelId: string): PiCatalogModel | undefined {
   const normalized = modelId.toLowerCase()
-  return models.find((model) =>
-    model.id.toLowerCase() === normalized || model.name.toLowerCase() === normalized)
+  // ID 是渠道实际发送到上游的稳定标识；同名展示名称只能在没有 ID 命中时兜底。
+  return models.find((model) => model.id.toLowerCase() === normalized)
+    ?? models.find((model) => model.name.toLowerCase() === normalized)
 }
 
 /**
@@ -449,6 +471,52 @@ export async function resolvePiImageInputCapability(
 }
 
 /**
+ * Vision Relay 的实际请求路由。
+ *
+ * OpenCode Go 的同一渠道同时提供 OpenAI 和 Anthropic Messages 模型；因此必须以
+ * Pi catalog 中该模型声明的 API 与 Base URL 为准，不能只按渠道类型固定走 OpenAI。
+ */
+export interface PiVisionRelayRoute {
+  adapterProvider: ProviderType
+  baseUrl?: string
+}
+
+export async function resolvePiVisionRelayRoute(
+  provider: ProviderType,
+  modelId: string | undefined,
+): Promise<PiVisionRelayRoute | undefined> {
+  const resolvedModelId = stripLegacyAgentSdkContextSuffix(modelId)
+  if (!resolvedModelId) return undefined
+  const catalogModel = await findPiCatalogModel(provider, resolvedModelId)
+  if (!catalogModel?.input.includes('image')) return undefined
+
+  if (provider !== 'opencode-go-openai') {
+    return { adapterProvider: provider }
+  }
+
+  switch (catalogModel.api) {
+    case 'anthropic-messages':
+      return {
+        // Anthropic-compatible adapter 接收完整 messages 端点，避免误套 OpenAI 协议。
+        adapterProvider: 'anthropic-compatible',
+        baseUrl: `${normalizeVersionedAnthropicBaseUrl(catalogModel.baseUrl)}/messages`,
+      }
+    case 'openai-completions':
+      return {
+        adapterProvider: 'opencode-go-openai',
+        baseUrl: catalogModel.baseUrl,
+      }
+    case 'openai-responses':
+      return {
+        adapterProvider: 'openai-responses',
+        baseUrl: catalogModel.baseUrl,
+      }
+    default:
+      return undefined
+  }
+}
+
+/**
  * 解析 Pi runtime 的会话级 reasoning capability。
  *
  * 专属 profile 先匹配，保证 K3 / GLM / GPT-o 的协议映射不被 catalog 覆盖；
@@ -482,8 +550,10 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
   const codexAlignedCapabilities = getCodexAlignedGPT5Capabilities(input.model)
   const api = normalizePiApi(input.provider)
   const providerSpecificCapabilities = compilePiReasoningCapabilities(api, input.model)
-  const isVolcengineGlm52 = (input.provider === 'doubao' || input.provider === 'ark-coding-plan')
-    && input.model?.toLowerCase() === 'glm-5.2'
+  const glmModelId = input.model?.toLowerCase()
+  const isVolcengineGlm5x = (input.provider === 'doubao' || input.provider === 'ark-coding-plan')
+    && (glmModelId === 'glm-5.2' || glmModelId === 'glm-5.3')
+  const isCatalogMissingGlm53 = !catalogModel && glmModelId === 'glm-5.3'
   const catalogContextWindow = catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   const inferredContextWindow = inferContextWindow(input.model) ?? DEFAULT_CONTEXT_WINDOW
   return {
@@ -495,10 +565,10 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
     cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
     // Codex 对齐策略优先；其他模型仍保留 catalog 与 shared inference 中更大的已验证能力。
     contextWindow: codexAlignedCapabilities?.contextWindow ?? Math.max(catalogContextWindow, inferredContextWindow),
-    // Pi 的智谱目录将 GLM-5.2 标为 131072，但火山方舟兼容端点上限为 128000。
-    maxTokens: isVolcengineGlm52
-      ? VOLCENGINE_GLM_52_MAX_TOKENS
-      : (catalogModel?.maxTokens ?? DEFAULT_MAX_TOKENS),
+    // Pi 的智谱目录将 GLM-5.2 标为 131072，但火山方舟兼容端点上限为 128000；GLM-5.3 同理。
+    maxTokens: isVolcengineGlm5x
+      ? VOLCENGINE_GLM_MAX_TOKENS
+      : (catalogModel?.maxTokens ?? (isCatalogMissingGlm53 ? GLM_53_MAX_TOKENS : DEFAULT_MAX_TOKENS)),
   }
 }
 

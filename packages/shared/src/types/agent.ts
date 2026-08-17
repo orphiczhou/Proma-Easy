@@ -249,6 +249,26 @@ export interface SDKUserMessage {
   isReplay?: boolean
   /** SDK 合成的消息（如 Skill 展开 prompt），非人类用户输入 */
   isSynthetic?: boolean
+  /** Skills successfully loaded for this specific user input. */
+  skill_activations?: SkillActivation[]
+}
+
+/** Skill successfully loaded during an Agent turn. */
+export type SkillActivationSource = 'explicit' | 'read'
+
+export interface SkillActivation {
+  /** Skill directory slug, stable across display-name changes. */
+  slug: string
+  /** Frontmatter name when available; otherwise the slug. */
+  name: string
+  /** `SKILL.md` path used to load the Skill; retained as a compatibility fallback. */
+  filePath?: string
+  /** Stable Proma workspace locator for a managed Skill. */
+  workspaceSlug?: string
+  /** Path relative to the managed workspace Skills directory, such as `my-skill/SKILL.md`. */
+  workspaceSkillPath?: string
+  /** Ways this turn loaded the Skill. */
+  sources: SkillActivationSource[]
 }
 
 /** SDK result 消息（查询结束时返回） */
@@ -270,6 +290,8 @@ export interface SDKResultMessage {
   background_tasks?: SDKBackgroundTaskSummary[]
   session_crons?: SDKSessionCronSummary[]
   session_id?: string
+  /** Skills successfully loaded during this result's turn. */
+  skill_activations?: SkillActivation[]
   /** 渠道配置的模型 ID，用于缺失 modelUsage.contextWindow 时按 Agent SDK 运行窗口兜底 */
   _channelModelId?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
@@ -623,9 +645,38 @@ export type PromaEvent =
 /** 外部入口触发 Agent 运行的来源 */
 export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge' | 'delegation'
 
-/** IPC 传输的统一 payload（替代 AgentEvent） */
+/** Pi AssistantMessageEvent 的可序列化增量；不携带累计 partial，避免跨进程复制整段输出。 */
+export type AgentAssistantDelta =
+  | { type: 'start' }
+  | { type: 'text_start'; contentIndex: number }
+  | { type: 'text_delta'; contentIndex: number; delta: string }
+  | { type: 'text_end'; contentIndex: number; content: string }
+  | { type: 'thinking_start'; contentIndex: number }
+  | { type: 'thinking_delta'; contentIndex: number; delta: string }
+  | { type: 'thinking_end'; contentIndex: number; content: string }
+  | { type: 'toolcall_start'; contentIndex: number; toolCall?: AgentToolCallDelta }
+  | { type: 'toolcall_delta'; contentIndex: number; delta: string; toolCall?: AgentToolCallDelta }
+  | { type: 'toolcall_end'; contentIndex: number; toolCall: AgentToolCallDelta }
+
+export interface AgentToolCallDelta {
+  id: string
+  name: string
+  arguments?: Record<string, unknown>
+}
+
+export interface AgentAssistantDeltaPayload {
+  uuid: string
+  deltas: AgentAssistantDelta[]
+  session_id?: string
+  /** 产生该 Delta 的 Agent run 起始时间；仅存在于运行时 payload，不写入 JSONL。 */
+  runStartedAt?: number
+  _channelModelId?: string
+}
+
+/** SDK 消息与 AgentAssistantDeltaPayload 分离，Delta 只存在于运行时，不写入 JSONL。 */
 export type AgentStreamPayload =
   | { kind: 'sdk_message'; message: SDKMessage }
+  | { kind: 'sdk_delta'; delta: AgentAssistantDeltaPayload }
   | { kind: 'proma_event'; event: PromaEvent }
 
 // ===== Agent 会话管理 =====
@@ -640,6 +691,24 @@ export type AgentCwdMode = 'session' | 'project'
 
 /** 会话私有工作台的文件布局。缺失字段兼容旧版 `.context/` 子目录。 */
 export type SessionWorkbenchLayout = 'legacy-context' | 'root'
+
+/** 经主进程校验后持久化的 Agent 会话活动 worktree。 */
+export interface AgentActiveWorktree {
+  /** linked worktree 的绝对路径 */
+  path: string
+  /** worktree 所属主仓库根目录 */
+  mainRepoRoot: string
+  /** 选择时 Git 报告的分支名 */
+  branch: string
+  /** 用户明确选择的时间戳 */
+  selectedAt: number
+}
+
+/** 更新 Agent 会话活动 worktree 的输入；null 表示回到默认 cwd。 */
+export interface SetAgentSessionActiveWorktreeInput {
+  sessionId: string
+  worktreePath: string | null
+}
 
 /**
  * Agent 会话轻量索引项
@@ -680,6 +749,11 @@ export interface AgentSessionMeta {
    * session workbench cwd。
    */
   agentCwdMode?: AgentCwdMode
+  /**
+   * 当前会话显式激活的 linked worktree。缺失时保持 agentCwdMode 定义的默认 cwd；
+   * worktree 失效时主进程会主动清除，不会猜测切换到其它分支。
+   */
+  activeWorktree?: AgentActiveWorktree
   /**
    * 会话私有工作台的文件布局。新会话在 workbench 根目录直接存放计划、handoff
    * 等私有资料；缺失字段的历史会话保留 `.context/` 路径以兼容工具历史。
@@ -1084,6 +1158,8 @@ export interface AgentSendInput {
   userMessage: string
   /** 仅用于持久化/展示的原始用户输入（保留 @file 编码原文，省略时回退到 userMessage） */
   rawUserMessage?: string
+  /** 预分配的用户消息 UUID，用于将主进程持久化消息与渲染端乐观消息去重。 */
+  userMessageUuid?: string
   /** 渠道 ID（用于获取 API Key） */
   channelId: string
   /** 模型 ID */
@@ -1116,6 +1192,11 @@ export interface AgentSendInput {
 
 // ===== Agent 队列消息 =====
 
+/** 等待当前 run 结束后由主进程启动的消息。 */
+export interface AgentDeferredQueueMessageInput extends AgentSendInput {
+  queueMessageId: string
+}
+
 /** 流式追加消息的输入参数（Agent 流式中发送新消息） */
 export interface AgentQueueMessageInput {
   /** 会话 ID */
@@ -1142,6 +1223,27 @@ export interface AgentQueueMessageInput {
   mentionedTodoIds?: string[]
   /** 用户通过 &calendar_event:xxx 引用的日程 ID 列表 */
   mentionedCalendarEventIds?: string[]
+}
+
+export interface AgentQueuedMessageControlInput {
+  sessionId: string
+  messageId: string
+}
+
+export interface AgentMoveQueuedMessageInput {
+  sessionId: string
+  sourceId: string
+  targetId: string
+  placement: 'before' | 'after'
+}
+
+export interface AgentQueuedMessageStatus {
+  sessionId: string
+  messageId: string
+  status: 'started'
+  userMessage: string
+  rawUserMessage?: string
+  startedAt: number
 }
 
 // ===== 会话迁移输入 =====
@@ -1555,6 +1657,12 @@ export const AGENT_IPC_CHANNELS = {
   // 会话管理
   /** 获取会话列表 */
   LIST_SESSIONS: 'agent:list-sessions',
+  /** 获取未归档会话列表，供左侧 active 视图使用 */
+  LIST_ACTIVE_SESSIONS: 'agent:list-active-sessions',
+  /** 获取归档会话列表，进入归档视图时按需调用 */
+  LIST_ARCHIVED_SESSIONS: 'agent:list-archived-sessions',
+  /** 获取归档会话数量，不返回归档元数据 */
+  COUNT_ARCHIVED_SESSIONS: 'agent:count-archived-sessions',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
@@ -1563,6 +1671,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_TITLE: 'agent:update-title',
   /** 更新会话模型选择 */
   UPDATE_SESSION_MODEL: 'agent:update-session-model',
+  /** 选择或清除当前会话的活动 worktree */
+  SET_ACTIVE_WORKTREE: 'agent:set-active-worktree',
   /** 删除会话 */
   DELETE_SESSION: 'agent:delete-session',
   /** 迁移 Chat 对话记录到 Agent 会话 */
@@ -1613,6 +1723,21 @@ export const AGENT_IPC_CHANNELS = {
   SEND_MESSAGE: 'agent:send-message',
   /** 中止 Agent 执行 */
   STOP_AGENT: 'agent:stop',
+
+  // Pi 受管浏览器（网页内容与 CDP 仅驻留主进程）
+  OPEN_BROWSER: 'agent:open-browser',
+  LIST_BROWSER_TABS: 'agent:list-browser-tabs',
+  CREATE_BROWSER_TAB: 'agent:create-browser-tab',
+  SELECT_BROWSER_TAB: 'agent:select-browser-tab',
+  CLOSE_BROWSER_TAB: 'agent:close-browser-tab',
+  GET_BROWSER_STATE: 'agent:get-browser-state',
+  SET_BROWSER_LAYOUT: 'agent:set-browser-layout',
+  NAVIGATE_BROWSER: 'agent:navigate-browser',
+  GO_BACK_BROWSER: 'agent:go-back-browser',
+  GO_FORWARD_BROWSER: 'agent:go-forward-browser',
+  RELOAD_BROWSER: 'agent:reload-browser',
+  CLOSE_BROWSER: 'agent:close-browser',
+  BROWSER_STATE_CHANGED: 'agent:browser-state-changed',
 
   // 后台任务管理
   /** 获取任务输出 */
@@ -1701,6 +1826,8 @@ export const AGENT_IPC_CHANNELS = {
   STREAM_COMPLETE: 'agent:stream:complete',
   /** Agent 流式错误 */
   STREAM_ERROR: 'agent:stream:error',
+  /** renderer 报告当前可见的 Agent 会话，用于流式优先级。 */
+  SET_VISIBLE_STREAM_SESSION: 'agent:set-visible-stream-session',
 
   // 附件
   /** 保存文件到 Agent session 工作目录 */
@@ -1806,10 +1933,14 @@ export const AGENT_IPC_CHANNELS = {
   EXIT_PLAN_MODE_RESPOND: 'agent:exit-plan-mode:respond',
 
   // 队列消息（Agent 运行中排队发送）
-  /** 排队发送消息 */
+  /** 流式追加发送消息 */
   QUEUE_MESSAGE: 'agent:queue-message',
+  /** 排队发送消息（主进程 deferred queue） */
+  ENQUEUE_QUEUED_MESSAGE: 'agent:enqueue-queued-message',
   /** 取消队列消息 */
   CANCEL_QUEUED_MESSAGE: 'agent:cancel-queued-message',
+  /** 调整队列顺序 */
+  MOVE_QUEUED_MESSAGE: 'agent:move-queued-message',
   /** 提升队列消息为立即发送 */
   PROMOTE_QUEUED_MESSAGE: 'agent:promote-queued-message',
   /** 队列消息状态变更通知（主进程 → 渲染进程推送） */

@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
-import { HelpCircle, Keyboard, PanelRight } from 'lucide-react'
+import { HelpCircle, Keyboard, Globe2, PanelRight } from 'lucide-react'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -22,7 +22,7 @@ import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
   agentSessionsAtom,
-  agentSidePanelOpenAtom,
+  currentSessionSidePanelOpenAtom,
   agentWorkspacesAtom,
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
@@ -35,12 +35,15 @@ import { tearOffScratchToSplit } from '@/components/scratch-pad/scratch-pad-open
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TabBarItem } from './TabBarItem'
+import { getTabBarActionLayout } from './tab-bar-action-layout'
 import { useCloseTab } from '@/hooks/useCloseTab'
-import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT, WINDOW_CONTROLS_PADDING_RIGHT } from '@/lib/platform'
+import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { cn } from '@/lib/utils'
 import { shortcutGuideOpenAtom } from '@/atoms/shortcut-guide'
 import { faqDialogOpenAtom } from '@/atoms/faq-dialog'
+import { browserFilePanelManualRestoreSessionIdsAtom, browserPanelOpenMapAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+// 浏览器入口对所有 Agent 会话开放；来源限制由主进程浏览器策略处理。
 
 export function TabBar(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
@@ -229,20 +232,62 @@ function TabBarInner({
   const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
-  // 文件面板切换（全局共享）：Agent 会话及其归属的预览 Tab 都可切换面板；
+  // 文件面板按会话独立保存；Agent 会话及其归属的预览 Tab 都可切换面板；
   // 仅 Agent 会话 Tab 在面板关闭时展示右上角"打开"按钮。
   // 该按钮的 absolute 定位与 DiffPanelTabBar.PanelRightClose 的 mr-1 mb-[3px] 坐标耦合，
   // 若右侧关闭按钮样式变化，这里需同步调整。
-  const [isPanelOpen, setSidePanelOpen] = useAtom(agentSidePanelOpenAtom)
+  const [isPanelOpen, setSidePanelOpen] = useAtom(currentSessionSidePanelOpenAtom)
   const setShortcutGuideOpen = useSetAtom(shortcutGuideOpenAtom)
   const setFaqDialogOpen = useSetAtom(faqDialogOpenAtom)
   const activeTab = React.useMemo(() => tabs.find((t) => t.id === activeTabId), [tabs, activeTabId])
+  const agentSessions = useAtomValue(agentSessionsAtom)
+  const activeAgentSession = activeTab?.type === 'agent'
+    ? agentSessions.find((session) => session.id === activeTab.sessionId)
+    : undefined
+  const showBrowserButton = Boolean(activeAgentSession)
   const showOpenPanelButton = !isPanelOpen && activeTab?.type === 'agent'
+  const [browserOpenMap, setBrowserOpenMap] = useAtom(browserPanelOpenMapAtom)
+  const setBrowserStateMap = useSetAtom(browserStateMapAtom)
+  const [browserFilePanelManualRestoreSessionIds, setBrowserFilePanelManualRestoreSessionIds] = useAtom(browserFilePanelManualRestoreSessionIdsAtom)
+  const activeBrowserIsOpen = activeAgentSession ? browserOpenMap.get(activeAgentSession.id) === true : false
+  const priorBrowserStateRef = React.useRef<{ sessionId: string | null; open: boolean }>({ sessionId: null, open: false })
+  const actionLayout = getTabBarActionLayout(isWindows, showOpenPanelButton, showBrowserButton)
 
   const togglePanel = React.useCallback(() => {
     if (!isAgentContextTab(activeTab)) return
-    setSidePanelOpen((v) => !v)
-  }, [setSidePanelOpen, activeTab])
+    if (!isPanelOpen && activeAgentSession && browserOpenMap.get(activeAgentSession.id)) {
+      setBrowserFilePanelManualRestoreSessionIds((previous) => (
+        previous.includes(activeAgentSession.id) ? previous : [...previous, activeAgentSession.id]
+      ))
+    }
+    setSidePanelOpen(!isPanelOpen)
+  }, [activeAgentSession, activeTab, browserOpenMap, isPanelOpen, setBrowserFilePanelManualRestoreSessionIds, setSidePanelOpen])
+
+  const openBrowser = React.useCallback(async () => {
+    if (!activeAgentSession) return
+    const open = (window.electronAPI as Partial<typeof window.electronAPI>).openAgentBrowser
+    if (typeof open !== 'function') return
+    const state = await open(activeAgentSession.id)
+    setBrowserStateMap((previous) => { const next = new Map(previous); next.set(activeAgentSession.id, state); return next })
+    setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(activeAgentSession.id, true); return next })
+  }, [activeAgentSession, setBrowserOpenMap, setBrowserStateMap])
+
+  React.useEffect(() => {
+    const sessionId = activeAgentSession?.id ?? null
+    const previous = priorBrowserStateRef.current
+    const shouldAutoCollapse = Boolean(
+      sessionId &&
+      previous.sessionId === sessionId &&
+      !previous.open &&
+      activeBrowserIsOpen &&
+      isPanelOpen &&
+      !browserFilePanelManualRestoreSessionIds.includes(sessionId),
+    )
+    priorBrowserStateRef.current = { sessionId, open: activeBrowserIsOpen }
+
+    if (!shouldAutoCollapse) return
+    setSidePanelOpen(false)
+  }, [activeAgentSession?.id, activeBrowserIsOpen, browserFilePanelManualRestoreSessionIds, isPanelOpen, setSidePanelOpen])
 
   const openShortcutGuide = React.useCallback(() => {
     setShortcutGuideOpen(true)
@@ -398,9 +443,7 @@ function TabBarInner({
         ref={scrollRef}
         className={cn(
           "relative flex items-end flex-1 min-w-0 overflow-x-auto scrollbar-none",
-          // Windows 始终避开 WindowControls（~126px）；非 Windows 为快捷键地图和文件面板按钮预留空间。
-          isWindows && WINDOW_CONTROLS_PADDING_RIGHT,
-          !isWindows && (showOpenPanelButton ? "pr-20" : "pr-10"),
+          actionLayout.scrollPaddingClassName,
         )}
       >
         {tabs.map((tab) => (
@@ -430,8 +473,9 @@ function TabBarInner({
       </div>
 
       <ShortcutGuideButton
-        isWindows={isWindows}
-        hasPanelButton={showOpenPanelButton}
+        positionClassName={actionLayout.shortcutPositionClassName}
+        showBrowserButton={showBrowserButton}
+        onOpenBrowser={openBrowser}
         onOpen={openShortcutGuide}
         onOpenFaq={openFaqDialog}
       />
@@ -439,20 +483,22 @@ function TabBarInner({
       {/* 打开文件面板按钮：与文件面板打开时的 PanelRightClose 同坐标，避免开/关之间按钮位置跳变。
           Windows 上需让出右上角 WindowControls 区域（126px）。 */}
       {showOpenPanelButton && (
-        <AgentPanelOpenButton isWindows={isWindows} onToggle={togglePanel} />
+        <AgentPanelOpenButton positionClassName={actionLayout.panelPositionClassName} onToggle={togglePanel} />
       )}
     </div>
   )
 }
 
 function ShortcutGuideButton({
-  isWindows,
-  hasPanelButton,
+  positionClassName,
+  showBrowserButton,
+  onOpenBrowser,
   onOpen,
   onOpenFaq,
 }: {
-  isWindows: boolean
-  hasPanelButton: boolean
+  positionClassName: string
+  showBrowserButton: boolean
+  onOpenBrowser: () => void
   onOpen: () => void
   onOpenFaq: () => void
 }): React.ReactElement {
@@ -460,9 +506,7 @@ function ShortcutGuideButton({
     <div
       className={cn(
         "absolute flex items-center gap-1 titlebar-no-drag",
-        isWindows
-          ? cn("top-[37px] h-7 z-[52]", hasPanelButton ? "right-9" : "right-1")
-          : cn("inset-y-0 items-end pb-[3px] z-10", hasPanelButton ? "right-9" : "right-1"),
+        positionClassName,
       )}
     >
       {/* FAQ 快捷按钮（在快捷键地图左边） */}
@@ -484,6 +528,25 @@ function ShortcutGuideButton({
         </TooltipContent>
       </Tooltip>
 
+      {showBrowserButton && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => void onOpenBrowser()}
+            >
+              <Globe2 className="size-3.5" />
+              <span className="sr-only">打开受管浏览器</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p>打开受管浏览器</p>
+          </TooltipContent>
+        </Tooltip>
+      )}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -505,23 +568,19 @@ function ShortcutGuideButton({
   )
 }
 
-/** 打开 Agent 文件面板按钮。
- *  非 Windows：inset-y-0 撑满 TabBar，贴右边缘 right-1。
- *  Windows：溢出到 TabBar 下方（top-[37px]），避开 WindowControls，贴右边缘与关闭按钮对齐。 */
+/** 打开 Agent 文件面板按钮。 */
 function AgentPanelOpenButton({
-  isWindows,
+  positionClassName,
   onToggle,
 }: {
-  isWindows: boolean
+  positionClassName: string
   onToggle: () => void
 }): React.ReactElement {
   return (
     <div
       className={cn(
         "absolute flex titlebar-no-drag",
-        isWindows
-          ? "top-[37px] right-1 h-7 z-[52]"
-          : "inset-y-0 right-1 items-end pb-[3px] z-10",
+        positionClassName,
       )}
     >
       <Tooltip>
