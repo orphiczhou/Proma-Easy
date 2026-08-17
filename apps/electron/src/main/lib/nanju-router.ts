@@ -17,7 +17,10 @@ import type { ProjectMode } from './nanju-project'
 
 export type PhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'delivered'
 
-interface PhaseNode {
+/** AC 审计强度分级：quick 模式全阶段 light（快模型攻防），iterative 模式全阶段 medium（强模型攻防） */
+export type TaskWeight = 'light' | 'medium'
+
+export interface PhaseNode {
   id: PhaseId
   role: string
   title: string
@@ -30,12 +33,93 @@ interface PhaseNode {
   requiresAC: boolean
   retryLimit: number
   next: PhaseId | null
-  /** AC 审计攻击者配置（必须与 channel/model 不同家族） */
+  /** AC 审计强度：默认按路由模式（quick=light / iterative=medium），显式 ac* 配置可覆盖预设 */
+  taskWeight?: TaskWeight
+  /** AC 审计攻击者配置（显式指定时覆盖 taskWeight 预设） */
   acAttackerChannel?: string
   acAttackerModel?: string
-  /** AC 审计防御者配置（必须与攻击者不同家族） */
+  /** AC 审计防御者配置（显式指定时覆盖 taskWeight 预设；不得与作者同家族） */
   acDefenderChannel?: string
   acDefenderModel?: string
+}
+
+// ===== AC 审计分级预设（P1：v0.16.87） =====
+
+/** AC 攻/防角色配置 */
+export interface ACActorConfig {
+  channel: string
+  model: string
+}
+
+/**
+ * AC 审计预设表。
+ * 攻击者固定 deepseek 家族、防御者固定智谱家族，避免与常见作者渠道同家族；
+ * light 用快模型（快消型项目），medium 用强模型（长期迭代型项目）。
+ */
+export const AC_PRESETS: Record<TaskWeight, { attacker: ACActorConfig; defender: ACActorConfig }> = {
+  light: {
+    attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' },
+    defender: { channel: 'glm-zhipu', model: 'glm-5-turbo' },
+  },
+  medium: {
+    attacker: { channel: 'deepseek', model: 'deepseek-v4-pro' },
+    defender: { channel: 'glm-zhipu', model: 'GLM-5.3' },
+  },
+}
+
+/**
+ * 渠道家族判定：按渠道 ID 前缀归类（deepseek=ds系、glm-zhipu=智谱系、minimax=M3系）。
+ * 无法识别前缀的渠道（如 minimax 的 UUID 渠道 ID）视为独立家族，与字面渠道天然不同。
+ */
+export function channelFamily(channelId: string): string {
+  if (channelId.startsWith('deepseek')) return 'family-deepseek'
+  if (channelId.startsWith('glm-zhipu')) return 'family-glm'
+  if (channelId.startsWith('minimax')) return 'family-minimax'
+  return channelId
+}
+
+/**
+ * AC 家族多样性断言（修复「防御者=作者同家族」缺陷）：
+ * - 防御者渠道家族 ≠ 作者渠道家族（防止作者家族既当运动员又当裁判）
+ * - 攻击者渠道家族 ≠ 防御者渠道家族（防止攻防串通）
+ * 违反时抛错。构建 L2 委派指令时调用（首次构建期即拦截）。
+ */
+export function assertACFamilyDiversity(input: {
+  authorChannel: string
+  attackerChannel: string
+  defenderChannel: string
+}): void {
+  const authorFamily = channelFamily(input.authorChannel)
+  const attackerFamily = channelFamily(input.attackerChannel)
+  const defenderFamily = channelFamily(input.defenderChannel)
+  if (defenderFamily === authorFamily) {
+    throw new Error(
+      `AC 审计配置错误：防御者渠道（${input.defenderChannel}）与作者渠道（${input.authorChannel}）属于同一家族，审计无效，请调整预设或显式覆盖配置`,
+    )
+  }
+  if (attackerFamily === defenderFamily) {
+    throw new Error(
+      `AC 审计配置错误：攻击者渠道（${input.attackerChannel}）与防御者渠道（${input.defenderChannel}）属于同一家族，攻防可能串通`,
+    )
+  }
+}
+
+/**
+ * 解析阶段的 AC 攻/防配置：显式 acAttacker 与 acDefender 字段优先，其次按 taskWeight 取预设；
+ * 未标注 taskWeight 时按 medium 处理。
+ */
+export function resolveACActors(phase: PhaseNode): { attacker: ACActorConfig; defender: ACActorConfig } {
+  const preset = AC_PRESETS[phase.taskWeight ?? 'medium']
+  return {
+    attacker: {
+      channel: phase.acAttackerChannel ?? preset.attacker.channel,
+      model: phase.acAttackerModel ?? preset.attacker.model,
+    },
+    defender: {
+      channel: phase.acDefenderChannel ?? preset.defender.channel,
+      model: phase.acDefenderModel ?? preset.defender.model,
+    },
+  }
 }
 
 /** AC 审计 finding（简化版，v2 无 Arbiter） */
@@ -76,13 +160,10 @@ const SENTINEL: PhaseNode = {
   requiresAC: false,
   retryLimit: 0,
   next: null,
-  acAttackerChannel: undefined,
-  acAttackerModel: undefined,
-  acDefenderChannel: undefined,
-  acDefenderModel: undefined,
 }
 
-const REQUIREMENTS: PhaseNode = {
+/** 需求阶段基础定义（各模式共用；taskWeight 在 makeRoute 中按模式赋值） */
+const REQUIREMENTS_BASE: Omit<PhaseNode, 'taskWeight'> = {
   id: 'requirements',
   role: 'requirement-analyst',
   title: '需求分析师',
@@ -95,22 +176,26 @@ const REQUIREMENTS: PhaseNode = {
   requiresAC: false,
   retryLimit: 3,
   next: 'prototype',
-  // AC: 攻击者用 GLM，防御者用 MiniMax（与 deepseek 不同家族）
-  acAttackerChannel: 'glm-zhipu',
-  acAttackerModel: 'glm-5.2',
-  acDefenderChannel: 'deepseek',
-  acDefenderModel: 'deepseek-v4-pro',
 }
 
-// ===== 工厂函数（修正 R2：显式定义所有节点） =====
-
+/**
+ * 工厂函数（修正 R2：显式定义所有节点）。
+ *
+ * AC 审计强度默认按模式整体分级：quick=light（快模型攻防）、iterative=medium（强模型攻防）；
+ * SENTINEL 是终态哨兵，不参与 AC，跳过分级。显式 acAttacker 与 acDefender 字段仍可覆盖预设。
+ */
 function makeRoute(mode: ProjectMode): PhaseNode[] {
+  const defaultWeight: TaskWeight = mode === 'quick' ? 'light' : 'medium'
+  const REQUIREMENTS: PhaseNode = { ...REQUIREMENTS_BASE, taskWeight: defaultWeight }
+
   const prototype: PhaseNode = {
     id: 'prototype',
     role: 'ux-advisor',
     title: 'UX 顾问',
-    channel: 'glm-zhipu',
-    model: 'glm-5.2',
+    // 作者为 MiniMax-M3（视觉模型）。minimax 渠道 ID 是 UUID（release/dev 环境不同），
+    // 这里的 'minimax' 只是家族标记；实际渠道在构建委派指令时运行时解析（见 nanju-router-prompt.ts）。
+    channel: 'minimax',
+    model: 'MiniMax-M3',
     task: '你是 UX 顾问。根据 PRD 生成可交互 HTML 原型。',
     outputPath: '02_UX_DESIGN/prototype.html',
     constraints: ['单文件 HTML，内联 CSS', '简洁现代风格', '覆盖 PRD 核心功能', '包含核心页面的可点击导航'],
@@ -118,11 +203,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresAC: false,
     retryLimit: 2,
     next: mode === 'quick' ? 'delivered' : 'architecture',
-    // AC: 攻击者用 deepseek，防御者用 MiniMax（与 glm 不同家族）
-    acAttackerChannel: 'deepseek',
-    acAttackerModel: 'deepseek-v4-pro',
-    acDefenderChannel: 'glm-zhipu',
-    acDefenderModel: 'glm-5.2',
+    taskWeight: defaultWeight,
   }
 
   if (mode === 'quick') {
@@ -142,11 +223,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresAC: true,
     retryLimit: 2,
     next: 'planning',
-    // AC: 攻击者用 GLM，防御者用 MiniMax（与 deepseek 不同家族）
-    acAttackerChannel: 'glm-zhipu',
-    acAttackerModel: 'glm-5.2',
-    acDefenderChannel: 'deepseek',
-    acDefenderModel: 'deepseek-v4-pro',
+    taskWeight: defaultWeight,
   }
 
   const planning: PhaseNode = {
@@ -162,11 +239,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresAC: false,
     retryLimit: 2,
     next: 'delivered',
-    // AC: 攻击者用 GLM，防御者用 MiniMax（与 deepseek 不同家族）
-    acAttackerChannel: 'glm-zhipu',
-    acAttackerModel: 'glm-5.2',
-    acDefenderChannel: 'deepseek',
-    acDefenderModel: 'deepseek-v4-pro',
+    taskWeight: defaultWeight,
   }
 
   return [REQUIREMENTS, prototype, architecture, planning, SENTINEL]

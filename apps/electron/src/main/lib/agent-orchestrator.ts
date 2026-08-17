@@ -785,7 +785,6 @@ export class AgentOrchestrator {
     // finally 块会通过 generation 匹配来安全清理，不影响正常流程
     const runGeneration = ++this.nextRunGeneration
     this.activeSessions.set(sessionId, runGeneration)
-    callbacks.onRunStarted?.({ startedAt: streamStartedAt })
 
     const releaseActiveRun = (): void => {
       // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
@@ -814,13 +813,29 @@ export class AgentOrchestrator {
       callbacks.onComplete(messages, opts)
     }
 
-    // 3. 构建 Pi runtime 环境（代理与 Windows shell 配置）。
-    const proxyUrl = await getEffectiveProxyUrl()
-    const runtimeEnv = buildAgentRuntimeEnv({
-      proxyUrl,
-      runtimeStatus: getRuntimeStatus(),
-      windowsShellPreference: appSettings.windowsShellPreference,
-    })
+    // E6 修复（v0.16.87）：锁已占用但主 try/finally 尚未生效。此窗口内任何异常
+    // （onRunStarted 回调抛错、代理配置读取失败、runtime 环境构建抛错）会带着
+    // activeSessions 锁直接逃出 sendMessage——外层调用方只上报错误不释放锁，
+    // 导致该会话后续所有消息被「正在处理中」永久拒绝（会话挂死）。此处兑底
+    // failRun 释放锁并终止本轮。
+    let proxyUrl: string | undefined
+    let runtimeEnv: AgentRuntimeEnv
+    try {
+      callbacks.onRunStarted?.({ startedAt: streamStartedAt })
+
+      // 3. 构建 Pi runtime 环境（代理与 Windows shell 配置）。
+      proxyUrl = await getEffectiveProxyUrl()
+      runtimeEnv = buildAgentRuntimeEnv({
+        proxyUrl,
+        runtimeStatus: getRuntimeStatus(),
+        windowsShellPreference: appSettings.windowsShellPreference,
+      })
+    } catch (error) {
+      const message = friendlyErrorMessage(errorMessageOf(error) || 'Agent 启动环境构建失败')
+      console.error('[Agent 编排] 启动环境构建失败，已释放会话运行锁:', error)
+      failRun(message)
+      return
+    }
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     let existingSdkSessionId = sessionMeta?.sdkSessionId
