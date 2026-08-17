@@ -2246,11 +2246,20 @@ export class AgentOrchestrator {
       // 用户希望"立即打断当前输出并续跑新消息"：先软中断，再把消息压入通道
       // - interrupt() 让 SDK 结束当前 turn 并 yield 一个 aborted result
       // - 随后通道里的 'now' 消息会作为下一轮 turn 的用户输入被消费
+      // 例外：会话有挂起的 AskUserQuestion（横幅等待用户点选）时不软中断——
+      // 软中断会把挂起的 toolCall 连同后续队列消息一起杀死（stopReason=aborted
+      // 清空通道），用户在横幅上提交的回答将无接收方（e2e-v89 实测事故）。
+      // 保持排队：用户答完横幅 → turn 正常收尾 → 队列消息在下一 turn 自动消费。
       if (opts?.interrupt && this.adapter.interruptQuery) {
-        try {
-          await this.adapter.interruptQuery(sessionId)
-        } catch (error) {
-          console.warn(`[Agent 编排] 软中断失败（将继续追加消息）:`, error)
+        const hasPendingAskUser = askUserService.getPendingRequests().some((r) => r.sessionId === sessionId)
+        if (hasPendingAskUser) {
+          console.log(`[Agent 编排] 会话有挂起的用户交互横幅，跳过软中断（消息保持排队，横幅应答后自动消费）: sessionId=${sessionId}`)
+        } else {
+          try {
+            await this.adapter.interruptQuery(sessionId)
+          } catch (error) {
+            console.warn(`[Agent 编排] 软中断失败（将继续追加消息）:`, error)
+          }
         }
       }
 
