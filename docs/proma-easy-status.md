@@ -159,7 +159,7 @@ L2 角色子会话（跨渠道跨模型）
 | Cinnamon 面板图标按文件路径缓存 | 改图标文件内容+touch 不生效，必须换文件名 | 已用 icon-dev-cyberpunk.png 规避；后续换图标一律换新文件名 |
 | nemo-desktop 启动竞争致桌面图标不渲染 | 会话启动时多实例竞争，后到者报 "Desktop already managed" 弃权（xrdp 环境层问题，非 Proma） | 应急脚本 `~/proma-easy/fix-desktop-icons.sh`；启动追踪见 `/tmp/proma-dev-launch.log`（无记录=桌面层问题） |
 | deepseek 渠道委派场景间歇故障（2026-08-17 e2e 验收发现） | 委派子会话（长上下文）下 v4-pro 报 provider_error 服务繁忙、v4-flash 报 400 code 1214 "modelCode 不存在"；同模型轻量 probe 均成功。deepseek anthropic 端点（api.deepseek.com/anthropic）对长上下文/模型名的间歇行为，黑盒待查 | 短期：调度员重试即可恢复（繁忙为间歇性）；中期：渠道模型名加映射层（deepseek-chat/reasoner）；或 requirements 角色改用 glm |
-| 南大 e2e 阶段推进未完成实测 | 上行问题阻塞：requirements 委派因 deepseek 故障未产出 PRD，后续阶段（自动续接/原型预览）未走到 | 待 deepseek 稳定后重跑；入口：_nanju-projects.json 关联会话 + 发消息（验收用 hack，见 handoff） |
+| ~~南大 e2e 阶段推进未完成实测~~ | 2026-08-17 晚间已实测通过：e2e-v87（水印，17:25）验证 AC 分级与自动续接；e2e-v89（倒计时，18:54）验证 M3 视觉闭环+交互确认+强制预览（21:45 用户勾选后 delivered）。r5 番茄钟（中午）才是 deepseek 阻塞的遗留 | ✅ 已覆盖（会话证据在 dev 实例 19877，详见 PR 文档） |
 
 **2026-08-17 已解决**：
 - 预览面板 UI 确认 → v0.16.73 修复（74237e2，事件改发主窗），CDP 验证弹出 ✓
