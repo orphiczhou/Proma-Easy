@@ -726,7 +726,11 @@ function startDelegation(
     {
       sessionId: child.id,
       userMessage: prompt,
-      channelId: ctx.channelId,
+      // 运行渠道必须用目标渠道（effectiveChannelId），而不是父会话渠道：
+      // orchestrator 会用这里的 channelId 解析 baseUrl/apiKey，若误传父渠道，
+      // 请求会打到父渠道端点 + 子渠道模型名，直接 API 400（如智谱端点收到
+      // deepseek-v4-pro 会报 1214 modelCode 不存在）。
+      channelId: effectiveChannelId,
       modelId: effectiveModelId,
       workspaceId: ctx.workspaceId,
       permissionModeOverride: permissionMode,
