@@ -258,9 +258,23 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     '   再调 wait_for_delegations 继续等待。',
     '3. 子会话完成后，用 Read 检查产出文件：' + projectDir + '/' + phase.outputPath,
     '   子会话已经内部完成了 AC 审计，产出文件是 AC 通过的版本。',
-    '4. 用 AskUserQuestion 请求用户确认产出。',
-    '   **重要**：产出文件（PRD .md / 原型 .html）写入后，系统已自动在右侧预览面板展示。',
-    '   你在请求确认时提醒用户：「右侧预览面板已展示产出文件，请查看后确认。」',
+    ...(stage === 'prototype'
+      ? [
+        '4. 用 AskUserQuestion 请求用户【交互式】确认原型（不能只问“确认吗”）：',
+        '   a. 先 Read ' + projectDir + '/01_PRD/prd.md，提取全部用户故事（US-xx）清单。',
+        '   b. 提醒用户：「右侧预览面板已展示可交互原型（支持点击/输入/页内导航），请逐条实际操作验证」。',
+        '   c. AskUserQuestion：header「原型交互验证」，multiSelect=true，',
+        '      options = 每个用户故事一项（label=US-xx 简短标题，description=该故事的验收要点）',
+        '                + 最后一项「全部通过，交付」；question 写明「请实际操作后勾选验证通过的用户故事」。',
+        '   d. 用户勾选「全部通过」或选中所有故事 → 确认通过，进入第 5 步。',
+        '   e. 有未勾选的故事 → 把未通过项 + 用户反馈整理成修改清单，用 continue_delegation',
+        '      发给 UX 顾问子会话修复；修复后重新执行本步骤（重新 AskUserQuestion）。',
+      ]
+      : [
+        '4. 用 AskUserQuestion 请求用户确认产出。',
+        '   **重要**：产出文件（PRD .md / 原型 .html）写入后，系统已自动在右侧预览面板展示。',
+        '   你在请求确认时提醒用户：「右侧预览面板已展示产出文件，请查看后确认。」',
+      ]),
     '5. 用户确认通过后，输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
     '',
     '### 你绝对不能做的',
