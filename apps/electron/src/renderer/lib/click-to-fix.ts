@@ -29,8 +29,8 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     return layer;
   }
 
-  function reportToHost(payload) {
-    try { parent.postMessage(Object.assign({ __promaClickToFix: true }, payload), '*'); } catch (e) { /* 宿主不存在或被拦，静默 */ }
+  reportToHost(payload) {
+    try { parent.postMessage(Object.assign({ __promaClickToFix: true, filePath: location.href }, payload), '*'); } catch (e) { /* 宿主不存在或被拦，静默 */ }
   }
 
   document.addEventListener('click', function (e) {

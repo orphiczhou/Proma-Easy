@@ -77,7 +77,27 @@ export const currentSessionPreviewOpenAtom = atom<boolean>((get) => {
 // ===== 引用选中文本（Quoted Selection）=====
 
 /** 选中文本引用的来源 */
-export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad'
+export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad' | 'ux-element'
+
+/** UX 原型点选元素引用（点选纠错交互：点击元素→@引用进输入框→对话描述改法） */
+export interface UxElementRef {
+  /** 原型内唯一标记（data-ai-id） */
+  id: string
+  /** 元素类型（data-ai-type，如 按钮/输入框/文本） */
+  type: string
+  /** 元素文本摘要（≤40字） */
+  text: string
+  /** 所属原型文件绝对路径 */
+  filePath: string
+  /** 捕获时间戳 */
+  capturedAt: number
+}
+
+/** 每会话最近点选的 UX 元素引用候选池（@ 菜单可回选，MRU 序，容量 12） */
+export const uxElementRefPoolMapAtom = atom<Map<string, UxElementRef[]>>(new Map())
+
+/** 当前会话待发送的点选元素引用（点选即暂存，发送时随消息携带；新点选覆盖） */
+export const pendingUxElementRefMapAtom = atom<Map<string, UxElementRef>>(new Map())
 
 /** 从预览面板或 Agent 历史中选中的文本引用 */
 export interface QuotedSelection {

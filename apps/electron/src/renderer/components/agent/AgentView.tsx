@@ -61,7 +61,7 @@ import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
-import { previewPanelOpenMapAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, pendingUxElementRefMapAtom } from '@/atoms/preview-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
@@ -534,7 +534,17 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
   const isPermissionPlanMode = permissionMode === 'plan'
   const currentQuotedSelection = useAtomValue(currentQuotedSelectionAtom)
+  // 点选纠错：当前会话待发送的 UX 元素引用（点选暂存，随下一条消息携带）
+  const pendingUxElementRef = useAtomValue(pendingUxElementRefMapAtom).get(sessionId) ?? null
+  const clearPendingUxElementRef = React.useCallback((): void => {
+    setPendingUxElementRefMap((prev) => {
+      const m = new Map(prev)
+      m.delete(sessionId)
+      return m
+    })
+  }, [sessionId])
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
+  const setPendingUxElementRefMap = useSetAtom(pendingUxElementRefMapAtom)
   const openPreview = useOpenPreview()
 
   /** 移除当前引用选中文本 */
@@ -560,6 +570,21 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
     return quotedSelection
   }, [sessionId, store])
+
+  /** 消费待发送的点选元素引用：取出并清除暂存，序列化为消息前缀块 */
+  const consumeUxElementRefBlock = React.useCallback((): string => {
+    const ref = store.get(pendingUxElementRefMapAtom).get(sessionId) ?? null
+    if (!ref) return ''
+    clearPendingUxElementRef()
+    return [
+      '<ux-element-ref>',
+      `  id: ${ref.id}`,
+      `  type: ${ref.type}`,
+      `  text: ${ref.text || '(无文本)'}`,
+      `  prototype: ${ref.filePath}`,
+      '</ux-element-ref>',
+    ].join('\n')
+  }, [sessionId, store, clearPendingUxElementRef])
 
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
@@ -2123,13 +2148,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       if (pendingFilesSnapshot.length > 0 && !attachmentContext) return
 
       const quotedSelection = consumeQuotedSelection()
+      const uxRefBlockSoft = consumeUxElementRefBlock()
       const message = createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection, attachmentContext
         ? {
-            fileReferenceBlock: attachmentContext.referenceBlock,
+            fileReferenceBlock: uxRefBlockSoft ? `${uxRefBlockSoft}\n${attachmentContext.referenceBlock}` : attachmentContext.referenceBlock,
             attachments: attachmentContext.attachments,
             additionalDirectories: attachmentContext.additionalDirectories,
           }
-        : undefined)
+        : uxRefBlockSoft
+          ? { fileReferenceBlock: uxRefBlockSoft, attachments: [], additionalDirectories: [] }
+          : undefined)
       const quotedSelectionBlock = quotedSelection
         ? buildQuotedSelectionBlock(quotedSelection)
         : ''
@@ -2187,13 +2215,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       if (pendingFilesSnapshot.length > 0 && !attachmentContext) return
 
       const quotedSelection = consumeQuotedSelection()
+      const uxRefBlockSoft = consumeUxElementRefBlock()
       const message = createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection, attachmentContext
         ? {
-            fileReferenceBlock: attachmentContext.referenceBlock,
+            fileReferenceBlock: uxRefBlockSoft ? `${uxRefBlockSoft}\n${attachmentContext.referenceBlock}` : attachmentContext.referenceBlock,
             attachments: attachmentContext.attachments,
             additionalDirectories: attachmentContext.additionalDirectories,
           }
-        : undefined)
+        : uxRefBlockSoft
+          ? { fileReferenceBlock: uxRefBlockSoft, attachments: [], additionalDirectories: [] }
+          : undefined)
       if (overrideText === undefined || fromEditor) {
         setInputContent('')
         setInputHtmlContent('')
@@ -2259,6 +2290,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const quotedSelection = consumeQuotedSelection()
     if (quotedSelection) {
       fileReferences = fileReferences + buildQuotedSelectionBlock(quotedSelection)
+    }
+
+    // 点选纠错：待发送的 UX 元素引用块（点击原型元素→@引用→随本条消息携带）
+    const uxRefBlock = consumeUxElementRefBlock()
+    if (uxRefBlock) {
+      fileReferences = uxRefBlock + '\n' + fileReferences
     }
 
     // 2. 构建最终消息
@@ -3104,6 +3141,20 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
                     sourceLabel={currentQuotedSelection.sourceLabel}
                     onRemove={handleRemoveQuotedSelection}
                   />
+                )}
+                {pendingUxElementRef && (
+                  <div className="inline-flex items-center gap-1.5 max-w-full rounded-md border border-primary/40 bg-primary/5 px-2 py-1 text-xs">
+                    <span className="text-primary font-medium shrink-0">🎯 {pendingUxElementRef.type}</span>
+                    <span className="truncate max-w-[280px] text-muted-foreground">{pendingUxElementRef.text || pendingUxElementRef.id}</span>
+                    <button
+                      type="button"
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
+                      onClick={clearPendingUxElementRef}
+                      aria-label="移除元素引用"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 )}
               </div>
             )}

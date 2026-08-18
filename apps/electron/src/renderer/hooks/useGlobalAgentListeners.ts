@@ -66,7 +66,7 @@ import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { previewFileMapAtom, previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
+import { previewFileMapAtom, previewPanelOpenMapAtom, pendingUxElementRefMapAtom, uxElementRefPoolMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, AgentAssistantDelta, AgentAssistantDeltaPayload, SDKAssistantMessage, SDKMessage, SDKUserMessage, SDKSystemMessage, PromaEvent, AgentSessionMeta, ProviderType, SDKContentBlock, SDKUserContentBlock, AskUserRequest, AskUserQuestion } from '@proma/shared'
@@ -586,13 +586,38 @@ export function useGlobalAgentListeners(): void {
       if (!workspaceId) return
       const workspace = store.get(agentWorkspacesAtom).find((w) => w.id === workspaceId)
       if (!workspace || workspace.workspaceType !== 'nanju') return
+
+      const msg = data as { kind?: string; id?: string; type?: string; text?: string; filePath?: string }
+      if (msg.kind === 'element-click' && msg.id) {
+        // 【点选暂存（方案A）】：点击不直接发消息，而是暂存为待发送引用 chip，
+        // 用户在输入框接着打字描述改法，随下一条消息一起发送；
+        // 同时进 MRU 候选池（方案B：@ 菜单可回选，容量 12）。
+        const ref = {
+          id: msg.id,
+          type: msg.type ?? '元素',
+          text: msg.text ?? '',
+          filePath: msg.filePath ?? (store.get(previewFileMapAtom).get(sessionId)?.filePath ?? ''),
+          capturedAt: Date.now(),
+        }
+        store.set(pendingUxElementRefMapAtom, (prev) => new Map(prev).set(sessionId, ref))
+        store.set(uxElementRefPoolMapAtom, (prev) => {
+          const pool = (prev.get(sessionId) ?? []).filter((r) => r.id !== ref.id)
+          pool.unshift(ref)
+          const m = new Map(prev)
+          m.set(sessionId, pool.slice(0, 12))
+          return m
+        })
+        console.log(`[点选纠错] 元素已暂存为输入引用: ${msg.id}（${msg.type}）——请在输入框继续描述改法`)
+        return
+      }
+      // 双击/空白点击等仍走主进程注入路径（快捷五选项）
       void window.electronAPI.reportClickToFix({
         workspaceSlug: workspace.slug,
         sessionId,
-        kind: String((data as { kind?: string }).kind ?? ''),
-        id: typeof (data as { id?: string }).id === 'string' ? (data as { id?: string }).id : undefined,
-        type: typeof (data as { type?: string }).type === 'string' ? (data as { type?: string }).type : undefined,
-        text: typeof (data as { text?: string }).text === 'string' ? (data as { text?: string }).text : undefined,
+        kind: String(msg.kind ?? ''),
+        id: msg.id,
+        type: msg.type,
+        text: msg.text,
       }).catch(() => {})
     }
     window.addEventListener('message', clickToFixHandler)
