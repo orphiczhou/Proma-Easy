@@ -13,6 +13,7 @@ export const SELECTION_ACTION_POPOVER_SELECTOR = '[data-selection-action-popover
 
 const QUOTED_FILE_REGEX = /<quoted_file[^>]*>[\s\S]*?<\/quoted_file>(?:\r?\n)*/g
 const QUOTED_CONTEXT_REGEX = /<quoted_context[^>]*>[\s\S]*?<\/quoted_context>(?:\r?\n)*/g
+const UX_ELEMENT_REF_REGEX = /<ux-element-ref>[\s\S]*?<\/ux-element-ref>(?:\r?\n)*/g
 const AGENT_HISTORY_QUOTE_MENTION_PREFIX = '&quote:'
 const AGENT_HISTORY_QUOTE_MENTION_REGEX = /&quote:[A-Za-z0-9%_.!~*'()-]+/g
 
@@ -309,6 +310,8 @@ export function parseQuotedSelectionRefs(
       if (!options.inlineAgentHistoryQuotes || !quote) return ''
       return serializeAgentHistoryQuoteDisplayMention(quote) ?? ''
     })
+    // 点选纠错：气泡不显示原始 <ux-element-ref> 块（内部定位格式，SDK 侧已消费）
+    .replace(UX_ELEMENT_REF_REGEX, '')
     .trim()
 
   return { quotes, text }

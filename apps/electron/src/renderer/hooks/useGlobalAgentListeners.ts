@@ -588,15 +588,30 @@ export function useGlobalAgentListeners(): void {
       if (!workspace || workspace.workspaceType !== 'nanju') return
 
       const msg = data as { kind?: string; id?: string; type?: string; text?: string; filePath?: string }
+      // 安全校验（AC 审计 R3）：只信任预览 iframe 的消息——校验来源 window 与字段尺寸。
+      // 预览 iframe（DiffTabContent 的 htmlPreviewUrl iframe）contentWindow 必须是 event.source；
+      // 长度上限防注入换行/超长载荷。原型可嵌远程 iframe，远程内容可 top.postMessage 伪造，
+      // 故 source 校验不可省。
+      const previewFrames = Array.from(document.querySelectorAll('iframe'))
+      const fromPreviewFrame = previewFrames.some((f) => f.contentWindow === event.source)
+      if (!fromPreviewFrame) return
+      const sanitize = (v: unknown, max = 40): string | undefined => {
+        if (typeof v !== 'string' || !v) return undefined
+        const clean = v.replace(/[\r\n\t]/g, ' ').trim().slice(0, max)
+        return clean || undefined
+      }
       if (msg.kind === 'element-click' && msg.id) {
+        const safeId = sanitize(msg.id, 64)
+        if (!safeId) return
         // 【点选暂存（方案A）】：点击不直接发消息，而是暂存为待发送引用 chip，
         // 用户在输入框接着打字描述改法，随下一条消息一起发送；
         // 同时进 MRU 候选池（方案B：@ 菜单可回选，容量 12）。
+        // filePath 用会话预览的真实绝对路径（msg.filePath 是 token URL，不可解析）。
         const ref = {
-          id: msg.id,
-          type: msg.type ?? '元素',
-          text: msg.text ?? '',
-          filePath: msg.filePath ?? (store.get(previewFileMapAtom).get(sessionId)?.filePath ?? ''),
+          id: safeId,
+          type: sanitize(msg.type, 20) ?? '元素',
+          text: sanitize(msg.text) ?? '',
+          filePath: store.get(previewFileMapAtom).get(sessionId)?.filePath ?? '',
           capturedAt: Date.now(),
         }
         store.set(pendingUxElementRefMapAtom, (prev) => new Map(prev).set(sessionId, ref))
@@ -607,7 +622,7 @@ export function useGlobalAgentListeners(): void {
           m.set(sessionId, pool.slice(0, 12))
           return m
         })
-        console.log(`[点选纠错] 元素已暂存为输入引用: ${msg.id}（${msg.type}）——请在输入框继续描述改法`)
+        console.log(`[点选纠错] 元素已暂存为输入引用: ${ref.id}（${ref.type}）——请在输入框继续描述改法`)
         return
       }
       // 双击/空白点击等仍走主进程注入路径（快捷五选项）

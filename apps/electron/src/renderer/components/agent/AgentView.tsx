@@ -61,7 +61,7 @@ import { cn } from '@/lib/utils'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
-import { previewPanelOpenMapAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, pendingUxElementRefMapAtom } from '@/atoms/preview-atoms'
+import { previewPanelOpenMapAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, pendingUxElementRefMapAtom, type UxElementRef } from '@/atoms/preview-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
@@ -571,12 +571,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     return quotedSelection
   }, [sessionId, store])
 
-  /** 消费待发送的点选元素引用：取出并清除暂存，序列化为消息前缀块 */
-  const consumeUxElementRefBlock = React.useCallback((): string => {
+  /** 消费待发送的点选元素引用：取出并清除暂存，序列化为消息前缀块（附带原引用供失败回滚） */
+  const consumeUxElementRef = React.useCallback((): { block: string; ref: UxElementRef | null } => {
     const ref = store.get(pendingUxElementRefMapAtom).get(sessionId) ?? null
-    if (!ref) return ''
+    if (!ref) return { block: '', ref: null }
     clearPendingUxElementRef()
-    return [
+    const block = [
       '<ux-element-ref>',
       `  id: ${ref.id}`,
       `  type: ${ref.type}`,
@@ -584,7 +584,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       `  prototype: ${ref.filePath}`,
       '</ux-element-ref>',
     ].join('\n')
+    return { block, ref }
   }, [sessionId, store, clearPendingUxElementRef])
+
+  /** 发送失败回滚：恢复暂存的点选元素引用（与 quotedSelection 同等待遇，AC 审计 R2） */
+  const restoreUxElementRef = React.useCallback((ref: UxElementRef | null): void => {
+    if (!ref) return
+    setPendingUxElementRefMap((prev) => new Map(prev).set(sessionId, ref))
+  }, [sessionId])
 
   const suggestionsMap = useAtomValue(agentPromptSuggestionsAtom)
   const suggestion = suggestionsMap.get(sessionId) ?? null
@@ -2148,15 +2155,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       if (pendingFilesSnapshot.length > 0 && !attachmentContext) return
 
       const quotedSelection = consumeQuotedSelection()
-      const uxRefBlockSoft = consumeUxElementRefBlock()
+      const { block: uxRefBlock, ref: uxRefForRollback } = consumeUxElementRef()
       const message = createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection, attachmentContext
         ? {
-            fileReferenceBlock: uxRefBlockSoft ? `${uxRefBlockSoft}\n${attachmentContext.referenceBlock}` : attachmentContext.referenceBlock,
+            fileReferenceBlock: uxRefBlock ? `${uxRefBlock}\n${attachmentContext.referenceBlock}` : attachmentContext.referenceBlock,
             attachments: attachmentContext.attachments,
             additionalDirectories: attachmentContext.additionalDirectories,
           }
-        : uxRefBlockSoft
-          ? { fileReferenceBlock: uxRefBlockSoft, attachments: [], additionalDirectories: [] }
+        : uxRefBlock
+          ? { fileReferenceBlock: uxRefBlock, attachments: [], additionalDirectories: [] }
           : undefined)
       const quotedSelectionBlock = quotedSelection
         ? buildQuotedSelectionBlock(quotedSelection)
@@ -2190,6 +2197,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             return map
           })
         }
+        restoreUxElementRef(uxRefForRollback)
         toast.error('消息加入队列失败', { description: String(error) })
       })
       // 入队后消息会出现在队列 UI 中，用户可见；不再弹 toast 打扰。
@@ -2215,7 +2223,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       if (pendingFilesSnapshot.length > 0 && !attachmentContext) return
 
       const quotedSelection = consumeQuotedSelection()
-      const uxRefBlockSoft = consumeUxElementRefBlock()
+      const { block: uxRefBlockSoft, ref: uxRefSoftForRollback } = consumeUxElementRef()
       const message = createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection, attachmentContext
         ? {
             fileReferenceBlock: uxRefBlockSoft ? `${uxRefBlockSoft}\n${attachmentContext.referenceBlock}` : attachmentContext.referenceBlock,
@@ -2259,6 +2267,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           })
         }
         restoreQueuedAttachmentsToPending(message.attachments)
+        restoreUxElementRef(uxRefSoftForRollback)
       })
       return
     }
@@ -2293,7 +2302,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
 
     // 点选纠错：待发送的 UX 元素引用块（点击原型元素→@引用→随本条消息携带）
-    const uxRefBlock = consumeUxElementRefBlock()
+    const { block: uxRefBlock, ref: uxRefForRollback } = consumeUxElementRef()
     if (uxRefBlock) {
       fileReferences = uxRefBlock + '\n' + fileReferences
     }
@@ -2373,6 +2382,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     window.electronAPI.sendAgentMessage(input).catch((error) => {
       console.error('[AgentView] 发送消息失败:', error)
+      restoreUxElementRef(uxRefForRollback)
       setStreamingStates((prev) => {
         const current = prev.get(sessionId)
         if (!current) return prev
