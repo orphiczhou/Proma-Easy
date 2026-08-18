@@ -1303,6 +1303,9 @@ export interface ElectronAPI {
   onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
   offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
 
+  /** 点选纠错：预览 iframe 内点击事件转发（主进程 → 调度员会话消息） */
+  reportClickToFix: (input: { workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string }) => Promise<unknown>
+
   // ===== Windows Agent Island =====
 
   /** Windows: 主进程委托渲染进程播放提示音 */
@@ -2968,6 +2971,8 @@ const electronAPI: ElectronAPI = {
   onAgentOpenPreview: (callback) => {
     ipcRenderer.on('agent:open-preview-request', callback)
   },
+
+  reportClickToFix: (input) => ipcRenderer.invoke('agent:report-click-to-fix', input),
   offAgentOpenPreview: (callback) => {
     ipcRenderer.removeListener('agent:open-preview-request', callback)
   },

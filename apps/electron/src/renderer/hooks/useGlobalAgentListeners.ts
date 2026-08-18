@@ -572,6 +572,31 @@ export function useGlobalAgentListeners(): void {
     }
     window.electronAPI.onNanjuHtmlPreview?.(nanjuPreviewHandler)
 
+    // 点选纠错（Click-to-Fix，interaction-spec 交互1）：预览 iframe 内注入脚本捕获
+    // 用户点击原型元素后 postMessage 到宿主；这里转发主进程注入调度员会话消息。
+    // 仅当当前会话属于南大工作区时生效（主进程还会再校验一次）。
+    const clickToFixHandler = (event: MessageEvent): void => {
+      const data = event.data
+      if (!data || typeof data !== 'object' || (data as { __promaClickToFix?: boolean }).__promaClickToFix !== true) return
+      const sessionId = store.get(currentAgentSessionIdAtom)
+      if (!sessionId) return
+      const sessions = store.get(agentSessionsAtom)
+      const session = sessions.find((s) => s.id === sessionId)
+      const workspaceId = session?.workspaceId ?? store.get(currentAgentWorkspaceIdAtom)
+      if (!workspaceId) return
+      const workspace = store.get(agentWorkspacesAtom).find((w) => w.id === workspaceId)
+      if (!workspace || workspace.workspaceType !== 'nanju') return
+      void window.electronAPI.reportClickToFix({
+        workspaceSlug: workspace.slug,
+        sessionId,
+        kind: String((data as { kind?: string }).kind ?? ''),
+        id: typeof (data as { id?: string }).id === 'string' ? (data as { id?: string }).id : undefined,
+        type: typeof (data as { type?: string }).type === 'string' ? (data as { type?: string }).type : undefined,
+        text: typeof (data as { text?: string }).text === 'string' ? (data as { text?: string }).text : undefined,
+      }).catch(() => {})
+    }
+    window.addEventListener('message', clickToFixHandler)
+
     // Agent 会话工具 open_preview：主动在右侧分屏打开预览（与南大预览同一套 atom 写入）。
     // 事件携带发起会话 ID：即使该会话不是当前激活会话，也预先写入其预览状态，切回时可见。
     const agentOpenPreviewHandler = (_event: unknown, data: { sessionId: string; filePath: string; version?: number }): void => {
@@ -1903,6 +1928,7 @@ export function useGlobalAgentListeners(): void {
       window.removeEventListener('focus', onWindowFocus)
       window.electronAPI.offNanjuHtmlPreview?.(nanjuPreviewHandler)
       window.electronAPI.offAgentOpenPreview?.(agentOpenPreviewHandler)
+      window.removeEventListener('message', clickToFixHandler)
     }
   }, [store]) // store 引用稳定，effect 只执行一次
 }

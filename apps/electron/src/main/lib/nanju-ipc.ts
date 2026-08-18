@@ -18,6 +18,9 @@ import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
 import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
 import { findNanjuProjectBySession, advanceNanjuStage, getNanjuPhaseGatePrompt } from './nanju-phase-gate'
+
+/** 点选纠错消息防抖：`${sessionId}:${elementId}:${kind}` → 上次注入时间 */
+const clickToFixLastSent = new Map<string, number>()
 import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } from './nanju-orchestrator'
 import type { TelemetryEventType } from './nanju-telemetry'
 import type { ProjectSnapshot } from './nanju-snapshot'
@@ -91,6 +94,44 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
   ipcMain.handle('nanju:advance-stage', async (_event, input: { workspaceSlug: string; sessionId: string; stage: string }) => {
     advanceNanjuStage(input.workspaceSlug, input.sessionId, input.stage as any)
     return true
+  })
+
+  // ===== 点选纠错（Click-to-Fix，interaction-spec 交互1）=====
+  // 预览 iframe 内用户点击原型元素 → 渲染端 postMessage 捕获 → 此 IPC →
+  // 以用户消息形式注入对应南大调度员会话（非 interrupt，排队即可），
+  // 调度员按 router-prompt 的对话式设计循环处理（快速选项/修改链）。
+  ipcMain.handle('agent:report-click-to-fix', async (_event, input: {
+    workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string
+  }) => {
+    if (!input?.sessionId) return { ok: false, error: 'sessionId 不能为空' }
+    // 仅南大项目会话生效（避免普通会话被预览点击骚扰）
+    const project = findNanjuProjectBySession(input.workspaceSlug, input.sessionId)
+    if (!project) return { ok: false, error: '非南大项目会话，忽略点选' }
+
+    const { queueAgentMessage } = await import('./agent-service')
+    const label = input.kind === 'element-click'
+      ? `【点选纠错】我点击了原型元素：${input.type}「${input.text || input.id}」（data-ai-id=${input.id}）。请给出这个元素的快速修改选项。`
+      : `【点选纠错】我点了原型空白处，没有选中可修改元素。`
+    // 与当前用户消息幂等去重：同一元素 3 秒内重复点击只注入一次（渲染端已重置高亮，但消息防抖在宿主做）
+    const dedupeKey = `${input.sessionId}:${input.id ?? 'blank'}:${input.kind}`
+    const now = Date.now()
+    if (clickToFixLastSent.get(dedupeKey) && now - (clickToFixLastSent.get(dedupeKey) ?? 0) < 3000) {
+      return { ok: true, deduped: true }
+    }
+    clickToFixLastSent.set(dedupeKey, now)
+    if (clickToFixLastSent.size > 200) {
+      // 简单防膨胀
+      const oldest = clickToFixLastSent.keys().next().value
+      if (oldest) clickToFixLastSent.delete(oldest)
+    }
+
+    await queueAgentMessage(
+      { sessionId: input.sessionId, userMessage: label, rawUserMessage: label },
+      // webContents 仅用于流式回显；点选消息不需要，传 dummy
+      { send: () => {}, isDestroyed: () => false } as unknown as Electron.WebContents,
+    )
+    console.log(`[点选纠错] 已注入调度员会话 ${input.sessionId}: ${input.id ?? 'blank'}`)
+    return { ok: true }
   })
 
   // ===== 角色编排 =====

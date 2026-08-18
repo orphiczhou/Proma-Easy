@@ -152,7 +152,7 @@ export function buildL2TaskWithAC(
     parts.push('1. 用 chrome-devtools MCP 的 new_page 打开 file://' + projectDir + '/' + phase.outputPath + '（原型绝对路径）。')
     parts.push('2. 用 take_screenshot 获取渲染截图。')
     parts.push('3. 用 read 工具读取该截图（你是视觉模型，必须实际查看渲染结果，不能只看代码推断）。')
-    parts.push('4. 对照 PRD 用户故事清单逐条检查：界面覆盖（每条故事都有对应界面）、布局合理性、交互可用性（按钮/导航可点击、流程可达）、导航布局合规（场景索引为顶部横向分页窄条且 sticky，核心场景 1280x720 首屏可见，无纵向全屏索引页）。')
+    parts.push('4. 对照 PRD 用户故事清单逐条检查：界面覆盖（每条故事都有对应界面）、布局合理性、交互可用性（每个 P0 交互必须实际点击验证：点按钮看反馈、填输入看结果——不允许只看代码就判可交互，必须用 chrome-devtools 实点实测并截图留证）、导航布局合规（场景索引为顶部横向分页窄条且 sticky，核心场景 1280x720 首屏可见，无纵向全屏索引页）、可交互演示达标（原型可真实操作而非静态展示，状态机/演示数据完整，参照闪念Tips 原型标准）。')
     parts.push('5. 发现缺陷 → 修复 HTML → 重新截图检查；连续 2 轮截图检查均无缺陷，才允许进入 AC 对抗审计。')
     parts.push('')
   }
@@ -187,7 +187,8 @@ export function buildL2TaskWithAC(
   parts.push('2. 用 delegate_agent(inline:true, channel=' + defenderCh + ', model=' + defenderModel + ') 创建防御者，')
   parts.push('   让它对照攻击者的发现，用证据反驳或确认。')
   parts.push('   注意：攻击者和防御者是不同模型家族，不能串通。')
-  parts.push('3. 如果发现 red 级问题：修改产出文件 → 重新发起攻击者审查 → 直到无 red 级问题。')
+  parts.push('3. 【审计状态机（严格顺序，不可跳步）】：攻击者 → 防御者裁决 → 若有 red：修复 → 【必须重新委派攻击者复审】→ 再防御者确认 → 仍无 red 才算通过。')
+  parts.push('   注意：修复后必须回到步骤 1（重新攻击），不允许「修复后只让防御者确认」就结束——防御者的职责是对攻击发现做裁决，不是代替攻击者复审。无 red 时跳过本步骤。')
   if (isPrototype) {
     parts.push('4. 独立视觉裁决（防作者自证，仅 UX 原型阶段）：攻防通过后，')
     parts.push('   用 delegate_agent(inline:true, channel=' + author.channel + ', model=' + author.model + ') 创建视觉验证者。')
@@ -265,15 +266,24 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示原型。',
         '   b. Read ' + projectDir + '/01_PRD/prd.md 提取用户故事（US-xx）清单。',
         '   c. 向用户宣布进入对话式设计环节，邀请直接用自然语言提修改意见，并说明可指代具体元素',
-        '      （如「顶部导航太挤」「开始按钮改大」「这个表单去掉」）。',
-        '   d. 迭代循环（可多轮，直到用户说满意/交付）：',
-        '      - 用户新消息提出对原型某元素的修改 → 你用 BrowserObserve/BrowserScreenshot 获取该元素',
-        '        当前状态与 ref（受管浏览器打开该原型，BrowserPreviewOpen file://' + projectDir + '/' + phase.outputPath + '）；',
-        '        若描述模糊（如「这个」「那个」），先用 Observe 元素清单向用户确认指向哪个元素。',
-        '      - 把【元素定位 + 用户意图 + 现状描述】整理成修改指令，用 continue_delegation 发给 UX 顾问子会话',
-        '        （修复含截图自检循环，确保改动不破坏其他部分）。',
-        '      - 修复完成 → 重新 open_preview 展示新版 → 向用户报告改了什么，邀请继续提意见。',
-        '      - 用户意见若涉及需求变更（新增/删除功能、改验收标准）：先与用户确认需求变化，',
+        '      （如「顶部导航太挤」「开始按钮改大」「这个表单去掉」）；',
+        '      同时告知：「也可以直接在右侧原型上【点击】想改的元素，会弹出快速修改选项」。',
+        '      当收到【点选纠错】消息（用户在原型上点击了元素，含 data-ai-id 与类型）：',
+        '      - 立即用 AskUserQuestion 弹快速选项（模拟设计规范的快速选项面板）：',
+        '        options 固定五项：换个颜色🎨/改文字🖊/换个位置📐/删掉它🗑/其他💬（用户自描述）；',
+        '        question 写明「你点击了[元素类型]「[文本摘要]」，想怎么改？」（类型与摘要来自点选消息）。',
+        '      - 用户选了预设项或描述后，与文字意见一样进入意见收集轮（见 d，批量改而非立即改）。',
+        '   d. 【意见收集轮】（核心节奏：多轮沟通攒一批，再统一修改——不是一条意见就立即改）：',
+        '      - 每收到一条用户意见，先记录到你的意见清单（元素定位/意图），并回应确认你的理解；',
+        '        涉及需求变更的先按 e 确认范围。',
+        '      - 回应后【必须追问】：「这条记下了。还有其他想调整的地方吗？可以继续提，',
+        '        都提完我一起改」——除非用户明确说「就这些/开始改吧/没别的了」，否则【禁止】下发修改。',
+        '      - 描述模糊时（「这个」「那个」）：用 BrowserObserve 元素清单向用户确认指向。',
+        '      - 用户说收齐了 → 把全部意见整理成【批量修改清单】（每条：元素定位+意图+现状），',
+        '        一次 continue_delegation 发给 UX 顾问（修复含截图自检，逐条核对不破坏其他部分）。',
+        '      - 修复完成 → 重新 open_preview 展示新版 → 逐条报告改了什么，再次进入意见收集轮。',
+        '      - 此循环直到用户对结果表示满意（不再有新意见且说满意/交付）。',
+        '   e. 用户意见若涉及需求变更（新增/删除功能、改验收标准）：先与用户确认需求变化，',
         '        用 continue_delegation 要求 UX 顾问同步更新 PRD（01_PRD/prd.md 对应 US 条目），再改原型。',
         '        需求澄清后重新提取用户故事清单。',
         '   e. 用户表示满意后，AskUserQuestion 收口：header「原型交互验证」，multiSelect=true，',
@@ -285,7 +295,9 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   确保右侧分屏正在展示产出文件，然后用 AskUserQuestion 请求用户确认。',
         '   确认时提醒用户：「右侧预览面板已展示产出文件，请查看后确认。」',
       ]),
-    '5. 用户确认通过后，输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
+    '5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
+    '   再输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
+    '   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。',
     '',
     '### 你绝对不能做的',
     '- 自己写代码或文档（系统会拦截 Write/Edit/Bash）',
