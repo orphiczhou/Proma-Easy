@@ -76,7 +76,7 @@ export function checkNanjuRouterGate(
     if (PHASE_TOOL_WHITELIST.delivered.has(toolName)) return null
     return {
       behavior: 'deny',
-      message: '项目已完成交付。如需修改，请在普通工作区中操作。',
+      message: '🎉 该项目已全部交付完成。\n\n· 想基于产出物继续迭代 → 直接用自然语言描述要改什么（我会委派对应角色处理）\n· 想做新项目 → 在南大向导首页点「快速做一个工具」/「长期迭代项目」\n· 想回看产出 → 项目目录 01_PRD / 02_UX_DESIGN（右侧文件面板可浏览）',
     }
   }
 

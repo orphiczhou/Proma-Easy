@@ -2008,9 +2008,23 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
           }
 
-          // 南大向导：阶段推进后自动续接下一阶段
+          // 南大向导：阶段推进后自动续接下一阶段（delivered 是终点：不续接，注入完成富语，引导用户新建项目）
           if (nanjuPhaseAdvanced && !wasStoppedByUser) {
             const advanceStage = nanjuPhaseAdvanced
+            if (advanceStage === 'delivered') {
+              console.log(`[南大路由] 项目已交付（delivered），不自动续接，注入完成提示`)
+              this.eventBus.emit(sessionId, {
+                kind: 'sdk_message',
+                message: {
+                  type: 'assistant',
+                  message: { content: [{ type: 'text', text: '🎉 项目已全部完成交付！\n\n快消型流程到此结束。产出物在项目目录（01_PRD / 02_UX_DESIGN），可随时回看。\n想继续做新东西？在南大向导首页点「快速做一个工具」开始新项目；对交付物有后续修改需求，可直接在本会话继续描述。' }] },
+                  parent_tool_use_id: null,
+                  uuid: randomUUID(),
+                } as unknown as SDKMessage,
+              })
+              completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
+              return
+            }
             console.log(`[南大路由] 阶段已推进到 ${advanceStage}，1.5 秒后自动续接...`)
             // 注入系统提示，让用户知道已推进
             this.eventBus.emit(sessionId, {
