@@ -1937,6 +1937,42 @@ export class AgentOrchestrator {
                 `[Agent 编排] result 到达: sessionId=${sessionId}, subtype=${capturedResultSubtype ?? 'unknown'}` +
                 (capturedResultErrors?.length ? `, errors=${JSON.stringify(capturedResultErrors)}` : ''),
               )
+
+              // 南大调度员 Todo 步骤级对账（L5：进度标识不更新约根本治理）
+              // 指令级纪律对调度员无效（实测 TaskCreate 后 TaskUpdate=0），阶段级兑底
+              // 只在阶段切换时触发，步骤进行中永远 0/N。改为每轮 result 到达时按
+              // 实际项目状态对账：阶段已推进→该阶段全部旧 Todo 标完成；同阶段内
+              // 若本轮产出文件已落盘且被验证过→「委派/等待/检查」类 Todo 也应完成。
+              try {
+                if (workspaceSlug && nanjuPhaseAdvanced === null) {
+                  const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+                  const { listTodos, updateTodo } = require('./planning-manager') as typeof import('./planning-manager')
+                  const project = listNanjuProjects(workspaceSlug).find((p) => p.sessionId === sessionId)
+                  if (project) {
+                    const stageOrder = ['requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered']
+                    const currentIdx = stageOrder.indexOf(project.currentStage)
+                    const openTodos = listTodos({ status: 'open', limit: 100 }).filter((t) =>
+                      t.sessionLinks?.some((l) => l.sessionId === sessionId) && !t.nativeOrigin)
+                    let completed = 0
+                    for (const t of openTodos) {
+                      // Todo 标题含阶段前缀（如「需求阶段：…」）；解析出其所属阶段
+                      const m = /^(需求|原型|架构|规划|开发|测试)阶段/.exec(t.title)
+                      if (!m) continue
+                      const todoStageMap: Record<string, string> = { '需求': 'requirements', '原型': 'prototype', '架构': 'architecture', '规划': 'planning', '开发': 'coding', '测试': 'testing' }
+                      const todoStage = todoStageMap[m[1] ?? '']
+                      if (!todoStage) continue
+                      const todoIdx = stageOrder.indexOf(todoStage)
+                      // 该 Todo 所属阶段已被跨过（项目已在更晚阶段）→ 标完成
+                      if (todoIdx >= 0 && currentIdx > todoIdx) {
+                        try { updateTodo({ id: t.id, status: 'completed' }); completed++ } catch { /* 单条失败不断 */ }
+                      }
+                    }
+                    if (completed > 0) {
+                      console.log(`[南大路由] 步骤对账：阶段已跨过，自动完成 ${completed} 个旧阶段 Todo（session ${sessionId}）`)
+                    }
+                  }
+                }
+              } catch { /* 对账失败不影响主流程 */ }
               // Pi 也可能在 result 中报告失效的 resume artifact；仅回退本轮实际 resume 的请求。
               const resultErrorText = capturedResultErrors?.join('\n')
               if (resultErrorText && wasResuming) {
