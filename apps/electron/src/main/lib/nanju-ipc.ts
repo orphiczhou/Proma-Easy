@@ -108,28 +108,32 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     const project = findNanjuProjectBySession(input.workspaceSlug, input.sessionId)
     if (!project) return { ok: false, error: '非南大项目会话，忽略点选' }
 
-    const { queueAgentMessage } = await import('./agent-service')
-    const label = input.kind === 'element-click'
+    const { runAgent } = await import('./agent-service')
+    const { getChannelById } = await import('./channel-manager')
+    const { getMainWindow } = await import('./main-window-store')
+    const meta = (await import('./agent-session-manager')).getAgentSessionMeta(input.sessionId)
+    if (!meta) return { ok: false, error: '会话不存在' }
+    const win = getMainWindow()
+    if (!win || win.isDestroyed()) return { ok: false, error: '主窗口不可用' }
+    const label2 = input.kind === 'element-click'
       ? `【点选纠错】我点击了原型元素：${input.type}「${input.text || input.id}」（data-ai-id=${input.id}）。请给出这个元素的快速修改选项。`
       : `【点选纠错】我点了原型空白处，没有选中可修改元素。`
-    // 与当前用户消息幂等去重：同一元素 3 秒内重复点击只注入一次（渲染端已重置高亮，但消息防抖在宿主做）
-    const dedupeKey = `${input.sessionId}:${input.id ?? 'blank'}:${input.kind}`
-    const now = Date.now()
-    if (clickToFixLastSent.get(dedupeKey) && now - (clickToFixLastSent.get(dedupeKey) ?? 0) < 3000) {
-      return { ok: true, deduped: true }
-    }
-    clickToFixLastSent.set(dedupeKey, now)
-    if (clickToFixLastSent.size > 200) {
-      // 简单防膨胀
-      const oldest = clickToFixLastSent.keys().next().value
-      if (oldest) clickToFixLastSent.delete(oldest)
-    }
-
-    await queueAgentMessage(
-      { sessionId: input.sessionId, userMessage: label, rawUserMessage: label },
-      // webContents 仅用于流式回显；点选消息不需要，传 dummy
-      { send: () => {}, isDestroyed: () => false } as unknown as Electron.WebContents,
-    )
+    // 会话可能空闲（等用户意见时是 idle）：queueAgentMessage 要求会话运行中，
+    // 点选消息语义等同用户新消息——用 runAgent 开新一轮（带真实 webContents 流式回显）。
+    void runAgent(
+      {
+        sessionId: input.sessionId,
+        userMessage: label2,
+        channelId: meta.channelId ?? getChannelById('glm-zhipu')?.id ?? 'glm-zhipu',
+        modelId: meta.modelId,
+        workspaceId: meta.workspaceId,
+        permissionModeOverride: meta.permissionMode,
+        startedAt: Date.now(),
+      },
+      win.webContents,
+    ).catch((e: unknown) => {
+      console.warn(`[点选纠错] 注入失败:`, e instanceof Error ? e.message : String(e))
+    })
     console.log(`[点选纠错] 已注入调度员会话 ${input.sessionId}: ${input.id ?? 'blank'}`)
     return { ok: true }
   })
