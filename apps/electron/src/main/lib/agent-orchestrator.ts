@@ -1895,6 +1895,24 @@ export class AgentOrchestrator {
                       updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                       console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
                       nanjuPhaseAdvanced = newStage ?? null
+                      // Todo 纪律兜底（P3/L4）：调度员经常忘记在阶段推进时收尾 Todo，
+                      // 程序化把该会话关联的 open Todo 标记完成（nativeOrigin 外部来源不动，
+                      // 避免同步到系统提醒事项的副作用；只处理本会话通过 TaskCreate 建的）。
+                      try {
+                        const { listTodos, updateTodo } = require('./planning-manager') as typeof import('./planning-manager')
+                        const openTodos = listTodos({ status: 'open', limit: 100 })
+                        const linked = openTodos.filter((t) =>
+                          t.sessionLinks?.some((l) => l.sessionId === sessionId)
+                          && !t.nativeOrigin)
+                        for (const t of linked) {
+                          try { updateTodo({ id: t.id, status: 'completed' }) } catch { /* 单条失败不阻断 */ }
+                        }
+                        if (linked.length > 0) {
+                          console.log(`[南大路由] 阶段推进收尾：已自动完成 ${linked.length} 个本会话 Todo`)
+                        }
+                      } catch (todoErr) {
+                        console.warn(`[南大路由] Todo 自动收尾失败（不影响推进）:`, todoErr instanceof Error ? todoErr.message : String(todoErr))
+                      }
                     }
                   } else {
                     console.log(`[南大路由] 未找到关联的南大项目: sessionId=${sessionId}`)
