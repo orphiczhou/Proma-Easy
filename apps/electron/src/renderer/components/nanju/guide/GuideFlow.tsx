@@ -149,21 +149,27 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     }
   }, [renderedSvg, onNodeClick])
 
-  // 拖拽平移：mousedown 在视口空白/图形上拖动
-  const handlePointerDown = React.useCallback((e: React.PointerEvent) => {
+  // 拖拽平移：pointer capture 确保 SVG 子元素不吞事件、指针移出仍持续跟踪
+  const handlePointerDown = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // 仅主键拖拽；从节点上起拖也允许（click 抑制逻辑兜底）
+    if (e.button !== 0) return
     dragStateRef.current = { startX: e.clientX, startY: e.clientY, baseX: pan.x, baseY: pan.y, moved: false }
+    // 捕获指针：即使移到 svg 子元素/视口外，move/up 仍派发给本元素
+    e.currentTarget.setPointerCapture(e.pointerId)
   }, [pan])
 
-  const handlePointerMove = React.useCallback((e: React.PointerEvent) => {
+  const handlePointerMove = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const st = dragStateRef.current
     if (!st) return
     const dx = e.clientX - st.startX
     const dy = e.clientY - st.startY
-    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) st.moved = true
+    if (!st.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) st.moved = true
+    if (!st.moved) return
     setPan({ x: st.baseX + dx, y: st.baseY + dy })
   }, [])
 
-  const handlePointerUp = React.useCallback(() => {
+  const handlePointerUp = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* 未捕获时忽略 */ }
     // moved 标志保留到 click 事件后再清（click 在 pointerup 后同步触发）
     setTimeout(() => { dragStateRef.current = null }, 0)
   }, [])
@@ -240,7 +246,7 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
       </div>
       <div
         ref={viewportRef}
-        className="flex-1 min-h-0 overflow-hidden bg-background/40 border-t border-border/40 cursor-grab active:cursor-grabbing"
+        className="flex-1 min-h-0 overflow-hidden bg-background/40 border-t border-border/40 cursor-grab active:cursor-grabbing select-none [touch-action:none]"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
