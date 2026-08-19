@@ -113,13 +113,15 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     const container = containerRef.current
     if (!container || !renderedSvg) return
 
-    // 尺寸适配：svg 改为 width=100% height=auto（覆盖 mermaid 固定像素宽）
+    // 尺寸适配：只覆盖 width=100% 并移除固定 height——SVG 带 viewBox 时，
+    // 宽度跟随容器后浏览器按纵横比自动计算高度（保留 preserveAspectRatio）。
+    // （此前设 height='auto'+删 preserveAspectRatio 在部分引擎会塌为 0 高。）
     const svgEl = container.querySelector('svg')
     if (svgEl) {
       svgEl.setAttribute('width', '100%')
-      svgEl.setAttribute('height', 'auto')
+      svgEl.removeAttribute('height')
       svgEl.style.maxWidth = 'none'
-      svgEl.removeAttribute('preserveAspectRatio')
+      svgEl.style.height = 'auto'
     }
 
     // 主路径：beautiful-mermaid 的 [data-id]；兜底路径：官方 mermaid 的 [id^="flowchart-"]
