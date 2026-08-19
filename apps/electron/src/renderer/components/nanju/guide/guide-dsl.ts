@@ -311,7 +311,11 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
   const acActorLabel = first ? `攻 ${first.acActors.attacker.model} / 防 ${first.acActors.defender.model}` : ''
   const modeLabel = mode === 'quick' ? '快消型' : '长期迭代型'
 
-  const lines: string[] = ['flowchart TD']
+  const lines: string[] = [
+    // 紧凑布局指令：缩小节点间距/层级间距/内边距，缓解“布局稀疏、元素小”（用户反馈）
+    '---\nconfig:\n  flowchart:\n    nodeSpacing: 28\n    rankSpacing: 36\n    padding: 6\n---',
+    'flowchart TD',
+  ]
   // 边索引计数：linkStyle 需要按边声明顺序的 0 基索引
   let edgeIndex = 0
   const passedEdgeIndexes: number[] = []

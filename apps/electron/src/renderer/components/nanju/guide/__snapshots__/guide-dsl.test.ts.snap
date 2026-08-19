@@ -1,7 +1,14 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`DSL 快照样例（两版 × 代表性进度态） quick · prototype 进行中 1`] = `
-"flowchart TD
+"---
+config:
+  flowchart:
+    nodeSpacing: 28
+    rankSpacing: 36
+    padding: 6
+---
+flowchart TD
     USER(["用户描述想法"]) --> MODE{"模式路由"}
     MODE -->|"快消型 · AC light<br/>攻 deepseek-v4-flash / 防 glm-5-turbo"| REQ
 
@@ -48,7 +55,14 @@ exports[`DSL 快照样例（两版 × 代表性进度态） quick · prototype �
 `;
 
 exports[`DSL 快照样例（两版 × 代表性进度态） iterative · architecture 进行中 + Todo 徽标 1`] = `
-"flowchart TD
+"---
+config:
+  flowchart:
+    nodeSpacing: 28
+    rankSpacing: 36
+    padding: 6
+---
+flowchart TD
     USER(["用户描述想法"]) --> MODE{"模式路由"}
     MODE -->|"长期迭代型 · AC medium<br/>攻 deepseek-v4-pro / 防 GLM-5.3"| REQ
 
