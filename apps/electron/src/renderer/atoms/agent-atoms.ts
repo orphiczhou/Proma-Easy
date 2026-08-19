@@ -520,7 +520,7 @@ export const agentFileSourceFilterMapAtom = atomWithStorage<Record<string, Agent
   { getOnInit: true },
 )
 
-export type AgentSidePanelTab = 'files' | 'changes' | 'chat' | 'tree'
+export type AgentSidePanelTab = 'files' | 'changes' | 'chat' | 'tree' | 'guide'
 
 /** 当前会话的侧面板是否打开，并将写入定向到当前会话。 */
 export const currentSessionSidePanelOpenAtom = atom(

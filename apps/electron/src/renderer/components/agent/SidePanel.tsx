@@ -42,6 +42,7 @@ import {
 import type { AgentSidePanelTab, AgentFileSourceFilter } from '@/atoms/agent-atoms'
 import { WorkspaceMemoryChangeDock } from '@/components/agent-skills/WorkspaceMemoryChangeDock'
 import { TreeViewPanel } from '@/components/agent/TreeViewPanel'
+import { GuidePanel } from '@/components/nanju/guide/GuidePanel'
 import { agentSideChatMapAtom } from '@/atoms/chat-atoms'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
@@ -471,6 +472,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             onCloseChat={handleCloseChatTab}
             showChatTab={Boolean(sideChatConversationId)}
             isWindows={isWindows}
+            showGuideTab={currentWorkspace?.workspaceType === 'nanju'}
           />
 
           {effectiveActiveTab === 'chat' ? (
@@ -648,6 +650,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           ) : effectiveActiveTab === 'tree' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
               <TreeViewPanel sessionId={sessionId} />
+            </div>
+          ) : effectiveActiveTab === 'guide' ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <GuidePanel sessionId={sessionId} />
             </div>
           ) : null}
         </div>

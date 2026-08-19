@@ -1287,13 +1287,16 @@ export interface ElectronAPI {
   nanjuGetRoleSequence: (mode: 'quick' | 'iterative') => Promise<unknown>
   nanjuCreateRoleSession: (input: { roleId: string; workspaceId: string; projectContext?: string }) => Promise<unknown>
 
-  /** 南大项目：快照管理 */
-  nanjuCreateSnapshot: (input: { sessionId: string; projectId: string; label?: string }) => Promise<unknown>
-  nanjuListSnapshots: (projectId: string) => Promise<unknown[]>
-  nanjuRollbackSnapshot: (input: { projectId: string; snapshotId: string }) => Promise<unknown>
+  /** 南大项目：快照管理（参数契约与 nanju-ipc.ts handler 对齐：双参对象 + snapshotId number） */
+  nanjuCreateSnapshot: (input: { workspaceSlug: string; projectId: string; sessionId: string; description: string; triggerType?: string }) => Promise<unknown>
+  nanjuListSnapshots: (input: { workspaceSlug: string; projectId: string }) => Promise<unknown[]>
+  nanjuRollbackSnapshot: (input: { workspaceSlug: string; projectId: string; snapshotId: number }) => Promise<unknown>
 
   /** 南大项目：启动 HTML 文件监听 */
   nanjuStartHtmlWatcher: (workspaceSlug: string) => Promise<unknown>
+
+  /** 南大项目：获取执行路由总图数据（阶段 + AC 攻防解析；含 id='delivered' 哨兵节点，渲染端自行过滤） */
+  nanjuGetRoute: (mode: 'quick' | 'iterative') => Promise<unknown[]>
 
   /** 南大 HTML 原型自动预览事件 */
   onNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
@@ -2949,14 +2952,18 @@ const electronAPI: ElectronAPI = {
   nanjuCreateRoleSession: (input) =>
     ipcRenderer.invoke('nanju:create-role-session', input),
 
-  nanjuCreateSnapshot: (input) =>
+  nanjuCreateSnapshot: (input: { workspaceSlug: string; projectId: string; sessionId: string; description: string; triggerType?: string }) =>
     ipcRenderer.invoke('nanju:create-snapshot', input),
 
-  nanjuListSnapshots: (projectId) =>
-    ipcRenderer.invoke('nanju:list-snapshots', projectId),
+  nanjuListSnapshots: (input: { workspaceSlug: string; projectId: string }) =>
+    ipcRenderer.invoke('nanju:list-snapshots', input),
 
-  nanjuRollbackSnapshot: (input) =>
+  nanjuRollbackSnapshot: (input: { workspaceSlug: string; projectId: string; snapshotId: number }) =>
     ipcRenderer.invoke('nanju:rollback-snapshot', input),
+
+  /** 南大项目：获取执行路由总图数据（阶段 + AC 攻防解析；含 id='delivered' 哨兵节点，渲染端自行过滤） */
+  nanjuGetRoute: (mode: 'quick' | 'iterative') =>
+    ipcRenderer.invoke('nanju:get-route', mode),
 
   nanjuStartHtmlWatcher: (workspaceSlug: string) =>
     ipcRenderer.invoke('nanju:start-html-watcher', workspaceSlug),

@@ -1,0 +1,125 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`DSL 快照样例（两版 × 代表性进度态） quick · prototype 进行中 1`] = `
+"flowchart TD
+    USER(["用户描述想法"]) --> MODE{"模式路由"}
+    MODE -->|"快消型 · AC light<br/>攻 deepseek-v4-flash / 防 glm-5-turbo"| REQ
+
+    subgraph SG_REQ["① 需求分析师 requirement-analyst · deepseek-v4-pro"]
+        direction TB
+        REQ["产出 PRD<br/>01_PRD/prd.md"]
+        REQ --> REQ_ATK["攻击者审查（AC light）"]
+        REQ_ATK --> REQ_DEF["防御者裁决"]
+        REQ_DEF -->|"red → 修复后重新攻击"| REQ_ATK
+        REQ_DEF -->|"无 red"| REQ_UC{"用户确认<br/>预览 01_PRD/prd.md"}
+        REQ_UC -->|"补充意见"| REQ
+    end
+
+    REQ_UC -->|"确认"| PROTO
+
+    subgraph SG_PROTO["② UX 顾问 ux-advisor · MiniMax-M3"]
+        direction TB
+        PROTO["可交互 HTML 原型<br/>02_UX_DESIGN/prototype.html"]
+        PROTO --> PROTO_SS{"截图渲染自检循环<br/>连续 2 轮无缺陷"}
+        PROTO_SS -->|"发现缺陷 → 修复"| PROTO
+        PROTO_SS -->|"通过"| PROTO_ATK["攻击者审查（AC light + 视觉/交互维度）"]
+        PROTO_ATK --> PROTO_DEF["防御者裁决"]
+        PROTO_DEF -->|"red → 修复后重新攻击"| PROTO_ATK
+        PROTO_DEF -->|"无 red"| PROTO_UC{"用户确认<br/>预览 02_UX_DESIGN/prototype.html"}
+        PROTO_DEF -->|"无 red"| PROTO_VIS{"独立视觉裁决<br/>防作者自证"}
+        PROTO_VIS -->|"red → 回截图自检"| PROTO_SS
+        PROTO_VIS -->|"green / yellow"| PROTO_UC{"原型确认 · 点选纠错<br/>意见收集轮 → 批量修改"}
+        PROTO_UC -->|"补充意见"| PROTO
+    end
+
+    PROTO_UC -->|"全部用户故事通过"| DONE(["交付 delivered<br/>项目可用"])
+
+    classDef st-done fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#111827
+    classDef st-sub-done fill:#ECFDF5,stroke:#059669,color:#111827
+    classDef st-current fill:#EEF2FF,stroke:#4F46E5,stroke-width:3px,color:#111827
+    classDef st-pending fill:#F3F4F6,stroke:#9CA3AF,color:#6B7280
+    class DONE st-pending
+    class USER,MODE st-pending
+    class REQ st-done
+    class PROTO st-current
+    class REQ_ATK,REQ_DEF,REQ_UC st-sub-done
+    linkStyle 7 stroke:#059669,stroke-width:2.5px
+"
+`;
+
+exports[`DSL 快照样例（两版 × 代表性进度态） iterative · architecture 进行中 + Todo 徽标 1`] = `
+"flowchart TD
+    USER(["用户描述想法"]) --> MODE{"模式路由"}
+    MODE -->|"长期迭代型 · AC medium<br/>攻 deepseek-v4-pro / 防 GLM-5.3"| REQ
+
+    subgraph SG_REQ["① 需求分析师 requirement-analyst · deepseek-v4-pro"]
+        direction TB
+        REQ["产出 PRD<br/>01_PRD/prd.md"]
+        REQ --> REQ_ATK["攻击者审查（AC medium）"]
+        REQ_ATK --> REQ_DEF["防御者裁决"]
+        REQ_DEF -->|"red → 修复后重新攻击"| REQ_ATK
+        REQ_DEF -->|"无 red"| REQ_UC{"用户确认<br/>预览 01_PRD/prd.md"}
+        REQ_UC -->|"补充意见"| REQ
+    end
+
+    REQ_UC -->|"确认"| PROTO
+
+    subgraph SG_PROTO["② UX 顾问 ux-advisor · MiniMax-M3"]
+        direction TB
+        PROTO["可交互 HTML 原型<br/>02_UX_DESIGN/prototype.html"]
+        PROTO --> PROTO_SS{"截图渲染自检循环<br/>连续 2 轮无缺陷"}
+        PROTO_SS -->|"发现缺陷 → 修复"| PROTO
+        PROTO_SS -->|"通过"| PROTO_ATK["攻击者审查（AC medium + 视觉/交互维度）"]
+        PROTO_ATK --> PROTO_DEF["防御者裁决"]
+        PROTO_DEF -->|"red → 修复后重新攻击"| PROTO_ATK
+        PROTO_DEF -->|"无 red"| PROTO_UC{"用户确认<br/>预览 02_UX_DESIGN/prototype.html"}
+        PROTO_DEF -->|"无 red"| PROTO_VIS{"独立视觉裁决<br/>防作者自证"}
+        PROTO_VIS -->|"red → 回截图自检"| PROTO_SS
+        PROTO_VIS -->|"green / yellow"| PROTO_UC{"原型确认 · 点选纠错<br/>意见收集轮 → 批量修改"}
+        PROTO_UC -->|"补充意见"| PROTO
+    end
+
+    PROTO_UC -->|"全部用户故事通过"| ARCH
+
+    subgraph SG_ARCH["③ 架构师 architect · deepseek-v4-pro"]
+        direction TB
+        ARCH["产出架构文档<br/>03_ARCHITECTURE/architecture.md<br/>Todo 1/3"]
+        ARCH --> ARCH_ATK["攻击者审查（AC medium）"]
+        ARCH_ATK --> ARCH_DEF["防御者裁决"]
+        ARCH_DEF -->|"red → 修复后重新攻击"| ARCH_ATK
+        ARCH_DEF -->|"有 red · AC 结论硬门禁"| ARCH_GATE{"AC 结论硬门禁<br/>red 时通知用户后重审"}
+        ARCH_GATE -->|"处理后重新攻击"| ARCH_ATK
+        ARCH_DEF -->|"无 red"| ARCH_UC{"用户确认<br/>预览 03_ARCHITECTURE/architecture.md"}
+        ARCH_UC -->|"补充意见"| ARCH
+    end
+
+    ARCH_UC -->|"确认"| PLAN
+
+    subgraph SG_PLAN["④ 工程经理 engineering-manager · deepseek-v4-pro"]
+        direction TB
+        PLAN["产出工程计划<br/>05_PROJECT_PLAN/plan.md"]
+        PLAN --> PLAN_ATK["攻击者审查（AC medium）"]
+        PLAN_ATK --> PLAN_DEF["防御者裁决"]
+        PLAN_DEF -->|"red → 修复后重新攻击"| PLAN_ATK
+        PLAN_DEF -->|"无 red"| PLAN_UC{"用户确认<br/>预览 05_PROJECT_PLAN/plan.md"}
+        PLAN_UC -->|"补充意见"| PLAN
+    end
+
+    PLAN_UC -->|"确认"| DONE(["交付 delivered<br/>进入编码实现阶段"])
+
+    classDef st-done fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#111827
+    classDef st-sub-done fill:#ECFDF5,stroke:#059669,color:#111827
+    classDef st-current fill:#EEF2FF,stroke:#4F46E5,stroke-width:3px,color:#111827
+    classDef st-pending fill:#F3F4F6,stroke:#9CA3AF,color:#6B7280
+    class DONE st-pending
+    class USER,MODE st-pending
+    class REQ st-done
+    class PROTO st-done
+    class ARCH st-current
+    class PLAN st-pending
+    class PLAN_ATK,PLAN_DEF,PLAN_UC st-pending
+    class REQ_ATK,REQ_DEF,REQ_UC st-sub-done
+    class PROTO_SS,PROTO_VIS,PROTO_ATK,PROTO_DEF,PROTO_UC st-sub-done
+    linkStyle 7,18 stroke:#059669,stroke-width:2.5px
+"
+`;

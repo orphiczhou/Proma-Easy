@@ -22,6 +22,7 @@ import { findNanjuProjectBySession, advanceNanjuStage, getNanjuPhaseGatePrompt }
 /** 点选纠错消息防抖：`${sessionId}:${elementId}:${kind}` → 上次注入时间 */
 const clickToFixLastSent = new Map<string, number>()
 import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } from './nanju-orchestrator'
+import { getGuideRoute } from './nanju-router'
 import type { TelemetryEventType } from './nanju-telemetry'
 import type { ProjectSnapshot } from './nanju-snapshot'
 
@@ -149,6 +150,13 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('nanju:get-role-sequence', async (_event, mode: 'quick' | 'iterative') => {
     return getRoleSequence(mode)
+  })
+
+  // ===== 向导图（项目执行流程总图）=====
+  // getGuideRoute = getRoute(mode) 透传 + 每 phase 附加 resolveACActors 解析结果；
+  // 返回数组含 id='delivered' 哨兵空节点，渲染端负责过滤（PRD 修订 R2/Y3）。
+  ipcMain.handle('nanju:get-route', async (_event, mode: ProjectMode) => {
+    return getGuideRoute(mode)
   })
 
   ipcMain.handle('nanju:create-role-session', async (_event, input: {

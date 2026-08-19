@@ -80,7 +80,13 @@ async function renderWithOfficialMermaid(code: string): Promise<string> {
   return svg
 }
 
-async function renderMermaidSvg(code: string): Promise<string> {
+/**
+ * DSL → SVG 字符串。导出供外部复用（如南大向导图 GuideFlow）。
+ *
+ * 渲染策略：beautiful-mermaid 优先（高质量、主题表），官方 mermaid 兑底。
+ * 主题取当前 document.documentElement 的 dark class；调用方负责主题切换时重调。
+ */
+export async function renderMermaidSvg(code: string): Promise<string> {
   try {
     const { renderMermaidSVGAsync, THEMES } = await import('beautiful-mermaid')
     const svg = await renderMermaidSVGAsync(code, getThemeOptions(THEMES))

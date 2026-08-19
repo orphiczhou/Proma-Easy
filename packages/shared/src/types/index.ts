@@ -26,6 +26,9 @@ export * from './agent'
 export * from './browser'
 export * from './reasoning-profile'
 
+// 南大向导「向导图」共享契约
+export * from './nanju'
+
 // Agent Provider 适配器接口
 export * from './agent-provider'
 export * from './agent-runtime'

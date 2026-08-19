@@ -12,6 +12,7 @@
 
 import { findNanjuProjectBySession } from './nanju-router-gate'
 import { assertACFamilyDiversity, getPhaseNode, resolveACActors, type PhaseId, type PhaseNode } from './nanju-router'
+import { PHASE_TODO_PREFIX } from '@proma/shared'
 import { getNanjuProjectDir } from './nanju-project'
 import type { Channel } from '@proma/shared'
 import { join } from 'node:path'
@@ -227,6 +228,8 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   const prdSummary = getPrdSummary(workspaceSlug, project.projectId)
   const priorArtifacts = getPriorArtifacts(workspaceSlug, project.projectId, stage)
   const nextPhase = phase.next ?? 'delivered'
+  // 新阶段 Todo 强制前缀（向导图进度徽标按此解析；delivered 无新 Todo，PRD 修订 Y5）
+  const nextTodoPrefix = nextPhase !== 'delivered' ? PHASE_TODO_PREFIX[nextPhase as Exclude<typeof nextPhase, 'delivered'>] : null
 
   // prototype 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析
   const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
@@ -301,7 +304,15 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ]),
     '5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
     '   再输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
-    '   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。',
+    ...(nextTodoPrefix
+      ? [
+        '   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。',
+        '   【强制】所有 Todo 标题必须以「' + nextTodoPrefix + '」开头（如「' + nextTodoPrefix + '等待子会话产出」），',
+        '   不带此前缀的 Todo 无法计入向导图阶段进度徽标。',
+      ]
+      : [
+        '   项目已交付，无需再创建新阶段 Todo。',
+      ]),
     '',
     '### 你绝对不能做的',
     '- 自己写代码或文档（系统会拦截 Write/Edit/Bash）',

@@ -21,6 +21,8 @@ interface DiffPanelTabBarProps {
   onCloseChat?: () => void
   showChatTab?: boolean
   isWindows?: boolean
+  /** 南大向导工作区：第三 tab 位显示「向导图」而非「任务树」（两者互斥，PRD §5.1） */
+  showGuideTab?: boolean
 }
 
 interface PreviousTabState {
@@ -35,6 +37,7 @@ export function DiffPanelTabBar({
   onCloseChat,
   showChatTab = false,
   isWindows = false,
+  showGuideTab = false,
 }: DiffPanelTabBarProps): React.ReactElement {
   const unseenMap = useAtomValue(agentDiffUnseenChangesAtom)
   const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
@@ -115,24 +118,45 @@ export function DiffPanelTabBar({
             文件改动
           </span>
         </button>
-        <button
-          type="button"
-          onClick={() => onTabChange('tree')}
-          className={cn(
-            'flex-1 px-3 h-[34px] text-xs transition-colors select-none cursor-pointer whitespace-nowrap overflow-hidden',
-            isClassic ? 'rounded-t-lg' : 'rounded-none',
-            'border-t border-l border-r',
-            activeTab === 'tree'
-              ? isClassic
-                ? 'bg-content-area text-foreground border-border/50'
-                : 'app-tab-active text-foreground border-border/80'
-              : isClassic
-                ? 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50'
-                : 'app-tab-inactive text-muted-foreground border-transparent hover:text-foreground',
-          )}
-        >
-          任务树
-        </button>
+        {showGuideTab ? (
+          <button
+            type="button"
+            onClick={() => onTabChange('guide')}
+            className={cn(
+              'flex-1 px-3 h-[34px] text-xs transition-colors select-none cursor-pointer whitespace-nowrap overflow-hidden',
+              isClassic ? 'rounded-t-lg' : 'rounded-none',
+              'border-t border-l border-r',
+              activeTab === 'guide'
+                ? isClassic
+                  ? 'bg-content-area text-foreground border-border/50'
+                  : 'app-tab-active text-foreground border-border/80'
+                : isClassic
+                  ? 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50'
+                  : 'app-tab-inactive text-muted-foreground border-transparent hover:text-foreground',
+            )}
+          >
+            向导图
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onTabChange('tree')}
+            className={cn(
+              'flex-1 px-3 h-[34px] text-xs transition-colors select-none cursor-pointer whitespace-nowrap overflow-hidden',
+              isClassic ? 'rounded-t-lg' : 'rounded-none',
+              'border-t border-l border-r',
+              activeTab === 'tree'
+                ? isClassic
+                  ? 'bg-content-area text-foreground border-border/50'
+                  : 'app-tab-active text-foreground border-border/80'
+                : isClassic
+                  ? 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50'
+                  : 'app-tab-inactive text-muted-foreground border-transparent hover:text-foreground',
+            )}
+          >
+            任务树
+          </button>
+        )}
         {showChatTab && (
           <div
             className={cn(

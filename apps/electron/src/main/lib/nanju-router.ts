@@ -12,6 +12,7 @@
  */
 
 import type { ProjectMode } from './nanju-project'
+import type { GuideRoutePhase } from '@proma/shared'
 
 // ===== 类型定义 =====
 
@@ -262,6 +263,19 @@ const ROUTES: Record<ProjectMode, PhaseNode[]> = {
 /** 获取指定模式的完整路由 */
 export function getRoute(mode: ProjectMode): PhaseNode[] {
   return ROUTES[mode] ?? ROUTES.iterative
+}
+
+/**
+ * 获取向导图数据：getRoute(mode) 透传 + 对每个 phase 附加 resolveACActors 解析结果（修订 R2）。
+ *
+ * 数据契约：返回数组含 id==='delivered' 的哨兵空节点（role/outputPath 为空串），
+ * 渲染端负责过滤（PRD 修订 Y3）。
+ */
+export function getGuideRoute(mode: ProjectMode): GuideRoutePhase[] {
+  return getRoute(mode).map((phase) => ({
+    ...phase,
+    acActors: resolveACActors(phase),
+  }))
 }
 
 /** 获取指定阶段的节点定义 */
