@@ -184,10 +184,6 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
             style={{ zoom: scale }}
             dangerouslySetInnerHTML={{ __html: renderedSvg }}
           />
-          {/* 尺寸适配注入：svg 强制 width=100% height=auto——mermaid 默认输出固定像素宽，
-              在窄面板（280-400px）里会触发 max-w-full 等比压缩致文字不可读；
-              改为跟随容器宽自适应（高度 auto 保持比例），大图纵向滚动查看。
-              移除原先的 [&>svg]:max-w-full（它就是“太小看不清”的直接原因）。 */}
         )}
       </div>
     </div>
