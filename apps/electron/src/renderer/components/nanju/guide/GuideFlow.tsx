@@ -168,15 +168,52 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     setTimeout(() => { dragStateRef.current = null }, 0)
   }, [])
 
-  // 滚轮缩放（Ctrl+滚轮 或直接滚轮？设计：Ctrl+滚轮缩放，普通滚轮滚动——遵循 MermaidBlock 不劫持滚轮原则）
-  const handleWheel = React.useCallback((e: React.WheelEvent) => {
-    if (!e.ctrlKey && !e.metaKey) return
-    e.preventDefault()
-    setScale((prev) => clamp(prev * (e.deltaY < 0 ? 1.1 : 0.9), ZOOM_MIN, ZOOM_MAX))
+  /** 视口中心锚定缩放（地图式）：缩放时眼前内容原地放大/缩小，而不是左上角锚定导致内容跑出视野
+   *  数学：视口中心点 C 在内容坐标系的位置保持不变 → pan' = C - (C - pan) * (newScale/oldScale) */
+  const zoomAtCenter = React.useCallback((factor: number) => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const cx = viewport.clientWidth / 2
+    const cy = viewport.clientHeight / 2
+    setScale((prevScale) => {
+      const next = clamp(prevScale * factor, ZOOM_MIN, ZOOM_MAX)
+      if (next === prevScale) return prevScale
+      setPan((prevPan) => ({
+        x: cx - (cx - prevPan.x) * (next / prevScale),
+        y: cy - (cy - prevPan.y) * (next / prevScale),
+      }))
+      return next
+    })
   }, [])
 
-  const zoomIn = React.useCallback(() => setScale((prev) => clamp(prev + ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)), [])
-  const zoomOut = React.useCallback(() => setScale((prev) => clamp(prev - ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)), [])
+  /** 鼠标位置锚定缩放（滚轮用）：光标处的内容点保持在光标下 */
+  const zoomAtPoint = React.useCallback((factor: number, px: number, py: number) => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const rect = viewport.getBoundingClientRect()
+    const cx = px - rect.left
+    const cy = py - rect.top
+    setScale((prevScale) => {
+      const next = clamp(prevScale * factor, ZOOM_MIN, ZOOM_MAX)
+      if (next === prevScale) return prevScale
+      setPan((prevPan) => ({
+        x: cx - (cx - prevPan.x) * (next / prevScale),
+        y: cy - (cy - prevPan.y) * (next / prevScale),
+      }))
+      return next
+    })
+  }, [])
+
+  // 滚轮直接缩放（用户反馈：Ctrl 被会话快捷键拦截不可用；图查看器惯例=滚轮缩放）。
+  // Shift+滚轮 = 纵向滚动（给需要滚动的场景留出口）。
+  const handleWheel = React.useCallback((e: React.WheelEvent) => {
+    if (e.shiftKey) return
+    e.preventDefault()
+    zoomAtPoint(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY)
+  }, [zoomAtPoint])
+
+  const zoomIn = React.useCallback(() => zoomAtCenter(1 + ZOOM_STEP), [zoomAtCenter])
+  const zoomOut = React.useCallback(() => zoomAtCenter(1 - ZOOM_STEP), [zoomAtCenter])
   const zoomReset = React.useCallback(() => { setScale(INITIAL_SCALE); setPan({ x: 0, y: 0 }) }, [])
   const zoomFit = React.useCallback(() => {
     // 适配视口：按视口宽/图原始宽计算缩放（近似，图渲染后按 100% 原始尺寸放置）
