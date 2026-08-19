@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils'
 
 
 const MIN_RIGHT_PANEL_WIDTH = 300
-const MAX_RIGHT_PANEL_WIDTH = 560
+const MAX_RIGHT_PANEL_WIDTH = 760
 
 function clampRightPanelWidth(width: number): number {
   return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(MAX_RIGHT_PANEL_WIDTH, width))

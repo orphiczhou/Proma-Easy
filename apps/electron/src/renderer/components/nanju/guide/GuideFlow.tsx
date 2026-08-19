@@ -21,7 +21,8 @@ const DEBOUNCE_MS = 350
 const ZOOM_MIN = 0.4
 const ZOOM_MAX = 2.5
 const ZOOM_STEP = 0.15
-const INITIAL_SCALE = 0.85
+/** 初始缩放 1.0：fit-to-width 由 CSS 承担（svg width=100% height=auto），不再双重缩小 */
+const INITIAL_SCALE = 1.0
 
 interface GuideFlowProps {
   /** mermaid DSL（GuidePanel useMemo 派生，引用相等即不重渲染——轮询零抖动） */
@@ -107,10 +108,19 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     return () => observer.disconnect()
   }, [renderCurrentDsl])
 
-  // SVG 后处理：双锚点绑定 click（修订 R3）
+  // SVG 后处理：双锚点绑定 click（修订 R3）+ 尺寸适配注入
   React.useEffect(() => {
     const container = containerRef.current
     if (!container || !renderedSvg) return
+
+    // 尺寸适配：svg 改为 width=100% height=auto（覆盖 mermaid 固定像素宽）
+    const svgEl = container.querySelector('svg')
+    if (svgEl) {
+      svgEl.setAttribute('width', '100%')
+      svgEl.setAttribute('height', 'auto')
+      svgEl.style.maxWidth = 'none'
+      svgEl.removeAttribute('preserveAspectRatio')
+    }
 
     // 主路径：beautiful-mermaid 的 [data-id]；兜底路径：官方 mermaid 的 [id^="flowchart-"]
     let nodes = Array.from(container.querySelectorAll('[data-id]'))
@@ -170,10 +180,14 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
         ) : (
           <div
             ref={containerRef}
-            className="guide-flow-svg inline-block min-w-full p-3 [&>svg]:max-w-full"
+            className="guide-flow-svg inline-block min-w-full p-3"
             style={{ zoom: scale }}
             dangerouslySetInnerHTML={{ __html: renderedSvg }}
           />
+          {/* 尺寸适配注入：svg 强制 width=100% height=auto——mermaid 默认输出固定像素宽，
+              在窄面板（280-400px）里会触发 max-w-full 等比压缩致文字不可读；
+              改为跟随容器宽自适应（高度 auto 保持比例），大图纵向滚动查看。
+              移除原先的 [&>svg]:max-w-full（它就是“太小看不清”的直接原因）。 */}
         )}
       </div>
     </div>
