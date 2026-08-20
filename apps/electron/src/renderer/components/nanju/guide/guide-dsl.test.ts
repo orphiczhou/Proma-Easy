@@ -138,11 +138,19 @@ describe('buildGuideDsl 结构（AC-02）', () => {
     expect(dsl.match(/subgraph SG_/g)?.length).toBe(4)
   })
 
-  test('对照模式（progress=null）不注入任何状态 class 行（AC-11）', () => {
+  test('对照模式（progress=null）不注入状态 class，仅注入中性参考样式 st-ref（AC-11 修订）', () => {
     const dsl = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS, isDark: false })
-    expect(dsl.includes('classDef')).toBe(false)
-    expect(dsl.includes('class REQ')).toBe(false)
+    // 不注入任何状态 classDef/class（st-done/st-current/st-pending/st-sub-done）
+    expect(dsl.includes('classDef st-done')).toBe(false)
+    expect(dsl.includes('classDef st-current')).toBe(false)
+    expect(dsl.includes('classDef st-pending')).toBe(false)
+    expect(dsl.includes('st-sub-done')).toBe(false)
+    expect(dsl.includes('class REQ st-')).toBe(false)
     expect(dsl.includes('linkStyle')).toBe(false)
+    // 注入统一中性参考样式（与进度图一致的色块反差，不表状态）
+    expect(dsl).toContain('classDef st-ref fill:#FFFFFF,stroke:#9CA3AF')
+    expect(dsl).toContain('class USER,MODE,DONE,REQ,REQ_ATK,REQ_DEF,REQ_UC')
+    expect(dsl).toContain('st-ref')
   })
 
   test('同一个输入生成确定性输出（快照稳定性）', () => {

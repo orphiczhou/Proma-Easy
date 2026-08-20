@@ -228,6 +228,13 @@ const CLASS_DEFS: Record<'light' | 'dark', string[]> = {
   ],
 }
 
+/** 对照模式（progress=null）的中性参考样式：与 st-pending 同款色块。
+ *  对照图不表示任何进度状态（AC-11 语义），但需要与进度图一致的元素/背景反差。 */
+const REF_CLASS_DEFS: Record<'light' | 'dark', string[]> = {
+  light: ['classDef st-ref fill:#FFFFFF,stroke:#9CA3AF,color:#4B5563'],
+  dark: ['classDef st-ref fill:#334155,stroke:#94A3B8,color:#CBD5E1'],
+}
+
 /** 已通过的跨阶段推进边加粗主色（linkStyle，PRD §3.1 原则 3） */
 const PASSED_EDGE_STYLE: Record<'light' | 'dark', string> = {
   light: 'stroke:#059669,stroke-width:2.5px',
@@ -333,6 +340,8 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
   // 各阶段 subgraph + 跨阶段推进边
   const classAssignments: string[] = []
   const subDoneGroups: string[] = []
+  /** 全量节点 id（对照模式中性着色的 class 行用） */
+  const allNodeIds: string[] = ['USER', 'MODE', 'DONE']
   let prevExit: string | null = null
   phases.forEach((phase, i) => {
     const phaseId = phase.id as GuidePhaseId
@@ -357,20 +366,21 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
     edgeIndex += edgeCount
     prevExit = exitNode
 
+    // 全量节点收集（对照模式中性着色用）
+    allNodeIds.push(mainNode)
+    const subs = [`${mainNode}_ATK`, `${mainNode}_DEF`, exitNode]
+    if (phaseId === 'prototype') subs.unshift(`${mainNode}_SS`, `${mainNode}_VIS`)
+    if (phaseId === 'architecture') subs.splice(2, 0, `${mainNode}_GATE`)
+    allNodeIds.push(...subs)
+
     // 进度 class 注入（对照模式 progress=null 时不注入任何状态 class）
     if (progress) {
       const status = abandoned ? 'pending' : statusOf(phaseId)
       classAssignments.push(`class ${mainNode} st-${status}`)
       if (status === 'done') {
         // 子节点跟随阶段 done 着色（st-sub-done 弱一档，不做子级独立追踪，PRD §4.1.4）
-        const subs = [`${mainNode}_ATK`, `${mainNode}_DEF`, exitNode]
-        if (phaseId === 'prototype') subs.unshift(`${mainNode}_SS`, `${mainNode}_VIS`)
-        if (phaseId === 'architecture') subs.splice(2, 0, `${mainNode}_GATE`)
         subDoneGroups.push(subs.join(','))
       } else if (status === 'pending' || abandoned) {
-        const subs = [`${mainNode}_ATK`, `${mainNode}_DEF`, exitNode]
-        if (phaseId === 'prototype') subs.unshift(`${mainNode}_SS`, `${mainNode}_VIS`)
-        if (phaseId === 'architecture') subs.splice(2, 0, `${mainNode}_GATE`)
         classAssignments.push(`class ${subs.join(',')} st-pending`)
       }
     }
@@ -386,7 +396,7 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
   }
   edgeIndex += 1
 
-  // classDef + class + linkStyle（仅进度模式输出）
+  // classDef + class + linkStyle（进度模式：状态着色；对照模式：中性参考样式）
   if (progress) {
     lines.push('')
     lines.push(...CLASS_DEFS[isDark ? 'dark' : 'light'].map((def) => `    ${def}`))
@@ -399,6 +409,11 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
       const style = PASSED_EDGE_STYLE[isDark ? 'dark' : 'light']
       lines.push(`    linkStyle ${passedEdgeIndexes.join(',')} ${style}`)
     }
+  } else {
+    // 对照模式：无进度状态，注入统一中性色块（反差配色与进度图一致，语义不表状态）
+    lines.push('')
+    lines.push(...REF_CLASS_DEFS[isDark ? 'dark' : 'light'].map((def) => `    ${def}`))
+    lines.push(`    class ${allNodeIds.join(',')} st-ref`)
   }
 
   return lines.join('\n') + '\n'
