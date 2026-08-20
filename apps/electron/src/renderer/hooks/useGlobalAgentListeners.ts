@@ -67,6 +67,7 @@ import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { previewFileMapAtom, previewPanelOpenMapAtom, pendingUxElementRefMapAtom, uxElementRefPoolMapAtom, clickToFixPanelAtom, pendingCtfChangesMapAtom, type CtfChangeItem } from '@/atoms/preview-atoms'
+import { ensurePreviewSplit } from '@/components/nanju/ClickToFixPanel'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, AgentAssistantDelta, AgentAssistantDeltaPayload, SDKAssistantMessage, SDKMessage, SDKUserMessage, SDKSystemMessage, PromaEvent, AgentSessionMeta, ProviderType, SDKContentBlock, SDKUserContentBlock, AskUserRequest, AskUserQuestion } from '@proma/shared'
@@ -663,6 +664,8 @@ export function useGlobalAgentListeners(): void {
             appliedAt: Date.now(),
           }
           if (item.ref.id) {
+            // 第一次改动产生即并列展示（聊天+原型分屏，边看边改）
+            ensurePreviewSplit(store, sessionId)
             store.set(pendingCtfChangesMapAtom, (prev) => {
               const list = prev.get(sessionId) ?? []
               // R2：同一元素连续改动合并为一条（保留最新）；R4：时间窗去重防伪造脚本刷清单

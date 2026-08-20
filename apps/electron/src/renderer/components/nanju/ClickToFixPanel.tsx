@@ -15,9 +15,28 @@ import { clickToFixPanelAtom, pendingCtfChangesMapAtom, uxElementRefPoolMapAtom,
 import { currentAgentSessionIdAtom, agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
 import { VOICE_DICTATION_INSERT_EVENT, VOICE_DICTATION_PREVIEW_EVENT } from '@/lib/voice-input-focus'
+import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
+import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
+
+type JotaiStore = ReturnType<typeof useStore>
 
 /** 语音意见收集器的 sourceInputId 前缀（点选元素旁的语音 bar 用） */
 const CTF_VOICE_INPUT_PREFIX = 'ctf-voice-'
+
+/** 点选纠错交互强制并列展示：聊天 + 原型分屏（用户反馈：交互确认 UX 界面时必须并列）
+ *  - 若当前是 preview 独立 tab → tearOff 为分屏；
+ *  - 若无 tab 但该会话有预览文件 → 直接开分屏。 */
+export function ensurePreviewSplit(store: JotaiStore, sessionId: string): void {
+  const tabs = store.get(tabsAtom)
+  const previewTab = tabs.find((t) => t.type === 'preview' && t.sessionId === sessionId)
+  if (previewTab) {
+    tearOffPreviewToSplit(store, previewTab.id)
+    return
+  }
+  if (store.get(previewFileMapAtom).get(sessionId)) {
+    store.set(previewPanelOpenMapAtom, (prev) => new Map(prev).set(sessionId, true))
+  }
+}
 
 /** 4 预设色（D1 修订：红/蓝/绿/靛蓝） */
 const PRESET_COLORS = ['#DC2626', '#4F46E5', '#059669', '#6366F1']
@@ -123,12 +142,16 @@ export function ClickToFixPanel(): React.ReactElement | null {
 
   /** 语音：面板保持打开，语音 bar 状态靠近元素；结果自动附在当前元素上（角标+意见） */
   const startVoiceForElement = (): void => {
+    // 并列展示：语音时用户看着原型说话
+    if (sessionId) ensurePreviewSplit(store, sessionId)
     // R2：元素 id 编入 sourceInputId，语音结果按发起时元素归属（听写中切元素/关面板不串）
     void window.electronAPI.toggleVoiceDictation({ sourceInputId: `${CTF_VOICE_INPUT_PREFIX}${sessionId ?? ''}-${ref.id}` }).catch(() => {})
   }
 
   const closeAndFocusInput = (): void => {
     setPanel(null)
+    // 交互确认需要并列展示：强制聊天+原型分屏（不再用独立预览 tab）
+    if (sessionId) ensurePreviewSplit(store, sessionId)
     const tabs = store.get(tabsAtom)
     const sessionTab = tabs.find((t) => t.sessionId === sessionId && t.type !== 'preview')
     if (sessionTab) store.set(activeTabIdAtom, sessionTab.id)
@@ -324,6 +347,8 @@ export function CtfChangesBar(): React.ReactElement | null {
       (w) => w.id === store.get(agentSessionsAtom).find((s) => s.id === sessionId)?.workspaceId,
     )
     if (!sessionId || !workspace) return
+    // 并列展示：接受后用户看会话执行 + 原型刷新，聊天与原型需并排
+    ensurePreviewSplit(store, sessionId)
     try {
       const result = await window.electronAPI.reportClickToFix({
         workspaceSlug: workspace.slug,
@@ -356,6 +381,8 @@ export function CtfChangesBar(): React.ReactElement | null {
   }
 
   const startVoice = (): void => {
+    // 并列展示：语音时用户看着原型说话
+    if (sessionId) ensurePreviewSplit(store, sessionId)
     const tabs = store.get(tabsAtom)
     const sessionTab = tabs.find((t) => t.sessionId === sessionId && t.type !== 'preview')
     if (sessionTab) store.set(activeTabIdAtom, sessionTab.id)
