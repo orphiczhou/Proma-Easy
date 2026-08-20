@@ -72,6 +72,8 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
   const fetchSeqRef = React.useRef(0)
   /** 已锁定的 projectId：项目消失后不 fallback 到其他项目（修订 Y7） */
   const lockedProjectIdRef = React.useRef<string | null>(null)
+  /** 锁定归属的 sessionId：跨会话不锁（切换会话时重置，修复“向导图始终一个图”） */
+  const lockedSessionIdRef = React.useRef<string | null>(null)
 
   const fetchOnce = React.useCallback(async () => {
     if (!workspaceSlug) {
@@ -79,6 +81,11 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
       return
     }
     const seq = ++fetchSeqRef.current
+    // 跨会话：切换会话后锁定失效，重新按 sessionId 匹配（修复：向导图不随会话切换）
+    if (lockedSessionIdRef.current !== null && lockedSessionIdRef.current !== sessionId) {
+      lockedProjectIdRef.current = null
+      lockedSessionIdRef.current = null
+    }
     setLoading(true)
     try {
       // 1. 项目列表 → 匹配当前会话（sessionId 匹配优先；无匹配取最新 active，多项目并存先例 PRD §12.7）
@@ -93,8 +100,6 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
         if (lockedProjectIdRef.current && projects.some((p) => p.projectId === lockedProjectIdRef.current)) {
           // 轮询期间 sessionId 关联可能变更（如回滚切到 fork 会话）：仍按 projectId 跟踪
           matched = projects.find((p) => p.projectId === lockedProjectIdRef.current) ?? null
-        } else if (!lockedProjectIdRef.current) {
-          matched = projects.filter((p) => p.status === 'active').sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0] ?? null
         }
         // 曾锁定但项目已删除 → projectDeleted
         if (!matched && lockedProjectIdRef.current) {
@@ -105,6 +110,7 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
         }
       } else {
         lockedProjectIdRef.current = matched.projectId
+        lockedSessionIdRef.current = sessionId
         setProjectDeleted(false)
       }
       setProject(matched)
