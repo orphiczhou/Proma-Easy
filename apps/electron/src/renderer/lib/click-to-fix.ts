@@ -40,9 +40,10 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
   }
 
   var suppressClickUntil = 0;
+  var suppressClickTarget = null;
   document.addEventListener('click', function (e) {
-    // 拖拽刚结束的 click 不重新点选（移动操作的稳定交互）
-    if (Date.now() < suppressClickUntil) { suppressClickUntil = 0; return; }
+    // Y7：拖拽刚结束的 click 只对拖拽起点元素生效（不吞对其他元素的快速点选）
+    if (Date.now() < suppressClickUntil && e.target === suppressClickTarget) { suppressClickUntil = 0; suppressClickTarget = null; return; }
     var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
 
     var layer = ensureHighlightLayer();
@@ -136,6 +137,9 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
       }
       var n = parseInt(bag.textContent, 10) || 0;
       bag.textContent = String(n + 1);
+      // Y6：多条意见累积（strip 显示最新一条，tip 展示全部）
+      if (!el.__ctfNotes) el.__ctfNotes = [];
+      el.__ctfNotes.push(d.text || '');
       // 元素旁窄条：显示最近一条改动摘要（替换为最新）
       var strip = document.getElementById('proma-ctf-strip-' + d.id);
       if (!strip) {
@@ -145,7 +149,7 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         el.appendChild(strip);
       }
       strip.textContent = d.text || '';
-      // 点击角标/窄条 → 切换意见浮层
+      // 点击角标/窄条 → 切换意见浮层（展示全部意见）
       var showTip = function (ev) {
         ev.stopPropagation();
         var tip = document.getElementById('proma-ctf-tip-' + d.id);
@@ -155,7 +159,8 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
           tip.style.cssText = 'position:absolute;top:-10px;right:12px;z-index:9997;max-width:220px;padding:6px 8px;border-radius:6px;background:#1f2937;color:#f9fafb;font-size:11px;line-height:1.5;box-shadow:0 4px 12px rgba(0,0,0,.5);white-space:pre-wrap';
           el.appendChild(tip);
         }
-        tip.textContent = d.text || '';
+        var notes = el.__ctfNotes || [d.text || ''];
+        tip.textContent = notes.map(function (t2, i2) { return (i2 + 1) + '. ' + t2; }).join('\n');
         tip.style.display = tip.style.display === 'none' ? '' : 'none';
       };
       bag.onclick = showTip;
@@ -176,8 +181,8 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     if (d.action === 'undo') { undoChange(d.id); return; }
     if (d.action === 'undo-all') {
       Object.keys(originalStyles).forEach(function (id) { undoChange(id); });
-      // 一并清理全部元素角标与意见浮层
-      var badges = document.querySelectorAll('[id^="proma-ctf-badge-"], [id^="proma-ctf-tip-"]');
+      // 一并清理全部元素角标/窄条/意见浮层（Y5：含 strip）
+      var badges = document.querySelectorAll('[id^="proma-ctf-badge-"], [id^="proma-ctf-tip-"], [id^="proma-ctf-strip-"]');
       for (var i = 0; i < badges.length; i++) badges[i].remove();
       return;
     }
@@ -200,14 +205,16 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         document.removeEventListener('mouseup', up);
         el.style.cursor = '';
         var rdx = Math.round(dx), rdy = Math.round(dy);
-        // 位移小于 4px 视为误触（点击未拖动），还原且不上报，避免“点一下放下”产生空改动
-        if (Math.abs(rdx) < 4 && Math.abs(rdy) < 4) {
+        // 位移小于阈值视为误触（点击未拖动），还原且不上报；阈值按 devicePixelRatio 归一（Y7 高分屏）
+        var th = 4 * (window.devicePixelRatio || 1);
+        if (Math.abs(rdx) < th && Math.abs(rdy) < th) {
           el.style.transform = base;
           return;
         }
         el.style.transform = base + ' translate(' + rdx + 'px, ' + rdy + 'px)';
-        // 拖拽结束后的 click 不再触发点选面板（稳定交互：一次拖动=一次改动）
+        // 拖拽结束后的 click 不再触发点选面板（仅限该元素）
         suppressClickUntil = Date.now() + 400;
+        suppressClickTarget = el;
         reportToHost({ kind: 'change-result', id: d.id, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: rdx, dy: rdy } });
       };
       var up = function (ev) { finish(ev.clientX - sx, ev.clientY - sy); };

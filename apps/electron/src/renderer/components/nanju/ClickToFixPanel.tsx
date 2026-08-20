@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { X, Palette, Type, Move, Trash2, MessageCircle, Mic, Check, RotateCcw } from 'lucide-react'
-import { clickToFixPanelAtom, pendingCtfChangesMapAtom, type CtfChangeItem } from '@/atoms/preview-atoms'
+import { clickToFixPanelAtom, pendingCtfChangesMapAtom, uxElementRefPoolMapAtom, previewFileMapAtom, type CtfChangeItem, type UxElementRef } from '@/atoms/preview-atoms'
 import { currentAgentSessionIdAtom, agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
 import { VOICE_DICTATION_INSERT_EVENT, VOICE_DICTATION_PREVIEW_EVENT } from '@/lib/voice-input-focus'
@@ -42,16 +42,27 @@ export function ClickToFixPanel(): React.ReactElement | null {
   const changes = useAtomValue(pendingCtfChangesMapAtom).get(sessionId ?? '') ?? []
   const setChangesMap = useSetAtom(pendingCtfChangesMapAtom)
 
-  // 语音意见收集：听写结果（targetInputId 匹配点选语音收集器）自动附在当前选中元素上
+  // 语音意见收集：听写结果（targetInputId 匹配点选语音收集器）自动附在发起语音时的元素上
   React.useEffect(() => {
     const onInsert = (event: Event): void => {
-      const detail = (event as CustomEvent<{ sessionId?: string; text?: string; targetInputId?: string | null }>).detail ?? {}
+      const customEvent = event as CustomEvent<{ sessionId?: string; text?: string; targetInputId?: string | null }>
+      const detail = customEvent.detail ?? {}
       const text = detail.text?.trim()
       if (!text || !detail.sessionId) return
-      if (detail.targetInputId !== `${CTF_VOICE_INPUT_PREFIX}${detail.sessionId}`) return
-      const current = store.get(clickToFixPanelAtom)
-      if (!current) return
-      const ref = current.ref
+      // R2：targetInputId 含元素 id（ctf-voice-<sessionId>-<elementId>），按发起时元素归属
+      const prefix = `${CTF_VOICE_INPUT_PREFIX}${detail.sessionId}-`
+      if (!detail.targetInputId?.startsWith(prefix)) return
+      const elementId = detail.targetInputId.slice(prefix.length)
+      // R1：命中即确认送达（preventDefault → 主进程不再走剪贴板兜底）
+      customEvent.preventDefault()
+      // 从元素池找完整 ref（type/text）；找不到则退化用 elementId
+      const pool = store.get(uxElementRefPoolMapAtom).get(detail.sessionId) ?? []
+      const pooled = pool.find((r) => r.id === elementId)
+      const ref: UxElementRef = pooled ?? {
+        id: elementId, type: '元素', text: '',
+        filePath: store.get(previewFileMapAtom).get(detail.sessionId)?.filePath ?? '',
+        capturedAt: Date.now(),
+      }
       // 入清单：voice 项（同元素多条语音意见累积，不覆盖）
       const item: CtfChangeItem = { ref, action: 'voice', value: text, appliedAt: Date.now() }
       store.set(pendingCtfChangesMapAtom, (prev) => {
@@ -60,9 +71,9 @@ export function ClickToFixPanel(): React.ReactElement | null {
         next.set(detail.sessionId!, [...list, item].slice(-24))
         return next
       })
-      // 元素角标：iframe 内 annotate（计数+1，点击角标看意见）
+      // 元素角标+窄条：iframe 内 annotate（计数+1，点击看意见）
       const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
-      frame?.contentWindow?.postMessage({ __promaCtfApply: true, action: 'annotate', id: ref.id, text }, '*')
+      frame?.contentWindow?.postMessage({ __promaCtfApply: true, action: 'annotate', id: elementId, text }, '*')
     }
     window.addEventListener(VOICE_DICTATION_INSERT_EVENT, onInsert)
     return () => window.removeEventListener(VOICE_DICTATION_INSERT_EVENT, onInsert)
@@ -112,7 +123,8 @@ export function ClickToFixPanel(): React.ReactElement | null {
 
   /** 语音：面板保持打开，语音 bar 状态靠近元素；结果自动附在当前元素上（角标+意见） */
   const startVoiceForElement = (): void => {
-    void window.electronAPI.toggleVoiceDictation({ sourceInputId: `${CTF_VOICE_INPUT_PREFIX}${sessionId ?? ''}` }).catch(() => {})
+    // R2：元素 id 编入 sourceInputId，语音结果按发起时元素归属（听写中切元素/关面板不串）
+    void window.electronAPI.toggleVoiceDictation({ sourceInputId: `${CTF_VOICE_INPUT_PREFIX}${sessionId ?? ''}-${ref.id}` }).catch(() => {})
   }
 
   const closeAndFocusInput = (): void => {
@@ -227,28 +239,9 @@ export function CtfChangesBar(): React.ReactElement | null {
 
   // 预览 iframe 存在性与位置轮询（轻量，1.5s）：浮动条/接受按钮/麦克风都定位在预览窗口内
   React.useEffect(() => {
-    const check = (): void => {
-      const f = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
-      const visible = !!f && f.offsetWidth > 0
-      setPreviewVisible(visible)
-      if (visible && f) {
-        const r = f.getBoundingClientRect()
-        setIframeRect((prev) => (prev && Math.abs(prev.x - r.x) < 1 && Math.abs(prev.y - r.y) < 1 ? prev : { x: r.x, y: r.y }))
-      } else {
-        setIframeRect(null)
-      }
-    }
-    check()
-    const timer = window.setInterval(check, 1500)
-    return () => window.clearInterval(timer)
-  }, [])
-
-  // Y7：iframe 重载后注入脚本的 inline 效果与 originalStyles 全丢失，
-  // 清单若残留会与视觉脱节——重载时清空当前会话清单
-  React.useEffect(() => {
-    const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
-    if (!frame) return
+    let boundFrame: HTMLIFrameElement | null = null
     const onLoad = (): void => {
+      // Y2：iframe 重载后注入脚本的 inline 效果与角标全丢失，清空清单防脱节
       const s = store.get(currentAgentSessionIdAtom)
       if (!s) return
       const list = store.get(pendingCtfChangesMapAtom).get(s)
@@ -259,9 +252,36 @@ export function CtfChangesBar(): React.ReactElement | null {
         return next
       })
     }
-    frame.addEventListener('load', onLoad)
-    return () => frame.removeEventListener('load', onLoad)
+    const check = (): void => {
+      const f = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+      const visible = !!f && f.offsetWidth > 0
+      setPreviewVisible(visible)
+      if (visible && f) {
+        const r = f.getBoundingClientRect()
+        setIframeRect((prev) => (prev && Math.abs(prev.x - r.x) < 1 && Math.abs(prev.y - r.y) < 1 ? prev : { x: r.x, y: r.y }))
+        // iframe 引用变化（首现/切换）时（重新）绑定 load
+        if (boundFrame !== f) {
+          if (boundFrame) boundFrame.removeEventListener('load', onLoad)
+          f.addEventListener('load', onLoad)
+          boundFrame = f
+        }
+      } else {
+        setIframeRect(null)
+        if (boundFrame) {
+          boundFrame.removeEventListener('load', onLoad)
+          boundFrame = null
+        }
+      }
+    }
+    check()
+    const timer = window.setInterval(check, 1500)
+    return () => {
+      window.clearInterval(timer)
+      if (boundFrame) boundFrame.removeEventListener('load', onLoad)
+    }
   }, [setChangesMap, store])
+
+  // （原 Y7 的 load 清理 effect 已并入上方轮询，删除独立 effect）
 
   if (changes.length === 0 && !previewVisible) return null
 
@@ -325,6 +345,9 @@ export function CtfChangesBar(): React.ReactElement | null {
       // 失败：保留清单与 iframe 内即时效果，用户可重试或放弃
       return
     }
+    // Y1：接受成功后清理 iframe 内 inline 效果与角标/窄条（不依赖重载）
+    const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+    frame?.contentWindow?.postMessage({ __promaCtfApply: true, action: 'undo-all' }, '*')
     setChangesMap((prev) => {
       const next = new Map(prev)
       next.delete(sessionId ?? '')
