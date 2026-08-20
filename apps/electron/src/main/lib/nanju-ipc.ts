@@ -118,6 +118,26 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     if (!win || win.isDestroyed()) return { ok: false, error: '主窗口不可用' }
     // 面板选项指令（interaction-spec 交互1 快速选项）：直接转化为修改指令消息
     const actionLabel = (() => {
+      if (input.kind === 'commit-changes') {
+        // 待接受清单一次性提交：结构化列出全部即时调整
+        let detail = ''
+        try {
+          const items = JSON.parse(input.action ?? '[]') as Array<{ id?: string; type?: string; label?: string; action?: string; value?: unknown }>
+          detail = items.map((it) => {
+            const what = `${it.type ?? '元素'}「${it.label || it.id}」（data-ai-id=${it.id}）`
+            if (it.action === 'color') return `- ${what}：背景色改为 ${String(it.value)}`
+            if (it.action === 'delete') return `- ${what}：删除`
+            if (it.action === 'move') {
+              const v = it.value as { dx?: number; dy?: number } | undefined
+              return `- ${what}：平移 (${v?.dx ?? 0}px, ${v?.dy ?? 0}px)`
+            }
+            return `- ${what}：${it.action}`
+          }).join('\n')
+        } catch {
+          detail = input.action ?? ''
+        }
+        return `以下是我在原型上即时调整的修改清单（共 ${input.type}），请把这些改动应用到 prototype.html 并同步 PRD：\n${detail}`
+      }
       if (input.kind !== 'panel-action') return null
       const el = `${input.type}「${input.text || input.id}」`
       if (input.action === 'color') return `把元素 ${el}（data-ai-id=${input.id}）的颜色改为 ${input.color}。`
@@ -128,7 +148,9 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
       ? `【点选纠错】我点击了原型元素：${input.type}「${input.text || input.id}」（data-ai-id=${input.id}）。请给出这个元素的快速修改选项。`
       : input.kind === 'panel-action' && actionLabel
         ? `【点选纠错】${actionLabel}请执行修改并同步 PRD。`
-        : `【点选纠错】我点了原型空白处，没有选中可修改元素。`
+        : input.kind === 'commit-changes' && actionLabel
+          ? `【点选纠错·批量修改】${actionLabel}`
+          : `【点选纠错】我点了原型空白处，没有选中可修改元素。`
     // 会话可能空闲（等用户意见时是 idle）：queueAgentMessage 要求会话运行中，
     // 点选消息语义等同用户新消息——用 runAgent 开新一轮（带真实 webContents 流式回显）。
     void runAgent(

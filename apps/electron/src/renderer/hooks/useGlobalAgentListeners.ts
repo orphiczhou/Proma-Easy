@@ -66,7 +66,7 @@ import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { previewFileMapAtom, previewPanelOpenMapAtom, pendingUxElementRefMapAtom, uxElementRefPoolMapAtom, clickToFixPanelAtom } from '@/atoms/preview-atoms'
+import { previewFileMapAtom, previewPanelOpenMapAtom, pendingUxElementRefMapAtom, uxElementRefPoolMapAtom, clickToFixPanelAtom, pendingCtfChangesMapAtom, type CtfChangeItem } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, AgentAssistantDelta, AgentAssistantDeltaPayload, SDKAssistantMessage, SDKMessage, SDKUserMessage, SDKSystemMessage, PromaEvent, AgentSessionMeta, ProviderType, SDKContentBlock, SDKUserContentBlock, AskUserRequest, AskUserQuestion } from '@proma/shared'
@@ -587,7 +587,7 @@ export function useGlobalAgentListeners(): void {
       const workspace = store.get(agentWorkspacesAtom).find((w) => w.id === workspaceId)
       if (!workspace || workspace.workspaceType !== 'nanju') return
 
-      const msg = data as { kind?: string; id?: string; type?: string; text?: string; filePath?: string }
+      const msg = data as { kind?: string; id?: string; type?: string; text?: string; filePath?: string; action?: string; value?: unknown; ok?: boolean; error?: string }
       // 安全校验（AC 审计 R3）：只信任预览 iframe 的消息——校验来源 window 与字段尺寸。
       // 预览 iframe（DiffTabContent 的 htmlPreviewUrl iframe）contentWindow 必须是 event.source；
       // 长度上限防注入换行/超长载荷。原型可嵌远程 iframe，远程内容可 top.postMessage 伪造，
@@ -641,7 +641,36 @@ export function useGlobalAgentListeners(): void {
         console.log(`[点选纠错] 元素已暂存为输入引用: ${ref.id}（${ref.type}）——请在输入框继续描述改法`)
         return
       }
-      // 双击/空白点击等仍走主进程注入路径（快捷五选项）
+      // 空白点击/双击等仍走主进程注入路径（快捷五选项）
+      if (msg.kind === 'change-result' && msg.id) {
+        // 即时调整结果：成功则入待接受清单（面板选项在 iframe 内已即时应用）
+        const resultFrame = previewFrames.find((f) => f.contentWindow === event.source)
+        if (!resultFrame) return
+        const ok = (msg as { ok?: boolean }).ok === true
+        if (ok) {
+          const item = {
+            ref: {
+              id: sanitize(msg.id, 64) ?? '',
+              type: sanitize(msg.type, 20) ?? '元素',
+              text: sanitize(msg.text) ?? '',
+              filePath: store.get(previewFileMapAtom).get(sessionId)?.filePath ?? '',
+              capturedAt: Date.now(),
+            },
+            action: (sanitize(msg.action, 12) ?? 'color') as 'color' | 'delete' | 'move',
+            value: (msg as { value?: unknown }).value as CtfChangeItem['value'],
+            appliedAt: Date.now(),
+          }
+          if (item.ref.id) {
+            store.set(pendingCtfChangesMapAtom, (prev) => {
+              const list = prev.get(sessionId) ?? []
+              const next = new Map(prev)
+              next.set(sessionId, [...list, item])
+              return next
+            })
+          }
+        }
+        return
+      }
       void window.electronAPI.reportClickToFix({
         workspaceSlug: workspace.slug,
         sessionId,

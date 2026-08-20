@@ -109,6 +109,17 @@ export interface ClickToFixPanelState {
 }
 export const clickToFixPanelAtom = atom<ClickToFixPanelState | null>(null)
 
+/** 点选即时调整项（交互1 快速选项：颜色/删除/位置在原型上即时生效后入清单） */
+export interface CtfChangeItem {
+  ref: UxElementRef
+  action: 'color' | 'delete' | 'move'
+  /** color=色值；delete 无；move={dx,dy} 像素偏移 */
+  value?: string | { dx: number; dy: number }
+  appliedAt: number
+}
+/** 每会话待接受的即时调整清单（接受调整后一次性发给会话执行并清空） */
+export const pendingCtfChangesMapAtom = atom<Map<string, CtfChangeItem[]>>(new Map())
+
 /** 从预览面板或 Agent 历史中选中的文本引用 */
 export interface QuotedSelection {
   /** 选中的文本内容 */
