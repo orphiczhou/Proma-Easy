@@ -710,6 +710,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const pendingFilesRef = React.useRef(pendingFiles)
   // RichTextInput 命令接口 ref（右侧文件面板拖入时插入 @file 引用）
   const richTextInputRef = React.useRef<RichTextInputHandle>(null)
+  // 点选纠错面板“改文字/换位置/其他”关闭后聚焦输入框（全局事件，避免组件间耦合）
+  React.useEffect(() => {
+    const onFocusInput = (): void => {
+      richTextInputRef.current?.focusEditor()
+    }
+    window.addEventListener('proma:focus-agent-input', onFocusInput)
+    return () => window.removeEventListener('proma:focus-agent-input', onFocusInput)
+  }, [])
   const historyQuoteNavigationRequestIdRef = React.useRef(0)
   const [historyQuoteNavigation, setHistoryQuoteNavigation] = React.useState<AgentHistoryQuoteNavigationRequest | null>(null)
   const handleAddHistoryQuote = React.useCallback((quote: QuotedSelection): boolean => {

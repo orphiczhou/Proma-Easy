@@ -33,6 +33,12 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     try { parent.postMessage(Object.assign({ __promaClickToFix: true, filePath: location.href }, payload), '*'); } catch (e) { /* 宿主不存在或被拦，静默 */ }
   }
 
+  // 供快速选项面板定位用的 rect（iframe 文档内坐标）；宿主会叠加 iframe 在视口内的偏移
+  function rectOf(el) {
+    var r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  }
+
   document.addEventListener('click', function (e) {
     var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
 
@@ -59,7 +65,7 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     if (highlightTimer) clearTimeout(highlightTimer);
     highlightTimer = setTimeout(function () { layer.style.display = 'none'; }, 3000);
 
-    reportToHost({ kind: 'element-click', id: id, type: type, text: text });
+    reportToHost({ kind: 'element-click', id: id, type: type, text: text, rect: rectOf(target) });
   }, true);
 })();
 `

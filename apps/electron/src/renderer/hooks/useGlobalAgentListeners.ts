@@ -66,7 +66,7 @@ import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { previewFileMapAtom, previewPanelOpenMapAtom, pendingUxElementRefMapAtom, uxElementRefPoolMapAtom } from '@/atoms/preview-atoms'
+import { previewFileMapAtom, previewPanelOpenMapAtom, pendingUxElementRefMapAtom, uxElementRefPoolMapAtom, clickToFixPanelAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, AgentAssistantDelta, AgentAssistantDeltaPayload, SDKAssistantMessage, SDKMessage, SDKUserMessage, SDKSystemMessage, PromaEvent, AgentSessionMeta, ProviderType, SDKContentBlock, SDKUserContentBlock, AskUserRequest, AskUserQuestion } from '@proma/shared'
@@ -622,6 +622,22 @@ export function useGlobalAgentListeners(): void {
           m.set(sessionId, pool.slice(0, 12))
           return m
         })
+        // 快速选项面板（interaction-spec 交互1）：元素 rect + 预览 iframe 视口位置 →
+        // 面板定位在元素下方；选择选项前点击其他区域/再次点选时关闭。
+        const rawRect = (msg as { rect?: { x?: number; y?: number; w?: number; h?: number } }).rect
+        const sourceFrame = previewFrames.find((f) => f.contentWindow === event.source) ?? null
+        if (rawRect && typeof rawRect.x === 'number' && typeof rawRect.y === 'number' && sourceFrame) {
+          const frameRect = sourceFrame.getBoundingClientRect()
+          const elemRect = {
+            x: Number(rawRect.x), y: Number(rawRect.y),
+            w: Number(rawRect.w ?? 0), h: Number(rawRect.h ?? 0),
+          }
+          store.set(clickToFixPanelAtom, {
+            ref,
+            rect: elemRect,
+            iframe: { x: frameRect.x, y: frameRect.y, w: frameRect.width, h: frameRect.height },
+          })
+        }
         console.log(`[点选纠错] 元素已暂存为输入引用: ${ref.id}（${ref.type}）——请在输入框继续描述改法`)
         return
       }

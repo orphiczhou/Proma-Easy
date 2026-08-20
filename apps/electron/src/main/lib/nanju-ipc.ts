@@ -102,7 +102,7 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
   // 以用户消息形式注入对应南大调度员会话（非 interrupt，排队即可），
   // 调度员按 router-prompt 的对话式设计循环处理（快速选项/修改链）。
   ipcMain.handle('agent:report-click-to-fix', async (_event, input: {
-    workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string
+    workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string; action?: string; color?: string
   }) => {
     if (!input?.sessionId) return { ok: false, error: 'sessionId 不能为空' }
     // 仅南大项目会话生效（避免普通会话被预览点击骚扰）
@@ -116,9 +116,19 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     if (!meta) return { ok: false, error: '会话不存在' }
     const win = getMainWindow()
     if (!win || win.isDestroyed()) return { ok: false, error: '主窗口不可用' }
+    // 面板选项指令（interaction-spec 交互1 快速选项）：直接转化为修改指令消息
+    const actionLabel = (() => {
+      if (input.kind !== 'panel-action') return null
+      const el = `${input.type}「${input.text || input.id}」`
+      if (input.action === 'color') return `把元素 ${el}（data-ai-id=${input.id}）的颜色改为 ${input.color}。`
+      if (input.action === 'delete') return `删除元素 ${el}（data-ai-id=${input.id}）。`
+      return `对元素 ${el}（data-ai-id=${input.id}）执行：${input.action}。`
+    })()
     const label2 = input.kind === 'element-click'
       ? `【点选纠错】我点击了原型元素：${input.type}「${input.text || input.id}」（data-ai-id=${input.id}）。请给出这个元素的快速修改选项。`
-      : `【点选纠错】我点了原型空白处，没有选中可修改元素。`
+      : input.kind === 'panel-action' && actionLabel
+        ? `【点选纠错】${actionLabel}请执行修改并同步 PRD。`
+        : `【点选纠错】我点了原型空白处，没有选中可修改元素。`
     // 会话可能空闲（等用户意见时是 idle）：queueAgentMessage 要求会话运行中，
     // 点选消息语义等同用户新消息——用 runAgent 开新一轮（带真实 webContents 流式回显）。
     void runAgent(

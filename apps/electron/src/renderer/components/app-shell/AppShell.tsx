@@ -20,6 +20,7 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { useProjectActions } from '@/hooks/useProjectActions'
 import { WorkspaceMemoryChangeObserver } from '@/components/agent-skills/WorkspaceMemoryChangeObserver'
+import { ClickToFixPanel } from '@/components/nanju/ClickToFixPanel'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { WindowControls } from '@/components/WindowControls'
@@ -253,6 +254,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             )}
         </div>
         {currentWorkspace && <WorkspaceMemoryChangeObserver workspaceSlug={currentWorkspace.slug} />}
+        {/* 点选纠错快速选项面板（全局 overlay，跟随点选元素定位） */}
+        <ClickToFixPanel />
         {settingsOpen && (
           <div className="absolute inset-0 z-[60]">
             <SettingsPanel onClose={() => setSettingsOpen(false)} />

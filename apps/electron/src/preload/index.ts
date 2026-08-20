@@ -1306,8 +1306,8 @@ export interface ElectronAPI {
   onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
   offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
 
-  /** 点选纠错：预览 iframe 内点击事件转发（主进程 → 调度员会话消息） */
-  reportClickToFix: (input: { workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string }) => Promise<unknown>
+  /** 点选纠错：预览 iframe 内点击事件转发（主进程 → 调度员会话消息）；panel-action 携带选项指令 */
+  reportClickToFix: (input: { workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string; action?: string; color?: string }) => Promise<unknown>
 
   // ===== Windows Agent Island =====
 

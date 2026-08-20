@@ -99,6 +99,16 @@ export const uxElementRefPoolMapAtom = atom<Map<string, UxElementRef[]>>(new Map
 /** 当前会话待发送的点选元素引用（点选即暂存，发送时随消息携带；新点选覆盖） */
 export const pendingUxElementRefMapAtom = atom<Map<string, UxElementRef>>(new Map())
 
+/** 点选快速选项面板状态（交互1：点击原型元素后弹出快速选项面板） */
+export interface ClickToFixPanelState {
+  ref: UxElementRef
+  /** 元素在 iframe 文档内的坐标（注入脚本 getBoundingClientRect） */
+  rect: { x: number; y: number; w: number; h: number }
+  /** 预览 iframe 在宿主视口内的左上角坐标 */
+  iframe: { x: number; y: number; w: number; h: number }
+}
+export const clickToFixPanelAtom = atom<ClickToFixPanelState | null>(null)
+
 /** 从预览面板或 Agent 历史中选中的文本引用 */
 export interface QuotedSelection {
   /** 选中的文本内容 */

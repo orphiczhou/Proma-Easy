@@ -181,6 +181,8 @@ interface RichTextInputProps {
 export interface RichTextInputHandle {
   /** 返回最新 Markdown 草稿，并同步尚未提交的编辑。 */
   getMarkdown: () => string
+  /** 聚焦编辑器（点选纠错面板“改文字/其他”关闭后聚焦输入框用） */
+  focusEditor: () => void
   /** 在光标处插入文件引用（右侧文件面板拖入时调用） */
   insertFileMentions: (items: FilePanelDragItem[]) => void
   /** 在光标处插入可定位的 Agent 历史引用 chip。 */
@@ -1008,6 +1010,9 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
   useImperativeHandle(ref, () => ({
     getMarkdown(): string {
       return flushPendingDraftSync(editor ?? undefined)
+    },
+    focusEditor(): void {
+      editor?.chain().focus().run()
     },
     insertFileMentions(items: FilePanelDragItem[]): void {
       if (!editor || items.length === 0) return
