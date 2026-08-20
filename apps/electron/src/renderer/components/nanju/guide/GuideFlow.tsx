@@ -100,18 +100,23 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     const svgEl = container.querySelector('svg')
     if (svgEl) {
       svgEl.style.maxWidth = 'none'
-      svgEl.style.width = ''
-      svgEl.style.height = ''
-      svgEl.removeAttribute('width')
-      svgEl.removeAttribute('height')
-      // viewBox 缺失时用原始尺寸补（transform 依赖）
-      if (!svgEl.getAttribute('viewBox')) {
-        const vb = svgEl.getAttribute('viewBox')
-        if (!vb) {
-          // beautiful-mermaid 输出带 viewBox；官方兜底路径有 width/height 属性，转 viewBox
-          const w = svgEl.getAttribute('data-orig-width')
-          const h = svgEl.getAttribute('data-orig-height')
-          if (w && h) svgEl.setAttribute('viewBox', `0 0 ${w} ${h}`)
+      // 必须显式按 viewBox 设置宽高：只清空 width/height 会让 SVG 布局尺寸塌陷为 0，
+      // 图形视觉完全不可见（v0.17.41 实测）。原始像素尺寸 + 外层 transform 缩放。
+      let viewBox = svgEl.getAttribute('viewBox')
+      if (!viewBox) {
+        // beautiful-mermaid 输出带 viewBox；官方兜底路径有 width/height 属性，转 viewBox
+        const w = svgEl.getAttribute('data-orig-width') || svgEl.getAttribute('width')
+        const h = svgEl.getAttribute('data-orig-height') || svgEl.getAttribute('height')
+        if (w && h && !/%/.test(w)) {
+          viewBox = `0 0 ${w} ${h}`
+          svgEl.setAttribute('viewBox', viewBox)
+        }
+      }
+      if (viewBox) {
+        const [, , vbW = 0, vbH = 0] = viewBox.split(/\s+/).map(Number)
+        if (vbW > 0 && vbH > 0) {
+          svgEl.style.width = `${vbW}px`
+          svgEl.style.height = `${vbH}px`
         }
       }
     }
