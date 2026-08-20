@@ -60,7 +60,8 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     const renderedW = vbW > 0 ? vbW : svgEl.clientWidth
     const scaledW = renderedW * INITIAL_SCALE
     setScale(INITIAL_SCALE)
-    setPan({ x: Math.max(0, (viewport.clientWidth - scaledW) / 2), y: 0 })
+    // 图中线对齐视口中线：图比视口宽时 pan.x 为负（显示图的中部），仍属居中语义
+    setPan({ x: (viewport.clientWidth - scaledW) / 2, y: 0 })
   }, [])
   const dslRef = React.useRef(dsl)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
