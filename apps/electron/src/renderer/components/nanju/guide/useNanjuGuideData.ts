@@ -124,10 +124,9 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
       setTodoStats(stats)
       setTodosByPhase(byPhase)
 
-      // 3. 路由结构：mode 确定后拉取一次；mode 不变不重拉（PRD §8.1，拉取在下方 routeModeRef effect 中统一处理）
-      if (!matched) {
-        setPhases([])
-      }
+      // 路由结构是 harness 模板（与项目匹配无关，只与 mode 相关）：不随匹配结果清空。
+      // 否则非项目会话清空后，切回项目会话时 routeModeRef 认为 mode 未变不重拉，
+      // 图卡在“路由加载中…”（v0.17.45 回归）。清空仅在 mode 真正变化时由下方 effect 处理。
     } catch (e) {
       if (seq !== fetchSeqRef.current) return
       setError(e instanceof Error ? e.message : String(e))
@@ -139,7 +138,9 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
   // mode 变化（理论上仅一次）时重拉路由
   const routeModeRef = React.useRef<GuideMode | null>(null)
   React.useEffect(() => {
-    if (!project || routeModeRef.current === project.mode) return
+    // phases 为空（如首次、或历史版本被清空）也强制重拉，防止卡“路由加载中…”
+    if (!project) return
+    if (routeModeRef.current === project.mode && phases.length > 0) return
     routeModeRef.current = project.mode
     void window.electronAPI.nanjuGetRoute(project.mode)
       .then((route) => {
@@ -148,7 +149,7 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
       .catch((e: unknown) => {
         console.warn('[向导图] 获取路由失败:', e)
       })
-  }, [project])
+  }, [project, phases.length])
 
   // 挂载拉取 + 10s 轮询；页面隐藏跳过；卸载清理（AC-09）
   React.useEffect(() => {
