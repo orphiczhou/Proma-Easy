@@ -150,7 +150,7 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
       return;
     }
     var result = applyChange(d.action, d.id, d.value);
-    reportToHost({ kind: 'change-result', id: d.id, action: d.action, ok: result.ok, error: result.error || '' });
+    reportToHost({ kind: 'change-result', id: d.id, action: d.action, ok: result.ok, error: result.error || '', value: d.value });
   });
 })();
 `
