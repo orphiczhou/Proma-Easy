@@ -53,12 +53,53 @@ function isUsableSvg(svg: unknown): svg is string {
   return true
 }
 
-async function renderWithOfficialMermaid(code: string): Promise<string> {
+/** front matter（v10 风格 config 头）解析结果：flowchart 布局参数 */
+interface FrontMatterFlowConfig {
+  nodeSpacing?: number
+  rankSpacing?: number
+  padding?: number
+}
+
+/**
+ * 兼容层：剥离 mermaid v10 风格的 front matter config 头（`---\nconfig: ...\n---`）。
+ *
+ * 背景：mermaid v11 已移除 front matter 支持，beautiful-mermaid 也只接受以
+ * `flowchart TD` 等图型声明开头的源码（会报 "Invalid mermaid header"）。
+ * 向导图 guide-dsl 仍按 v10 风格生成 config 头，因此这里统一剥离，并把
+ * flowchart 布局参数（nodeSpacing/rankSpacing/padding）转交各渲染器：
+ * - beautiful-mermaid：RenderOptions（nodeSpacing/layerSpacing/padding）
+ * - 官方 mermaid：initialize 的 flowchart 配置
+ */
+export function extractFrontMatter(code: string): { cleanCode: string; flow: FrontMatterFlowConfig } {
+  const match = code.match(/^---\n([\s\S]*?)\n---\n?/)
+  if (!match) return { cleanCode: code, flow: {} }
+  const body = match[1] ?? ''
+  const pickNumber = (key: string): number | undefined => {
+    const m = body.match(new RegExp(`(?:^|\n)\\s*${key}:\\s*(\\d+(?:\\.\\d+)?)`))
+    return m ? Number(m[1]) : undefined
+  }
+  const flow: FrontMatterFlowConfig = {}
+  const nodeSpacing = pickNumber('nodeSpacing')
+  const rankSpacing = pickNumber('rankSpacing')
+  const padding = pickNumber('padding')
+  if (nodeSpacing !== undefined) flow.nodeSpacing = nodeSpacing
+  if (rankSpacing !== undefined) flow.rankSpacing = rankSpacing
+  if (padding !== undefined) flow.padding = padding
+  return { cleanCode: code.slice(match[0].length), flow }
+}
+
+async function renderWithOfficialMermaid(code: string, flow: FrontMatterFlowConfig = {}): Promise<string> {
   const { default: mermaid } = await import('mermaid')
   const dark = isDarkMode()
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'strict',
+    // flowchart 布局参数来自剥离后的 front matter（compact 布局，缓解“布局稀疏”）
+    flowchart: {
+      nodeSpacing: flow.nodeSpacing ?? 24,
+      rankSpacing: flow.rankSpacing ?? 40,
+      padding: flow.padding ?? 8,
+    },
     // 解析/绘制失败时清理临时节点并抛错，而非把错误图注入 document.body
     // （后者会在页面底部残留一条孤立的 "Syntax error in text" bar）
     suppressErrorRendering: true,
@@ -87,15 +128,21 @@ async function renderWithOfficialMermaid(code: string): Promise<string> {
  * 主题取当前 document.documentElement 的 dark class；调用方负责主题切换时重调。
  */
 export async function renderMermaidSvg(code: string): Promise<string> {
+  const { cleanCode, flow } = extractFrontMatter(code)
   try {
     const { renderMermaidSVGAsync, THEMES } = await import('beautiful-mermaid')
-    const svg = await renderMermaidSVGAsync(code, getThemeOptions(THEMES))
+    const svg = await renderMermaidSVGAsync(cleanCode, {
+      ...getThemeOptions(THEMES),
+      ...(flow.nodeSpacing !== undefined ? { nodeSpacing: flow.nodeSpacing } : {}),
+      ...(flow.rankSpacing !== undefined ? { layerSpacing: flow.rankSpacing } : {}),
+      ...(flow.padding !== undefined ? { padding: flow.padding } : {}),
+    })
     if (isUsableSvg(svg)) return svg
   } catch {
     // beautiful-mermaid 只覆盖部分图型，不支持时交给官方 mermaid 兜底。
   }
 
-  return renderWithOfficialMermaid(code)
+  return renderWithOfficialMermaid(cleanCode, flow)
 }
 
 function clamp(value: number, min: number, max: number): number {
