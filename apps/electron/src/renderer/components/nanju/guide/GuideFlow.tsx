@@ -10,8 +10,8 @@ interface GuideFlowProps {
 const ZOOM_MIN = 0.3
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.2
-/** 初始缩放：100%（svg 本体已 fit 容器宽，scale 是用户附加缩放） */
-const INITIAL_SCALE = 1
+/** 初始缩放：70%（用户反馈 2026-08-20：默认 70% 左右居中展示） */
+const INITIAL_SCALE = 0.7
 const DEBOUNCE_MS = 350
 
 /** 缩放适配：svg 以原始像素尺寸渲染（不缩水），外层 transform: scale 控制视觉缩放 */
@@ -45,10 +45,29 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
 
   const viewportRef = React.useRef<HTMLDivElement>(null)
   const containerRef = React.useRef<HTMLDivElement>(null)
+
+  /** 初始布局：70% 缩放 + 左右居中（顶部对齐）；无 SVG 时退化为 70%+左上角 */
+  const applyInitialLayout = React.useCallback((): void => {
+    const viewport = viewportRef.current
+    const svgEl = containerRef.current?.querySelector('svg')
+    if (!viewport || !svgEl) {
+      setScale(INITIAL_SCALE)
+      setPan({ x: 0, y: 0 })
+      return
+    }
+    const viewBox = svgEl.getAttribute('viewBox')
+    const [, , vbW = 0] = (viewBox ?? '').split(/\s+/).map(Number)
+    const renderedW = vbW > 0 ? vbW : svgEl.clientWidth
+    const scaledW = renderedW * INITIAL_SCALE
+    setScale(INITIAL_SCALE)
+    setPan({ x: Math.max(0, (viewport.clientWidth - scaledW) / 2), y: 0 })
+  }, [])
   const dslRef = React.useRef(dsl)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const generationRef = React.useRef(0)
   const anchorWarnedRef = React.useRef(false)
+  /** 初始布局（70% 居中）是否已应用：首次渲染/DSL 变化后应用一次 */
+  const initialLayoutAppliedRef = React.useRef(false)
 
   dslRef.current = dsl
 
@@ -74,6 +93,8 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     setRenderFailed(false)
     setScale(INITIAL_SCALE)
     setPan({ x: 0, y: 0 })
+    // DSL 变化后重新居中（下次 SVG 渲染完成时应用初始布局）
+    initialLayoutAppliedRef.current = false
     debounceRef.current = setTimeout(() => {
       void renderCurrentDsl(currentGen)
     }, DEBOUNCE_MS)
@@ -121,6 +142,13 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
       }
     }
 
+    // 首次渲染/DSL 变化后应用初始布局：70% 缩放 + 左右居中（顶部对齐）
+    if (!initialLayoutAppliedRef.current) {
+      initialLayoutAppliedRef.current = true
+      // 尺寸已设置，稍等一帧让布局生效再居中
+      requestAnimationFrame(() => { applyInitialLayout() })
+    }
+
     let nodes = Array.from(container.querySelectorAll('[data-id]'))
     if (nodes.length === 0) {
       nodes = Array.from(container.querySelectorAll('[id^="flowchart-"]'))
@@ -152,15 +180,17 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     return () => {
       for (const dispose of disposers) dispose()
     }
-  }, [renderedSvg, onNodeClick])
+  }, [renderedSvg, onNodeClick, applyInitialLayout])
 
-  // 拖拽平移：pointer capture 确保 SVG 子元素不吞事件、指针移出仍持续跟踪
+  // 拖拽平移：仅 Ctrl+拖动（用户反馈：拖动需按住 Ctrl，避免与常规操作冲突）；
+  // pointer capture 确保 SVG 子元素不吞事件、指针移出仍持续跟踪
   const handlePointerDown = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    // 仅主键拖拽；从节点上起拖也允许（click 抑制逻辑兜底）
-    if (e.button !== 0) return
+    // 仅主键拖拽；必须按住 Ctrl（Ctrl 组合键兼容：仅 Ctrl+左键进入拖拽）
+    if (e.button !== 0 || !e.ctrlKey) return
+    e.preventDefault()
     dragStateRef.current = { startX: e.clientX, startY: e.clientY, baseX: pan.x, baseY: pan.y, moved: false }
     // 捕获指针：即使移到 svg 子元素/视口外，move/up 仍派发给本元素
-    e.currentTarget.setPointerCapture(e.pointerId)
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 合成事件无指针时忽略 */ }
   }, [pan])
 
   const handlePointerMove = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -215,17 +245,28 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     })
   }, [])
 
-  // 滚轮直接缩放（用户反馈：Ctrl 被会话快捷键拦截不可用；图查看器惯例=滚轮缩放）。
-  // Shift+滚轮 = 纵向滚动（给需要滚动的场景留出口）。
+  // 滚轮（用户反馈 2026-08-20）：
+  // - Ctrl+滚轮 = 缩放（光标锚定，地图式）
+  // - 默认滚轮 = 图的上下滚动（pan.y）
+  // - Shift+滚轮 = 水平滚动（pan.x）
+  // Ctrl 组合键兼容：仅 wheel 事件按 ctrlKey/shiftKey 分流，不影响 Ctrl+C/V/A 等键盘组合。
   const handleWheel = React.useCallback((e: React.WheelEvent) => {
-    if (e.shiftKey) return
     e.preventDefault()
-    zoomAtPoint(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY)
+    if (e.ctrlKey) {
+      zoomAtPoint(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY)
+      return
+    }
+    if (e.shiftKey) {
+      setPan((p) => ({ ...p, x: p.x - e.deltaY }))
+      return
+    }
+    setPan((p) => ({ ...p, y: p.y - e.deltaY }))
   }, [zoomAtPoint])
 
+  /** 初始布局：70% 缩放 + 左右居中（顶部对齐） */
   const zoomIn = React.useCallback(() => zoomAtCenter(1 + ZOOM_STEP), [zoomAtCenter])
   const zoomOut = React.useCallback(() => zoomAtCenter(1 - ZOOM_STEP), [zoomAtCenter])
-  const zoomReset = React.useCallback(() => { setScale(INITIAL_SCALE); setPan({ x: 0, y: 0 }) }, [])
+  const zoomReset = React.useCallback(() => { applyInitialLayout() }, [applyInitialLayout])
   const zoomFit = React.useCallback(() => {
     // 适配视口：按视口宽/图原始宽计算缩放（近似，图渲染后按 100% 原始尺寸放置）
     const viewport = viewportRef.current
@@ -252,6 +293,7 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
       <div
         ref={viewportRef}
         className="flex-1 min-h-0 overflow-hidden bg-content-area border-t border-border/40 cursor-grab active:cursor-grabbing select-none [touch-action:none]"
+        title="Ctrl+拖动平移 · Ctrl+滚轮缩放 · 滚轮上下滚动 · Shift+滚轮横向滚动"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
