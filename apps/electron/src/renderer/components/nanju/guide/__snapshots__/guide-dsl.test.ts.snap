@@ -41,10 +41,10 @@ flowchart TD
 
     PROTO_UC -->|"全部用户故事通过"| DONE(["交付 delivered<br/>项目可用"])
 
-    classDef st-done fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#111827
-    classDef st-sub-done fill:#ECFDF5,stroke:#059669,color:#111827
-    classDef st-current fill:#EEF2FF,stroke:#4F46E5,stroke-width:3px,color:#111827
-    classDef st-pending fill:#F3F4F6,stroke:#9CA3AF,color:#6B7280
+    classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
+    classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
+    classDef st-current fill:#C7D2FE,stroke:#4F46E5,stroke-width:3px,color:#312E81
+    classDef st-pending fill:#FFFFFF,stroke:#9CA3AF,color:#4B5563
     class DONE st-pending
     class USER,MODE st-pending
     class REQ st-done
@@ -121,10 +121,10 @@ flowchart TD
 
     PLAN_UC -->|"确认"| DONE(["交付 delivered<br/>进入编码实现阶段"])
 
-    classDef st-done fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#111827
-    classDef st-sub-done fill:#ECFDF5,stroke:#059669,color:#111827
-    classDef st-current fill:#EEF2FF,stroke:#4F46E5,stroke-width:3px,color:#111827
-    classDef st-pending fill:#F3F4F6,stroke:#9CA3AF,color:#6B7280
+    classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
+    classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
+    classDef st-current fill:#C7D2FE,stroke:#4F46E5,stroke-width:3px,color:#312E81
+    classDef st-pending fill:#FFFFFF,stroke:#9CA3AF,color:#4B5563
     class DONE st-pending
     class USER,MODE st-pending
     class REQ st-done

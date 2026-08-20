@@ -166,10 +166,10 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
     expect(dsl).toContain('class PROTO st-current')
     // REQ 阶段子节点跟随 done（弱一档）
     expect(dsl).toContain('class REQ_ATK,REQ_DEF,REQ_UC st-sub-done')
-    // classDef 三态色注入
-    expect(dsl).toContain('classDef st-done fill:#ECFDF5,stroke:#059669')
-    expect(dsl).toContain('classDef st-current fill:#EEF2FF,stroke:#4F46E5')
-    expect(dsl).toContain('classDef st-pending fill:#F3F4F6,stroke:#9CA3AF')
+    // classDef 三态色注入（亮色实色填充，背景/元素反差）
+    expect(dsl).toContain('classDef st-done fill:#A7F3D0,stroke:#059669')
+    expect(dsl).toContain('classDef st-current fill:#C7D2FE,stroke:#4F46E5')
+    expect(dsl).toContain('classDef st-pending fill:#FFFFFF,stroke:#9CA3AF')
     // 已通过的跨阶段边加粗（linkStyle，边索引 7 = REQ_UC→PROTO）
     expect(dsl).toContain('linkStyle 7 stroke:#059669,stroke-width:2.5px')
   })
@@ -204,7 +204,7 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
       progress: { stageStates: { requirements: 'done' } },
       isDark: true,
     })
-    expect(dark).toContain('classDef st-done fill:rgba(5,150,105,0.18),stroke:#34D399')
+    expect(dark).toContain('classDef st-done fill:#047857,stroke:#34D399')
     expect(dark).toContain('linkStyle 7 stroke:#34D399,stroke-width:2.5px')
   })
 

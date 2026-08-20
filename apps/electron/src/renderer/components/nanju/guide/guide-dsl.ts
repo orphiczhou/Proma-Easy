@@ -209,19 +209,22 @@ const DONE_SUB_LABEL: Record<GuideMode, string> = {
   iterative: '进入编码实现阶段',
 }
 
-/** 明/暗两套 classDef 色值（南大语义色，PRD §3.1 + design-system DOC-2.4） */
+/** 明/暗两套 classDef 色值（南大语义色，PRD §3.1 + design-system DOC-2.4）
+ *  2026-08-20 配色修正（用户反馈：背景与元素反差不足）：
+ *  改用实色填充替代低透明 rgba，节点色块在画布背景上明显突出；
+ *  渲染器必须是官方 mermaid（beautiful-mermaid 不支持 classDef）。 */
 const CLASS_DEFS: Record<'light' | 'dark', string[]> = {
   light: [
-    'classDef st-done fill:#ECFDF5,stroke:#059669,stroke-width:2px,color:#111827',
-    'classDef st-sub-done fill:#ECFDF5,stroke:#059669,color:#111827',
-    'classDef st-current fill:#EEF2FF,stroke:#4F46E5,stroke-width:3px,color:#111827',
-    'classDef st-pending fill:#F3F4F6,stroke:#9CA3AF,color:#6B7280',
+    'classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B',
+    'classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46',
+    'classDef st-current fill:#C7D2FE,stroke:#4F46E5,stroke-width:3px,color:#312E81',
+    'classDef st-pending fill:#FFFFFF,stroke:#9CA3AF,color:#4B5563',
   ],
   dark: [
-    'classDef st-done fill:rgba(5,150,105,0.18),stroke:#34D399,stroke-width:2px,color:#E5E7EB',
-    'classDef st-sub-done fill:rgba(5,150,105,0.14),stroke:#34D399,color:#D1D5DB',
-    'classDef st-current fill:rgba(79,70,229,0.22),stroke:#818CF8,stroke-width:3px,color:#F9FAFB',
-    'classDef st-pending fill:rgba(75,85,99,0.25),stroke:#6B7280,color:#9CA3AF',
+    'classDef st-done fill:#047857,stroke:#34D399,stroke-width:2px,color:#ECFDF5',
+    'classDef st-sub-done fill:#065F46,stroke:#10B981,color:#D1FAE5',
+    'classDef st-current fill:#312E81,stroke:#818CF8,stroke-width:3px,color:#F8FAFF',
+    'classDef st-pending fill:#334155,stroke:#94A3B8,color:#CBD5E1',
   ],
 }
 

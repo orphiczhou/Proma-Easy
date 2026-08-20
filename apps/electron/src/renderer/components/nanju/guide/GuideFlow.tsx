@@ -251,7 +251,7 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
       </div>
       <div
         ref={viewportRef}
-        className="flex-1 min-h-0 overflow-hidden bg-background/40 border-t border-border/40 cursor-grab active:cursor-grabbing select-none [touch-action:none]"
+        className="flex-1 min-h-0 overflow-hidden bg-content-area border-t border-border/40 cursor-grab active:cursor-grabbing select-none [touch-action:none]"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

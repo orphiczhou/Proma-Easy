@@ -105,13 +105,19 @@ async function renderWithOfficialMermaid(code: string, flow: FrontMatterFlowConf
     suppressErrorRendering: true,
     theme: dark ? 'dark' : 'default',
     themeVariables: {
-      background: dark ? '#0f172a' : '#ffffff',
-      mainBkg: dark ? '#1e293b' : '#f8fafc',
-      primaryColor: dark ? '#1e293b' : '#f8fafc',
-      primaryTextColor: dark ? '#e2e8f0' : '#0f172a',
-      primaryBorderColor: dark ? '#475569' : '#cbd5e1',
-      lineColor: dark ? '#94a3b8' : '#64748b',
-      textColor: dark ? '#e2e8f0' : '#0f172a',
+      // 背景透明：透出容器背景，避免 SVG 自绘背景块与面板背景接缝/双重底色
+      background: 'transparent',
+      // 节点默认填充（无 classDef 时）：比画布背景亮一档，形成元素/背景反差
+      mainBkg: dark ? '#1e2733' : '#ffffff',
+      primaryColor: dark ? '#1e2733' : '#ffffff',
+      primaryTextColor: dark ? '#e8edf3' : '#111827',
+      primaryBorderColor: dark ? '#5b6675' : '#d1d5db',
+      lineColor: dark ? '#7c8a99' : '#9ca3af',
+      textColor: dark ? '#e8edf3' : '#111827',
+      // subgraph 容器：与画布微区分，不抢节点色块
+      clusterBkg: dark ? '#141b24' : '#f3f4f6',
+      clusterBorder: dark ? '#3b4654' : '#e5e7eb',
+      edgeLabelBackground: dark ? '#0f1520' : '#ffffff',
     },
   })
 
@@ -129,6 +135,11 @@ async function renderWithOfficialMermaid(code: string, flow: FrontMatterFlowConf
  */
 export async function renderMermaidSvg(code: string): Promise<string> {
   const { cleanCode, flow } = extractFrontMatter(code)
+  // beautiful-mermaid 不支持 classDef/class/linkStyle（会静默忽略），
+  // 含 classDef 的 DSL（向导图状态着色）直接走官方 mermaid，避免状态色丢失
+  if (/\bclassDef\b/.test(cleanCode)) {
+    return renderWithOfficialMermaid(cleanCode, flow)
+  }
   try {
     const { renderMermaidSVGAsync, THEMES } = await import('beautiful-mermaid')
     const svg = await renderMermaidSVGAsync(cleanCode, {
