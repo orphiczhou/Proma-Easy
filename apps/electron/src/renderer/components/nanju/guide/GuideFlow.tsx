@@ -10,8 +10,8 @@ interface GuideFlowProps {
 const ZOOM_MIN = 0.3
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.2
-/** 初始缩放：70%（用户反馈 2026-08-20：默认 70% 左右居中展示） */
-const INITIAL_SCALE = 0.7
+/** 初始缩放：68%（用户反馈 2026-08-20 二轮：70→68，与面板宽度配合完全显示内容） */
+const INITIAL_SCALE = 0.68
 const DEBOUNCE_MS = 350
 
 /** 缩放适配：svg 以原始像素尺寸渲染（不缩水），外层 transform: scale 控制视觉缩放 */
@@ -65,22 +65,26 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     return clamp(value, min, max)
   }, [scale])
 
-  /** 初始布局：70% 缩放 + 左右居中（顶部对齐）；无 SVG 时退化为 70%+左上角 */
+  /** 初始布局：68% 缩放 + 左右居中 + 顶部对齐（顶部留 8px 防边框遮节点）；
+   *  内容完全显示优先：面板过窄时自动降到 fit 缩放（68% 与适配取小者），
+   *  保证整图不横向溢出被遮。 */
   const applyInitialLayout = React.useCallback((): void => {
     const viewport = viewportRef.current
     const svgEl = containerRef.current?.querySelector('svg')
     if (!viewport || !svgEl) {
       setScale(INITIAL_SCALE)
-      setPan({ x: 0, y: 0 })
+      setPan({ x: 0, y: 8 })
       return
     }
     const viewBox = svgEl.getAttribute('viewBox')
     const [, , vbW = 0] = (viewBox ?? '').split(/\s+/).map(Number)
     const renderedW = vbW > 0 ? vbW : svgEl.clientWidth
-    const scaledW = renderedW * INITIAL_SCALE
-    setScale(INITIAL_SCALE)
-    // 图中线对齐视口中线：图比视口宽时 pan.x 为负（显示图的中部），仍属居中语义
-    setPan({ x: (viewport.clientWidth - scaledW) / 2, y: 0 })
+    // 内容完全显示：图宽超过视口时用 fit（68% 与适配取小）
+    const fitScale = (viewport.clientWidth - 24) / renderedW
+    const effective = Math.min(INITIAL_SCALE, clamp(fitScale, ZOOM_MIN, ZOOM_MAX))
+    const scaledW = renderedW * effective
+    setScale(effective)
+    setPan({ x: (viewport.clientWidth - scaledW) / 2, y: 8 })
   }, [])
   const dslRef = React.useRef(dsl)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)

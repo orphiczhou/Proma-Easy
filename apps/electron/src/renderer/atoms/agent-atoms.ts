@@ -509,7 +509,7 @@ export const agentSidePanelOpenAtomFamily = atomFamily((sessionId: string) => at
 ))
 
 /** 侧面板宽度（全局共享，用户拖拽后持久化） */
-export const agentSidePanelWidthAtom = atomWithStorage<number>('proma-agent-sidepanel-width', 280)
+export const agentSidePanelWidthAtom = atomWithStorage<number>('proma-agent-sidepanel-width', 420)
 
 /** 文件来源选择：按会话持久化，未存储的会话默认显示会话文件。 */
 export type AgentFileSourceFilter = 'session' | 'project'
