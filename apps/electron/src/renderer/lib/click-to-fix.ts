@@ -110,12 +110,14 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     el.style.opacity = orig.opacity;
     el.style.transform = orig.transform;
     el.style.textDecoration = '';
-    delete originalStyles[id];
+    // 不删 originalStyles：同一元素可多次撤销（每次回原始态，重复幂等）
     return { ok: true };
   }
   window.addEventListener('message', function (e) {
     var d = e.data;
     if (!d || d.__promaCtfApply !== true) return;
+    // 安全：只接受来自宿主（parent）的指令（R4：防原型内嵌脚本伪造）
+    if (e.source !== parent) return;
     if (d.action === 'undo') { undoChange(d.id); return; }
     if (d.action === 'undo-all') {
       Object.keys(originalStyles).forEach(function (id) { undoChange(id); });
@@ -127,26 +129,37 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
       rememberOriginal(el);
       el.style.cursor = 'move';
       var base = el.style.transform || '';
-      var sx = 0, sy = 0;
+      var sx = 0, sy = 0, active = false, lastDx = 0, lastDy = 0;
       var mv = function (ev) {
+        if (!active) return;
         var dx = ev.clientX - sx, dy = ev.clientY - sy;
+        lastDx = dx; lastDy = dy;
         el.style.transform = base + ' translate(' + dx + 'px, ' + dy + 'px)';
       };
-      var up = function (ev) {
+      var finish = function (dx, dy) {
+        active = false;
         document.removeEventListener('mousemove', mv);
         document.removeEventListener('mouseup', up);
         el.style.cursor = '';
-        var dx = Math.round(ev.clientX - sx), dy = Math.round(ev.clientY - sy);
-        el.style.transform = base + ' translate(' + dx + 'px, ' + dy + 'px)';
-        reportToHost({ kind: 'change-result', id: d.id, action: 'move', ok: true, value: { dx: dx, dy: dy } });
+        el.style.transform = base + ' translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+        reportToHost({ kind: 'change-result', id: d.id, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: Math.round(dx), dy: Math.round(dy) } });
       };
+      var up = function (ev) { finish(ev.clientX - sx, ev.clientY - sy); };
       var down = function (ev) {
-        sx = ev.clientX; sy = ev.clientY;
+        sx = ev.clientX; sy = ev.clientY; active = true;
+        // R1：pointer capture 到元素——拖出 iframe 边界后 move/up 仍派发给元素，不丢 mouseup
+        try { el.setPointerCapture(ev.pointerId); } catch (err) { /* 降级：document 级监听 */ }
         document.addEventListener('mousemove', mv);
         document.addEventListener('mouseup', up);
         ev.preventDefault();
       };
-      el.addEventListener('mousedown', down, { once: true });
+      el.addEventListener('pointerdown', down, { once: true });
+      // 兑底：拖出 iframe 后指针事件被宿主截走时，以最后已知位移收口
+      var leave = function () {
+        if (!active) return;
+        finish(lastDx, lastDy);
+      };
+      el.addEventListener('mouseleave', leave, { once: true });
       return;
     }
     var result = applyChange(d.action, d.id, d.value);

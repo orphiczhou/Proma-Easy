@@ -46,6 +46,25 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
   const viewportRef = React.useRef<HTMLDivElement>(null)
   const containerRef = React.useRef<HTMLDivElement>(null)
 
+  /** Y5：pan 边界约束（可拖出最多半个视口，防止图完全拖丢；缩放/重置/适配可找回） */
+  const clampPan = React.useCallback((value: number, axis: 'x' | 'y'): number => {
+    const viewport = viewportRef.current
+    const svgEl = containerRef.current?.querySelector('svg')
+    if (!viewport || !svgEl) return value
+    const viewBox = svgEl.getAttribute('viewBox')
+    const [, , vbW = 0, vbH = 0] = (viewBox ?? '').split(/\s+/).map(Number)
+    const w = (vbW > 0 ? vbW : svgEl.clientWidth) * scale
+    const h = (vbH > 0 ? vbH : svgEl.clientHeight) * scale
+    if (axis === 'x') {
+      const min = Math.min(0, viewport.clientWidth - w) - viewport.clientWidth / 2
+      const max = Math.max(0, viewport.clientWidth - w) + viewport.clientWidth / 2
+      return clamp(value, min, max)
+    }
+    const min = Math.min(0, viewport.clientHeight - h) - viewport.clientHeight / 2
+    const max = Math.max(0, viewport.clientHeight - h) + viewport.clientHeight / 2
+    return clamp(value, min, max)
+  }, [scale])
+
   /** 初始布局：70% 缩放 + 左右居中（顶部对齐）；无 SVG 时退化为 70%+左上角 */
   const applyInitialLayout = React.useCallback((): void => {
     const viewport = viewportRef.current
@@ -69,6 +88,8 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
   const anchorWarnedRef = React.useRef(false)
   /** 初始布局（70% 居中）是否已应用：首次渲染/DSL 变化后应用一次 */
   const initialLayoutAppliedRef = React.useRef(false)
+  /** 用户是否已手动操作过视图（拖拽/缩放/滚动）；未操作时面板 resize 可自动重居中 */
+  const userInteractedRef = React.useRef(false)
 
   dslRef.current = dsl
 
@@ -94,8 +115,9 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     setRenderFailed(false)
     setScale(INITIAL_SCALE)
     setPan({ x: 0, y: 0 })
-    // DSL 变化后重新居中（下次 SVG 渲染完成时应用初始布局）
+    // DSL 变化后重新居中（下次 SVG 渲染完成时应用初始布局）；用户操作痕迹一并重置
     initialLayoutAppliedRef.current = false
+    userInteractedRef.current = false
     debounceRef.current = setTimeout(() => {
       void renderCurrentDsl(currentGen)
     }, DEBOUNCE_MS)
@@ -201,13 +223,23 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     const dy = e.clientY - st.startY
     if (!st.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) st.moved = true
     if (!st.moved) return
-    setPan({ x: st.baseX + dx, y: st.baseY + dy })
-  }, [])
+    userInteractedRef.current = true
+    setPan({ x: clampPan(st.baseX + dx, 'x'), y: clampPan(st.baseY + dy, 'y') })
+  }, [clampPan])
 
   const handlePointerUp = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* 未捕获时忽略 */ }
     // moved 标志保留到 click 事件后再清（click 在 pointerup 后同步触发）
     setTimeout(() => { dragStateRef.current = null }, 0)
+  }, [])
+
+  // Y3：拖拽中松开 Ctrl 即结束拖拽（与“按住 Ctrl 拖拽”契约一致）
+  React.useEffect(() => {
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if (e.key === 'Control') dragStateRef.current = null
+    }
+    window.addEventListener('keyup', onKeyUp)
+    return () => window.removeEventListener('keyup', onKeyUp)
   }, [])
 
   /** 视口中心锚定缩放（地图式）：缩放时眼前内容原地放大/缩小，而不是左上角锚定导致内容跑出视野
@@ -246,6 +278,23 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     })
   }, [])
 
+  // Y4：面板宽度变化时（用户未手动操作过视图）自动重新居中，避免侧栏 resize 后图停在旧位置
+  React.useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    let lastW = viewport.clientWidth
+    const observer = new ResizeObserver(() => {
+      const w = viewport.clientWidth
+      if (w === lastW) return
+      lastW = w
+      if (!userInteractedRef.current && initialLayoutAppliedRef.current) {
+        applyInitialLayout()
+      }
+    })
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [applyInitialLayout])
+
   // 滚轮（用户反馈 2026-08-20）：
   // - Ctrl+滚轮 = 缩放（光标锚定，地图式）
   // - 默认滚轮 = 图的上下滚动（pan.y）
@@ -253,21 +302,26 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
   // Ctrl 组合键兼容：仅 wheel 事件按 ctrlKey/shiftKey 分流，不影响 Ctrl+C/V/A 等键盘组合。
   const handleWheel = React.useCallback((e: React.WheelEvent) => {
     e.preventDefault()
+    userInteractedRef.current = true
     if (e.ctrlKey) {
       zoomAtPoint(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY)
       return
     }
+    // Y6：deltaMode 归一化（line=16px，page=视口高）
+    const vpH = viewportRef.current?.clientHeight ?? 600
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? vpH : 1
+    const dy = e.deltaY * unit
     if (e.shiftKey) {
-      setPan((p) => ({ ...p, x: p.x - e.deltaY }))
+      setPan((p) => ({ ...p, x: clampPan(p.x - dy, 'x') }))
       return
     }
-    setPan((p) => ({ ...p, y: p.y - e.deltaY }))
+    setPan((p) => ({ ...p, y: clampPan(p.y - dy, 'y') }))
   }, [zoomAtPoint])
 
   /** 初始布局：70% 缩放 + 左右居中（顶部对齐） */
-  const zoomIn = React.useCallback(() => zoomAtCenter(1 + ZOOM_STEP), [zoomAtCenter])
-  const zoomOut = React.useCallback(() => zoomAtCenter(1 - ZOOM_STEP), [zoomAtCenter])
-  const zoomReset = React.useCallback(() => { applyInitialLayout() }, [applyInitialLayout])
+  const zoomIn = React.useCallback(() => { userInteractedRef.current = true; zoomAtCenter(1 + ZOOM_STEP) }, [zoomAtCenter])
+  const zoomOut = React.useCallback(() => { userInteractedRef.current = true; zoomAtCenter(1 - ZOOM_STEP) }, [zoomAtCenter])
+  const zoomReset = React.useCallback(() => { userInteractedRef.current = false; applyInitialLayout() }, [applyInitialLayout])
   const zoomFit = React.useCallback(() => {
     // 适配视口：按视口宽/图原始宽计算缩放（近似，图渲染后按 100% 原始尺寸放置）
     const viewport = viewportRef.current
@@ -278,8 +332,10 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     const [, , vbW] = viewBox.split(/\s+/).map(Number)
     if (!vbW) { zoomReset(); return }
     const fit = clamp((viewport.clientWidth - 24) / vbW, ZOOM_MIN, ZOOM_MAX)
+    userInteractedRef.current = true
     setScale(fit)
-    setPan({ x: 0, y: 0 })
+    // Y5：与 reset/初始一致，水平居中（图中线对齐视口中线）
+    setPan({ x: (viewport.clientWidth - vbW * fit) / 2, y: 0 })
   }, [zoomReset])
 
   return (

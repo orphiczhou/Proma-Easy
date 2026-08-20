@@ -186,6 +186,26 @@ export function CtfChangesBar(): React.ReactElement | null {
     return () => window.clearInterval(timer)
   }, [])
 
+  // Y7：iframe 重载后注入脚本的 inline 效果与 originalStyles 全丢失，
+  // 清单若残留会与视觉脱节——重载时清空当前会话清单
+  React.useEffect(() => {
+    const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+    if (!frame) return
+    const onLoad = (): void => {
+      const s = store.get(currentAgentSessionIdAtom)
+      if (!s) return
+      const list = store.get(pendingCtfChangesMapAtom).get(s)
+      if (!list || list.length === 0) return
+      setChangesMap((prev) => {
+        const next = new Map(prev)
+        next.delete(s)
+        return next
+      })
+    }
+    frame.addEventListener('load', onLoad)
+    return () => frame.removeEventListener('load', onLoad)
+  }, [setChangesMap, store])
+
   if (changes.length === 0 && !previewVisible) return null
 
   const removeChange = (index: number): void => {
@@ -216,27 +236,34 @@ export function CtfChangesBar(): React.ReactElement | null {
     })
   }
 
-  /** 接受调整：一次性把修改清单发给调度员会话执行（含 PRD 同步），随后清空清单 */
-  const acceptAll = (): void => {
+  /** 接受调整：一次性把修改清单发给调度员会话执行（含 PRD 同步）；
+   *  Y8：仅当注入成功（ok）才清清单，失败保留清单并提示 */
+  const acceptAll = async (): Promise<void> => {
     const workspace = store.get(agentWorkspacesAtom).find(
       (w) => w.id === store.get(agentSessionsAtom).find((s) => s.id === sessionId)?.workspaceId,
     )
     if (!sessionId || !workspace) return
-    void window.electronAPI.reportClickToFix({
-      workspaceSlug: workspace.slug,
-      sessionId,
-      kind: 'commit-changes',
-      id: 'batch',
-      type: `${changes.length} 处`,
-      text: '',
-      action: JSON.stringify(changes.map((c) => ({
-        id: c.ref.id,
-        type: c.ref.type,
-        label: c.ref.text,
-        action: c.action,
-        value: c.value,
-      }))),
-    }).catch(() => {})
+    try {
+      const result = await window.electronAPI.reportClickToFix({
+        workspaceSlug: workspace.slug,
+        sessionId,
+        kind: 'commit-changes',
+        id: 'batch',
+        type: `${changes.length} 处`,
+        text: '',
+        action: JSON.stringify(changes.map((c) => ({
+          id: c.ref.id,
+          type: c.ref.type,
+          label: c.ref.text,
+          action: c.action,
+          value: c.value,
+        }))),
+      }) as { ok?: boolean } | undefined
+      if (result && result.ok === false) throw new Error('注入失败')
+    } catch {
+      // 失败：保留清单与 iframe 内即时效果，用户可重试或放弃
+      return
+    }
     setChangesMap((prev) => {
       const next = new Map(prev)
       next.delete(sessionId ?? '')

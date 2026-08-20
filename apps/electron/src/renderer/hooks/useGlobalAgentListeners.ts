@@ -575,6 +575,8 @@ export function useGlobalAgentListeners(): void {
     // 点选纠错（Click-to-Fix，interaction-spec 交互1）：预览 iframe 内注入脚本捕获
     // 用户点击原型元素后 postMessage 到宿主；这里转发主进程注入调度员会话消息。
     // 仅当当前会话属于南大工作区时生效（主进程还会再校验一次）。
+    // blank-click 节流时间戳（hook 作用域，跨 handler 调用保留）
+    const blankClickLastTsRef = { current: 0 }
     const clickToFixHandler = (event: MessageEvent): void => {
       const data = event.data
       if (!data || typeof data !== 'object' || (data as { __promaClickToFix?: boolean }).__promaClickToFix !== true) return
@@ -663,11 +665,28 @@ export function useGlobalAgentListeners(): void {
           if (item.ref.id) {
             store.set(pendingCtfChangesMapAtom, (prev) => {
               const list = prev.get(sessionId) ?? []
+              // R2：同一元素连续改动合并为一条（保留最新）；R4：时间窗去重防伪造脚本刷清单
+              const merged = list.filter((c) => c.ref.id !== item.ref.id)
+              const deduped = merged.filter((c) => !(c.ref.id === item.ref.id && item.appliedAt - c.appliedAt < 1500))
               const next = new Map(prev)
-              next.set(sessionId, [...list, item])
+              // 清单上限 24（防异常/伪造刷爆）
+              next.set(sessionId, [...deduped, item].slice(-24))
               return next
             })
           }
+        }
+        return
+      }
+      // 空白点击：节流 2s（Y10：连点空白不反复注入会话）
+      if (msg.kind === 'blank-click') {
+        const blankFrame = previewFrames.find((f) => f.contentWindow === event.source)
+        if (blankFrame && Date.now() - blankClickLastTsRef.current > 2000) {
+          blankClickLastTsRef.current = Date.now()
+          void window.electronAPI.reportClickToFix({
+            workspaceSlug: workspace.slug,
+            sessionId,
+            kind: 'blank-click',
+          }).catch(() => {})
         }
         return
       }
