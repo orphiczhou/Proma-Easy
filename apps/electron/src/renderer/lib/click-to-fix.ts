@@ -118,9 +118,51 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     if (!d || d.__promaCtfApply !== true) return;
     // 安全：只接受来自宿主（parent）的指令（R4：防原型内嵌脚本伪造）
     if (e.source !== parent) return;
+    if (d.action === 'annotate') {
+      // 元素角标：显示改动意见（语音/文字），计数累加；点击角标查看意见列表
+      var el = document.querySelector('[data-ai-id="' + d.id + '"]');
+      if (!el) return;
+      el.style.position = getComputedStyle(el).position === 'static' ? 'relative' : el.style.position;
+      var bag = document.getElementById('proma-ctf-badge-' + d.id);
+      if (!bag) {
+        bag = document.createElement('div');
+        bag.id = 'proma-ctf-badge-' + d.id;
+        bag.style.cssText = 'position:absolute;top:-8px;right:-8px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#DC2626;color:#fff;font-size:10px;line-height:16px;text-align:center;cursor:pointer;z-index:9999;box-shadow:0 1px 3px rgba(0,0,0,.4)';
+        el.appendChild(bag);
+      }
+      var n = parseInt(bag.textContent, 10) || 0;
+      bag.textContent = String(n + 1);
+      // 点击角标 → 切换意见浮层
+      bag.onclick = function (ev) {
+        ev.stopPropagation();
+        var tip = document.getElementById('proma-ctf-tip-' + d.id);
+        if (!tip) {
+          tip = document.createElement('div');
+          tip.id = 'proma-ctf-tip-' + d.id;
+          tip.style.cssText = 'position:absolute;top:-10px;right:10px;z-index:9998;max-width:220px;padding:6px 8px;border-radius:6px;background:#1f2937;color:#f9fafb;font-size:11px;line-height:1.5;box-shadow:0 4px 12px rgba(0,0,0,.5);white-space:pre-wrap';
+          el.appendChild(tip);
+        }
+        tip.textContent = d.text || '';
+        tip.style.display = tip.style.display === 'none' ? '' : 'none';
+      };
+      return;
+    }
+    if (d.action === 'remove-annotation') {
+      var bagEl = document.getElementById('proma-ctf-badge-' + d.id);
+      var tipEl = document.getElementById('proma-ctf-tip-' + d.id);
+      if (bagEl) {
+        var cnt = (parseInt(bagEl.textContent, 10) || 1) - 1;
+        if (cnt <= 0) { bagEl.remove(); } else { bagEl.textContent = String(cnt); }
+      }
+      if (tipEl && (cnt === undefined || cnt <= 0)) tipEl.remove();
+      return;
+    }
     if (d.action === 'undo') { undoChange(d.id); return; }
     if (d.action === 'undo-all') {
       Object.keys(originalStyles).forEach(function (id) { undoChange(id); });
+      // 一并清理全部元素角标与意见浮层
+      var badges = document.querySelectorAll('[id^="proma-ctf-badge-"], [id^="proma-ctf-tip-"]');
+      for (var i = 0; i < badges.length; i++) badges[i].remove();
       return;
     }
     if (d.action === 'drag-start') {

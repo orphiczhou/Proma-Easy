@@ -112,8 +112,8 @@ export const clickToFixPanelAtom = atom<ClickToFixPanelState | null>(null)
 /** 点选即时调整项（交互1 快速选项：颜色/删除/位置在原型上即时生效后入清单） */
 export interface CtfChangeItem {
   ref: UxElementRef
-  action: 'color' | 'delete' | 'move'
-  /** color=色值；delete 无；move={dx,dy} 像素偏移 */
+  action: 'color' | 'delete' | 'move' | 'voice'
+  /** color=色值；delete 无；move={dx,dy} 像素偏移；voice=语音意见文字 */
   value?: string | { dx: number; dy: number }
   appliedAt: number
 }

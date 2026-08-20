@@ -14,6 +14,10 @@ import { X, Palette, Type, Move, Trash2, MessageCircle, Mic, Check, RotateCcw } 
 import { clickToFixPanelAtom, pendingCtfChangesMapAtom, type CtfChangeItem } from '@/atoms/preview-atoms'
 import { currentAgentSessionIdAtom, agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
+import { VOICE_DICTATION_INSERT_EVENT, VOICE_DICTATION_PREVIEW_EVENT } from '@/lib/voice-input-focus'
+
+/** 语音意见收集器的 sourceInputId 前缀（点选元素旁的语音 bar 用） */
+const CTF_VOICE_INPUT_PREFIX = 'ctf-voice-'
 
 /** 4 预设色（D1 修订：红/蓝/绿/靛蓝） */
 const PRESET_COLORS = ['#DC2626', '#4F46E5', '#059669', '#6366F1']
@@ -36,6 +40,33 @@ export function ClickToFixPanel(): React.ReactElement | null {
   const panelRef = React.useRef<HTMLDivElement>(null)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
   const changes = useAtomValue(pendingCtfChangesMapAtom).get(sessionId ?? '') ?? []
+  const setChangesMap = useSetAtom(pendingCtfChangesMapAtom)
+
+  // 语音意见收集：听写结果（targetInputId 匹配点选语音收集器）自动附在当前选中元素上
+  React.useEffect(() => {
+    const onInsert = (event: Event): void => {
+      const detail = (event as CustomEvent<{ sessionId?: string; text?: string; targetInputId?: string | null }>).detail ?? {}
+      const text = detail.text?.trim()
+      if (!text || !detail.sessionId) return
+      if (detail.targetInputId !== `${CTF_VOICE_INPUT_PREFIX}${detail.sessionId}`) return
+      const current = store.get(clickToFixPanelAtom)
+      if (!current) return
+      const ref = current.ref
+      // 入清单：voice 项（同元素多条语音意见累积，不覆盖）
+      const item: CtfChangeItem = { ref, action: 'voice', value: text, appliedAt: Date.now() }
+      store.set(pendingCtfChangesMapAtom, (prev) => {
+        const list = prev.get(detail.sessionId!) ?? []
+        const next = new Map(prev)
+        next.set(detail.sessionId!, [...list, item].slice(-24))
+        return next
+      })
+      // 元素角标：iframe 内 annotate（计数+1，点击角标看意见）
+      const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+      frame?.contentWindow?.postMessage({ __promaCtfApply: true, action: 'annotate', id: ref.id, text }, '*')
+    }
+    window.addEventListener(VOICE_DICTATION_INSERT_EVENT, onInsert)
+    return () => window.removeEventListener(VOICE_DICTATION_INSERT_EVENT, onInsert)
+  }, [store])
 
   // 面板外点击关闭
   React.useEffect(() => {
@@ -79,6 +110,11 @@ export function ClickToFixPanel(): React.ReactElement | null {
     setPanel(null)
   }
 
+  /** 语音：面板保持打开，语音 bar 状态靠近元素；结果自动附在当前元素上（角标+意见） */
+  const startVoiceForElement = (): void => {
+    void window.electronAPI.toggleVoiceDictation({ sourceInputId: `${CTF_VOICE_INPUT_PREFIX}${sessionId ?? ''}` }).catch(() => {})
+  }
+
   const closeAndFocusInput = (): void => {
     setPanel(null)
     const tabs = store.get(tabsAtom)
@@ -108,6 +144,7 @@ export function ClickToFixPanel(): React.ReactElement | null {
     { icon: <Type className="size-3.5" />, label: '改文字', onClick: closeAndFocusInput },
     { icon: <Move className="size-3.5" />, label: '换个位置', onClick: startDrag },
     { icon: <Trash2 className="size-3.5" />, label: '删掉它', onClick: applyDelete },
+    { icon: <Mic className="size-3.5" />, label: '语音', onClick: startVoiceForElement },
     { icon: <MessageCircle className="size-3.5" />, label: '其他', onClick: closeAndFocusInput },
   ]
 
@@ -211,10 +248,14 @@ export function CtfChangesBar(): React.ReactElement | null {
   const removeChange = (index: number): void => {
     const item = changes[index]
     if (!item) return
-    // 撤销 iframe 内即时效果（重新加载预览最稳）
+    // 撤销 iframe 内即时效果：voice 项清角标计数；其余恢复原始样式
     const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
     if (frame?.contentWindow) {
-      frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'undo', id: item.ref.id }, '*')
+      if (item.action === 'voice') {
+        frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'remove-annotation', id: item.ref.id }, '*')
+      } else {
+        frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'undo', id: item.ref.id }, '*')
+      }
     }
     setChangesMap((prev) => {
       const list = prev.get(sessionId ?? '') ?? []
@@ -287,58 +328,55 @@ export function CtfChangesBar(): React.ReactElement | null {
     const what = c.ref.text || c.ref.id
     if (c.action === 'color') return `${what} → 换颜色`
     if (c.action === 'delete') return `${what} → 删除`
+    if (c.action === 'voice') {
+      const t = String(c.value ?? '').slice(0, 24)
+      return `${what} → 💬「${t}」`
+    }
     const v = c.value as { dx?: number; dy?: number } | undefined
     return `${what} → 移动(${v?.dx ?? 0},${v?.dy ?? 0})`
   }
 
   return (
-    <div className="fixed z-[299] bottom-24 left-1/2 -translate-x-1/2 max-w-[560px] w-auto">
+    <div className="fixed z-[299] top-16 left-4 w-auto">
       {changes.length > 0 ? (
-        <div className="flex items-center gap-2 rounded-full border border-border bg-popover/95 shadow-lg px-3 py-1.5 text-xs backdrop-blur">
-          <span className="shrink-0 font-medium text-primary">已调整 {changes.length} 处</span>
-          <div className="flex items-center gap-1 overflow-x-auto max-w-[340px]">
+        <div className="flex flex-col items-start gap-1.5 rounded-xl border border-border bg-popover/95 shadow-lg px-3 py-2 text-xs backdrop-blur">
+          <span className="shrink-0 font-medium text-primary">本轮已调整 {changes.length} 处</span>
+          <div className="flex flex-col items-start gap-1 max-h-48 overflow-y-auto">
             {changes.map((c, i) => (
               <button
-                key={`${c.ref.id}-${i}`}
+                key={`${c.ref.id}-${c.action}-${i}`}
                 type="button"
                 onClick={() => removeChange(i)}
-                className="shrink-0 inline-flex items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 hover:bg-muted/70"
+                className="shrink-0 inline-flex items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 hover:bg-muted/70 max-w-[240px]"
                 title={`${changeLabel(c)}（点击撤销）`}
               >
-                <span className="truncate max-w-[120px]">{changeLabel(c)}</span>
+                <span className="truncate">{changeLabel(c)}</span>
                 <X className="size-3 text-muted-foreground" />
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={discardAll}
-            className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 hover:bg-muted/70"
-          >
-            <RotateCcw className="size-3" /> 放弃
-          </button>
-          <button
-            type="button"
-            onClick={acceptAll}
-            className="shrink-0 inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-2.5 py-0.5 hover:opacity-90"
-          >
-            <Check className="size-3" /> 接受调整
-          </button>
-          <button
-            type="button"
-            onClick={startVoice}
-            className="shrink-0 size-6 inline-flex items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90"
-            aria-label="语音输入"
-            title="语音输入"
-          >
-            <Mic className="size-3.5" />
-          </button>
+          <div className="flex items-center gap-1.5 w-full">
+            <button
+              type="button"
+              onClick={discardAll}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 hover:bg-muted/70"
+            >
+              <RotateCcw className="size-3" /> 放弃
+            </button>
+            <button
+              type="button"
+              onClick={acceptAll}
+              className="inline-flex items-center gap-1 rounded-full bg-primary text-primary-foreground px-2.5 py-1 hover:opacity-90"
+            >
+              <Check className="size-3" /> 接受本轮改动
+            </button>
+          </div>
         </div>
       ) : (
         <button
           type="button"
           onClick={startVoice}
-          className="ml-auto flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg hover:opacity-90"
+          className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg hover:opacity-90"
           aria-label="语音输入"
           title="语音输入：直接说修改意见"
         >

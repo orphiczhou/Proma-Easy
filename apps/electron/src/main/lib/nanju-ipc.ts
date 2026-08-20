@@ -131,6 +131,7 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
               const v = it.value as { dx?: number; dy?: number } | undefined
               return `- ${what}：平移 (${v?.dx ?? 0}px, ${v?.dy ?? 0}px)`
             }
+            if (it.action === 'voice') return `- ${what}：用户意见「${String(it.value ?? '')}」`
             return `- ${what}：${it.action}`
           }).join('\n')
         } catch {
