@@ -39,7 +39,10 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   }
 
+  var suppressClickUntil = 0;
   document.addEventListener('click', function (e) {
+    // 拖拽刚结束的 click 不重新点选（移动操作的稳定交互）
+    if (Date.now() < suppressClickUntil) { suppressClickUntil = 0; return; }
     var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
 
     var layer = ensureHighlightLayer();
@@ -119,42 +122,55 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     // 安全：只接受来自宿主（parent）的指令（R4：防原型内嵌脚本伪造）
     if (e.source !== parent) return;
     if (d.action === 'annotate') {
-      // 元素角标：显示改动意见（语音/文字），计数累加；点击角标查看意见列表
+      // 元素角标（内部右上角，避免被卡片 overflow/圆角裁剪）+ 元素旁窄条显示改动摘要
       var el = document.querySelector('[data-ai-id="' + d.id + '"]');
       if (!el) return;
-      el.style.position = getComputedStyle(el).position === 'static' ? 'relative' : el.style.position;
+      var pos = getComputedStyle(el).position;
+      if (pos === 'static') el.style.position = 'relative';
       var bag = document.getElementById('proma-ctf-badge-' + d.id);
       if (!bag) {
         bag = document.createElement('div');
         bag.id = 'proma-ctf-badge-' + d.id;
-        bag.style.cssText = 'position:absolute;top:-8px;right:-8px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#DC2626;color:#fff;font-size:10px;line-height:16px;text-align:center;cursor:pointer;z-index:9999;box-shadow:0 1px 3px rgba(0,0,0,.4)';
+        bag.style.cssText = 'position:absolute;top:2px;right:2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#DC2626;color:#fff;font-size:10px;line-height:16px;text-align:center;cursor:pointer;z-index:9999;box-shadow:0 1px 3px rgba(0,0,0,.4)';
         el.appendChild(bag);
       }
       var n = parseInt(bag.textContent, 10) || 0;
       bag.textContent = String(n + 1);
-      // 点击角标 → 切换意见浮层
-      bag.onclick = function (ev) {
+      // 元素旁窄条：显示最近一条改动摘要（替换为最新）
+      var strip = document.getElementById('proma-ctf-strip-' + d.id);
+      if (!strip) {
+        strip = document.createElement('div');
+        strip.id = 'proma-ctf-strip-' + d.id;
+        strip.style.cssText = 'position:absolute;left:0;bottom:-20px;max-width:100%;padding:2px 6px;border-radius:4px;background:rgba(79,70,229,.9);color:#fff;font-size:10px;line-height:1.3;z-index:9998;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 6px rgba(0,0,0,.35)';
+        el.appendChild(strip);
+      }
+      strip.textContent = d.text || '';
+      // 点击角标/窄条 → 切换意见浮层
+      var showTip = function (ev) {
         ev.stopPropagation();
         var tip = document.getElementById('proma-ctf-tip-' + d.id);
         if (!tip) {
           tip = document.createElement('div');
           tip.id = 'proma-ctf-tip-' + d.id;
-          tip.style.cssText = 'position:absolute;top:-10px;right:10px;z-index:9998;max-width:220px;padding:6px 8px;border-radius:6px;background:#1f2937;color:#f9fafb;font-size:11px;line-height:1.5;box-shadow:0 4px 12px rgba(0,0,0,.5);white-space:pre-wrap';
+          tip.style.cssText = 'position:absolute;top:-10px;right:12px;z-index:9997;max-width:220px;padding:6px 8px;border-radius:6px;background:#1f2937;color:#f9fafb;font-size:11px;line-height:1.5;box-shadow:0 4px 12px rgba(0,0,0,.5);white-space:pre-wrap';
           el.appendChild(tip);
         }
         tip.textContent = d.text || '';
         tip.style.display = tip.style.display === 'none' ? '' : 'none';
       };
+      bag.onclick = showTip;
+      strip.onclick = showTip;
       return;
     }
     if (d.action === 'remove-annotation') {
       var bagEl = document.getElementById('proma-ctf-badge-' + d.id);
       var tipEl = document.getElementById('proma-ctf-tip-' + d.id);
+      var stripEl = document.getElementById('proma-ctf-strip-' + d.id);
       if (bagEl) {
         var cnt = (parseInt(bagEl.textContent, 10) || 1) - 1;
-        if (cnt <= 0) { bagEl.remove(); } else { bagEl.textContent = String(cnt); }
+        if (cnt <= 0) { bagEl.remove(); if (stripEl) stripEl.remove(); } else { bagEl.textContent = String(cnt); }
       }
-      if (tipEl && (cnt === undefined || cnt <= 0)) tipEl.remove();
+      if (tipEl) tipEl.remove();
       return;
     }
     if (d.action === 'undo') { undoChange(d.id); return; }
@@ -183,8 +199,16 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         document.removeEventListener('mousemove', mv);
         document.removeEventListener('mouseup', up);
         el.style.cursor = '';
-        el.style.transform = base + ' translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
-        reportToHost({ kind: 'change-result', id: d.id, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: Math.round(dx), dy: Math.round(dy) } });
+        var rdx = Math.round(dx), rdy = Math.round(dy);
+        // 位移小于 4px 视为误触（点击未拖动），还原且不上报，避免“点一下放下”产生空改动
+        if (Math.abs(rdx) < 4 && Math.abs(rdy) < 4) {
+          el.style.transform = base;
+          return;
+        }
+        el.style.transform = base + ' translate(' + rdx + 'px, ' + rdy + 'px)';
+        // 拖拽结束后的 click 不再触发点选面板（稳定交互：一次拖动=一次改动）
+        suppressClickUntil = Date.now() + 400;
+        reportToHost({ kind: 'change-result', id: d.id, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: rdx, dy: rdy } });
       };
       var up = function (ev) { finish(ev.clientX - sx, ev.clientY - sy); };
       var down = function (ev) {

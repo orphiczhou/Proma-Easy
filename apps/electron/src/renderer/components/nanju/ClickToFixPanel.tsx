@@ -173,7 +173,7 @@ export function ClickToFixPanel(): React.ReactElement | null {
       {colorPickerOpen && (
         <div className="px-3 py-2 border-b border-border/60">
           <div className="text-[10px] text-muted-foreground mb-1.5">选择新颜色（即时生效）</div>
-          <div className="flex gap-1.5">
+          <div className="flex items-center gap-1.5">
             {PRESET_COLORS.map((c) => (
               <button
                 key={c}
@@ -184,6 +184,18 @@ export function ClickToFixPanel(): React.ReactElement | null {
                 onClick={() => applyColor(c)}
               />
             ))}
+            {/* 自定义调色板（用户反馈：四种预设色后加调色板入口） */}
+            <label
+              className="size-6 rounded-md border border-dashed border-border flex items-center justify-center cursor-pointer hover:bg-muted/70 overflow-hidden"
+              title="自定义调色板"
+            >
+              <input
+                type="color"
+                className="absolute opacity-0 size-0"
+                onChange={(e) => { applyColor(e.target.value); setColorPickerOpen(false) }}
+              />
+              <span className="text-[10px] leading-none">🎨</span>
+            </label>
           </div>
         </div>
       )}
@@ -211,15 +223,23 @@ export function CtfChangesBar(): React.ReactElement | null {
   const store = useStore()
   const setChangesMap = useSetAtom(pendingCtfChangesMapAtom)
   const [previewVisible, setPreviewVisible] = React.useState(false)
+  const [iframeRect, setIframeRect] = React.useState<{ x: number; y: number } | null>(null)
 
-  // 预览 iframe 存在性轮询（轻量，2s）
+  // 预览 iframe 存在性与位置轮询（轻量，1.5s）：浮动条/接受按钮/麦克风都定位在预览窗口内
   React.useEffect(() => {
     const check = (): void => {
       const f = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
-      setPreviewVisible(!!f && f.offsetWidth > 0)
+      const visible = !!f && f.offsetWidth > 0
+      setPreviewVisible(visible)
+      if (visible && f) {
+        const r = f.getBoundingClientRect()
+        setIframeRect((prev) => (prev && Math.abs(prev.x - r.x) < 1 && Math.abs(prev.y - r.y) < 1 ? prev : { x: r.x, y: r.y }))
+      } else {
+        setIframeRect(null)
+      }
     }
     check()
-    const timer = window.setInterval(check, 2000)
+    const timer = window.setInterval(check, 1500)
     return () => window.clearInterval(timer)
   }, [])
 
@@ -336,8 +356,13 @@ export function CtfChangesBar(): React.ReactElement | null {
     return `${what} → 移动(${v?.dx ?? 0},${v?.dy ?? 0})`
   }
 
+  // 浮动条定位在预览窗口内左上角（用户要求：属于 UX 界面范围，不挂在整个窗口左上角）
+  const barStyle: React.CSSProperties | undefined = iframeRect
+    ? { top: iframeRect.y + 8, left: iframeRect.x + 8, position: 'fixed' }
+    : { top: 16, left: 4 }
+
   return (
-    <div className="fixed z-[299] top-16 left-4 w-auto">
+    <div className="fixed z-[299] w-auto" style={barStyle}>
       {changes.length > 0 ? (
         <div className="flex flex-col items-start gap-1.5 rounded-xl border border-border bg-popover/95 shadow-lg px-3 py-2 text-xs backdrop-blur">
           <span className="shrink-0 font-medium text-primary">本轮已调整 {changes.length} 处</span>
