@@ -95,10 +95,10 @@ export function createNanjuProject(input: {
   existing.push(project)
   writeJsonFileAtomic(getMetaPath(input.workspaceSlug), existing)
 
-  // 创建文档目录骨架，使用 project-{slugified-name} 格式
+  // 创建文档目录骨架，使用 project-{slugified-name} 格式（08_APP：P1 Sprint A coding 阶段产物目录）
   const docDirs = [
     '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE',
-    '04_API_SPEC', '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS',
+    '04_API_SPEC', '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS', '08_APP',
   ]
   const wsFilesDir = getWorkspaceFilesDir(input.workspaceSlug)
   const projectDir = join(wsFilesDir, `project-${uniqueId}`)

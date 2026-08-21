@@ -39,7 +39,19 @@ flowchart TD
         PROTO_UC -->|"补充意见"| PROTO
     end
 
-    PROTO_UC -->|"全部用户故事通过"| DONE(["交付 delivered<br/>项目可用"])
+    PROTO_UC -->|"全部用户故事通过"| CODE
+
+    subgraph SG_CODE["③ 全栈开发 fullstack-developer · deepseek-v4-pro"]
+        direction TB
+        CODE["可运行应用代码<br/>08_APP/index.html"]
+        CODE --> CODE_ATK["攻击者审查（AC light）"]
+        CODE_ATK --> CODE_DEF["防御者裁决"]
+        CODE_DEF -->|"red → 修复后重新攻击"| CODE_ATK
+        CODE_DEF -->|"无 red"| CODE_UC{"用户确认<br/>预览 08_APP/index.html"}
+        CODE_UC -->|"补充意见"| CODE
+    end
+
+    CODE_UC -->|"确认"| DONE(["交付 delivered<br/>项目可用"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
@@ -49,6 +61,8 @@ flowchart TD
     class USER,MODE st-pending
     class REQ st-done
     class PROTO st-current
+    class CODE st-pending
+    class CODE_ATK,CODE_DEF,CODE_UC st-pending
     class REQ_ATK,REQ_DEF,REQ_UC st-sub-done
     linkStyle 7 stroke:#059669,stroke-width:2.5px
 "
@@ -119,7 +133,19 @@ flowchart TD
         PLAN_UC -->|"补充意见"| PLAN
     end
 
-    PLAN_UC -->|"确认"| DONE(["交付 delivered<br/>进入编码实现阶段"])
+    PLAN_UC -->|"确认"| CODE
+
+    subgraph SG_CODE["⑤ 全栈开发 fullstack-developer · deepseek-v4-pro"]
+        direction TB
+        CODE["可运行应用代码<br/>08_APP/index.html"]
+        CODE --> CODE_ATK["攻击者审查（AC medium）"]
+        CODE_ATK --> CODE_DEF["防御者裁决"]
+        CODE_DEF -->|"red → 修复后重新攻击"| CODE_ATK
+        CODE_DEF -->|"无 red"| CODE_UC{"用户确认<br/>预览 08_APP/index.html"}
+        CODE_UC -->|"补充意见"| CODE
+    end
+
+    CODE_UC -->|"确认"| DONE(["交付 delivered<br/>项目可用 · 交付完成"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
@@ -132,6 +158,8 @@ flowchart TD
     class ARCH st-current
     class PLAN st-pending
     class PLAN_ATK,PLAN_DEF,PLAN_UC st-pending
+    class CODE st-pending
+    class CODE_ATK,CODE_DEF,CODE_UC st-pending
     class REQ_ATK,REQ_DEF,REQ_UC st-sub-done
     class PROTO_SS,PROTO_VIS,PROTO_ATK,PROTO_DEF,PROTO_UC st-sub-done
     linkStyle 7,18 stroke:#059669,stroke-width:2.5px

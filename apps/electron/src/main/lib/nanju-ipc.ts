@@ -153,6 +153,8 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     const win = getMainWindow()
     if (!win || win.isDestroyed()) return { ok: false, error: '主窗口不可用' }
     // 面板选项指令（interaction-spec 交互1 快速选项）：直接转化为修改指令消息
+    // coding 阶段（P1 Sprint A）点选目标是 08_APP 代码而非 prototype.html，且不回写 PRD
+    const isCodingStage = project.currentStage === 'coding'
     const actionLabel = (() => {
       if (input.kind === 'commit-changes') {
         // 待接受清单一次性提交：结构化列出全部即时调整（WO4：明细构建抽 buildCtfCommitDetail 纯函数）
@@ -162,7 +164,7 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
         } catch {
           detail = input.action ?? ''
         }
-        return `以下是我在原型上即时调整的修改清单（共 ${input.type}），请把这些改动应用到 prototype.html 并同步 PRD：\n${detail}`
+        return `以下是我在${isCodingStage ? '应用' : '原型'}上即时调整的修改清单（共 ${input.type}），请把这些改动应用到${isCodingStage ? ' 08_APP 的代码文件（入口 08_APP/index.html），不需要同步 PRD' : ' prototype.html 并同步 PRD'}：\n${detail}`
       }
       if (input.kind !== 'panel-action') return null
       const el = `${input.type}「${input.text || input.id}」`
@@ -171,12 +173,12 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
       return `对元素 ${el}（data-ai-id=${input.id}）执行：${input.action}。`
     })()
     const label2 = input.kind === 'element-click'
-      ? `【点选纠错】我点击了原型元素：${input.type}「${input.text || input.id}」（data-ai-id=${input.id}）。请给出这个元素的快速修改选项。`
+      ? `【点选纠错】我点击了${isCodingStage ? '页面' : '原型'}元素：${input.type}「${input.text || input.id}」（data-ai-id=${input.id}）。请给出这个元素的快速修改选项。`
       : input.kind === 'panel-action' && actionLabel
-        ? `【点选纠错】${actionLabel}请执行修改并同步 PRD。`
+        ? `【点选纠错】${actionLabel}${isCodingStage ? '目标文件是 08_APP/ 下的代码文件（入口 08_APP/index.html），请执行修改。' : '请执行修改并同步 PRD。'}`
         : input.kind === 'commit-changes' && actionLabel
           ? `【点选纠错·批量修改】${actionLabel}`
-          : `【点选纠错】我点了原型空白处，没有选中可修改元素。`
+          : `【点选纠错】我点了${isCodingStage ? '应用' : '原型'}空白处，没有选中可修改元素。`
     // 会话可能空闲（等用户意见时是 idle）：queueAgentMessage 要求会话运行中，
     // 点选消息语义等同用户新消息——用 runAgent 开新一轮（带真实 webContents 流式回显）。
     void runAgent(

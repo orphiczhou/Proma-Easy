@@ -139,3 +139,46 @@ describe('L2 委派指令构建（视觉闭环）', () => {
       .toThrow('防御者渠道')
   })
 })
+
+describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
+  const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
+
+  test('coding 包含零构建约束、沙箱边界约束与入口产出路径', () => {
+    const phase = getPhaseNode('quick', 'coding')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+
+    expect(task).toContain('零构建约束')
+    expect(task).toContain('禁止触碰其他 project-')
+    expect(task).toContain('请将产出写入：/tmp/project/08_APP/index.html')
+    // 点选纠错标记与原型同构
+    expect(task).toContain('data-ai-id')
+  })
+
+  test('coding 强调 PRD 用户故事清单必读（自测对照基准）+ 原型大文件取舍提示', () => {
+    const phase = getPhaseNode('iterative', 'coding')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+
+    expect(task).toContain('前序必读：PRD 用户故事清单')
+    expect(task).toContain('代码生成、运行自测、AC 审计')
+    expect(task).toContain('允许只读其结构与关键交互段')
+  })
+
+  test('coding 自测指令：chrome-devtools new_page 打开入口实测 P0 交互，连续 1 轮无缺陷', () => {
+    const phase = getPhaseNode('quick', 'coding')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+
+    expect(task).toContain('chrome-devtools MCP 的 new_page 打开入口文件')
+    expect(task).toContain('实测每个 P0 交互')
+    expect(task).toContain('连续 1 轮无缺陷才算完成')
+  })
+
+  test('coding 不含 prototype 专属视觉闭环（截图自检/视觉裁决/视觉维度），沿用默认五维审计', () => {
+    const phase = getPhaseNode('iterative', 'coding')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+
+    expect(task).toContain('完整性、正确性、一致性、可执行性、安全性。')
+    expect(task).not.toContain('截图渲染自检循环')
+    expect(task).not.toContain('独立视觉裁决')
+    expect(task).not.toContain('视觉还原度')
+  })
+})

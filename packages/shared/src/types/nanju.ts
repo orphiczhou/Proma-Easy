@@ -7,15 +7,16 @@
  * 注意：本文件是纯类型/常量模块，不得引入 electron 或运行时依赖。
  */
 
-/** 南大项目模式：quick=快消型（3 阶段），iterative=长期迭代型（5 阶段） */
+/** 南大项目模式：quick=快消型（4 阶段），iterative=长期迭代型（6 阶段，均含 delivered 哨兵） */
 export type NanjuProjectMode = 'quick' | 'iterative'
 
 /** 调度员 Todo 标题强制前缀（nanju-router-prompt 建 Todo 时使用，向导图徽标按此解析） */
-export const PHASE_TODO_PREFIX: Record<'requirements' | 'prototype' | 'architecture' | 'planning', string> = {
+export const PHASE_TODO_PREFIX: Record<'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding', string> = {
   requirements: '需求阶段：',
   prototype: '原型阶段：',
   architecture: '架构阶段：',
   planning: '规划阶段：',
+  coding: '开发阶段：',
 }
 
 /** AC 攻/防角色配置（resolveACActors 的解析结果） */

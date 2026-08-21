@@ -30,7 +30,7 @@ const STAGE_LABELS: Record<string, string> = {
   'prototype': '原型设计',
   'architecture': '架构设计',
   'planning': '工程规划',
-  'coding': '编码中',
+  'coding': '开发中',
   'testing': '测试中',
   'delivered': '已交付',
 }

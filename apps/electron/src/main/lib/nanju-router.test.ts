@@ -3,6 +3,7 @@ import {
   AC_PRESETS,
   assertACFamilyDiversity,
   channelFamily,
+  checkOutputFormat,
   getPhaseNode,
   getRoute,
   resolveACActors,
@@ -101,10 +102,10 @@ describe('quick/iterative 默认分级映射', () => {
     }
   })
 
-  test('quick 路由：requirements → prototype → delivered；iterative 路由包含完整四阶段', () => {
-    expect(getRoute('quick').map((n) => n.id)).toEqual(['requirements', 'prototype', 'delivered'])
+  test('quick 路由：requirements → prototype → coding → delivered；iterative 路由完整五阶段', () => {
+    expect(getRoute('quick').map((n) => n.id)).toEqual(['requirements', 'prototype', 'coding', 'delivered'])
     expect(getRoute('iterative').map((n) => n.id)).toEqual([
-      'requirements', 'prototype', 'architecture', 'planning', 'delivered',
+      'requirements', 'prototype', 'architecture', 'planning', 'coding', 'delivered',
     ])
   })
 
@@ -129,6 +130,50 @@ describe('quick/iterative 默认分级映射', () => {
     expect(iterativePrototype?.model).toBe('MiniMax-M3')
     // 'minimax' 仅是家族标记，实际渠道 ID 在构建委派指令时运行时解析
     expect(quickPrototype?.channel).toBe('minimax')
+  })
+})
+
+describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
+  test('coding 节点定义：全栈开发 / deepseek-v4-pro / 08_APP/index.html / next=delivered', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const coding = getPhaseNode(mode, 'coding')
+      expect(coding?.role).toBe('fullstack-developer')
+      expect(coding?.title).toBe('全栈开发')
+      expect(coding?.channel).toBe('deepseek')
+      expect(coding?.model).toBe('deepseek-v4-pro')
+      expect(coding?.outputPath).toBe('08_APP/index.html')
+      expect(coding?.next).toBe('delivered')
+      expect(coding?.requiresUserConfirmation).toBe(true)
+      expect(coding?.requiresAC).toBe(false)
+      expect(coding?.retryLimit).toBe(2)
+      expect(coding?.taskWeight).toBe(mode === 'quick' ? 'light' : 'medium')
+    }
+  })
+
+  test('路由改向：quick prototype.next=coding；iterative planning.next=coding（两条链均贯通到代码交付）', () => {
+    expect(getPhaseNode('quick', 'prototype')?.next).toBe('coding')
+    expect(getPhaseNode('iterative', 'planning')?.next).toBe('coding')
+    expect(getPhaseNode('iterative', 'prototype')?.next).toBe('architecture')
+  })
+
+  test('FORMAT_CHECKS：coding 接受 <html / <!DOCTYPE / <script（入口可运行）', () => {
+    expect(checkOutputFormat('coding', '<html><body>x</body></html>')).toBe(true)
+    expect(checkOutputFormat('coding', '<!DOCTYPE html>')).toBe(true)
+    expect(checkOutputFormat('coding', '<script src="app.js"></script>')).toBe(true)
+    expect(checkOutputFormat('coding', '这不是 HTML，没有脚本')).toBe(false)
+  })
+
+  test('coding 作者 deepseek 系与两套 AC 预设防御者（glm 系）均满足家族多样性断言', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const coding = getPhaseNode(mode, 'coding')!
+      const actors = resolveACActors(coding)
+      expect(actors.defender.channel).not.toBe(coding.channel)
+      expect(() => assertACFamilyDiversity({
+        authorChannel: coding.channel,
+        attackerChannel: actors.attacker.channel,
+        defenderChannel: actors.defender.channel,
+      })).not.toThrow()
+    }
   })
 })
 

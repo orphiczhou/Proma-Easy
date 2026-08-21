@@ -9,10 +9,10 @@ import { describe, expect, test } from 'bun:test'
 import { getGuideRoute, getRoute, AC_PRESETS } from './nanju-router'
 
 describe('getGuideRoute（nanju:get-route 数据面）', () => {
-  test('quick：3 个阶段（含 delivered 哨兵），taskWeight=light，acActors=light 预设', () => {
+  test('quick：4 个阶段（含 delivered 哨兵），taskWeight=light，acActors=light 预设', () => {
     const route = getGuideRoute('quick')
-    expect(route.length).toBe(3)
-    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'delivered'])
+    expect(route.length).toBe(4)
+    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'coding', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('light')
@@ -24,9 +24,9 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(sentinel?.outputPath).toBe('')
   })
 
-  test('iterative：5 个阶段（含 delivered 哨兵），taskWeight=medium，acActors=medium 预设', () => {
+  test('iterative：6 个阶段（含 delivered 哨兵），taskWeight=medium，acActors=medium 预设', () => {
     const route = getGuideRoute('iterative')
-    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'planning', 'delivered'])
+    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'planning', 'coding', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('medium')
@@ -39,13 +39,18 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     const iterative = getGuideRoute('iterative')
     expect(quick.find((p) => p.id === 'requirements')?.outputPath).toBe('01_PRD/prd.md')
     expect(quick.find((p) => p.id === 'prototype')?.outputPath).toBe('02_UX_DESIGN/prototype.html')
+    expect(quick.find((p) => p.id === 'coding')?.outputPath).toBe('08_APP/index.html')
     expect(iterative.find((p) => p.id === 'architecture')?.outputPath).toBe('03_ARCHITECTURE/architecture.md')
     expect(iterative.find((p) => p.id === 'planning')?.outputPath).toBe('05_PROJECT_PLAN/plan.md')
+    expect(iterative.find((p) => p.id === 'coding')?.outputPath).toBe('08_APP/index.html')
   })
 
-  test('prototype next 指向：quick→delivered，iterative→architecture（路由分叉点）', () => {
-    expect(getGuideRoute('quick').find((p) => p.id === 'prototype')?.next).toBe('delivered')
+  test('prototype next 指向：quick→coding，iterative→architecture（路由分叉点）；coding next=delivered（两链共同收口）', () => {
+    expect(getGuideRoute('quick').find((p) => p.id === 'prototype')?.next).toBe('coding')
     expect(getGuideRoute('iterative').find((p) => p.id === 'prototype')?.next).toBe('architecture')
+    expect(getGuideRoute('iterative').find((p) => p.id === 'planning')?.next).toBe('coding')
+    expect(getGuideRoute('quick').find((p) => p.id === 'coding')?.next).toBe('delivered')
+    expect(getGuideRoute('iterative').find((p) => p.id === 'coding')?.next).toBe('delivered')
   })
 
   test('requiresAC 硬门禁仅 architecture 为 true', () => {
@@ -70,12 +75,15 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     }
   })
 
-  test('阶段角色与模型（v0.16.87 基准：UX 顾问为 MiniMax-M3 家族标记）', () => {
+  test('阶段角色与模型（v0.16.87 基准：UX 顾问为 MiniMax-M3 家族标记；v0.17.60：coding 为全栈开发）', () => {
     const iterative = getGuideRoute('iterative')
     const byTitle = (phase: string) => iterative.find((p) => p.id === phase)
     expect(byTitle('requirements')?.title).toBe('需求分析师')
     expect(byTitle('prototype')?.model).toBe('MiniMax-M3')
     expect(byTitle('architecture')?.title).toBe('架构师')
     expect(byTitle('planning')?.title).toBe('工程经理')
+    expect(byTitle('coding')?.title).toBe('全栈开发')
+    expect(byTitle('coding')?.role).toBe('fullstack-developer')
+    expect(byTitle('coding')?.model).toBe('deepseek-v4-pro')
   })
 })

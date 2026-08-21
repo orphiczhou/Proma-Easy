@@ -16,7 +16,7 @@ import type { GuideRoutePhase } from '@proma/shared'
 
 // ===== 类型定义 =====
 
-export type PhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'delivered'
+export type PhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding' | 'delivered'
 
 /** AC 审计强度分级：quick 模式全阶段 light（快模型攻防），iterative 模式全阶段 medium（强模型攻防） */
 export type TaskWeight = 'light' | 'medium'
@@ -210,12 +210,44 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresUserConfirmation: true,
     requiresAC: false,
     retryLimit: 2,
-    next: mode === 'quick' ? 'delivered' : 'architecture',
+    next: mode === 'quick' ? 'coding' : 'architecture',
+    taskWeight: defaultWeight,
+  }
+
+  // coding 阶段（P1 Sprint A：v0.17.60 向导域→编程域贯通）
+  // 两条路由共用同一节点（quick: prototype→coding→delivered；iterative: planning→coding→delivered）。
+  // 作者选 deepseek 系：与 light/medium 两套 AC 预设防御者（glm 系）均满足家族多样性断言；
+  // 若后续切 GLM 系作者，必须显式覆盖 acDefender*（PhaseNode 已预留覆盖位）。
+  const coding: PhaseNode = {
+    id: 'coding',
+    role: 'fullstack-developer',
+    title: '全栈开发',
+    channel: 'deepseek',
+    model: 'deepseek-v4-pro',
+    task: '你是全栈开发工程师。先阅读任务末尾「前序产出文件」一节实际列出的产出（PRD 必读；原型按取舍提示阅读），'
+      + '然后生成可直接在浏览器运行的零构建应用代码，入口写入 08_APP/index.html。',
+    outputPath: '08_APP/index.html',
+    constraints: [
+      '零构建约束：纯 HTML/CSS/原生 JS，禁止 npm/打包器/框架构建链，浏览器直接打开即可运行',
+      '以 02_UX_DESIGN/prototype.html 为视觉与交互基准，页面结构、文案、交互行为不得偏离',
+      '数据持久化（如需要）只用 localStorage/IndexedDB，不引入任何后端服务（file:// 本地打开时 localStorage 作用域与 http 站点不同，所有键名加项目前缀避免跨项目串数据）',
+      '所有资源（css/js/图片）放在 08_APP/ 内用相对路径引用，不得引用 08_APP 之外或远程 CDN 生产依赖',
+      '点选纠错标记（硬性标准）：所有可交互/可修改 UI 元素必须标 data-ai-id（唯一英文ID）+ data-ai-type（中文类型），与原型同一套 ID 命名，保持原型→代码可对照',
+      '只在项目目录 08_APP/ 下写入文件，禁止触碰其他 project-* 目录与工作区根的配置文件',
+      '自测（必须）：生成后用 chrome-devtools MCP 的 new_page 打开入口文件（绝对路径见「产出文件」一节），'
+        + '逐条对照 PRD 用户故事实测每个 P0 交互（点击/输入/提交都要真实触发并看到结果），'
+        + '发现问题修复后重测，连续 1 轮无缺陷才算完成'
+        + '（new_page 需 URL 形态：本地文件用 file:// 前缀+正斜杠绝对路径；若 chrome-devtools MCP 不可用，降级为逐项人工核对入口结构、资源引用与 P0 交互逻辑，并在交付说明中注明未实测）',
+    ],
+    requiresUserConfirmation: true, // 预览 + 用户确认（Sprint A 骨架的核心收口）
+    requiresAC: false,              // 不开 red 硬门禁；AC 攻防指令仍由 buildL2TaskWithAC 自动注入
+    retryLimit: 2,
+    next: 'delivered',
     taskWeight: defaultWeight,
   }
 
   if (mode === 'quick') {
-    return [REQUIREMENTS, prototype, SENTINEL]
+    return [REQUIREMENTS, prototype, coding, SENTINEL]
   }
 
   const architecture: PhaseNode = {
@@ -246,11 +278,11 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresUserConfirmation: true,
     requiresAC: false,
     retryLimit: 2,
-    next: 'delivered',
+    next: 'coding',
     taskWeight: defaultWeight,
   }
 
-  return [REQUIREMENTS, prototype, architecture, planning, SENTINEL]
+  return [REQUIREMENTS, prototype, architecture, planning, coding, SENTINEL]
 }
 
 const ROUTES: Record<ProjectMode, PhaseNode[]> = {
@@ -325,6 +357,9 @@ export function handlePhaseResult(result: PhaseResult, phase: PhaseNode): PhaseA
 const FORMAT_CHECKS: Record<PhaseId, (content: string) => boolean> = {
   requirements: (c) => c.includes('# ') || c.includes('## '),
   prototype: (c) => c.includes('<html') || c.includes('<!DOCTYPE') || c.includes('<div'),
+  // coding 入口是 HTML，比 prototype 多给 <script：最低格式底线为 HTML 文档或含脚本
+  // （完整「可运行」由 L2 自测 + 引用校验分层保证，不在此收紧）
+  coding: (c) => c.includes('<html') || c.includes('<!DOCTYPE') || c.includes('<script'),
   architecture: (c) => c.includes('# ') || c.includes('## '),
   planning: (c) => c.includes('# ') || c.includes('## '),
   delivered: () => true,

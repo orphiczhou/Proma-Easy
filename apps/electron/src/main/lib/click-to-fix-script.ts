@@ -306,6 +306,9 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     if (!el || !orig) return { ok: false };
     var act = value && value.action ? String(value.action) : '';
     if (act === 'color') {
+      // 应用路径设的是 backgroundColor（applyChange :282）——选择性还原必须同步还原
+      // bg 与 color 两个属性（与全量还原 :322-323 对齐），只还原 color 会残留背景色
+      el.style.backgroundColor = orig.bg;
       el.style.color = orig.color;
     } else if (act === 'move') {
       el.style.transform = orig.transform;

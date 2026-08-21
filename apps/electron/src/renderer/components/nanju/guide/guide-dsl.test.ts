@@ -51,7 +51,11 @@ const QUICK_ROUTE: GuideRoutePhase[] = [
   makePhase({ taskWeight: 'light', acActors: LIGHT_ACTORS }),
   makePhase({
     id: 'prototype', role: 'ux-advisor', title: 'UX 顾问', channel: 'minimax', model: 'MiniMax-M3',
-    outputPath: '02_UX_DESIGN/prototype.html', retryLimit: 2, next: 'delivered', taskWeight: 'light', acActors: LIGHT_ACTORS,
+    outputPath: '02_UX_DESIGN/prototype.html', retryLimit: 2, next: 'coding', taskWeight: 'light', acActors: LIGHT_ACTORS,
+  }),
+  makePhase({
+    id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'deepseek', model: 'deepseek-v4-pro',
+    outputPath: '08_APP/index.html', retryLimit: 2, next: 'delivered', taskWeight: 'light', acActors: LIGHT_ACTORS,
   }),
   SENTINEL,
 ]
@@ -68,7 +72,11 @@ const ITERATIVE_ROUTE: GuideRoutePhase[] = [
   }),
   makePhase({
     id: 'planning', role: 'engineering-manager', title: '工程经理', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '05_PROJECT_PLAN/plan.md', retryLimit: 2, next: 'delivered', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
+    outputPath: '05_PROJECT_PLAN/plan.md', retryLimit: 2, next: 'coding', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
+  }),
+  makePhase({
+    id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'deepseek', model: 'deepseek-v4-pro',
+    outputPath: '08_APP/index.html', retryLimit: 2, next: 'delivered', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
   }),
   SENTINEL,
 ]
@@ -79,32 +87,36 @@ const NO_PROGRESS = null
 // ===== AC-02：DSL 结构正确性 =====
 
 describe('buildGuideDsl 结构（AC-02）', () => {
-  test('quick 版：含 REQ/PROTO 主阶段与 delivered 终点，不含 ARCH/PLAN', () => {
+  test('quick 版：含 REQ/PROTO/CODE 主阶段与 delivered 终点，不含 ARCH/PLAN', () => {
     const dsl = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(dsl).toContain('REQ[')
     expect(dsl).toContain('PROTO[')
+    expect(dsl).toContain('CODE[')
     expect(dsl).toContain('DONE([\"交付 delivered')
     expect(dsl.includes('ARCH')).toBe(false)
     expect(dsl.includes('PLAN')).toBe(false)
   })
 
-  test('iterative 版：含 REQ/PROTO/ARCH/PLAN 四个主阶段', () => {
+  test('iterative 版：含 REQ/PROTO/ARCH/PLAN/CODE 五个主阶段', () => {
     const dsl = buildGuideDsl({ mode: 'iterative', route: ITERATIVE_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(dsl).toContain('REQ[')
     expect(dsl).toContain('PROTO[')
     expect(dsl).toContain('ARCH[')
     expect(dsl).toContain('PLAN[')
+    expect(dsl).toContain('CODE[')
   })
 
   test('两版 outputPath 与 nanju-router 一致', () => {
     const quick = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(quick).toContain('01_PRD/prd.md')
     expect(quick).toContain('02_UX_DESIGN/prototype.html')
+    expect(quick).toContain('08_APP/index.html')
     const iterative = buildGuideDsl({ mode: 'iterative', route: ITERATIVE_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(iterative).toContain('01_PRD/prd.md')
     expect(iterative).toContain('02_UX_DESIGN/prototype.html')
     expect(iterative).toContain('03_ARCHITECTURE/architecture.md')
     expect(iterative).toContain('05_PROJECT_PLAN/plan.md')
+    expect(iterative).toContain('08_APP/index.html')
   })
 
   test('quick 边标签含 light、iterative 含 medium（AC 强度按模式整体分级）', () => {
@@ -116,26 +128,30 @@ describe('buildGuideDsl 结构（AC-02）', () => {
     expect(iterative).toContain('攻 deepseek-v4-pro / 防 GLM-5.3')
   })
 
-  test('ARCH 子图含「AC 结论硬门禁」独立出口边文案，其余阶段不含（修订 Y2）', () => {
+  test('ARCH 子图含「AC 结论硬门禁」独立出口边文案，其余阶段不含（修订 Y2）；CODE 子图走默认分支', () => {
     const dsl = buildGuideDsl({ mode: 'iterative', route: ITERATIVE_ROUTE, progress: NO_PROGRESS, isDark: false })
     const archIndex = dsl.indexOf('subgraph SG_ARCH')
     const planIndex = dsl.indexOf('subgraph SG_PLAN')
     const reqIndex = dsl.indexOf('subgraph SG_REQ')
     const protoIndex = dsl.indexOf('subgraph SG_PROTO')
+    const codeIndex = dsl.indexOf('subgraph SG_CODE')
     const archSub = dsl.slice(archIndex, planIndex)
     expect(archSub).toContain('AC 结论硬门禁')
     expect(archSub).toContain('ARCH_GATE')
     expect(dsl.slice(reqIndex, protoIndex)).not.toContain('AC 结论硬门禁')
     expect(dsl.slice(protoIndex, archIndex)).not.toContain('AC 结论硬门禁')
-    expect(dsl.slice(planIndex)).not.toContain('AC 结论硬门禁')
+    expect(dsl.slice(planIndex, codeIndex)).not.toContain('AC 结论硬门禁')
+    expect(dsl.slice(codeIndex)).not.toContain('AC 结论硬门禁')
+    // coding 主节点 label：可运行应用代码 + 08_APP/index.html（走默认分支：产出→攻击者→防御者→用户确认）
+    expect(dsl.slice(codeIndex)).toContain('可运行应用代码<br/>08_APP/index.html')
   })
 
   test('prototype 特有环节：截图自检循环 + 独立视觉裁决；哨兵节点被过滤', () => {
     const dsl = buildGuideDsl({ mode: 'iterative', route: ITERATIVE_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(dsl).toContain('PROTO_SS{\"截图渲染自检循环')
     expect(dsl).toContain('PROTO_VIS{\"独立视觉裁决')
-    // 哨兵（id=delivered）不产生第四个 subgraph，只有 REQ/PROTO/ARCH/PLAN 四个 subgraph
-    expect(dsl.match(/subgraph SG_/g)?.length).toBe(4)
+    // 哨兵（id=delivered）不产生第六个 subgraph，只有 REQ/PROTO/ARCH/PLAN/CODE 五个 subgraph
+    expect(dsl.match(/subgraph SG_/g)?.length).toBe(5)
   })
 
   test('对照模式（progress=null）不注入状态 class，仅注入中性参考样式 st-ref（AC-11 修订）', () => {
@@ -167,43 +183,49 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
     const dsl = buildGuideDsl({
       mode: 'quick',
       route: QUICK_ROUTE,
-      progress: { stageStates: { requirements: 'done', prototype: 'current', delivered: 'pending' } },
+      progress: { stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' } },
       isDark: false,
     })
     expect(dsl).toContain('class REQ st-done')
     expect(dsl).toContain('class PROTO st-current')
     // REQ 阶段子节点跟随 done（弱一档）
     expect(dsl).toContain('class REQ_ATK,REQ_DEF,REQ_UC st-sub-done')
+    // coding 未开始：主节点与子节点 pending 灰态
+    expect(dsl).toContain('class CODE st-pending')
+    expect(dsl).toContain('class CODE_ATK,CODE_DEF,CODE_UC st-pending')
     // classDef 三态色注入（亮色实色填充，背景/元素反差）
     expect(dsl).toContain('classDef st-done fill:#A7F3D0,stroke:#059669')
     expect(dsl).toContain('classDef st-current fill:#C7D2FE,stroke:#4F46E5')
     expect(dsl).toContain('classDef st-pending fill:#FFFFFF,stroke:#9CA3AF')
-    // 已通过的跨阶段边加粗（linkStyle，边索引 7 = REQ_UC→PROTO）
+    // 已通过的跨阶段边加粗（linkStyle，边索引 7 = REQ_UC→PROTO（coding 加在 PROTO 之后，不影响该索引））
     expect(dsl).toContain('linkStyle 7 stroke:#059669,stroke-width:2.5px')
   })
 
-  test('iterative：REQ done 时 ARCH/PLAN 子节点 st-pending 灰态', () => {
+  test('iterative：REQ done 时 ARCH/PLAN/CODE 子节点 st-pending 灰态', () => {
     const dsl = buildGuideDsl({
       mode: 'iterative',
       route: ITERATIVE_ROUTE,
-      progress: { stageStates: { requirements: 'done', prototype: 'current', architecture: 'pending', planning: 'pending', delivered: 'pending' } },
+      progress: { stageStates: { requirements: 'done', prototype: 'current', architecture: 'pending', planning: 'pending', coding: 'pending', delivered: 'pending' } },
       isDark: false,
     })
     expect(dsl).toContain('class ARCH_ATK,ARCH_DEF,ARCH_GATE,ARCH_UC st-pending')
     expect(dsl).toContain('class PLAN_ATK,PLAN_DEF,PLAN_UC st-pending')
+    expect(dsl).toContain('class CODE_ATK,CODE_DEF,CODE_UC st-pending')
   })
 
   test('delivered：全部 done + 终点 done 标记', () => {
     const dsl = buildGuideDsl({
       mode: 'quick',
       route: QUICK_ROUTE,
-      progress: { stageStates: { requirements: 'done', prototype: 'done', delivered: 'done' } },
+      progress: { stageStates: { requirements: 'done', prototype: 'done', coding: 'done', delivered: 'done' } },
       isDark: false,
     })
     expect(dsl).toContain('class DONE st-done')
     expect(dsl).toContain('class REQ st-done')
     expect(dsl).toContain('class PROTO st-done')
+    expect(dsl).toContain('class CODE st-done')
     expect(dsl).toContain('class PROTO_SS,PROTO_VIS,PROTO_ATK,PROTO_DEF,PROTO_UC st-sub-done')
+    expect(dsl).toContain('class CODE_ATK,CODE_DEF,CODE_UC st-sub-done')
   })
 
   test('暗色主题输出深色 classDef（AC-07 数据面）', () => {
@@ -264,6 +286,7 @@ describe('parseTodoPhase 前缀解析', () => {
     expect(parseTodoPhase('原型阶段：委派 UX 顾问')).toBe('prototype')
     expect(parseTodoPhase('架构阶段：等待用户确认')).toBe('architecture')
     expect(parseTodoPhase('规划阶段：确认工程计划')).toBe('planning')
+    expect(parseTodoPhase('开发阶段：委派全栈开发')).toBe('coding')
   })
 
   test('宽松关键词匹配（强制前缀启用前的历史 Todo 降级识别）', () => {
@@ -272,6 +295,8 @@ describe('parseTodoPhase 前缀解析', () => {
     expect(parseTodoPhase('架构文档审查')).toBe('architecture')
     expect(parseTodoPhase('工程计划确认')).toBe('planning')
     expect(parseTodoPhase('计划评审')).toBe('planning')
+    expect(parseTodoPhase('开发修复登录页')).toBe('coding')
+    expect(parseTodoPhase('编码任务清单')).toBe('coding')
   })
 
   test('无法归类返回 null（该阶段无徽标，降级不报错）', () => {
@@ -334,12 +359,32 @@ describe('computeStageStates 边界态（AC-12）', () => {
     expect(result.notice).toContain('选择')
   })
 
-  test('coding/testing 遗留值：最后阶段 current + 交接提示（不崩溃）', () => {
-    for (const stage of ['coding', 'testing'] as const) {
-      const result = computeStageStates({ mode: 'iterative', currentStage: stage, status: 'active' }, ITERATIVE_ROUTE)
-      expect(result.stageStates.planning).toBe('current')
-      expect(result.notice).toContain(stage === 'coding' ? '编码' : '测试')
-    }
+  test('coding 是真实路由阶段：按序比较（iterative currentStage=coding → 前四阶段 done、coding current）', () => {
+    const result = computeStageStates({ mode: 'iterative', currentStage: 'coding', status: 'active' }, ITERATIVE_ROUTE)
+    expect(result.stageStates.requirements).toBe('done')
+    expect(result.stageStates.prototype).toBe('done')
+    expect(result.stageStates.architecture).toBe('done')
+    expect(result.stageStates.planning).toBe('done')
+    expect(result.stageStates.coding).toBe('current')
+    expect(result.stageStates.delivered).toBe('pending')
+    expect(result.notice).toBeNull()
+  })
+
+  test('coding 是真实路由阶段：quick currentStage=coding → prototype done、coding current', () => {
+    const result = computeStageStates({ mode: 'quick', currentStage: 'coding', status: 'active' }, quick)
+    expect(result.stageStates.requirements).toBe('done')
+    expect(result.stageStates.prototype).toBe('done')
+    expect(result.stageStates.coding).toBe('current')
+    expect(result.stageStates.delivered).toBe('pending')
+    expect(result.notice).toBeNull()
+  })
+
+  test('testing 遗留值：全 pending 无高亮 + 收口提示（不崩溃）', () => {
+    const result = computeStageStates({ mode: 'iterative', currentStage: 'testing', status: 'active' }, ITERATIVE_ROUTE)
+    expect(result.stageStates.coding).toBe('pending')
+    expect(result.stageStates.delivered).toBe('pending')
+    expect(result.notice).toContain('测试')
+    expect(result.notice).toContain('向导流程已交付')
   })
 
   test('未知 stage：全 pending + 数据异常提示（不崩溃）', () => {
@@ -358,6 +403,9 @@ describe('resolveGuideNodeTarget 锚点解析（AC-10 数据面）', () => {
     expect(resolveGuideNodeTarget('ARCH_GATE')).toBe('architecture')
     expect(resolveGuideNodeTarget('flowchart-REQ-0')).toBe('requirements')
     expect(resolveGuideNodeTarget('flowchart-PROTO_UC-12')).toBe('prototype')
+    expect(resolveGuideNodeTarget('CODE')).toBe('coding')
+    expect(resolveGuideNodeTarget('CODE_DEF')).toBe('coding')
+    expect(resolveGuideNodeTarget('flowchart-CODE-4')).toBe('coding')
     expect(resolveGuideNodeTarget('USER')).toBe('user')
     expect(resolveGuideNodeTarget('MODE')).toBe('mode')
     expect(resolveGuideNodeTarget('DONE')).toBe('done')

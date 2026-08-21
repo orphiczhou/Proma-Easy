@@ -21,6 +21,7 @@
 | UX 顾问 | glm-zhipu | glm-5.2 | 02_UX_DESIGN/prototype.html |
 | 架构师 | deepseek | deepseek-v4-pro | 03_ARCHITECTURE/architecture.md |
 | 工程经理 | deepseek | deepseek-v4-pro | 05_PROJECT_PLAN/plan.md |
+| 全栈开发 | deepseek | deepseek-v4-pro | 08_APP/index.html |
 
 ## 委派与代答流程
 

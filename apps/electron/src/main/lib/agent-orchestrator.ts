@@ -1891,7 +1891,30 @@ export class AgentOrchestrator {
                     const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
                     if (verifyError) {
                       console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
+                      // 可见化（AC L-002）：校验失败时 PHASE_ADVANCE 不推进，除主进程日志外
+                      // 向会话注入 assistant 消息，让用户/调度员在 UI 直接看到拦截原因；
+                      // 不自动续接，待修复后重新声明推进（本轮照常 completeRun）。
+                      this.eventBus.emit(sessionId, {
+                        kind: 'sdk_message',
+                        message: {
+                          type: 'assistant',
+                          message: { content: [{ type: 'text', text: `⚠️ 阶段推进被拦截：${verifyError}\n产出未达交付标准，请继续修复后重新声明推进。` }] },
+                          parent_tool_use_id: null,
+                          uuid: randomUUID(),
+                        } as unknown as SDKMessage,
+                      })
                     } else {
+                      // coding.executed 埋点（P1 Sprint A）：coding 阶段推进成功 = 用户已确认的可运行应用交付事实
+                      // （推进即事实；不用 verifyPhaseOutput 通过后记，避免把重试中的半成品计入）
+                      if (project.currentStage === 'coding') {
+                        try {
+                          const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+                          recordTelemetry(workspaceSlug, 'coding.executed', {
+                            project_id: project.projectId, mode: project.mode,
+                            entry: '08_APP/index.html',
+                          }, project.projectId)
+                        } catch { /* 埋点失败不影响推进 */ }
+                      }
                       updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                       console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
                       nanjuPhaseAdvanced = newStage ?? null
@@ -2071,7 +2094,7 @@ export class AgentOrchestrator {
                 kind: 'sdk_message',
                 message: {
                   type: 'assistant',
-                  message: { content: [{ type: 'text', text: '🎉 项目已全部完成交付！\n\n快消型流程到此结束。产出物在项目目录（01_PRD / 02_UX_DESIGN），可随时回看。\n想继续做新东西？在南大向导首页点「快速做一个工具」开始新项目；对交付物有后续修改需求，可直接在本会话继续描述。' }] },
+                  message: { content: [{ type: 'text', text: '🎉 项目已全部完成交付！\n\n向导流程到此结束。产出物在项目目录（01_PRD / 02_UX_DESIGN / 08_APP），可运行应用入口 08_APP/index.html，可随时回看。\n想继续做新东西？在南大向导首页点「快速做一个工具」开始新项目；对交付物有后续修改需求，可直接在本会话继续描述。' }] },
                   parent_tool_use_id: null,
                   uuid: randomUUID(),
                 } as unknown as SDKMessage,
@@ -2085,7 +2108,7 @@ export class AgentOrchestrator {
               kind: 'sdk_message',
               message: {
                 type: 'assistant',
-                message: { content: [{ type: 'text', text: `✅ 需求阶段已完成，自动进入下一阶段：${advanceStage === 'prototype' ? 'UX 原型设计' : advanceStage === 'architecture' ? '架构设计' : advanceStage === 'planning' ? '工程规划' : advanceStage}...` }] },
+                message: { content: [{ type: 'text', text: `✅ 本阶段已完成，自动进入下一阶段：${advanceStage === 'prototype' ? 'UX 原型设计' : advanceStage === 'architecture' ? '架构设计' : advanceStage === 'planning' ? '工程规划' : advanceStage === 'coding' ? '全栈开发' : advanceStage}...` }] },
                 parent_tool_use_id: null,
                 uuid: randomUUID(),
               } as unknown as SDKMessage,

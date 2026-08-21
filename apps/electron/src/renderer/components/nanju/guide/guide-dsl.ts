@@ -19,8 +19,8 @@ import { PHASE_TODO_PREFIX } from '@proma/shared'
 
 export type GuideMode = 'quick' | 'iterative'
 export type StageViewStatus = 'done' | 'current' | 'pending'
-/** 除 delivered 终点外的四个可执行阶段 */
-export type GuidePhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning'
+/** 除 delivered 终点外的五个可执行阶段 */
+export type GuidePhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding'
 
 /** 阶段主节点 id（SVG 交互锚点，稳定不变） */
 export const GUIDE_MAIN_NODE_ID: Record<GuidePhaseId, string> = {
@@ -28,6 +28,7 @@ export const GUIDE_MAIN_NODE_ID: Record<GuidePhaseId, string> = {
   prototype: 'PROTO',
   architecture: 'ARCH',
   planning: 'PLAN',
+  coding: 'CODE',
 }
 
 /** Todo 完成度徽标数据 */
@@ -62,6 +63,7 @@ const NODE_ID_TARGETS: Array<{ prefix: string; target: GuideNodeTarget }> = [
   { prefix: 'PROTO', target: 'prototype' },
   { prefix: 'ARCH', target: 'architecture' },
   { prefix: 'PLAN', target: 'planning' },
+  { prefix: 'CODE', target: 'coding' },
   { prefix: 'USER', target: 'user' },
   { prefix: 'MODE', target: 'mode' },
   { prefix: 'DONE', target: 'done' },
@@ -82,6 +84,7 @@ const TODO_LOOSE_KEYWORDS: Array<{ phase: GuidePhaseId; keywords: string[] }> = 
   { phase: 'prototype', keywords: ['原型', 'UX'] },
   { phase: 'architecture', keywords: ['架构'] },
   { phase: 'planning', keywords: ['规划', '工程', '计划'] },
+  { phase: 'coding', keywords: ['开发', '编码'] },
 ]
 
 /**
@@ -169,13 +172,9 @@ export function computeStageStates(
     return { stageStates: allPending(), abandoned: false, notice: '尚未选择项目模式，请先在对话中选择快消型或长期迭代型' }
   }
 
-  // 遗留 stage 值（不在 v2.3 路由内）：planning 视为 current + 交接提示
-  if (project.currentStage === 'coding' || project.currentStage === 'testing') {
-    const states = allPending()
-    const last = order[order.length - 1]
-    if (last) states[last] = 'current'
-    const label = project.currentStage === 'coding' ? '编码' : '测试'
-    return { stageStates: states, abandoned: false, notice: `项目已进入${label}阶段（由编程 Agent 接管，向导流程已交付）` }
+  // 遗留 stage 值（不在路由内）：testing 全 pending，无高亮 + 收口提示（coding 已入路由，走正常序比较）
+  if (project.currentStage === 'testing') {
+    return { stageStates: allPending(), abandoned: false, notice: '项目已进入测试阶段（测试功能属后续版本，向导流程已交付）' }
   }
 
   // 正常：按路由序逐个比较
@@ -201,12 +200,13 @@ const PHASE_OUTPUT_LABEL: Record<GuidePhaseId, string> = {
   prototype: '可交互 HTML 原型',
   architecture: '产出架构文档',
   planning: '产出工程计划',
+  coding: '可运行应用代码',
 }
 
-/** 交付终点 label 第二行（quick 与 iterative 语义不同，PRD §3.2/§3.3） */
+/** 交付终点 label 第二行（quick 与 iterative 语义不同，PRD §3.2/§3.3；coding 已入图，两版均交付到应用代码） */
 const DONE_SUB_LABEL: Record<GuideMode, string> = {
   quick: '项目可用',
-  iterative: '进入编码实现阶段',
+  iterative: '项目可用 · 交付完成',
 }
 
 /** 明/暗两套 classDef 色值（南大语义色，PRD §3.1 + design-system DOC-2.4）

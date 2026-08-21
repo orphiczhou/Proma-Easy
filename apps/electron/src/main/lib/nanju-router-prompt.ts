@@ -72,6 +72,8 @@ function getPriorArtifacts(workspaceSlug: string, projectId: string, currentPhas
     prototype: ['01_PRD/prd.md'],
     architecture: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html'],
     planning: ['01_PRD/prd.md', '03_ARCHITECTURE/architecture.md'],
+    // quick 模式下后两个文件不存在，existsSync 自动过滤（零特判）
+    coding: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '05_PROJECT_PLAN/plan.md'],
   }
 
   const files = priorFiles[currentPhase] ?? []
@@ -110,6 +112,7 @@ export function buildL2TaskWithAC(
   projectDir: string,
 ): string {
   const isPrototype = phase.id === 'prototype'
+  const isCoding = phase.id === 'coding'
   const parts: string[] = [
     '你是' + phase.title + '。' + phase.task,
     '',
@@ -127,12 +130,20 @@ export function buildL2TaskWithAC(
     parts.push('')
   }
 
-  // prototype 阶段：前序必读强调（PRD 用户故事与 AC 清单是后续所有视觉检查的对照基准）
-  if (isPrototype) {
+  // prototype / coding 阶段：前序必读强调（PRD 用户故事与 AC 清单是后续视觉/功能检查的对照基准）
+  const needsUserStoryChecklist = isPrototype || isCoding
+  if (needsUserStoryChecklist) {
     parts.push('## 前序必读：PRD 用户故事清单')
     parts.push('01_PRD/prd.md 包含用户故事与验收标准（AC）清单，是你的必读输入。')
     parts.push('你必须先完整 Read 该文件，把每条用户故事列成对照清单；')
-    parts.push('后续的原型设计、截图自检、AC 审计都必须逐条对照该用户故事清单执行，不得遗漏任何一条。')
+    parts.push(
+      '后续的' + (isPrototype ? '原型设计、截图自检、AC 审计' : '代码生成、运行自测、AC 审计')
+      + '都必须逐条对照该用户故事清单执行，不得遗漏任何一条。',
+    )
+    if (isCoding) {
+      // R1 缓解：原型等大文件由 L2 自主取舍，明确可只读结构与关键交互段
+      parts.push('前序文件 02_UX_DESIGN/prototype.html 可能较大：允许只读其结构与关键交互段（导航、核心表单、状态流转），以其为视觉与交互基准即可，不必逐行读完。')
+    }
     parts.push('')
   }
 
@@ -302,6 +313,33 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   e. 用户表示满意后，AskUserQuestion 收口：header「原型交互验证」，multiSelect=true，',
         '      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。',
         '   f. 全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。',
+      ]
+      : stage === 'coding'
+      ? [
+        '4. 【交互验证 + 确认收口】（编码阶段核心环节：预览应用 → 收集意见 → 批量修复 → 确认）：',
+        '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
+        '   b. 向用户宣布代码已生成，邀请直接用自然语言提修改意见；同时告知：',
+        '      「也可以直接在右侧预览上【点击】想改的元素，点选后元素会出现在输入框，',
+        '        你接着打字描述想怎么改（如“这个按钮改大”），一起发送即可精准修改」。',
+        '   c. 收到【点选纠错】消息（用户在预览上点击了元素，含 data-ai-id 与类型）：',
+        '      - 立即用 AskUserQuestion 弹快速选项：options 固定五项：换个颜色🎨/改文字🖊/换个位置📐/删掉它🗑/其他💬（用户自描述）；',
+        '        question 写明「你点击了[元素类型]「[文本摘要]」，想怎么改？」（类型与摘要来自点选消息）。',
+        '      - 用户选了预设项或描述后，与文字意见一样进入意见收集轮（见 d，批量改而非立即改）。',
+        '   d. 【意见收集轮】（核心节奏：多轮沟通攒一批，再统一修改——【绝不】一条意见就立即改）：',
+        '      - 每收到一条用户意见，先记录到你的意见清单（元素定位/意图），并回应确认你的理解；',
+        '        涉及需求变更的先与用户确认范围（PRD 不因代码改动回写，但需求变更要先澄清）。',
+        '      - 回应后【必须追问】：「这条记下了。还有其他想调整的地方吗？」——除非用户明确说收齐，',
+        '        否则【禁止】下发修改任务。',
+        '      - 用户说收齐了 → 把全部意见整理成【批量修改清单】（每条：元素定位+意图+现状），',
+        '        一次 continue_delegation 发给「全栈开发」子会话执行；修改目标一律是 08_APP/ 下的代码文件，',
+        '        【不得】改 02_UX_DESIGN/prototype.html，【不得】回写 01_PRD/prd.md。',
+        '      - 收到【点选纠错·批量修改】消息（用户已点「接受本轮改动」的收齐清单）：【直接】把清单',
+        '        整体转 continue_delegation 委派全栈开发改 08_APP，【不得】再追问「还有其他意见吗」。',
+        '      - 修复完成 → 重新 open_preview 展示新版 → 逐条报告改了什么，再次进入意见收集轮；',
+        '      - 此循环直到用户对结果表示满意（不再有新意见且说满意/交付）。',
+        '   e. 用户表示满意后，AskUserQuestion 收口：header「应用验证」，multiSelect=true，',
+        '      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。',
+        '      全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。',
       ]
       : [
         '4. 【必须】先调用 open_preview 工具（file_path=' + projectDir + '/' + phase.outputPath + '）',
