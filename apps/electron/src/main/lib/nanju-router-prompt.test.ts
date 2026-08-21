@@ -183,14 +183,16 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
   })
 })
 
-describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成）', () => {
-  const minimaxAuthor = { channel: 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd', model: 'MiniMax-M3' }
+describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；v0.17.63 作者回 deepseek）', () => {
+  const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
 
-  test('包含 steps.json 机器可执行 schema 规范（op 白名单 + 双文件契约 + 透明 skip）', () => {
+  test('包含 steps.json 机器可执行 schema 规范（op 白名单不含 eval + 双文件契约 + 透明 skip）', () => {
     const phase = getPhaseNode('quick', 'testing')!
-    const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
     expect(task).toContain('steps.json 格式规范')
-    expect(task).toContain('click / fill / press / wait-selector / assert-text / assert-visible / assert-count / eval')
+    expect(task).toContain('click / fill / press / wait-selector / assert-text / assert-visible / assert-count。')
+    expect(task).toContain('复杂状态断言暂不支持自定义脚本')
+    expect(task).not.toContain('/ eval')
     expect(task).toContain('06_TESTS/features/us-XX.feature 配一个同名 us-XX.steps.json')
     expect(task).toContain('unmapped:true')
     expect(task).toContain('禁止依赖严格时刻的断言')
@@ -200,13 +202,13 @@ describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成）', (
 
   test('包含 PRD 用户故事清单必读强调（覆盖性判定的对照基准）', () => {
     const phase = getPhaseNode('quick', 'testing')!
-    const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
     expect(task).toContain('前序必读：PRD 用户故事清单')
     expect(task).toContain('GWT 验收场景生成、步骤映射、AC 审计')
   })
 
-  test('testing 作者（minimax UUID 渠道）与 AC 攻防满足家族多样性断言（不抛错）', () => {
+  test('testing 作者（deepseek）与 AC 攻防满足家族多样性断言（不抛错；不再要求与 coding 异构）', () => {
     const phase = getPhaseNode('iterative', 'testing')!
-    expect(() => buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project')).not.toThrow()
+    expect(() => buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')).not.toThrow()
   })
 })

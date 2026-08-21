@@ -46,7 +46,7 @@ export function resolveMinimaxM3Channel(channels: Channel[]): ResolvedChannelMod
 }
 
 /**
- * 运行时解析 prototype / testing 阶段的 MiniMax-M3 作者渠道（视觉模型）。
+ * 运行时解析 prototype 阶段的 MiniMax-M3 作者渠道（视觉模型；v0.17.63 起 testing 不再走此解析）。
  * 未配置时抛中文错误，提示用户先在设置中配置 minimax 渠道。
  */
 export function resolvePrototypeAuthor(): ResolvedChannelModel {
@@ -56,7 +56,7 @@ export function resolvePrototypeAuthor(): ResolvedChannelModel {
   const resolved = resolveMinimaxM3Channel(listChannels())
   if (!resolved) {
     throw new Error(
-      '未找到可用的 MiniMax 渠道：UX 原型 / 验收测试阶段需要 MiniMax-M3 作为作者执行。' +
+      '未找到可用的 MiniMax 渠道：UX 原型阶段需要 MiniMax-M3 作为作者执行。' +
       '请在「设置 → 渠道」中添加 provider 为 minimax 且包含已启用的 MiniMax-M3 模型的渠道，然后重试。',
     )
   }
@@ -178,9 +178,9 @@ export function buildL2TaskWithAC(
       ],
     }, null, 2))
     parts.push('```')
-    parts.push('op.type 白名单：click / fill / press / wait-selector / assert-text / assert-visible / assert-count / eval。')
+    parts.push('op.type 白名单：click / fill / press / wait-selector / assert-text / assert-visible / assert-count。')
     parts.push('· press 的 value 写键名（如 Enter、Escape、Tab）；assert-count 用 count（非负整数）；')
-    parts.push('· eval 仅限 then 步骤读页面状态（如倒计时剩余值），表达式必须自包含并在页面上可求值；')
+    parts.push('· 复杂状态断言暂不支持自定义脚本：改用 assert-text 轮询读界面呈现的状态文本（如倒计时剩余数值、状态徽标文案）；')
     parts.push('· 断言类默认 timeoutMs=4000（轮询窗口内重试），禁止依赖严格时刻的断言；')
     parts.push('· 无法可靠映射的步骤：op 置 null 且 unmapped:true，场景标 skip:true + skipReason（透明跳过，不臆造）；')
     parts.push('· selector 只允许 data-ai-id=xxx 形态，ID 必须来自实际代码，与 .feature 文字描述一一对应。')
@@ -272,8 +272,9 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   // 新阶段 Todo 强制前缀（向导图进度徽标按此解析；delivered 无新 Todo，PRD 修订 Y5）
   const nextTodoPrefix = nextPhase !== 'delivered' ? PHASE_TODO_PREFIX[nextPhase as Exclude<typeof nextPhase, 'delivered'>] : null
 
-  // prototype / testing 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析
-  const authorOverride = phase.id === 'prototype' || phase.id === 'testing' ? resolvePrototypeAuthor() : null
+  // prototype 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析
+  // （v0.17.63：testing 作者回 deepseek-v4-pro，不再走视觉渠道解析）
+  const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
   const authorChannel = authorOverride?.channelId ?? phase.channel
   const authorModel = authorOverride?.modelId ?? phase.model
 
@@ -391,13 +392,17 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '5. 场景生成完成后的收口（机器判定，无用户确认环节）：',
         '   【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
         '   再输出推进标记：<!-- PHASE_ADVANCE: testing -->（推进到自身 = 触发 Harness 自动执行 GWT 验收测试）。',
-        '   测试结果由系统注入消息告知，按结果处理：',
+        '   测试结果由系统注入消息告知，按注入消息的分流指引处理（三类失败成因不同、修复通道不同）：',
         '   - ✅ 全部通过：项目自动交付（delivered），无需再做任何操作。',
-        '   - ❌ 有失败场景：按系统注入的失败清单 continue_delegation 委派「全栈开发」修复缺陷',
+        '   - ❌ 行为类失败（断言不匹配等应用缺陷）：按失败清单 continue_delegation 委派「全栈开发」修复缺陷',
         '     （仅改 08_APP/ 下的代码，不得改 06_TESTS/ 与 01_PRD/），修复完成后重新输出',
         '     <!-- PHASE_ADVANCE: testing --> 重跑测试。',
-        '   - ⚠️ 有 skip 场景（unmapped）：如需补测，continue_delegation 委派「测试工程师」仅重新映射缺失场景。',
-        '   - ⛔ 回炉超过 2 次：系统会通知用户人工介入，等待用户指示。',
+        '   - 🔁 映射类失败（目标元素等待超时未出现）：continue_delegation 委派「测试工程师」重新映射 steps.json',
+        '     （只改 06_TESTS/ 下的映射，不动 08_APP/ 与 01_PRD/），改完重跑；这不是应用缺陷，不要去改代码。',
+        '   - 🧭 覆盖类失败（用户故事无可执行场景 / PRD 缺 US-xx 清单）：按注入消息指引委派「测试工程师」补场景，',
+        '     或先补 PRD 用户故事清单（需求变更需与用户确认）。',
+        '   - ⚠️ 有 skip 场景（主动裁剪）：如需补测，continue_delegation 委派「测试工程师」仅补充被裁剪场景。',
+        '   - ⛔ 回炉超过 2 次（映射与修复合计）：系统会通知用户人工介入，等待用户指示。',
         '   项目交付后无需再创建新阶段 Todo。',
       ]
       : [

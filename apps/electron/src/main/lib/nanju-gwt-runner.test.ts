@@ -3,8 +3,8 @@
  *
  * 覆盖面：
  * - 纯函数：selector 归一 / steps.json schema 校验 / PRD US 提取 / 规则裁判 / 报告生成
- * - 执行器（mock BrowserController）：全 op 类型执行 / 断言超时 fail / 预检 unmapped-skip /
- *   场景声明 skip / 场景隔离重载 / 失败截图 / 进度事件序列
+ * - 执行器（mock BrowserController）：全 op 类型执行 / 断言超时 fail / click 等待超时 selector-wait /
+ *   动态 UI 轮询等待 / 场景声明 skip / 场景隔离重载 / 失败截图 / 标签恢复 / 进度事件序列
  * - 编排入口（runNanjuGwtAcceptance）：报告 schema（report.json）/ retryCount 累计 /
  *   judge.verdict 埋点落盘 / 入口缺失降级
  *
@@ -55,8 +55,6 @@ class FakePage {
   clicks: Array<{ x: number; y: number }> = []
   keys: string[] = []
   fills: Array<{ selector: string; text: string }> = []
-  /** eval op 直通钩子（魔数表达式） */
-  customEval: ((expr: string) => unknown) | null = null
   /** loadFileInTab 调用计数（场景隔离验证） */
   reloads = 0
 
@@ -69,7 +67,6 @@ class FakePage {
   }
 
   eval(expr: string): unknown {
-    if (this.customEval && !expr.includes('document.querySelector')) return this.customEval(expr)
     const strings = this.strings(expr)
     const sel = strings[0] ?? ''
     if (expr.includes('dispatchEvent')) {
@@ -191,9 +188,10 @@ describe('validateScenarioFileContent', () => {
     expect(validateScenarioFileContent(raw).errors.some((e) => e.includes('unmapped'))).toBe(true)
   })
 
-  test('eval 仅限 then 步骤', () => {
-    const raw = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'eval', expression: 'true' } }] })
-    expect(validateScenarioFileContent(raw).errors.some((e) => e.includes('仅允许 then'))).toBe(true)
+  test('op.type=eval 已移出白名单：含 expression 的 eval op 直接拒绝（安全通道关闭）', () => {
+    const raw = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'then', text: 'x', op: { type: 'eval', expression: 'true' } }] })
+    const { errors } = validateScenarioFileContent(raw)
+    expect(errors.some((e) => e.includes('白名单'))).toBe(true)
   })
 
   test('assert-count 需要 count 非负整数', () => {
@@ -278,11 +276,11 @@ describe('buildReportMarkdown / buildSummaryText', () => {
     expect(s).toContain('US-02 无可执行场景')
   })
 
-  test('报告 md 含判定/统计/明细表', () => {
+  test('报告 md 含判定/统计/明细表；纯覆盖性失败用覆盖不全句式（AC U-001）', () => {
     const j = judgeGwtResult([{ feature: 'us-01', scenario: 'US-01 a', status: 'pass' }], ['US-01'])
     const md = buildReportMarkdown({
       generatedAt: '2026-08-22T00:00:00.000Z',
-      verdict: j.verdict, entry: '08_APP/index.html',
+      verdict: j.verdict, failureKind: null, entry: '08_APP/index.html',
       scenariosTotal: j.scenariosTotal, passed: j.passed, failed: j.failed, skipped: j.skipped,
       coveredUs: j.coveredUs, uncoveredUs: j.uncoveredUs, retryCount: 0,
       scenarios: [{ feature: 'us-01', scenario: 'US-01 a', status: 'pass', reason: null, failedStep: null, screenshot: null, durationMs: 10 }],
@@ -290,6 +288,32 @@ describe('buildReportMarkdown / buildSummaryText', () => {
     expect(md).toContain('# 验收测试报告 — 测试项目')
     expect(md).toContain('✅ 全部通过')
     expect(md).toContain('| 1 | us-01 / US-01 a | ✅ pass |')
+    // 覆盖性失败单独句式：不输出与「0 个失败」并列的裸「未通过」
+    const cov = judgeGwtResult([{ feature: 'us-01', scenario: 'US-01 a', status: 'pass' }], ['US-01', 'US-02'])
+    const covMd = buildReportMarkdown({
+      generatedAt: '2026-08-22T00:00:00.000Z',
+      verdict: cov.verdict, failureKind: 'coverage', entry: '08_APP/index.html',
+      scenariosTotal: cov.scenariosTotal, passed: cov.passed, failed: cov.failed, skipped: cov.skipped,
+      coveredUs: cov.coveredUs, uncoveredUs: cov.uncoveredUs, retryCount: 0,
+      scenarios: [{ feature: 'us-01', scenario: 'US-01 a', status: 'pass', reason: null, failedStep: null, screenshot: null, durationMs: 10 }],
+    }, '测试项目')
+    expect(covMd).toContain('❌ 未通过（覆盖不全：有用户故事无可执行场景）')
+    // error 报告句式
+    const errMd = buildReportMarkdown({
+      generatedAt: '2026-08-22T00:00:00.000Z',
+      verdict: 'error', failureKind: null, errorReason: 'CDP 断连', entry: '08_APP/index.html',
+      scenariosTotal: 0, passed: 0, failed: 0, skipped: 0, coveredUs: [], uncoveredUs: [], retryCount: 0,
+      scenarios: [],
+    }, '测试项目')
+    expect(errMd).toContain('⚠️ 执行异常（CDP 断连）')
+  })
+
+  test('纯覆盖性失败摘要单独句式，不输出「0 个失败」自相矛盾（AC U-001）', () => {
+    const j = judgeGwtResult([{ feature: 'us-01', scenario: 'US-01 a', status: 'pass' }], ['US-01', 'US-02'])
+    const s = buildSummaryText(j, 'r.md')
+    expect(s).toContain('覆盖不全')
+    expect(s).toContain('US-02 没有可执行场景')
+    expect(s.includes('0 个失败')).toBe(false)
   })
 })
 
@@ -336,21 +360,69 @@ describe('runGwtSuite（mock BrowserController）', () => {
     expect(r.reason).toContain('期望')
   })
 
-  test('预检拦截：click selector 初始不存在 → unmapped-skip 不执行半截', async () => {
+  test('click 目标等待超时：8s 轮询窗口内未出现 → fail「等待超时未出现」（selector-wait，映射类）', async () => {
     const page = new FakePage()
-    page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '' })
-    // btn-missing 未注册 → 预检 2s 窗口后判 unmapped-skip
+    // btn-missing 未注册 → 执行期轮询窗口耗尽后判 fail（不再预检 unmapped-skip）
     const results = await runGwtSuite({
       sessionId: 's1',
       entryHtmlPath: '/tmp/app/index.html',
-      scenarios: [noteScenario()],
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 添加', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '点击保存', op: { type: 'click', selector: 'data-ai-id=btn-missing' }, timeoutMs: 80 }],
+      }],
       controller: makeMockController(page),
       screenshotDir: null,
     })
     const r = results[0]!
-    expect(r.status).toBe('skip')
-    expect(r.reason).toContain('unmapped-skip')
-    expect(page.clicks.length).toBe(0) // 未执行任何 click
+    expect(r.status).toBe('fail')
+    expect(r.failedStep?.actual).toContain('等待超时未出现')
+    expect(r.failedStep?.category).toBe('selector-wait')
+    expect(page.clicks.length).toBe(0) // 未执行任何 click（不执行半截）
+  })
+
+  test('动态 UI：click 目标延迟出现 → 执行期轮询等待成功（预检语义已移除，AC Z-002）', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="btn-late"]', { visible: true, text: '保存' })
+    // btn-late 前两次探测不存在（模拟先点开弹层/二级页再操作其中元素的渐进式 UI）
+    let probes = 0
+    const base = makeMockController(page)
+    const controller: GwtBrowserAdapter = {
+      ...base,
+      evaluateInTab: async (s, t, expr) => {
+        if (expr.includes('btn-late') && !expr.includes('dispatchEvent')) {
+          probes += 1
+          if (probes <= 2) return expr.includes('getBoundingClientRect') ? null : false
+        }
+        return base.evaluateInTab(s, t, expr)
+      },
+    }
+    const results = await runGwtSuite({
+      sessionId: 's1',
+      entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 动态弹层', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '点击弹层内按钮', op: { type: 'click', selector: 'data-ai-id=btn-late' }, timeoutMs: 3_000 }],
+      }],
+      controller,
+      screenshotDir: null,
+    })
+    expect(probes).toBeGreaterThanOrEqual(3) // 至少重试探测到出现
+    expect(results[0]?.status).toBe('pass')
+    expect(page.clicks.length).toBe(1)
+  })
+
+  test('fill 目标等待超时 → fail selector-wait；fill 到非可编辑元素 → fail assert', async () => {
+    const page = new FakePage()
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 输入', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '输入书名', op: { type: 'fill', selector: 'data-ai-id=input-missing', value: 'x' }, timeoutMs: 80 }],
+      }],
+      controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('fail')
+    expect(results[0]?.failedStep?.category).toBe('selector-wait')
   })
 
   test('场景声明 skip：透明跳过不执行', async () => {
@@ -403,19 +475,36 @@ describe('runGwtSuite（mock BrowserController）', () => {
     }
   })
 
-  test('eval op：仅 then、truthy 通过、falsy 失败', async () => {
+  test('unmapped 兑底：步骤 op=null 但场景未声明 skip → fail（映射类）', async () => {
     const page = new FakePage()
-    page.customEval = (expr) => expr.includes('running') ? true : false
     const results = await runGwtSuite({
       sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
-      scenarios: [
-        { feature: 'us-01', scenario: 'US-01 eval 通过', skip: false, skipReason: null, steps: [{ kind: 'then', text: '状态为运行中', op: { type: 'eval', expression: 'window.__state === "running"' } }] },
-        { feature: 'us-01', scenario: 'US-02 eval 失败', skip: false, skipReason: null, steps: [{ kind: 'then', text: '状态为已停止', op: { type: 'eval', expression: 'window.__state === "stopped"' } }] },
-      ],
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 x', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '未映射步骤', op: null, unmapped: true }],
+      }],
       controller: makeMockController(page), screenshotDir: null,
     })
-    expect(results[0]?.status).toBe('pass')
-    expect(results[1]?.status).toBe('fail')
+    expect(results[0]?.status).toBe('fail')
+    expect(results[0]?.failedStep?.category).toBe('unmapped')
+  })
+
+  test('标签恢复（AC Z-004）：测试结束后切回创建前的用户活动标签', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '百年孤独' })
+    const restored: string[] = []
+    const base = makeMockController(page)
+    const controller: GwtBrowserAdapter = {
+      ...base,
+      createLocalFileTab: async () => ({ tabId: 'tab-gwt-1', previousActiveTabId: 'tab-user' }),
+      restoreDisplayTab: (s, tabId) => { restored.push(`${s}:${tabId}`) },
+    }
+    await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [noteScenario({ steps: [{ kind: 'then', text: 'x', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list', timeoutMs: 300 } }] })],
+      controller, screenshotDir: null,
+    })
+    expect(restored).toEqual(['s1:tab-user'])
   })
 
   test('assert-count / assert-visible 语义', async () => {
@@ -485,6 +574,12 @@ function fullPassPage(): FakePage {
   return page
 }
 
+/** 执行通道异常 mock（createLocalFileTab 即抛，模拟 CDP attach 失败） */
+function makeThrowingController(): GwtBrowserAdapter {
+  const base = makeMockController(new FakePage())
+  return { ...base, createLocalFileTab: async () => { throw new Error('CDP attach 失败（模拟）') } }
+}
+
 describe('runNanjuGwtAcceptance', () => {
   test('全通过：report.json schema 完整 + verdict=pass + retryCount=0 + 埋点落盘', async () => {
     const coveringBothUs = JSON.stringify({
@@ -507,6 +602,8 @@ describe('runNanjuGwtAcceptance', () => {
     expect(outcome.verdict).toBe('pass')
     expect(outcome.retryCount).toBe(0)
     expect(outcome.retryLimitReached).toBe(false)
+    expect(outcome.failureKind).toBeNull()
+    expect(outcome.prdUserStoriesMissing).toBe(false)
     expect(outcome.summaryText).toContain('全部通过')
 
     // report.json schema 校验
@@ -539,8 +636,76 @@ describe('runNanjuGwtAcceptance', () => {
       sessionId: 's1', controller: makeMockController(fullPassPage()),
     })
     expect(outcome.verdict).toBe('fail') // US-02 无场景 → 覆盖性失败
+    expect(outcome.failureKind).toBe('coverage') // 纯覆盖性失败分流（AC L-001）
+    expect(outcome.prdUserStoriesMissing).toBe(false)
     expect(outcome.judgement.uncoveredUs).toEqual(['US-02'])
     expect(outcome.failListText).toContain('US-02')
+    expect(outcome.summaryText).toContain('覆盖不全') // AC U-001：不输出「0 个失败」自相矛盾
+    expect(outcome.summaryText.includes('0 个失败')).toBe(false)
+  })
+
+  test('PRD 存在但无 US-xx 清单 → fail-fast：coverage + prdUserStoriesMissing + 专用摘要（AC F-002）', async () => {
+    setupProjectFixture({
+      stepsFiles: { 'us-01.steps.json': PASSING_STEPS },
+      prd: '# 需求文档\n\n本工具用于管理阅读清单，未使用用户故事编号。\n\n功能：添加、删除、查看笔记。\n',
+    })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(outcome.verdict).toBe('fail')
+    expect(outcome.failureKind).toBe('coverage')
+    expect(outcome.prdUserStoriesMissing).toBe(true)
+    expect(outcome.results.length).toBe(0) // 覆盖性基准缺失 → 不执行浏览器步骤（fail-fast）
+    expect(outcome.summaryText).toContain('PRD 未提取到 US-xx 用户故事清单')
+    expect(outcome.failListText).toContain('US-01 / US-02')
+    const report = JSON.parse(readFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), 'utf-8'))
+    expect(report.verdict).toBe('fail')
+    expect(report.prdUserStoriesMissing).toBe(true)
+    expect(report.failureKind).toBe('coverage')
+  })
+
+  test('映射类失败分流：click 等待超时 → failureKind=mapping（AC L-001）', async () => {
+    const steps = JSON.stringify({
+      feature: 'us-01', scenario: 'US-01 添加读书笔记', skip: false, skipReason: null,
+      steps: [{ kind: 'when', text: '点击保存', op: { type: 'click', selector: 'data-ai-id=btn-missing' }, timeoutMs: 60 }],
+    })
+    setupProjectFixture({
+      stepsFiles: {
+        'us-01.steps.json': steps,
+        'us-02.steps.json': steps.replace(/US-01/g, 'US-02').replace(/us-01/g, 'us-02'),
+      },
+    })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(outcome.verdict).toBe('fail')
+    expect(outcome.failureKind).toBe('mapping') // selector 等待超时 → 回 testing 重映射
+    expect(outcome.failListText).toContain('映射类')
+  })
+
+  test('执行异常：controller 抛异常 → verdict=error 报告落盘 + error 轮次计入 retryCount（AC Z-005）', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS } })
+    const run = (): Promise<NanjuGwtOutcome> => runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeThrowingController(),
+    })
+    const first = await run()
+    expect(first.verdict).toBe('error')
+    expect(first.errorReason).toContain('CDP attach 失败')
+    expect(first.failureKind).toBeNull()
+    expect(first.retryCount).toBe(0)
+    expect(first.retryLimitReached).toBe(false)
+    expect(first.summaryText).toContain('执行异常')
+    // error 报告落盘（不再裸抛断链）
+    const report = JSON.parse(readFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), 'utf-8'))
+    expect(report.verdict).toBe('error')
+    expect(report.errorReason).toContain('CDP attach 失败')
+    // error 轮次计入重试：重跑仍异常 → retryCount=1
+    const second = await run()
+    expect(second.verdict).toBe('error')
+    expect(second.retryCount).toBe(1)
   })
 
   test('失败与重试累计：首轮 fail retryCount=0 → 重跑 fail retryCount=1 → 再跑 retryLimitReached', async () => {
@@ -554,6 +719,7 @@ describe('runNanjuGwtAcceptance', () => {
     expect(first.verdict).toBe('fail')
     expect(first.retryCount).toBe(0)
     expect(first.retryLimitReached).toBe(false)
+    expect(first.failureKind).toBe('behavior') // assert 断言失败 → 回炉 coding（AC L-001）
     const second = await run()
     expect(second.retryCount).toBe(1)
     expect(second.retryLimitReached).toBe(false)

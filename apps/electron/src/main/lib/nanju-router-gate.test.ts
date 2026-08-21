@@ -188,20 +188,30 @@ describe('verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口�
   const featureDoc = (body: string): string =>
     `# 读书笔记验收场景\n${body}`
 
-  test('合规汇总入口（Feature: + Scenario: 结构）通过', () => {
+  test('合规汇总入口（Feature: + Scenario: 结构）通过；成对 steps.json 存在（v0.17.63 AC I-001）', () => {
     const ws = setupFixture({
       stage: 'testing',
       html: featureDoc('Feature: US-01 读书笔记\n  Scenario: US-01 添加笔记\n    Given 用户在列表页\n    When 输入书名\n    Then 列表显示'),
+      files: { 'us-01.steps.json': '{"feature":"us-01","scenario":"US-01 添加笔记","skip":false,"skipReason":null,"steps":[]}' },
     })
     expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toBeNull()
   })
 
-  test('非 Gherkin 结构拦截（缺 Scenario:；内容加长过体积检查）', () => {
+  test('非 Gherkin 结构拦截（缺 Scenario:；内容加长过体积检查；含成对 steps.json 隔离变量）', () => {
     const ws = setupFixture({
       stage: 'testing',
       html: featureDoc('Feature: US-01 读书笔记\n（这里只有 Feature 没有任何场景定义，补充说明文本用于超过一百字节的最低体积门槛，确保体积检查不先行拦截本用例的格式断言。）'),
+      files: { 'us-01.steps.json': '{}' },
     })
     expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toContain('格式不符合要求')
+  })
+
+  test('steps.json 存在性门禁（AC I-001）：只有汇总入口无任何 *.steps.json → 拦截', () => {
+    const ws = setupFixture({
+      stage: 'testing',
+      html: featureDoc('Feature: US-01 读书笔记\n  Scenario: US-01 添加笔记\n    Given 用户在列表页'),
+    })
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toContain('缺少可执行步骤映射')
   })
 
   test('汇总入口缺失拦截：index.feature 不存在', () => {

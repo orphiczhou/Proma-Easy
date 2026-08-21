@@ -5,7 +5,7 @@
  * 在 canUseTool 中调用，按阶段限制调度员可用工具。
  */
 
-import { existsSync, statSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, dirname, resolve, sep } from 'node:path'
 import { listNanjuProjects, type NanjuProject } from './nanju-project'
 import { getPhaseNode, type PhaseId, checkOutputFormat } from './nanju-router'
@@ -139,6 +139,18 @@ export function verifyPhaseOutput(
   const content = readFileSync(filePath, 'utf-8')
   if (!checkOutputFormat(phaseId, content)) {
     return `产出文件格式不符合要求（缺少基本结构）：${phase.outputPath}`
+  }
+
+  // testing 阶段（v0.17.63，AC I-001）：可执行契约存在性门禁——06_TESTS/features/ 下
+  // 至少一个 *.steps.json（与 us-XX.feature 成对）。成对一致性与 JSON/schema 合法性由
+  // GwtRunner 的 schema 校验分层保证，此处只做最低存在性（防止只交汇总入口就过关）。
+  if (phaseId === 'testing') {
+    const featuresDir = dirname(filePath)
+    const hasStepsJson = existsSync(featuresDir)
+      && readdirSync(featuresDir).some((f) => f.endsWith('.steps.json'))
+    if (!hasStepsJson) {
+      return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个 *.steps.json（与 us-XX.feature 成对产出）'
+    }
   }
 
   // 仅 coding：入口 HTML 引用的 08_APP 内相对资源必须存在（多文件产出完整性兜底——

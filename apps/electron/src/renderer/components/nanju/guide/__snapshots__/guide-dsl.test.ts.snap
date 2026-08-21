@@ -53,7 +53,7 @@ flowchart TD
 
     CODE_UC -->|"应用验证通过"| TEST
 
-    subgraph SG_TEST["④ 测试工程师 test-engineer · MiniMax-M3"]
+    subgraph SG_TEST["④ 测试工程师 test-engineer · deepseek-v4-pro"]
         direction TB
         TEST["GWT 验收测试<br/>06_TESTS/features/index.feature"]
         TEST --> TEST_ATK["攻击者审查（AC light）"]
@@ -162,7 +162,7 @@ flowchart TD
 
     CODE_UC -->|"应用验证通过"| TEST
 
-    subgraph SG_TEST["⑥ 测试工程师 test-engineer · MiniMax-M3"]
+    subgraph SG_TEST["⑥ 测试工程师 test-engineer · deepseek-v4-pro"]
         direction TB
         TEST["GWT 验收测试<br/>06_TESTS/features/index.feature"]
         TEST --> TEST_ATK["攻击者审查（AC medium）"]

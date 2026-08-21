@@ -1357,13 +1357,19 @@ export class BrowserController {
   // 绕开 proma-file:// 预览协议的 click-to-fix 注入脚本——CDP 合成输入 isTrusted=true 会
   // 误触点选纠错面板，对测试执行是干扰（e2e-v59 已验证该行为）。file:// 作用域也与
   // coding 约束「localStorage 键名加项目前缀」的说明完全一致。
+  // 边界声明（v0.17.63，AC G-003/F-003）：file:// 测试上下文与 proma-file 预览存在注入
+  // 差异（click-to-fix 注入与 token 门控不在测试覆盖内）——测试结论对交互语义负责、
+  // 不验证 click-to-fix 注入。
   // evaluateInTab 的表达式由 GwtRunner 内部固定模板生成（selector/期望值 JSON 序列化注入，
-  // 非自由 JS）；eval 类 op 由 GwtRunner 侧过 assertBrowserScript 校验后传入。
+  // 非自由 JS）；v0.17.63 起 op 白名单不含 eval，不再有 L2 产出 JS 进入页面上下文。
 
   /** GWT：创建验收测试专用标签并 loadFile 直载本地入口（不抢 Agent 工作标签，用户可见）。 */
-  async createLocalFileTab(sessionId: string, filePath: string): Promise<{ tabId: string; url: string }> {
+  async createLocalFileTab(sessionId: string, filePath: string): Promise<{ tabId: string; url: string; previousActiveTabId: string | null }> {
     const browserSession = this.getOrCreateSession(sessionId, [], false)
     this.assertRiskDisclaimerAcknowledged()
+    // 标签恢复（AC Z-004）：记录测试创建前的用户活动标签，测试结束后由 GwtRunner 切回，
+    // 不依赖 repairTabSelection 取任意第一个标签
+    const previousActiveTabId = browserSession.activeTabId || null
     const tab = this.createTab(browserSession, false, false)
     this.activateDisplayTab(browserSession, tab)
     this.trace(browserSession, tab, 'tab', `验收测试标签已创建：${path.basename(filePath)}`)
@@ -1373,7 +1379,7 @@ export class BrowserController {
       this.updateNavigationState(browserSession, tab)
       return { tabId: tab.tabId, url: tab.state.url }
     })
-    return { tabId: tab.tabId, url: tab.state.url }
+    return { tabId: tab.tabId, url: tab.state.url, previousActiveTabId }
   }
 
   /** GWT：场景隔离——同一测试标签重新 loadFile（同代码同结果，重试公平）。 */
@@ -1381,9 +1387,29 @@ export class BrowserController {
     const browserSession = this.getOrCreateSession(sessionId, [], false)
     const tab = this.getAgentTab(browserSession, tabId)
     await this.runTabOperation(browserSession, tab, undefined, async () => {
+      // 场景隔离存储清理（v0.17.63，AC Z-001）：重载前清空页面本地存储（file:// 作用域内
+      // localStorage/sessionStorage 生效），消除上一场景写入数据的跨场景串扰；
+      // indexedDB 清理归 Sprint C。清理失败（如空白初始页）不阻断重载。
+      try {
+        await this.executePageExpression(tab, 'try{localStorage.clear();sessionStorage.clear()}catch(e){}', browserSession.agentAbortController.signal)
+      } catch { /* 存储不可用时不阻断重载 */ }
       await withBrowserCdpTimeout(() => tab.view.webContents.loadFile(filePath), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000)
       this.updateNavigationState(browserSession, tab)
     })
+  }
+
+  /** GWT：恢复测试前的用户活动标签（AC Z-004：标签不存在时静默跳过）。 */
+  restoreDisplayTab(sessionId: string, tabId: string): void {
+    const browserSession = this.sessions.get(sessionId)
+    if (!browserSession) return
+    const tab = browserSession.tabs.get(tabId)
+    if (!tab || tabId === browserSession.activeTabId) return
+    this.activateDisplayTab(browserSession, tab)
+  }
+
+  /** GWT 启动预检：风险告知是否已确认（v0.17.63，AC L-002：未确认时给行动指引而非裸异常断链）。 */
+  hasRiskDisclaimerAcknowledged(): boolean {
+    return hasAcknowledgedBrowserRiskDisclaimer(getSettings())
   }
 
   /** GWT：固定模板表达式求值（Runtime.evaluate + awaitPromise + returnByValue，e2e 已验证模式）。 */

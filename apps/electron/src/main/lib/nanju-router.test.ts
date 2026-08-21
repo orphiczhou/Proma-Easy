@@ -237,13 +237,13 @@ describe('AC 家族多样性断言', () => {
 })
 
 describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', () => {
-  test('testing 节点定义：测试工程师 / MiniMax-M3（运行时解析标记）/ 06_TESTS/features/index.feature / next=delivered', () => {
+  test('testing 节点定义：测试工程师 / deepseek-v4-pro（v0.17.63 回退，仲裁 selection_ruling）/ 06_TESTS/features/index.feature / next=delivered', () => {
     for (const mode of ['quick', 'iterative'] as const) {
       const testing = getPhaseNode(mode, 'testing')
       expect(testing?.role).toBe('test-engineer')
       expect(testing?.title).toBe('测试工程师')
-      expect(testing?.channel).toBe('minimax') // 家族标记；实际渠道在构建委派指令时运行时解析（同 prototype）
-      expect(testing?.model).toBe('MiniMax-M3')
+      expect(testing?.channel).toBe('deepseek') // 纯文本 spec 生成任务，不绑视觉模型（AC F-001）
+      expect(testing?.model).toBe('deepseek-v4-pro')
       expect(testing?.outputPath).toBe('06_TESTS/features/index.feature')
       expect(testing?.next).toBe('delivered')
       expect(testing?.requiresUserConfirmation).toBe(false) // 机器判定收口（裁判规则），不做人肉确认
@@ -253,12 +253,10 @@ describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', ()
     }
   })
 
-  test('testing 作者与 coding 作者（deepseek 系）异构，且与 AC 防御者（glm 系）满足家族多样性', () => {
+  test('testing 作者与 AC 攻防满足家族多样性断言（defender≠author / attacker≠defender；不再自设 testing≠coding 家族约束）', () => {
     for (const mode of ['quick', 'iterative'] as const) {
       const testing = getPhaseNode(mode, 'testing')!
-      const coding = getPhaseNode(mode, 'coding')!
       const actors = resolveACActors(testing)
-      expect(channelFamily(testing.channel)).not.toBe(channelFamily(coding.channel))
       expect(() => assertACFamilyDiversity({
         authorChannel: testing.channel,
         attackerChannel: actors.attacker.channel,
@@ -267,16 +265,25 @@ describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', ()
     }
   })
 
-  test('testing 约束含映射前提（先读 08_APP 实码提 data-ai-id）与透明 skip 语义', () => {
+  test('testing 约束含映射前提（先读 08_APP 实码提 data-ai-id）与透明 skip 语义；不含自由 JS op（v0.17.63）', () => {
     const constraints = getPhaseNode('quick', 'testing')!.constraints.join('\n')
     expect(constraints).toContain('先 Read 08_APP/index.html')
     expect(constraints).toContain('禁止臆造 selector')
     expect(constraints).toContain('unmapped')
     expect(constraints).toContain('禁止严格时刻断言')
+    expect(constraints.includes('eval')).toBe(false) // 自由 JS op 已移除（AC G-001/G-002）
   })
 
   test('FORMAT_CHECKS：testing 接受 Feature: + Scenario:（中文 Gherkin 最低结构）', () => {
     expect(checkOutputFormat('testing', 'Feature: 读书笔记\nScenario: US-01 添加笔记\n  Given 用户在列表页')).toBe(true)
     expect(checkOutputFormat('testing', '# 这只是 markdown，没有 Gherkin 结构')).toBe(false)
+  })
+
+  test('requirements 上游软门禁：PRD 应含 US-xx 编号用户故事清单提示（AC F-002）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const constraints = getPhaseNode(mode, 'requirements')!.constraints.join('\n')
+      expect(constraints).toContain('US-xx')
+      expect(constraints).toContain('覆盖性')
+    }
   })
 })

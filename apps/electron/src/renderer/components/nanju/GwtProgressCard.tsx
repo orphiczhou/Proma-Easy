@@ -104,7 +104,7 @@ export function GwtProgressCard({ sessionId }: { sessionId: string }): React.Rea
       )}
       {!running && data.skipped > 0 && (
         <div className="mt-1 text-muted-foreground">
-          有 {data.skipped} 个场景被跳过（无法映射到页面元素），明细见测试报告
+          有 {data.skipped} 个场景被跳过（主动裁剪范围或文件校验未过，属测试侧声明而非应用故障），原因见测试报告明细
         </div>
       )}
     </div>

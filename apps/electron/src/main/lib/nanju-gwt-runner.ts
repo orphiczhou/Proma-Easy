@@ -14,6 +14,14 @@
  * 执行内核：BrowserController GWT 原语（loadFile 直载绕开 click-to-fix 注入 +
  * data-ai-id 选择器锚点 + CDP 真实输入序列）。时序断言一律轮询窗口（timeoutMs），
  * 禁严格时刻断言。
+ *
+ * 安全边界（v0.17.63，AC G-001/G-002）：op 白名单不含 eval——L2 产出的自由 JS
+ * 不再进入页面上下文（assertBrowserScript 仅长度校验，无白名单约束力）；复杂状态
+ * 断言暂不支持，用 assert-text 轮询读界面状态文本替代。
+ *
+ * 测试上下文边界声明（AC G-003/F-003）：file:// 测试上下文与 proma-file 预览存在
+ * 注入差异（预览协议的 click-to-fix 注入与 token 门控不在测试覆盖内）——测试结论
+ * 对交互语义负责、不验证 click-to-fix 注入。
  */
 
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -21,14 +29,13 @@ import { join } from 'node:path'
 import { writeJsonFileAtomic, writeTextFileAtomic } from './safe-file'
 import { getNanjuProjectDir } from './nanju-project'
 import { recordTelemetry } from './nanju-telemetry'
-import { assertBrowserScript } from './browser-script-policy'
 
 // ===== steps.json schema =====
 
-/** op 白名单（Sprint B；设计稿 Q4） */
+/** op 白名单（Sprint B；设计稿 Q4。v0.17.63 移除 eval：自由 JS 通道整体关闭） */
 export type GwtOpType =
   | 'click' | 'fill' | 'press' | 'wait-selector'
-  | 'assert-text' | 'assert-visible' | 'assert-count' | 'eval'
+  | 'assert-text' | 'assert-visible' | 'assert-count'
 
 export interface GwtStepOp {
   type: GwtOpType
@@ -40,8 +47,6 @@ export interface GwtStepOp {
   contains?: string
   /** assert-count 期望元素数量 */
   count?: number
-  /** eval 表达式（仅 then 步骤；过 assertBrowserScript 校验，truthy=通过） */
-  expression?: string
   /** op 级超时/轮询窗口（毫秒）——设计稿 schema 示例的写法，与步骤级 timeoutMs 等效（步骤级优先） */
   timeoutMs?: number
 }
@@ -66,6 +71,23 @@ export interface GwtScenarioFile {
 
 export type GwtScenarioStatus = 'pass' | 'fail' | 'skip'
 
+/** 失败步骤详情（回炉缺陷清单用） */
+export interface GwtFailedStep {
+  index: number
+  kind: GwtStep['kind']
+  text: string
+  expected: string
+  actual: string
+  /**
+   * 失败归类（v0.17.63 回炉分流依据，AC L-001）：
+   * - selector-wait：click/fill 目标元素轮询窗口内未出现（映射类，回 testing 重映射）
+   * - unmapped：步骤未映射但场景未声明 skip（映射类兜底）
+   * - assert：断言不满足（行为类，回 coding 改代码）
+   * - channel：执行通道异常（CDP/标签级故障）
+   */
+  category?: 'selector-wait' | 'unmapped' | 'assert' | 'channel'
+}
+
 /** 单场景执行结果 */
 export interface GwtScenarioResult {
   feature: string
@@ -74,7 +96,7 @@ export interface GwtScenarioResult {
   /** skip 原因 / fail 首个失败步骤描述 */
   reason: string | null
   /** fail 时的失败步骤详情（回炉缺陷清单用） */
-  failedStep: { index: number; kind: GwtStep['kind']; text: string; expected: string; actual: string } | null
+  failedStep: GwtFailedStep | null
   /** 失败截图相对路径（06_TESTS/ 内相对） */
   screenshot: string | null
   durationMs: number
@@ -97,7 +119,7 @@ export interface GwtJudgement {
 
 const DATA_AI_ID_VALUE = /^[A-Za-z][A-Za-z0-9_-]*$/
 const VALID_OP_TYPES: ReadonlySet<string> = new Set([
-  'click', 'fill', 'press', 'wait-selector', 'assert-text', 'assert-visible', 'assert-count', 'eval',
+  'click', 'fill', 'press', 'wait-selector', 'assert-text', 'assert-visible', 'assert-count',
 ])
 
 /**
@@ -184,10 +206,6 @@ export function validateScenarioFileContent(raw: string): { scenario: GwtScenari
         if (op.type === 'assert-count' && (typeof op.count !== 'number' || !Number.isInteger(op.count) || op.count < 0)) {
           errors.push(`${label}.op.type=assert-count 需要 count 非负整数`)
         }
-        if (op.type === 'eval') {
-          if (step.kind !== 'then') errors.push(`${label}.op.type=eval 仅允许 then 步骤`)
-          if (typeof op.expression !== 'string' || !op.expression.trim()) errors.push(`${label}.op.type=eval 需要 expression`)
-        }
       }
     } else {
       errors.push(`${label}.op 必须是对象或 null`)
@@ -268,7 +286,13 @@ export function judgeGwtResult(results: Array<Pick<GwtScenarioResult, 'feature' 
 /** 机器可读报告（06_TESTS/report.json） */
 export interface GwtReportJson {
   generatedAt: string
-  verdict: 'pass' | 'fail'
+  verdict: 'pass' | 'fail' | 'error'
+  /** 失败构成（回炉分流，v0.17.63 AC L-001）：behavior/mapping/coverage；pass 时为 null */
+  failureKind: GwtFailureKind | null
+  /** PRD 存在但未提取到 US-xx 清单（覆盖性基准缺失，fail-fast，v0.17.63 AC F-002） */
+  prdUserStoriesMissing?: boolean
+  /** verdict=error 时的异常原因（执行器抛异常但报告仍落盘，v0.17.63 AC Z-005） */
+  errorReason?: string | null
   entry: string
   scenariosTotal: number
   passed: number
@@ -295,9 +319,18 @@ export function buildReportMarkdown(report: GwtReportJson, projectName: string):
   lines.push('')
   lines.push(`- 生成时间：${report.generatedAt}`)
   lines.push(`- 测试入口：\`${report.entry}\``)
-  lines.push(`- 判定结果：${report.verdict === 'pass' ? '✅ 全部通过' : '❌ 未通过'}`)
+  // 判定结果文案（AC U-001）：error/覆盖不全单独句式，不出现「0 个失败」与「未通过」并列的自相矛盾
+  const verdictLabel = report.verdict === 'pass'
+    ? '✅ 全部通过'
+    : report.verdict === 'error'
+      ? `⚠️ 执行异常${report.errorReason ? `（${report.errorReason}）` : ''}`
+      : report.failed === 0
+        ? '❌ 未通过（覆盖不全：有用户故事无可执行场景）'
+        : '❌ 未通过'
+  lines.push(`- 判定结果：${verdictLabel}`)
   lines.push(`- 场景统计：共 ${report.scenariosTotal} 个，通过 ${report.passed}，失败 ${report.failed}，跳过 ${report.skipped}`)
   lines.push(`- 用户故事覆盖：${report.coveredUs.length > 0 ? report.coveredUs.join('、') : '无'}${report.uncoveredUs.length > 0 ? `（未覆盖：${report.uncoveredUs.join('、')}）` : ''}`)
+  if (report.prdUserStoriesMissing) lines.push('- ⚠ PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定（请补充 PRD 后重跑）')
   lines.push(`- 重试轮次：${report.retryCount}`)
   lines.push('')
   lines.push('## 场景明细')
@@ -323,6 +356,14 @@ export function buildSummaryText(judgement: GwtJudgement, reportPath: string): s
   if (judgement.verdict === 'pass') {
     return `✅ 我们测试了 ${judgement.scenariosTotal} 个场景，全部通过（覆盖 ${judgement.coveredUs.length} 条用户故事）。测试报告：${reportPath}`
   }
+  // 纯覆盖性失败（AC U-001）：单独句式，不输出「0 个失败」与「未通过」并列的自相矛盾
+  if (judgement.failed === 0) {
+    const parts: string[] = []
+    parts.push(`❌ 验收未通过（覆盖不全）：${judgement.scenariosTotal} 个场景全部执行成功，但用户故事 ${judgement.uncoveredUs.join('、')} 没有可执行场景`)
+    if (judgement.skipped > 0) parts.push(`${judgement.skipped} 个场景跳过`)
+    parts.push(`测试报告：${reportPath}`)
+    return parts.join('；')
+  }
   const parts: string[] = []
   parts.push(`❌ 验收测试未通过：${judgement.scenariosTotal} 个场景中 ${judgement.failed} 个失败`)
   if (judgement.skipped > 0) parts.push(`${judgement.skipped} 个跳过`)
@@ -334,13 +375,15 @@ export function buildSummaryText(judgement: GwtJudgement, reportPath: string): s
 // ===== 浏览器适配器（单测 mock 注入；生产实现为 browser-controller GWT 原语） =====
 
 export interface GwtBrowserAdapter {
-  createLocalFileTab(sessionId: string, filePath: string): Promise<{ tabId: string }>
+  createLocalFileTab(sessionId: string, filePath: string): Promise<{ tabId: string; previousActiveTabId?: string | null }>
   loadFileInTab(sessionId: string, tabId: string, filePath: string): Promise<void>
   evaluateInTab(sessionId: string, tabId: string, expression: string, signal?: AbortSignal): Promise<unknown>
   clickPointInTab(sessionId: string, tabId: string, x: number, y: number, signal?: AbortSignal): Promise<void>
   pressKeyInTab(sessionId: string, tabId: string, key: string, signal?: AbortSignal): Promise<void>
   screenshot(sessionId: string, tabId: string, signal?: AbortSignal): Promise<{ base64: string }>
   closeTab(sessionId: string, tabId: string): Promise<unknown>
+  /** 测试结束后恢复用户原活动标签（v0.17.63 AC Z-004；可选实现，未实现时保持现状） */
+  restoreDisplayTab?(sessionId: string, tabId: string): void
 }
 
 // ===== 执行器 =====
@@ -348,8 +391,6 @@ export interface GwtBrowserAdapter {
 const DEFAULT_ASSERT_TIMEOUT_MS = 4_000
 const DEFAULT_WAIT_SELECTOR_TIMEOUT_MS = 8_000
 const POLL_INTERVAL_MS = 250
-/** 预检宽松窗口：初始 DOM 存在性检查（拦截 LLM 臆造 selector，误杀容忍靠轮询） */
-const PRECHECK_TIMEOUT_MS = 2_000
 /** 每步执行后的 settle 延时（等异步渲染稳定） */
 const STEP_SETTLE_MS = 150
 
@@ -442,48 +483,27 @@ async function executeScenario(
     }
   }
 
-  // 场景隔离：每个场景重新 loadFile（同代码同结果，重试公平）
+  // 场景隔离：每个场景重新 loadFile（同代码同结果，重试公平）。
+  // v0.17.63（AC Z-001）：存储清理下沉到 BrowserController.loadFileInTab（重载前清
+  // localStorage/sessionStorage，消除上一场景写入数据的串扰；indexedDB 清理归 Sprint C）。
   await controller.loadFileInTab(sessionId, tabId, entryHtmlPath)
   await sleep(300)
 
-  // 预检：click/fill 目标 selector 的初始存在性（宽松 2s 轮询窗口）。
-  // 缺失 = L2 臆造 selector 或映射错位 → 整场景 unmapped-skip，不执行半截（设计稿 Q4/R1）。
-  const precheckSelectors = [...new Set(
-    scenario.steps
-      .filter((s) => s.op && (s.op.type === 'click' || s.op.type === 'fill') && s.op.selector)
-      .map((s) => normalizeGwtSelector(s.op!.selector!))
-      .filter((sel): sel is string => !!sel),
-  )]
-  for (const selector of precheckSelectors) {
-    const precheckAt = Date.now()
-    let found = false
-    while (Date.now() - precheckAt <= PRECHECK_TIMEOUT_MS) {
-      const exists = await controller.evaluateInTab(sessionId, tabId, `(() => !!document.querySelector(${pagePayload(selector)}))()`)
-      if (exists === true) { found = true; break }
-      await sleep(POLL_INTERVAL_MS)
-    }
-    if (!found) {
-      return {
-        ...base,
-        status: 'skip',
-        reason: `unmapped-skip：初始页面找不到 selector ${selector}（步骤映射与实际代码不符，请重新映射）`,
-        durationMs: Date.now() - startedAt,
-      }
-    }
-  }
-
-  // 逐步执行
+  // 逐步执行（v0.17.63 预检重构，AC Z-002/Z-003：不再做「初始 DOM 存在性」预检——
+  // 2s 初始窗口对动态 UI（先点开弹屏/二级页再操作其中元素）是系统性误杀；
+  // 改为 click/fill 执行期 8s 轮询等待目标出现，等不到才判 fail「等待超时未出现」。
+  // 保留「不执行半截」语义：目标始终未出现时该步 fail，不动后续步骤。）
   for (let i = 0; i < scenario.steps.length; i++) {
     const step = scenario.steps[i]!
     const op = step.op
     if (!op) {
       // unmapped 步骤（schema 已要求显式声明）：场景半截执行到此，判 fail 不可续
-      // ——但预检语义下 unmapped 场景应在生成侧已标 skip；这里兜底 fail 透明化。
+      // ——正常情况下生成侧应在场景级标 skip；这里兜底 fail 透明化（映射类）。
       return {
         ...base,
         status: 'fail',
         reason: `步骤 ${i + 1} 未映射（unmapped）但场景未声明 skip`,
-        failedStep: { index: i, kind: step.kind, text: step.text, expected: '可执行步骤', actual: 'op=null' },
+        failedStep: { index: i, kind: step.kind, text: step.text, expected: '可执行步骤', actual: 'op=null', category: 'unmapped' },
         durationMs: Date.now() - startedAt,
       }
     }
@@ -492,19 +512,24 @@ async function executeScenario(
       if (op.type === 'click' || op.type === 'fill' || op.type === 'press') {
         if (op.type === 'click') {
           const selector = normalizeGwtSelector(op.selector ?? '')
-          if (!selector) throw new GwtStepError(i, step, 'selector 语法非法', op.selector ?? '')
-          const center = await controller.evaluateInTab(sessionId, tabId, CENTER_OF_EXPRESSION(selector))
-          const point = center as { x: number; y: number } | null
-          if (!point || typeof point.x !== 'number' || typeof point.y !== 'number') {
-            throw new GwtStepError(i, step, '元素存在并可点击', `selector ${selector} 不可定位`)
+          if (!selector) throw new GwtStepError(i, step, 'selector 语法非法', op.selector ?? '', 'selector-wait')
+          const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+          const point = await waitForClickable(controller, sessionId, tabId, selector, timeoutMs)
+          if (!point) {
+            throw new GwtStepError(i, step, `等待 ${selector} 出现（${timeoutMs}ms 内）`, `${selector} 等待超时未出现`, 'selector-wait')
           }
           await controller.clickPointInTab(sessionId, tabId, point.x, point.y)
         } else if (op.type === 'fill') {
           const selector = normalizeGwtSelector(op.selector ?? '')
-          if (!selector) throw new GwtStepError(i, step, 'selector 语法合法', op.selector ?? '')
+          if (!selector) throw new GwtStepError(i, step, 'selector 语法合法', op.selector ?? '', 'selector-wait')
+          const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+          const appeared = await waitForSelectorPresent(controller, sessionId, tabId, selector, timeoutMs)
+          if (!appeared) {
+            throw new GwtStepError(i, step, `等待 ${selector} 出现（${timeoutMs}ms 内）`, `${selector} 等待超时未出现`, 'selector-wait')
+          }
           const filled = await controller.evaluateInTab(sessionId, tabId, FILL_EXPRESSION(selector, op.value ?? '')) as { ok?: boolean; error?: string } | null
           if (!filled || filled.ok !== true) {
-            throw new GwtStepError(i, step, '输入成功', filled?.error ?? 'fill 失败')
+            throw new GwtStepError(i, step, '输入成功', filled?.error ?? 'fill 失败', 'assert')
           }
         } else {
           await controller.pressKeyInTab(sessionId, tabId, op.value ?? 'Enter')
@@ -512,7 +537,7 @@ async function executeScenario(
       } else if (op.type === 'wait-selector' || op.type === 'assert-text' || op.type === 'assert-visible' || op.type === 'assert-count') {
         // 断言/等待：轮询窗口（禁严格时刻断言；窗口内重试）
         const selector = normalizeGwtSelector(op.selector ?? '')
-        if (!selector) throw new GwtStepError(i, step, 'selector 语法合法', op.selector ?? '')
+        if (!selector) throw new GwtStepError(i, step, 'selector 语法合法', op.selector ?? '', 'assert')
         const isWait = op.type === 'wait-selector'
         const timeoutMs = step.timeoutMs ?? (isWait ? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS : DEFAULT_ASSERT_TIMEOUT_MS)
         const expression = isWait
@@ -538,15 +563,7 @@ async function executeScenario(
             : op.type === 'assert-text' ? `文本包含「${op.contains}」`
             : op.type === 'assert-visible' ? `${selector} 可见`
             : `${selector} 数量 = ${op.count}`
-          throw new GwtStepError(i, step, expected, lastActual)
-        }
-      } else if (op.type === 'eval') {
-        // 受限 JS（仅 then）：过 assertBrowserScript 校验（长度/非空），truthy=通过
-        const expression = op.expression ?? ''
-        assertBrowserScript(expression)
-        const value = await controller.evaluateInTab(sessionId, tabId, expression)
-        if (!value) {
-          throw new GwtStepError(i, step, '表达式求值为真', `求值结果：${JSON.stringify(value) ?? 'undefined'}`)
+          throw new GwtStepError(i, step, expected, lastActual, 'assert')
         }
       }
     } catch (e) {
@@ -566,7 +583,7 @@ async function executeScenario(
           ...base,
           status: 'fail',
           reason: `步骤 ${e.stepIndex + 1}（${e.step.kind}：${e.step.text}）期望「${e.expected}」实际「${e.actual}」`,
-          failedStep: { index: e.stepIndex, kind: e.step.kind, text: e.step.text, expected: e.expected, actual: e.actual },
+          failedStep: { index: e.stepIndex, kind: e.step.kind, text: e.step.text, expected: e.expected, actual: e.actual, category: e.category },
           screenshot,
           durationMs: Date.now() - startedAt,
         }
@@ -576,7 +593,7 @@ async function executeScenario(
         ...base,
         status: 'fail',
         reason: `执行通道异常：${e instanceof Error ? e.message : String(e)}`,
-        failedStep: { index: i, kind: step.kind, text: step.text, expected: '步骤正常执行', actual: String(e instanceof Error ? e.message : e).slice(0, 200) },
+        failedStep: { index: i, kind: step.kind, text: step.text, expected: '步骤正常执行', actual: String(e instanceof Error ? e.message : e).slice(0, 200), category: 'channel' },
         screenshot: null,
         durationMs: Date.now() - startedAt,
       }
@@ -587,16 +604,48 @@ async function executeScenario(
   return { ...base, status: 'pass', reason: null, durationMs: Date.now() - startedAt }
 }
 
-/** 步骤失败（带期望/实际，供缺陷清单） */
+/** 步骤失败（带期望/实际与回炉归类，供分流） */
 class GwtStepError extends Error {
   constructor(
     public readonly stepIndex: number,
     public readonly step: GwtStep,
     public readonly expected: string,
     public readonly actual: string,
+    public readonly category: NonNullable<GwtFailedStep['category']>,
   ) {
     super(`步骤 ${stepIndex + 1} 失败：期望「${expected}」实际「${actual}」`)
   }
+}
+
+/** click/fill 目标元素执行期轮询：窗口内等元素出现并返回中心坐标（等不到返回 null） */
+async function waitForClickable(
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, selector: string, timeoutMs: number,
+): Promise<{ x: number; y: number } | null> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      const center = await controller.evaluateInTab(sessionId, tabId, CENTER_OF_EXPRESSION(selector))
+      const point = center as { x: number; y: number } | null
+      if (point && typeof point.x === 'number' && typeof point.y === 'number') return point
+    } catch { /* 求值异常按未出现重试，窗口耗尽后由调用方判 fail */ }
+    await sleep(POLL_INTERVAL_MS)
+  }
+  return null
+}
+
+/** click/fill 目标元素执行期轮询：窗口内等元素存在（等不到返回 false） */
+async function waitForSelectorPresent(
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, selector: string, timeoutMs: number,
+): Promise<boolean> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      const exists = await controller.evaluateInTab(sessionId, tabId, `(() => !!document.querySelector(${pagePayload(selector)}))()`)
+      if (exists === true) return true
+    } catch { /* 求值异常按未出现重试，窗口耗尽后由调用方判 fail */ }
+    await sleep(POLL_INTERVAL_MS)
+  }
+  return false
 }
 
 /** 执行全套场景（不判定；判定归 judgeGwtResult） */
@@ -622,6 +671,10 @@ export async function runGwtSuite(options: GwtSuiteOptions): Promise<GwtScenario
     return results
   } finally {
     try { await controller.closeTab(sessionId, tab.tabId) } catch { /* 标签清理失败不影响结果 */ }
+    // 标签恢复（AC Z-004）：切回测试创建前的用户活动标签，不留在任意残留标签上
+    if (tab.previousActiveTabId && tab.previousActiveTabId !== tab.tabId) {
+      try { controller.restoreDisplayTab?.(sessionId, tab.previousActiveTabId) } catch { /* 恢复失败不影响结果 */ }
+    }
     onProgress?.({ phase: 'done', current: scenarios.length, total: scenarios.length, passed, failed, skipped })
   }
 }
@@ -631,17 +684,41 @@ export async function runGwtSuite(options: GwtSuiteOptions): Promise<GwtScenario
 /** GWT 测试重试上限（PRD §9.3：快消型退回上限 2 次；与 PhaseNode.retryLimit 一致） */
 export const GWT_RETRY_LIMIT = 2
 
+/**
+ * 失败构成（v0.17.63 回炉分流，AC L-001）：
+ * - behavior：assert 行为类失败（断言不满足/通道异常）→ 回炉 coding 改代码
+ * - mapping：selector 等待超时/未映射类失败 → 回炉 testing 重写 steps.json 映射（不烧 coding 预算）
+ * - coverage：US 覆盖缺失（无可执行场景 / PRD 缺 US-xx 清单 fail-fast）→ 补场景或回 requirements
+ */
+export type GwtFailureKind = 'behavior' | 'mapping' | 'coverage'
+
+/** 从场景结果归纳失败构成（纯函数；verdict=pass 时返回 null） */
+export function classifyGwtFailure(results: Array<Pick<GwtScenarioResult, 'status' | 'failedStep'>>): GwtFailureKind | null {
+  const failedResults = results.filter((r) => r.status === 'fail')
+  if (failedResults.length === 0) return 'coverage'
+  const isMapping = (r: (typeof failedResults)[number]) => r.failedStep?.category === 'selector-wait' || r.failedStep?.category === 'unmapped'
+  // 混合失败时优先 behavior：真实缺陷修复后映射类失败常一并消失（元素本该存在），
+  // 避免先重映射再发现代码坏了的两跳回炉
+  return failedResults.some((r) => !isMapping(r)) ? 'behavior' : 'mapping'
+}
+
 export interface NanjuGwtOutcome {
-  verdict: 'pass' | 'fail'
+  verdict: 'pass' | 'fail' | 'error'
   judgement: GwtJudgement
   reportJsonPath: string
   reportMdPath: string
-  /** 本轮重试编号（首次执行=0；fail 后每回炉重跑 +1） */
+  /** 本轮重试编号（首次执行=0；非 pass 轮次含 error 后每回炉重跑 +1，合计 ≤ GWT_RETRY_LIMIT） */
   retryCount: number
   retryLimitReached: boolean
   summaryText: string
-  /** 失败清单（回炉 coding 的缺陷描述） */
+  /** 失败清单（回炉缺陷/映射修复描述） */
   failListText: string
+  /** 失败构成（回炉分流依据）：behavior/mapping/coverage；pass 时为 null */
+  failureKind: GwtFailureKind | null
+  /** PRD 存在但未提取到 US-xx 清单（coverage 子类：需先补 PRD） */
+  prdUserStoriesMissing: boolean
+  /** verdict=error 时的异常原因 */
+  errorReason: string | null
   results: GwtScenarioResult[]
 }
 
@@ -688,38 +765,55 @@ export async function runNanjuGwtAcceptance(input: {
     }
   }
 
-  // 2. PRD 用户故事清单（覆盖性判定的对照基准）
+  // 2. PRD 用户故事清单（覆盖性判定的对照基准）。v0.17.63（AC F-002）：
+  //    PRD 存在但提取不到任何 US-xx → 覆盖性基准缺失，fail-fast（不静默退化为纯通过性判定）
   let userStories: string[] = []
+  let prdUserStoriesMissing = false
   const prdPath = join(projectDir, '01_PRD', 'prd.md')
   if (existsSync(prdPath)) {
     userStories = parseUserStories(readFileSync(prdPath, 'utf-8'))
+    prdUserStoriesMissing = userStories.length === 0
   }
 
-  // 3. 上轮重试编号（report.json 持久化，跨轮次累计）
+  // 3. 上轮重试编号（report.json 持久化，跨轮次累计）。
+  //    v0.17.63（AC Z-005）：error 轮次同样计入重试（非 pass 即累计），
+  //    避免「持续异常不写报告 → retryCount 永远 0 → 永不触发人工介入」。
+  //    回炉预算语义：testing 侧重映射与 coding 修复合计 ≤ 2 次（择简口径，不改既有计数结构）。
   let prevRetryCount = 0
   let prevFailed = false
   if (existsSync(reportJsonPath)) {
     try {
       const prev = JSON.parse(readFileSync(reportJsonPath, 'utf-8')) as { retryCount?: number; verdict?: string }
       prevRetryCount = typeof prev.retryCount === 'number' ? prev.retryCount : 0
-      prevFailed = prev.verdict === 'fail'
+      prevFailed = prev.verdict === 'fail' || prev.verdict === 'error'
     } catch { /* 损坏报告按首次处理 */ }
   }
   const retryCount = prevFailed ? prevRetryCount + 1 : 0
 
-  // 4. 执行（入口缺失 = 全量 fail 的确定态，不抛异常保持报告完整）
+  // 4. 执行（三种确定态，均不向上抛异常：正常结果 / 覆盖性基准缺失 fail-fast / 执行异常 error）
   const entryHtmlPath = join(projectDir, '08_APP', 'index.html')
   const screenshotDir = join(projectDir, '06_TESTS', 'screenshots')
-  const results = scenarios.length > 0 && existsSync(entryHtmlPath)
-    ? await runGwtSuite({
-      sessionId: input.sessionId,
-      entryHtmlPath,
-      scenarios,
-      controller: input.controller,
-      screenshotDir,
-      onProgress: input.onProgress,
-    })
-    : scenarios.map((s) => ({
+  let results: GwtScenarioResult[] = []
+  let errorReason: string | null = null
+  if (prdUserStoriesMissing) {
+    // PRD 缺 US-xx 清单：覆盖性无法判定，不执行浏览器步骤（fail-fast，AC F-002）
+  } else if (scenarios.length > 0 && existsSync(entryHtmlPath)) {
+    try {
+      results = await runGwtSuite({
+        sessionId: input.sessionId,
+        entryHtmlPath,
+        scenarios,
+        controller: input.controller,
+        screenshotDir,
+        onProgress: input.onProgress,
+      })
+    } catch (e) {
+      // 执行器异常（CDP/标签级故障等）：同样写报告（verdict=error）+ 计入重试，
+      // 不再裸抛断链（AC Z-005/L-003：后续轮次可触发超限人工介入）
+      errorReason = e instanceof Error ? e.message : String(e)
+    }
+  } else {
+    results = scenarios.map((s) => ({
       feature: s.feature,
       scenario: s.scenario,
       status: 'skip' as const,
@@ -728,12 +822,24 @@ export async function runNanjuGwtAcceptance(input: {
       screenshot: null,
       durationMs: 0,
     }))
+  }
 
   // 5. 规则裁判 + 报告
   const judgement = judgeGwtResult(results, userStories)
+  const failureKind = errorReason
+    ? null
+    : prdUserStoriesMissing
+      ? 'coverage'
+      : judgement.verdict === 'fail'
+        ? classifyGwtFailure(results)
+        : null
+  const verdict: NanjuGwtOutcome['verdict'] = errorReason ? 'error' : judgement.verdict
   const report: GwtReportJson = {
     generatedAt: new Date().toISOString(),
-    verdict: judgement.verdict,
+    verdict,
+    failureKind,
+    prdUserStoriesMissing: prdUserStoriesMissing || undefined,
+    errorReason,
     entry: '08_APP/index.html',
     scenariosTotal: judgement.scenariosTotal,
     passed: judgement.passed,
@@ -754,7 +860,7 @@ export async function runNanjuGwtAcceptance(input: {
   const reportMdPath = join(projectDir, '06_TESTS', `report-${stampText}.md`)
   writeTextFileAtomic(reportMdPath, buildReportMarkdown(report, input.projectName))
 
-  // 6. judge.verdict 埋点（推进即事实口径：fail 轮次也记，供漏斗分析）
+  // 6. judge.verdict 埋点（推进即事实口径：fail/error 轮次也记，供漏斗分析）
   try {
     recordTelemetry(input.workspaceSlug, 'judge.verdict', {
       project_id: input.projectId,
@@ -763,33 +869,53 @@ export async function runNanjuGwtAcceptance(input: {
       passed: judgement.passed,
       failed: judgement.failed,
       skipped: judgement.skipped,
-      unmapped: results.filter((r) => r.reason?.startsWith('unmapped-skip')).length,
+      mapping_fail: results.filter((r) => r.failedStep?.category === 'selector-wait' || r.failedStep?.category === 'unmapped').length,
       coverage_us: judgement.uncoveredUs.length === 0 ? judgement.coveredUs.join(',') : `缺失:${judgement.uncoveredUs.join(',')}`,
-      verdict: judgement.verdict,
+      prd_us_missing: prdUserStoriesMissing || undefined,
+      verdict,
+      failure_kind: failureKind ?? undefined,
+      error_reason: errorReason ?? undefined,
       duration_ms: results.reduce((sum, r) => sum + r.durationMs, 0),
       retry_round: retryCount,
     }, input.projectId)
   } catch { /* 埋点失败不影响主流程 */ }
 
-  // 7. 回炉缺陷清单（失败场景 + 期望 vs 实际 + 截图路径）
+  // 7. 回炉缺陷清单（失败场景 + 期望 vs 实际 + 截图路径；v0.17.63 按失败构成分组描述）
   const failLines: string[] = []
+  if (prdUserStoriesMissing) {
+    failLines.push('PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定。请先补充 PRD（用户故事用「US-01 / US-02 …」编号命名）后再重跑测试。')
+  }
   results.filter((r) => r.status === 'fail').forEach((r, i) => {
     const fs = r.failedStep
-    failLines.push(`${i + 1}. [${r.feature}] ${r.scenario} — 步骤 ${(fs?.index ?? 0) + 1}（${fs?.kind ?? ''}：${fs?.text ?? ''}）：期望「${fs?.expected ?? ''}」实际「${fs?.actual ?? r.reason ?? ''}」${r.screenshot ? `（截图 ${r.screenshot}）` : ''}`)
+    const kindTag = fs?.category === 'selector-wait' || fs?.category === 'unmapped' ? '（映射类：目标元素未出现或未映射）' : ''
+    failLines.push(`${i + 1}. [${r.feature}] ${r.scenario} — 步骤 ${(fs?.index ?? 0) + 1}（${fs?.kind ?? ''}：${fs?.text ?? ''}）：期望「${fs?.expected ?? ''}」实际「${fs?.actual ?? r.reason ?? ''}」${kindTag}${r.screenshot ? `（截图 ${r.screenshot}）` : ''}`)
   })
-  if (judgement.uncoveredUs.length > 0) {
+  if (!prdUserStoriesMissing && judgement.uncoveredUs.length > 0) {
     failLines.push(`用户故事 ${judgement.uncoveredUs.join('、')} 没有可执行场景（全部 skip），覆盖不完整。`)
   }
+  if (errorReason) {
+    failLines.push(`执行异常：${errorReason}`)
+  }
+
+  // 摘要口径（AC U-001/F-002）：PRD 缺 US 清单与执行异常用专用句式，不用普通 fail 文案
+  const summaryText = errorReason
+    ? `⚠️ 验收测试执行异常：${errorReason}。请检查 08_APP/index.html 与 06_TESTS/ 产物完整性后重跑。测试报告：${reportMdPath}`
+    : prdUserStoriesMissing
+      ? `❌ PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定（验收硬约束要求每条用户故事有可执行场景）。请补充 PRD 用户故事清单后重跑。测试报告：${reportMdPath}`
+      : buildSummaryText(judgement, reportMdPath)
 
   return {
-    verdict: judgement.verdict,
+    verdict,
     judgement,
     reportJsonPath,
     reportMdPath,
     retryCount,
     retryLimitReached: retryCount >= GWT_RETRY_LIMIT,
-    summaryText: buildSummaryText(judgement, reportMdPath),
+    summaryText,
     failListText: failLines.join('\n'),
+    failureKind,
+    prdUserStoriesMissing,
+    errorReason,
     results,
   }
 }

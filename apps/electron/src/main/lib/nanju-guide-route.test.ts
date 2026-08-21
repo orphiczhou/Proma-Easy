@@ -87,5 +87,8 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(byTitle('coding')?.title).toBe('全栈开发')
     expect(byTitle('coding')?.role).toBe('fullstack-developer')
     expect(byTitle('coding')?.model).toBe('deepseek-v4-pro')
+    // v0.17.63：测试工程师回 deepseek-v4-pro（纯文本 spec 任务，不绑视觉模型）
+    expect(byTitle('testing')?.model).toBe('deepseek-v4-pro')
+    expect(byTitle('testing')?.channel).toBe('deepseek')
   })
 })

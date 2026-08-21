@@ -58,7 +58,7 @@ const QUICK_ROUTE: GuideRoutePhase[] = [
     outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'light', acActors: LIGHT_ACTORS,
   }),
   makePhase({
-    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'minimax', model: 'MiniMax-M3',
+    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'deepseek', model: 'deepseek-v4-pro',
     outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'light', acActors: LIGHT_ACTORS,
   }),
   SENTINEL,
@@ -83,7 +83,7 @@ const ITERATIVE_ROUTE: GuideRoutePhase[] = [
     outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
   }),
   makePhase({
-    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'minimax', model: 'MiniMax-M3',
+    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'deepseek', model: 'deepseek-v4-pro',
     outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
   }),
   SENTINEL,

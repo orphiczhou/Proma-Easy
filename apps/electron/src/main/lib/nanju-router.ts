@@ -172,7 +172,14 @@ const REQUIREMENTS_BASE: Omit<PhaseNode, 'taskWeight'> = {
   model: 'deepseek-v4-pro',
   task: '你是需求分析师。与用户对话收集需求，产出 PRD。',
   outputPath: '01_PRD/prd.md',
-  constraints: ['用生活化语言提问', '3-5 个引导性问题', '提供选项而非填空'],
+  constraints: [
+    '用生活化语言提问',
+    '3-5 个引导性问题',
+    '提供选项而非填空',
+    // 上游软门禁（v0.17.63，AC F-002）：不阻断但明确要求——测试阶段按 US-xx 提取覆盖基准，
+    // 缺失时 GWT 直接 fail-fast（PRD 未提取到用户故事清单）
+    'PRD 应含「US-xx」编号的用户故事清单（如「## US-01 添加笔记」），每条故事一段含验收标准；后续验收测试按 US-xx 编号判定覆盖性，无编号清单会导致验收无法收口',
+  ],
   requiresUserConfirmation: true,
   requiresAC: false,
   retryLimit: 3,
@@ -247,15 +254,17 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
   }
 
   // testing 阶段（P1 Sprint B：GWT 验收测试 + 裁判判定闭环）
-  // 作者选 MiniMax-M3（minimax 家族标记，运行时解析同 prototype）：与 coding 作者（deepseek 系）异构，
-  // 且与 light/medium 两套 AC 预设防御者（glm 系）均满足家族多样性断言。
+  // 作者回 deepseek-v4-pro（v0.17.63，AC F-001/仲裁 selection_ruling）：测试工程师是纯文本
+  // spec 生成任务（Gherkin + steps.json），不绑视觉模型；与 coding 作者同渠道不构成构建期
+  // 约束（assertACFamilyDiversity 只要求 defender≠author / attacker≠defender，coding 阶段
+  // deepseek 作者 + deepseek 攻击者已是生产先例），不再自设「testing≠coding 家族」断言。
   // 机器判定收口（requiresUserConfirmation=false）：全场景通过 + 用户故事全覆盖 = 自动交付。
   const testing: PhaseNode = {
     id: 'testing',
     role: 'test-engineer',
     title: '测试工程师',
-    channel: 'minimax',
-    model: 'MiniMax-M3',
+    channel: 'deepseek',
+    model: 'deepseek-v4-pro',
     task: '你是测试工程师。依据 PRD 用户故事清单，为每条故事生成 GWT 验收场景（中文 Gherkin）'
       + '及可执行的步骤映射（steps.json），写入 06_TESTS/。',
     outputPath: '06_TESTS/features/index.feature', // 汇总入口文件（FORMAT_CHECKS 用）
@@ -264,8 +273,8 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       '映射前提（硬性）：先 Read 08_APP/index.html（及 08_APP/ 内被引用的 js），从实际代码提取 data-ai-id 清单，再写步骤映射；禁止臆造 selector',
       '双文件成对产出：每个 us-XX 一个 us-XX.feature（中文 Gherkin：Feature/Scenario/Given/When/Then）+ 一个 us-XX.steps.json（机器可执行步骤脚本，schema 见任务描述），两文件语义必须一致',
       '汇总入口：把全部场景汇总写入 06_TESTS/features/index.feature（每条用户故事一个 Feature 段，保持与分文件同名对应）',
-      'selector 只允许 [data-ai-id="xxx"] 形态（与原型/代码同一套 ID）；操作步骤 op 白名单：click/fill/press/wait-selector/assert-text/assert-visible/assert-count/eval，每步可配 timeoutMs（断言类默认 4000，轮询窗口内重试，禁止严格时刻断言）',
-      '无法可靠映射到实际元素的步骤：该步 op 置 null 且 unmapped=true，并在场景级标 skip:true + skipReason 说明（透明跳过，不臆造）；eval 仅限 then 步骤读状态（如倒计时剩余值），禁止页面无关操作',
+      'selector 只允许 [data-ai-id="xxx"] 形态（与原型/代码同一套 ID）；操作步骤 op 白名单：click/fill/press/wait-selector/assert-text/assert-visible/assert-count（复杂状态断言暂不支持自定义脚本，用 assert-text 轮询读界面呈现的状态文本替代），每步可配 timeoutMs（断言类默认 4000，轮询窗口内重试，禁止严格时刻断言）',
+      '无法可靠映射到实际元素的步骤：该步 op 置 null 且 unmapped=true，并在场景级标 skip:true + skipReason 说明（透明跳过，不臆造）',
       '只在项目目录 06_TESTS/ 下写入文件，禁止触碰 08_APP/ 等其他目录',
     ],
     requiresUserConfirmation: false, // 机器判定收口（裁判规则：全场景通过 + US 全覆盖 = 交付），不做人肉确认
@@ -390,7 +399,8 @@ const FORMAT_CHECKS: Record<PhaseId, (content: string) => boolean> = {
   // （完整「可运行」由 L2 自测 + 引用校验分层保证，不在此收紧）
   coding: (c) => c.includes('<html') || c.includes('<!DOCTYPE') || c.includes('<script'),
   // testing 汇总入口是中文 Gherkin：最低结构底线 Feature: + Scenario:
-  // （真正的可执行性由 GwtRunner 的 steps.json schema 校验 + selector 预检分层保证）
+  // （真正的可执行性由 GwtRunner 的 steps.json schema 校验 + 执行期轮询分层保证；
+  //   steps.json 存在性门禁见 verifyPhaseOutput，v0.17.63 AC I-001）
   testing: (c) => c.includes('Feature:') && c.includes('Scenario:'),
   architecture: (c) => c.includes('# ') || c.includes('## '),
   planning: (c) => c.includes('# ') || c.includes('## '),

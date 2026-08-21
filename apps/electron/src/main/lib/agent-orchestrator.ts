@@ -461,6 +461,11 @@ export class AgentOrchestrator {
 
   /** GWT 交付门禁：testing → delivered 必须已有 verdict=pass 的测试报告（机器裁判收口） */
   private checkNanjuGwtDeliveryGate(workspaceSlug: string, projectId: string): string | null {
+    // 门禁感知运行中（v0.17.63，AC Z-006）：本轮测试还在跑（结果尚未写回 report.json）时
+    // 不误拦——引导等待本轮完成后再声明交付，避免读到上一轮旧报告的 TOCTOU 交错
+    if (this.runningGwtProjects.has(projectId)) {
+      return '验收测试正在运行中（本轮结果尚未写回测试报告）。请等待本轮测试完成、系统注入结果后再声明推进交付。'
+    }
     try {
       const { existsSync, readFileSync } = require('node:fs')
       const { getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
@@ -469,7 +474,11 @@ export class AgentOrchestrator {
       if (!existsSync(reportPath)) {
         return '测试尚未执行（06_TESTS/report.json 不存在）。请先声明 <!-- PHASE_ADVANCE: testing --> 触发自动验收测试，全部通过后系统会自动交付。'
       }
-      const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as { verdict?: string; passed?: number; scenariosTotal?: number }
+      const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as { verdict?: string; passed?: number; scenariosTotal?: number; errorReason?: string | null }
+      // error 报告（v0.17.63，AC Z-005/L-003）：给「重跑测试」指引而非裸拦截
+      if (report?.verdict === 'error') {
+        return `验收测试执行异常（${report?.errorReason ?? '未知原因'}），测试结论不可用。请检查 08_APP/index.html 与 06_TESTS/ 产物后重跑测试（声明 <!-- PHASE_ADVANCE: testing -->）。`
+      }
       if (report?.verdict !== 'pass') {
         return `验收测试未通过（${report?.passed ?? 0}/${report?.scenariosTotal ?? 0} 个场景通过）。请按测试报告修复缺陷后重跑（声明 <!-- PHASE_ADVANCE: testing -->）。`
       }
@@ -504,8 +513,12 @@ export class AgentOrchestrator {
    * 触发时机：PHASE_ADVANCE: testing 重入（currentStage 已是 testing）——
    * 首次 = 场景已生成；重跑 = coding 缺陷已修复。完成后按规则裁判结果处理：
    * - pass → updateNanjuProject(delivered) + Todo 收尾 + 交付完成富语（机器裁判收口）
-   * - fail 未超限（<2 次）→ 注入失败清单与回炉指令 + 续接 L1 委派 coding 修复
-   * - fail 超限（≥2 次）→ 注入人工介入提示（notify_user 语义）
+   * - error（执行异常，v0.17.63）→ 超限人工介入 / 未超限「检查后重跑」指引（不自动烧回炉）
+   * - fail 未超限（<2 次）→ 按失败构成分流（v0.17.63 AC L-001）：
+   *   · behavior（assert 行为类）→ 回炉 coding 修复代码
+   *   · mapping（selector 等待超时/未映射）→ 回炉 testing 重写 steps.json 映射（不烧 coding 预算）
+   *   · coverage（US 缺场景）→ 回炉 testing 补场景；PRD 缺 US-xx 清单 → 指引补 PRD（需用户确认）
+   * - fail 超限（≥2 次，映射与修复合计）→ 注入人工介入提示（notify_user 语义）
    */
   private triggerNanjuGwtRun(input: {
     workspaceSlug: string
@@ -516,6 +529,24 @@ export class AgentOrchestrator {
     resume: { channelId: string; modelId?: string; workspaceId?: string; permissionModeOverride?: PromaPermissionMode }
   }): void {
     const { workspaceSlug, projectId, projectName, projectMode, sessionId, resume } = input
+    // 风险告知预检（v0.17.63，AC L-002）：quick 流程 coding 收口走 open_preview（预览协议），
+    // 此前可能从未打开受管浏览器 → 未确认风险告知时直接给行动指引（含原文指引 + 人工预览降级
+    // 出口），不进 GwtRunner 吃裸异常断链。
+    try {
+      if (!browserController.hasRiskDisclaimerAcknowledged()) {
+        this.injectNanjuAssistantMessage(
+          sessionId,
+          '⚠️ 尚未确认平台账号风险告知，浏览器验收测试无法启动。\n\n'
+          + '· 确认后重跑：请在浏览器面板阅读并确认平台账号风险告知（首次使用受管浏览器前，请在浏览器面板阅读并确认平台账号风险告知后重试），'
+          + '然后重新声明推进 <!-- PHASE_ADVANCE: testing -->。\n'
+          + '· 不想确认的降级出口：可跳过浏览器自动测试，直接人工预览验证——让调度员用 open_preview 打开 08_APP/index.html，'
+          + '你逐条核对用户故事后告知调度员结论；交付收口仍需测试报告，建议确认告知后重跑一次自动测试。',
+        )
+        return
+      }
+    } catch (precheckErr) {
+      console.warn('[南大路由] 风险告知预检失败（不阻断，交由 GwtRunner 原生异常兜底）:', precheckErr instanceof Error ? precheckErr.message : String(precheckErr))
+    }
     if (this.runningGwtProjects.has(projectId)) {
       console.log(`[南大路由] GWT 验收已在进行中：${projectName}，忽略重复触发`)
       return
@@ -558,14 +589,95 @@ export class AgentOrchestrator {
             sessionId,
             outcome.summaryText + '\n\n🎉 项目已全部完成交付！\n\n向导流程到此结束。产出物在项目目录（01_PRD / 02_UX_DESIGN / 08_APP），可运行应用入口 08_APP/index.html，可随时回看。想继续做新东西？在南大向导首页点「快速做一个工具」开始新项目。',
           )
+        } else if (outcome.verdict === 'error') {
+          // 执行异常（v0.17.63，AC Z-005/L-003）：报告已落盘（verdict=error）+ retryCount 已计数；
+          // 超限转人工，未超限给「检查后重跑」指引（不自动烧回炉续接——异常成因非代码缺陷）
+          if (outcome.retryLimitReached) {
+            this.injectNanjuAssistantMessage(
+              sessionId,
+              outcome.summaryText + `\n\n⛔ 测试执行异常累计已达上限（${outcome.retryCount} 轮），转为人工介入。请查看测试报告 ${outcome.reportMdPath}，然后告诉调度员：终止项目、排查环境后重试，或跳过测试直接交付。`,
+            )
+          } else {
+            this.injectNanjuAssistantMessage(
+              sessionId,
+              outcome.summaryText + '\n\n请检查 08_APP/index.html 与 06_TESTS/ 产物完整性（以及浏览器面板可用性），修复后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
+            )
+          }
         } else if (outcome.retryLimitReached) {
           // 重试超限 → 人工介入（handlePhaseResult notify_user 语义的产品化落地）
           this.injectNanjuAssistantMessage(
             sessionId,
             outcome.summaryText + `\n\n⛔ 测试回炉已达上限（${outcome.retryCount} 次），转为人工介入。请查看测试报告 ${outcome.reportMdPath}，然后告诉调度员：终止项目、继续人工修复，或跳过测试直接交付。`,
           )
+        } else if (outcome.failureKind === 'coverage' && outcome.prdUserStoriesMissing) {
+          // 覆盖性基准缺失（v0.17.63，AC F-002）：PRD 缺 US-xx 清单 → 指引补 PRD
+          // （需求变更需用户确认，不自动烧回炉续接）
+          this.injectNanjuAssistantMessage(
+            sessionId,
+            outcome.summaryText + '\n\n处理指引：请与用户确认需求范围后，用 continue_delegation 委派「需求分析师」补充 PRD 用户故事清单'
+            + '（每条用「US-01 / US-02 …」编号命名并含验收标准），完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
+          )
+        } else if (outcome.failureKind === 'coverage') {
+          // 覆盖类失败（AC L-001 分流）：US 无可执行场景 → 回 testing 补场景（不动 coding）
+          this.injectNanjuAssistantMessage(
+            sessionId,
+            outcome.summaryText + '\n\n失败清单：\n' + outcome.failListText
+            + '\n\n请 continue_delegation 委派「测试工程师」为缺失的用户故事补生成 GWT 场景与 steps.json 映射'
+            + '（只写 06_TESTS/，不动 08_APP/ 与 01_PRD/），完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
+          )
+          setTimeout(() => {
+            runRegisteredHeadlessAgent(
+              {
+                sessionId,
+                userMessage: '验收未通过（覆盖类：部分用户故事无可执行场景）。请按系统注入的清单处理：用 continue_delegation 委派测试工程师为缺失的用户故事补场景与映射（只写 06_TESTS/），完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                channelId: resume.channelId,
+                modelId: resume.modelId,
+                workspaceId: resume.workspaceId,
+                permissionModeOverride: resume.permissionModeOverride,
+                startedAt: Date.now(),
+              },
+              {
+                source: 'delegation',
+                onError: (error: string) => console.warn('[南大路由] GWT 覆盖类回炉续接错误:', error),
+                onComplete: () => {},
+                onTitleUpdated: () => {},
+              },
+            ).catch((e: unknown) => {
+              console.warn('[南大路由] GWT 覆盖类回炉续接失败:', e instanceof Error ? e.message : String(e))
+            })
+          }, 1500)
+        } else if (outcome.failureKind === 'mapping') {
+          // 映射类失败（AC L-001 分流）：selector 等待超时/未映射 → 回 testing 重写映射，不烧 coding 预算
+          this.injectNanjuAssistantMessage(
+            sessionId,
+            outcome.summaryText + '\n\n失败清单：\n' + outcome.failListText
+            + '\n\n这些是步骤映射问题（目标元素等待超时未出现/未映射），不是应用缺陷。请 continue_delegation 委派「测试工程师」'
+            + '重新核对 08_APP 实码的 data-ai-id 后重写对应 steps.json 映射（只改 06_TESTS/，不动 08_APP/ 与 01_PRD/），'
+            + '完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
+          )
+          setTimeout(() => {
+            runRegisteredHeadlessAgent(
+              {
+                sessionId,
+                userMessage: '验收未通过（映射类：步骤映射与实际代码不符）。请按系统注入的清单处理：用 continue_delegation 委派测试工程师重新映射 steps.json（只改 06_TESTS/，不得改 08_APP/），完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                channelId: resume.channelId,
+                modelId: resume.modelId,
+                workspaceId: resume.workspaceId,
+                permissionModeOverride: resume.permissionModeOverride,
+                startedAt: Date.now(),
+              },
+              {
+                source: 'delegation',
+                onError: (error: string) => console.warn('[南大路由] GWT 映射类回炉续接错误:', error),
+                onComplete: () => {},
+                onTitleUpdated: () => {},
+              },
+            ).catch((e: unknown) => {
+              console.warn('[南大路由] GWT 映射类回炉续接失败:', e instanceof Error ? e.message : String(e))
+            })
+          }, 1500)
         } else {
-          // fail 未超限 → 注入失败清单与回炉指令，续接 L1 委派 coding 修复（≤2 次）
+          // 行为类失败（AC L-001 分流）：assert 断言不满足 → 回炉 coding 修复（≤2 次）
           this.injectNanjuAssistantMessage(
             sessionId,
             outcome.summaryText + '\n\n失败清单：\n' + outcome.failListText
@@ -576,7 +688,7 @@ export class AgentOrchestrator {
             runRegisteredHeadlessAgent(
               {
                 sessionId,
-                userMessage: '验收测试未全部通过。请按系统注入的失败清单处理：用 continue_delegation 委派全栈开发修复缺陷（仅改 08_APP/），修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                userMessage: '验收测试未全部通过（行为类：应用缺陷）。请按系统注入的失败清单处理：用 continue_delegation 委派全栈开发修复缺陷（仅改 08_APP/），修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
                 channelId: resume.channelId,
                 modelId: resume.modelId,
                 workspaceId: resume.workspaceId,
@@ -585,12 +697,12 @@ export class AgentOrchestrator {
               },
               {
                 source: 'delegation',
-                onError: (error: string) => console.warn(`[南大路由] GWT 回炉续接错误:`, error),
+                onError: (error: string) => console.warn('[南大路由] GWT 回炉续接错误:', error),
                 onComplete: () => {},
                 onTitleUpdated: () => {},
               },
             ).catch((e: unknown) => {
-              console.warn(`[南大路由] GWT 回炉续接失败:`, e instanceof Error ? e.message : String(e))
+              console.warn('[南大路由] GWT 回炉续接失败:', e instanceof Error ? e.message : String(e))
             })
           }, 1500)
         }
