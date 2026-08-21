@@ -21,8 +21,27 @@ import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
 
 type JotaiStore = ReturnType<typeof useStore>
 
-/** 语音意见收集器的 sourceInputId 前缀（点选元素旁的语音 bar 用） */
-const CTF_VOICE_INPUT_PREFIX = 'ctf-voice-'
+/** 语音意见收集器的 sourceInputId 前缀（点选元素旁的语音 bar 用）
+ *  格式：ctf-voice-<agentSessionId>-<elementId>。两者都可能含 '-'（agentSid 是 36 字符
+ *  uuid、元素 id 是 kebab-case），解析先按 uuid 固定结构切分，再 lastIndexOf 兕底。
+ *  导出供 GlobalShortcuts 判定同一前缀（P3：ctf-voice 目标不抢焦点回输入框）。 */
+export const CTF_VOICE_INPUT_PREFIX = 'ctf-voice-'
+
+/** agent 会话 id 的 uuid 形状（8-4-4-4-12，共 36 字符）——用于 targetInputId 前缀解析 */
+const AGENT_SID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** 从 ctf-voice-<agentSid>-<elementId> 解析归属（P3：uuid 精确切分优先，lastIndexOf 兕底） */
+function parseCtfVoiceTarget(targetInputId: string): { agentSid: string; elementId: string } | null {
+  const rest = targetInputId.slice(CTF_VOICE_INPUT_PREFIX.length)
+  // agentSid 是 uuid（36 字符，自身含 4 个 '-'）且分隔符恰在 rest[36]：先按固定结构切
+  if (rest.length > 37 && rest[36] === '-' && AGENT_SID_UUID_RE.test(rest.slice(0, 36))) {
+    return { agentSid: rest.slice(0, 36), elementId: rest.slice(37) }
+  }
+  // 兕底（非 uuid 会话 id）：取最后一个 '-'——元素 id 含 '-' 时会切错，仅防御性保留
+  const dashIdx = rest.lastIndexOf('-')
+  if (dashIdx <= 0) return null
+  return { agentSid: rest.slice(0, dashIdx), elementId: rest.slice(dashIdx + 1) }
+}
 
 /** 点选纠错交互强制并列展示：聊天 + 原型分屏（用户反馈：交互确认 UX 界面时必须并列）
  *  - 若当前是 preview 独立 tab → tearOff 为分屏；
@@ -69,27 +88,35 @@ export function ClickToFixPanel(): React.ReactElement | null {
       const customEvent = event as CustomEvent<{ sessionId?: string; text?: string; targetInputId?: string | null }>
       const detail = customEvent.detail ?? {}
       const text = detail.text?.trim()
-      if (!text || !detail.sessionId) return
-      // R2：targetInputId 含元素 id（ctf-voice-<sessionId>-<elementId>），按发起时元素归属
-      const prefix = `${CTF_VOICE_INPUT_PREFIX}${detail.sessionId}-`
-      if (!detail.targetInputId?.startsWith(prefix)) return
-      const elementId = detail.targetInputId.slice(prefix.length)
-      // R1：命中即确认送达（preventDefault → 主进程不再走剪贴板兜底）
+      if (!text) return
+      // P3（v0.17.58）：targetInputId 是唯一事实源。detail.sessionId 是 ASR 听写会话 id
+      // （主进程 commit 传 dictationSessionId），不是 agent 会话 id——用它拼 prefix 永远
+      // startsWith false → 链路断裂（无清单/无角标/文本丢 fallback）。禁止回退到 sessionId 拼法。
+      const tid = typeof detail.targetInputId === 'string' ? detail.targetInputId : ''
+      if (!tid.startsWith(CTF_VOICE_INPUT_PREFIX)) return
+      // 元素 id 与会话 id 都可能含 '-'：uuid 结构精确切分优先（见 parseCtfVoiceTarget）
+      const parsed = parseCtfVoiceTarget(tid)
+      if (!parsed) return
+      const agentSid = parsed.agentSid
+      const elementId = parsed.elementId
+      if (!elementId) return
+      // 命中即确认送达（preventDefault → 主进程不走剪贴板/fallback 兜底）
       customEvent.preventDefault()
-      // 从元素池找完整 ref（type/text）；找不到则退化用 elementId
-      const pool = store.get(uxElementRefPoolMapAtom).get(detail.sessionId) ?? []
+      // 从元素池找完整 ref（type/text）；找不到则退化用 elementId 合成
+      const pool = store.get(uxElementRefPoolMapAtom).get(agentSid) ?? []
       const pooled = pool.find((r) => r.id === elementId)
       const ref: UxElementRef = pooled ?? {
         id: elementId, type: '元素', text: '',
-        filePath: store.get(previewFileMapAtom).get(detail.sessionId)?.filePath ?? '',
+        filePath: store.get(previewFileMapAtom).get(agentSid)?.filePath ?? '',
         capturedAt: Date.now(),
       }
-      // 入清单：voice 项（同元素多条语音意见累积，不覆盖）
+      // 入清单：voice 项（同元素多条语音意见累积，不覆盖）；
+      // 归 agentSid 键（听写期间可能切会话，不能用 currentAgentSessionId）
       const item: CtfChangeItem = { ref, action: 'voice', value: text, appliedAt: Date.now() }
       store.set(pendingCtfChangesMapAtom, (prev) => {
-        const list = prev.get(detail.sessionId!) ?? []
+        const list = prev.get(agentSid) ?? []
         const next = new Map(prev)
-        next.set(detail.sessionId!, [...list, item].slice(-24))
+        next.set(agentSid, [...list, item].slice(-24))
         return next
       })
       // 元素角标+窄条：iframe 内 annotate（计数+1，点击看意见）
@@ -135,7 +162,14 @@ export function ClickToFixPanel(): React.ReactElement | null {
     setPanel(null)
   }
 
-  /** 进入拖拽模式：iframe 内元素可拖动，松手后偏移进清单 */
+  /** P1（v0.17.58）：改文字 → iframe 原地编辑（contentEditable/原生输入控件，Enter 确认）；
+   *  替换元素/无可编辑文本时注入脚本回 text-edit-degraded，宿主退化为切输入框走「其他」路径 */
+  const startTextEdit = (): void => {
+    postToPreviewFrame('text-edit', ref.id)
+    setPanel(null)
+  }
+
+  /** 进入拖拽模式（P2a：会话级持续，iframe 内可反复拖动直到退出条件）；退出后偏移进清单 */
   const startDrag = (): void => {
     postToPreviewFrame('drag-start', ref.id)
     setPanel(null)
@@ -177,7 +211,7 @@ export function ClickToFixPanel(): React.ReactElement | null {
 
   const options = [
     { icon: <Palette className="size-3.5" />, label: '换个颜色', onClick: () => setColorPickerOpen((v) => !v) },
-    { icon: <Type className="size-3.5" />, label: '改文字', onClick: closeAndFocusInput },
+    { icon: <Type className="size-3.5" />, label: '改文字', onClick: startTextEdit },
     { icon: <Move className="size-3.5" />, label: '换个位置', onClick: startDrag },
     { icon: <Trash2 className="size-3.5" />, label: '删掉它', onClick: applyDelete },
     { icon: <Mic className="size-3.5" />, label: '语音', onClick: startVoiceForElement },
@@ -264,6 +298,8 @@ export function CtfChangesBar(): React.ReactElement | null {
   // 预览 iframe 存在性与位置轮询（轻量，1.5s）：浮动条/接受按钮/麦克风都定位在预览窗口内
   React.useEffect(() => {
     let boundFrame: HTMLIFrameElement | null = null
+    // P3b（v0.17.58）：iframe 重挂载/切换间隙可能单次探不到（闪隐），连续 2 次 null 才认定隐藏
+    let missCount = 0
     const onLoad = (): void => {
       // Y2：iframe 重载后注入脚本的 inline 效果与角标全丢失，清空清单防脱节
       const s = store.get(currentAgentSessionIdAtom)
@@ -279,21 +315,28 @@ export function CtfChangesBar(): React.ReactElement | null {
     const check = (): void => {
       const f = getPreviewFrame()
       const visible = !!f && f.offsetWidth > 0
-      setPreviewVisible(visible)
-      if (visible && f) {
-        const r = f.getBoundingClientRect()
-        setIframeRect((prev) => (prev && Math.abs(prev.x - r.x) < 1 && Math.abs(prev.y - r.y) < 1 ? prev : { x: r.x, y: r.y }))
-        // iframe 引用变化（首现/切换）时（重新）绑定 load
-        if (boundFrame !== f) {
-          if (boundFrame) boundFrame.removeEventListener('load', onLoad)
-          f.addEventListener('load', onLoad)
-          boundFrame = f
+      if (visible) {
+        missCount = 0
+        setPreviewVisible(true)
+        if (f) {
+          const r = f.getBoundingClientRect()
+          setIframeRect((prev) => (prev && Math.abs(prev.x - r.x) < 1 && Math.abs(prev.y - r.y) < 1 ? prev : { x: r.x, y: r.y }))
+          // iframe 引用变化（首现/切换）时（重新）绑定 load
+          if (boundFrame !== f) {
+            if (boundFrame) boundFrame.removeEventListener('load', onLoad)
+            f.addEventListener('load', onLoad)
+            boundFrame = f
+          }
         }
       } else {
-        setIframeRect(null)
-        if (boundFrame) {
-          boundFrame.removeEventListener('load', onLoad)
-          boundFrame = null
+        missCount += 1
+        if (missCount >= 2) {
+          setPreviewVisible(false)
+          setIframeRect(null)
+          if (boundFrame) {
+            boundFrame.removeEventListener('load', onLoad)
+            boundFrame = null
+          }
         }
       }
     }
@@ -351,6 +394,24 @@ export function CtfChangesBar(): React.ReactElement | null {
     // 并列展示：接受后用户看会话执行 + 原型刷新，聊天与原型需并排
     ensurePreviewSplit(store, sessionId)
     try {
+      // P2b（v0.17.58）：move 条目携带 finalTransform（最终 transform 文本），
+      // 调度员直接写死 translate(absX,absY)——所见即所得，消除增量语义歧义
+      const reportItems = changes.map((c) => {
+        const base = {
+          id: c.ref.id,
+          type: c.ref.type,
+          label: c.ref.text,
+          action: c.action,
+          value: c.value,
+        }
+        if (c.action === 'move') {
+          const v = c.value as { absX?: number; absY?: number } | undefined
+          if (typeof v?.absX === 'number' && typeof v?.absY === 'number') {
+            return { ...base, finalTransform: `translate(${Math.round(v.absX)}px, ${Math.round(v.absY)}px)` }
+          }
+        }
+        return base
+      })
       const result = await window.electronAPI.reportClickToFix({
         workspaceSlug: workspace.slug,
         sessionId,
@@ -358,13 +419,7 @@ export function CtfChangesBar(): React.ReactElement | null {
         id: 'batch',
         type: `${changes.length} 处`,
         text: '',
-        action: JSON.stringify(changes.map((c) => ({
-          id: c.ref.id,
-          type: c.ref.type,
-          label: c.ref.text,
-          action: c.action,
-          value: c.value,
-        }))),
+        action: JSON.stringify(reportItems),
       }) as { ok?: boolean } | undefined
       if (result && result.ok === false) throw new Error('注入失败')
     } catch {
@@ -399,11 +454,20 @@ export function CtfChangesBar(): React.ReactElement | null {
     const what = c.ref.text || c.ref.id
     if (c.action === 'color') return `${what} → 换颜色`
     if (c.action === 'delete') return `${what} → 删除`
+    if (c.action === 'text') {
+      // P1（v0.17.58）：同元素改文字入清单（合并保留最新）
+      const t = String(c.value ?? '').slice(0, 24)
+      return `${what} → 改文字「${t}」`
+    }
     if (c.action === 'voice') {
       const t = String(c.value ?? '').slice(0, 24)
       return `${what} → 💬「${t}」`
     }
-    const v = c.value as { dx?: number; dy?: number } | undefined
+    // P2b（v0.17.58）：优先显示绝对偏移（最终位置），与 commit 报文最终 transform 一致
+    const v = c.value as { dx?: number; dy?: number; absX?: number; absY?: number } | undefined
+    if (typeof v?.absX === 'number' && typeof v?.absY === 'number') {
+      return `${what} → 移动(→${Math.round(v.absX)},${Math.round(v.absY)})`
+    }
     return `${what} → 移动(${v?.dx ?? 0},${v?.dy ?? 0})`
   }
 

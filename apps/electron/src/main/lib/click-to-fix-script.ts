@@ -4,8 +4,9 @@
  * 依据 /home/orphic/proma-projDoc/DesignDoc/02_UX_DESIGN/interaction-spec.md 交互1：
  * 用户在预览区点击原型元素 → 事件委托捕获 data-ai-id/data-ai-type →
  * 3 秒高亮（document 级覆盖层）→ postMessage 通知宿主（Proma 渲染进程）。
- * 宿主 → iframe 指令（__promaCtfApply）：color/delete/move/drag-start/undo/undo-all/
- * annotate/remove-annotation，即时生效、可撤销。
+ * 宿主 → iframe 指令（__promaCtfApply）：color/delete/move/drag-start/text-edit/undo/undo-all/
+ * annotate/remove-annotation，即时生效、可撤销。v0.17.58：text-edit 原地编辑；拖拽改会话级
+ * 持续模式 + 绝对偏移（absX/absY）上报（拖拽基线取 computed transform，覆盖样式表歧义）。
  *
  * ⚠️ 本文件是注入脚本的唯一事实源：local-file-protocol.ts 把本常量包进 <script> 标签
  * 注入 proma-file:// HTML 响应。历史上 renderer/lib/click-to-fix.ts 的可读副本 + 协议层
@@ -39,6 +40,31 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
 
   function reportToHost(payload) {
     try { parent.postMessage(Object.assign({ __promaClickToFix: true, filePath: location.href }, payload), '*'); } catch (e) { /* 宿主不存在或被拦，静默 */ }
+  }
+
+  // P2b：解析 computed transform 的平移分量（tx/ty）。matrix(a,b,c,d,tx,ty) 6 值；
+  // matrix3d(...) 16 值（平移在 [12]/[13]）；none/空/解析失败 → 0,0。只取 tx/ty：
+  // commit 报文最终写死 translate(absX,absY)，旋转/缩放分量不参与点选纠错语义
+  function parseMatrixTranslate(tr) {
+    if (!tr || tr === 'none') return { tx: 0, ty: 0 };
+    var mm = String(tr).match(/matrix3d\\(([^)]+)\\)/);
+    if (mm) {
+      var p16 = mm[1].split(',');
+      if (p16.length >= 14) return { tx: parseFloat(p16[12]) || 0, ty: parseFloat(p16[13]) || 0 };
+      return { tx: 0, ty: 0 };
+    }
+    var m6 = String(tr).match(/matrix\\(([^)]+)\\)/);
+    if (!m6) return { tx: 0, ty: 0 };
+    var p6 = m6[1].split(',');
+    if (p6.length < 6) return { tx: 0, ty: 0 };
+    return { tx: parseFloat(p6[4]) || 0, ty: parseFloat(p6[5]) || 0 };
+  }
+
+  // P2b：拖拽基线 = computed transform 的 tx/ty（含样式表 transform，如历史 translate(31px,-9px)），
+  // 不再直接用 inline el.style.transform——inline 覆盖样式表会让首拖位置跳变
+  function computedTranslateOf(el) {
+    try { return parseMatrixTranslate(window.getComputedStyle(el).transform); }
+    catch (e) { return { tx: 0, ty: 0 }; }
   }
 
   // 供快速选项面板定位用的 rect（iframe 文档内坐标）；宿主会叠加 iframe 在视口内的偏移
@@ -117,13 +143,38 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
 
   var suppressClickUntil = 0;
   var suppressClickTarget = null;
+  // ===== P2a：拖拽会话级持续模式 =====
+  // dragMode 非空时：目标元素反复可拖（pointerdown 常驻，不再 once）；该元素 click 不弹面板；
+  // 退出：其他修改指令 / undo-all / 30s 无拖动 / 点击其他 data-ai-id 元素（用户转去做别的）
+  var dragMode = null; // { el, id, timer, pointerDown, mouseleave }
+
+  function exitDragMode() {
+    if (!dragMode) return;
+    if (dragMode.timer) clearTimeout(dragMode.timer);
+    try { dragMode.el.removeEventListener('pointerdown', dragMode.pointerDown); } catch (e) {}
+    if (dragMode.el.style.cursor === 'move') dragMode.el.style.cursor = '';
+    dragMode = null;
+  }
+
+  function armDragIdleTimer() {
+    if (!dragMode) return;
+    if (dragMode.timer) clearTimeout(dragMode.timer);
+    dragMode.timer = setTimeout(function () { exitDragMode(); }, 30000);
+  }
+
   document.addEventListener('click', function (e) {
     // 点击 overlay（角标/窄条/浮层）本身：属于 overlay 交互，不当作点选/空白点击
     var tid = e.target && e.target.id ? String(e.target.id) : '';
     if (tid.indexOf('proma-ctf-') === 0) return;
+    var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
+
+    // P2a：拖拽模式下点击其他 data-ai-id 元素 = 用户转去做别的，退出拖拽模式并照常弹面板
+    if (dragMode && target && target !== dragMode.el) exitDragMode();
+    // P2a：拖拽模式下目标元素自身的 click 一律不弹点选面板（用户还在拖，面板反而干扰）
+    if (dragMode && target === dragMode.el) return;
+
     // Y7：拖拽刚结束的 click 只对拖拽起点元素生效（不吞对其他元素的快速点选）
     if (Date.now() < suppressClickUntil && e.target === suppressClickTarget) { suppressClickUntil = 0; suppressClickTarget = null; return; }
-    var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
 
     var layer = ensureHighlightLayer();
 
@@ -151,8 +202,8 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     reportToHost({ kind: 'element-click', id: id, type: type, text: text, rect: rectOf(target) });
   }, true);
 
-  // ===== 宿主 → iframe 即时修改指令（交互1 快速选项：颜色/删除/位置即时生效） =====
-  // 记录每元素的原始样式/偏移，撤销时恢复；改动明细回传宿主进修改清单
+  // ===== 宿主 → iframe 即时修改指令（交互1 快速选项：颜色/删除/位置/改文字即时生效） =====
+  // 记录每元素的原始样式/偏移/文本快照，撤销时恢复；改动明细回传宿主进修改清单
   var originalStyles = {};
   function rememberOriginal(el) {
     var id = el.getAttribute('data-ai-id');
@@ -162,6 +213,9 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         color: el.style.color || '',
         opacity: el.style.opacity || '',
         transform: el.style.transform || '',
+        // P1：text-edit 首次编辑时才写入（textSaved 标记），undo 恢复文本仅限编过文本的元素
+        textSaved: false,
+        textSnapshot: '',
       };
     }
   }
@@ -175,12 +229,16 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
       el.style.opacity = '0.3';
       el.style.textDecoration = 'line-through';
     } else if (action === 'move') {
-      // value: {dx, dy} 像素偏移（累积）
-      var cur = originalStyles[id].transform;
-      var m = cur.match(/translate\\(([\\d.-]+)px, ([\\d.-]+)px\\)/);
-      var baseX = m ? parseFloat(m[1]) : 0;
-      var baseY = m ? parseFloat(m[2]) : 0;
-      el.style.transform = 'translate(' + (baseX + (value.dx||0)) + 'px, ' + (baseY + (value.dy||0)) + 'px)';
+      // value: {dx, dy} 像素偏移（累积）；P2b 扩展 {absX, absY} 绝对偏移（最终 transform 直接写死，所见即所得）
+      if (value && typeof value.absX === 'number' && typeof value.absY === 'number') {
+        el.style.transform = 'translate(' + Math.round(value.absX) + 'px, ' + Math.round(value.absY) + 'px)';
+      } else {
+        var cur = originalStyles[id].transform;
+        var m = cur.match(/translate\\(([\\d.-]+)px, ([\\d.-]+)px\\)/);
+        var baseX = m ? parseFloat(m[1]) : 0;
+        var baseY = m ? parseFloat(m[2]) : 0;
+        el.style.transform = 'translate(' + (baseX + (value.dx||0)) + 'px, ' + (baseY + (value.dy||0)) + 'px)';
+      }
     }
     return { ok: true };
   }
@@ -193,6 +251,11 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     el.style.opacity = orig.opacity;
     el.style.transform = orig.transform;
     el.style.textDecoration = '';
+    // P1：只恢复编辑过文本的元素（未动过文本的元素不碰 innerText，防重建子树破坏嵌套结构）
+    if (orig.textSaved) {
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value = orig.textSnapshot || '';
+      else el.innerText = orig.textSnapshot || '';
+    }
     // 不删 originalStyles：同一元素可多次撤销（每次回原始态，重复幂等）
     return { ok: true };
   }
@@ -203,6 +266,11 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     if (e.source !== parent) return;
     // Y4(b)：指令异常必须回报宿主，不静默（此前替换元素 appendChild 抛错即整条失败无回报）
     try {
+      // P2a：拖拽模式下收到其他修改类指令 / undo-all → 退出拖拽模式（annotate/undo 不算：
+      // 用户可能边拖边听写意见或在清单条上单撤某项，不必打断拖拽）
+      if (dragMode && d.action !== 'drag-start' && d.action !== 'annotate' && d.action !== 'remove-annotation' && d.action !== 'undo') {
+        exitDragMode();
+      }
       if (d.action === 'annotate') {
         var aEl = document.querySelector('[data-ai-id="' + d.id + '"]');
         if (!aEl) return;
@@ -248,49 +316,141 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         var el = document.querySelector('[data-ai-id="' + d.id + '"]');
         if (!el) return;
         rememberOriginal(el);
-        el.style.cursor = 'move';
-        var base = el.style.transform || '';
-        var sx = 0, sy = 0, active = false, lastDx = 0, lastDy = 0;
-        var mv = function (ev) {
-          if (!active) return;
-          var dx = ev.clientX - sx, dy = ev.clientY - sy;
-          lastDx = dx; lastDy = dy;
-          el.style.transform = base + ' translate(' + dx + 'px, ' + dy + 'px)';
-        };
-        var finish = function (dx, dy) {
-          active = false;
-          document.removeEventListener('mousemove', mv);
-          document.removeEventListener('mouseup', up);
-          el.style.cursor = '';
-          var rdx = Math.round(dx), rdy = Math.round(dy);
-          // 位移小于阈值视为误触（点击未拖动），还原且不上报；阈值按 devicePixelRatio 归一（Y7 高分屏）
-          var th = 4 * (window.devicePixelRatio || 1);
-          if (Math.abs(rdx) < th && Math.abs(rdy) < th) {
-            el.style.transform = base;
-            return;
-          }
-          el.style.transform = base + ' translate(' + rdx + 'px, ' + rdy + 'px)';
-          // 拖拽结束后的 click 不再触发点选面板（仅限该元素）
-          suppressClickUntil = Date.now() + 400;
-          suppressClickTarget = el;
-          reportToHost({ kind: 'change-result', id: d.id, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: rdx, dy: rdy } });
-        };
-        var up = function (ev) { finish(ev.clientX - sx, ev.clientY - sy); };
-        var down = function (ev) {
-          sx = ev.clientX; sy = ev.clientY; active = true;
+        // P2a：换目标元素时先退出旧拖拽模式（解绑旧元素 pointerdown/cursor）
+        exitDragMode();
+        var dragId = d.id;
+        // P2a：持续模式——pointerdown 常驻（不再 once），每轮拖动独立上报；exitDragMode 统一解绑
+        var pointerDown = function (ev) {
+          if (!dragMode || dragMode.el !== el) return;
+          var sx = ev.clientX, sy = ev.clientY, active = true, lastDx = 0, lastDy = 0;
+          var prevInline = el.style.transform || '';
+          // P2b：基线取 computed transform 的 tx/ty（含样式表 transform），首拖不跳变
+          var base = computedTranslateOf(el);
+          var mv = function (ev2) {
+            if (!active) return;
+            var dx = ev2.clientX - sx, dy = ev2.clientY - sy;
+            lastDx = dx; lastDy = dy;
+            el.style.transform = 'translate(' + (base.tx + dx) + 'px, ' + (base.ty + dy) + 'px)';
+          };
+          var finish = function (dx, dy) {
+            active = false;
+            document.removeEventListener('mousemove', mv);
+            document.removeEventListener('mouseup', up);
+            el.removeEventListener('mouseleave', leave);
+            var rdx = Math.round(dx), rdy = Math.round(dy);
+            // 位移小于阈值视为误触（点击未拖动），还原且不上报；阈值按 devicePixelRatio 归一（Y7 高分屏）
+            var th = 4 * (window.devicePixelRatio || 1);
+            armDragIdleTimer();
+            if (Math.abs(rdx) < th && Math.abs(rdy) < th) {
+              el.style.transform = prevInline;
+              return;
+            }
+            el.style.transform = 'translate(' + (base.tx + rdx) + 'px, ' + (base.ty + rdy) + 'px)';
+            // 拖拽结束后的 click 不再触发点选面板（仅限该元素）
+            suppressClickUntil = Date.now() + 400;
+            suppressClickTarget = el;
+            // P2b：上报绝对偏移 absX/absY（最终 computed transform 的 tx/ty），
+            // 调度员写死 translate(absX,absY) 即所见即所得；dx/dy 保留兼容
+            var abs = computedTranslateOf(el);
+            reportToHost({ kind: 'change-result', id: dragId, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: rdx, dy: rdy, absX: Math.round(abs.tx), absY: Math.round(abs.ty) } });
+          };
+          var up = function (ev2) { finish(ev2.clientX - sx, ev2.clientY - sy); };
+          // 兜底：拖出 iframe 后指针事件被宿主截走时，以最后已知位移收口
+          var leave = function () { if (active) finish(lastDx, lastDy); };
           // R1：pointer capture 到元素——拖出 iframe 边界后 move/up 仍派发给元素，不丢 mouseup
           try { el.setPointerCapture(ev.pointerId); } catch (err) { /* 降级：document 级监听 */ }
           document.addEventListener('mousemove', mv);
           document.addEventListener('mouseup', up);
+          el.addEventListener('mouseleave', leave);
           ev.preventDefault();
         };
-        el.addEventListener('pointerdown', down, { once: true });
-        // 兜底：拖出 iframe 后指针事件被宿主截走时，以最后已知位移收口
-        var leave = function () {
-          if (!active) return;
-          finish(lastDx, lastDy);
+        dragMode = { el: el, id: dragId, timer: null, pointerDown: pointerDown };
+        el.style.cursor = 'move';
+        el.addEventListener('pointerdown', pointerDown);
+        armDragIdleTimer();
+        return;
+      }
+      if (d.action === 'text-edit') {
+        var tEl = document.querySelector('[data-ai-id="' + d.id + '"]');
+        if (!tEl) return;
+        var tag = tEl.tagName;
+        var nativeEditable = tag === 'TEXTAREA' || (tag === 'INPUT' && ['text', 'search', 'url', 'tel', 'password'].indexOf(String(tEl.type || 'text')) >= 0);
+        // P1：替换元素（IMG/VIDEO/非文本 INPUT 等）或无可编辑文本 → 退化上报，宿主切输入框走「其他」路径
+        if (!nativeEditable) {
+          var replacedTags = ['IMG', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'IFRAME', 'EMBED', 'OBJECT', 'INPUT', 'SELECT'];
+          if (replacedTags.indexOf(tag) >= 0 || !(tEl.innerText || '').trim()) {
+            reportToHost({ kind: 'text-edit-degraded', id: d.id });
+            return;
+          }
+        }
+        rememberOriginal(tEl);
+        var tOrig = originalStyles[d.id];
+        if (!tOrig.textSaved) {
+          tOrig.textSaved = true;
+          tOrig.textSnapshot = nativeEditable ? String(tEl.value || '') : String(tEl.innerText || '');
+        }
+        if (nativeEditable) {
+          // P1：原生输入控件直接 focus+select 原地编辑；Enter 确认（textarea Ctrl/Cmd+Enter，Enter 换行），Esc 取消，blur 确认
+          var nPrev = String(tEl.value || '');
+          var nDone = false;
+          var nFinish = function (commit, restore) {
+            if (nDone) return;
+            nDone = true;
+            tEl.removeEventListener('keydown', nKey, true);
+            tEl.removeEventListener('blur', nBlur);
+            if (restore) tEl.value = nPrev;
+            var nAfter = String(tEl.value || '').trim();
+            if (commit && nAfter !== nPrev.trim()) {
+              suppressClickUntil = Date.now() + 400;
+              suppressClickTarget = tEl;
+              reportToHost({ kind: 'change-result', id: d.id, action: 'text', ok: true, type: tEl.getAttribute('data-ai-type') || '元素', text: nAfter.slice(0, 40), value: nAfter });
+            }
+          };
+          var nKey = function (ev) {
+            if (ev.key === 'Escape') { ev.preventDefault(); nFinish(false, true); }
+            else if (ev.key === 'Enter' && (tag === 'INPUT' || ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); nFinish(true, false); }
+          };
+          var nBlur = function () { nFinish(true, false); };
+          tEl.addEventListener('keydown', nKey, true);
+          tEl.addEventListener('blur', nBlur);
+          tEl.focus();
+          try { tEl.select(); } catch (eSelect) { /* 选区失败不影响直接输入 */ }
+          return;
+        }
+        // P1：通用元素 contentEditable 原地编辑：focus + 全选现有文本；Enter/blur 确认，Esc 取消
+        var cPrevAttr = tEl.getAttribute('contenteditable');
+        var cPrev = String(tEl.innerText || '');
+        var cDone = false;
+        var cFinish = function (commit, restore) {
+          if (cDone) return;
+          cDone = true;
+          tEl.removeEventListener('keydown', cKey, true);
+          tEl.removeEventListener('blur', cBlur);
+          if (cPrevAttr === null) tEl.removeAttribute('contenteditable'); else tEl.setAttribute('contenteditable', cPrevAttr);
+          if (restore) tEl.innerText = cPrev;
+          var cAfter = String(tEl.innerText || '').trim();
+          if (commit && cAfter !== cPrev.trim()) {
+            suppressClickUntil = Date.now() + 400;
+            suppressClickTarget = tEl;
+            reportToHost({ kind: 'change-result', id: d.id, action: 'text', ok: true, type: tEl.getAttribute('data-ai-type') || '元素', text: cAfter.slice(0, 40), value: cAfter });
+          }
         };
-        el.addEventListener('mouseleave', leave, { once: true });
+        var cKey = function (ev) {
+          if (ev.key === 'Escape') { ev.preventDefault(); cFinish(false, true); }
+          else if (ev.key === 'Enter') { ev.preventDefault(); cFinish(true, false); }
+        };
+        var cBlur = function () { cFinish(true, false); };
+        tEl.setAttribute('contenteditable', 'true');
+        tEl.addEventListener('keydown', cKey, true);
+        tEl.addEventListener('blur', cBlur);
+        tEl.focus();
+        try {
+          var sel = window.getSelection();
+          var rng = document.createRange();
+          rng.selectNodeContents(tEl);
+          sel.removeAllRanges();
+          sel.addRange(rng);
+        } catch (eSel) { /* 选区失败不影响直接输入 */ }
         return;
       }
       var result = applyChange(d.action, d.id, d.value);

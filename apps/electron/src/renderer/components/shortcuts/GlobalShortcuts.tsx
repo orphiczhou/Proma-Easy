@@ -52,6 +52,7 @@ import {
   updateShortcutOverrides,
 } from '@/lib/shortcut-registry'
 import { getFileParentPath } from '@/lib/file-utils'
+import { CTF_VOICE_INPUT_PREFIX } from '@/components/nanju/ClickToFixPanel'
 import {
   shouldFallbackVoiceDictationToActiveTab,
   VOICE_DICTATION_CLEAR_PREVIEW_EVENT,
@@ -391,7 +392,10 @@ export function GlobalShortcuts(): null {
       }))
       if (insertedAtCursor) {
         acknowledgeDelivery(true)
-        window.dispatchEvent(new CustomEvent('proma:focus-input'))
+        // P3（v0.17.58）：ctf-voice 目标文本已附元素（角标+清单），不把焦点抢回输入框
+        if (!(typeof data.targetInputId === 'string' && data.targetInputId.startsWith(CTF_VOICE_INPUT_PREFIX))) {
+          window.dispatchEvent(new CustomEvent('proma:focus-input'))
+        }
         return
       }
 

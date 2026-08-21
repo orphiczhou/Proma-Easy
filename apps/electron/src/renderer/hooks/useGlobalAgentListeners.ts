@@ -648,6 +648,19 @@ export function useGlobalAgentListeners(): void {
         return
       }
       // 空白点击/双击等仍走主进程注入路径（快捷五选项）
+      // P1（v0.17.58）：text-edit 无法原地编辑（替换元素/无可编辑文本）时注入脚本回此消息，
+      // 宿主退化为现行为：切宿主输入框（走「其他」路径，点选引用已随消息携带）
+      if (msg.kind === 'text-edit-degraded') {
+        const degradedFrame = previewFrames.find((f) => f.contentWindow === event.source)
+        if (degradedFrame) rememberPreviewFrame(degradedFrame)
+        ensurePreviewSplit(store, sessionId)
+        const sessionTab = store.get(tabsAtom).find((t) => t.sessionId === sessionId && t.type !== 'preview')
+        if (sessionTab) store.set(activeTabIdAtom, sessionTab.id)
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('proma:focus-agent-input'))
+        }, 200)
+        return
+      }
       if (msg.kind === 'change-result' && msg.id) {
         // 即时调整结果：成功则入待接受清单（面板选项在 iframe 内已即时应用）
         const resultFrame = previewFrames.find((f) => f.contentWindow === event.source)
@@ -663,7 +676,7 @@ export function useGlobalAgentListeners(): void {
               filePath: store.get(previewFileMapAtom).get(sessionId)?.filePath ?? '',
               capturedAt: Date.now(),
             },
-            action: (sanitize(msg.action, 12) ?? 'color') as 'color' | 'delete' | 'move',
+            action: (sanitize(msg.action, 12) ?? 'color') as 'color' | 'delete' | 'move' | 'text',
             value: (msg as { value?: unknown }).value as CtfChangeItem['value'],
             appliedAt: Date.now(),
           }
@@ -672,9 +685,10 @@ export function useGlobalAgentListeners(): void {
             ensurePreviewSplit(store, sessionId)
             store.set(pendingCtfChangesMapAtom, (prev) => {
               const list = prev.get(sessionId) ?? []
-              // R2：同一元素连续的快速操作（color/delete/move）合并为一条（保留最新）；
+              // R2：同一元素连续的快速操作（color/delete/move/text）合并为一条（保留最新）；
               // N1（AC-R2 复核）：voice 项不参与合并——否则"语音意见→顺手改个颜色"会把意见从清单里
-              // 静默挤掉（角标还在但接受批次不含该意见，调度员永远不会应用）
+              // 静默挤掉（角标还在但接受批次不含该意见，调度员永远不会应用）；
+              // P1（v0.17.58）：text 归快速操作类，同元素多次改文字只保留最新
               const merged = list.filter((c) => c.ref.id !== item.ref.id || c.action === 'voice')
               const next = new Map(prev)
               // 清单上限 24（防异常/伪造刷爆）
