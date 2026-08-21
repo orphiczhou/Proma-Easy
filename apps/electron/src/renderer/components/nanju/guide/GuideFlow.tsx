@@ -299,28 +299,33 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
     return () => observer.disconnect()
   }, [applyInitialLayout])
 
-  // 滚轮（用户反馈 2026-08-20）：
-  // - Ctrl+滚轮 = 缩放（光标锚定，地图式）
-  // - 默认滚轮 = 图的上下滚动（pan.y）
-  // - Shift+滚轮 = 水平滚动（pan.x）
-  // Ctrl 组合键兼容：仅 wheel 事件按 ctrlKey/shiftKey 分流，不影响 Ctrl+C/V/A 等键盘组合。
-  const handleWheel = React.useCallback((e: React.WheelEvent) => {
-    e.preventDefault()
-    userInteractedRef.current = true
-    if (e.ctrlKey) {
-      zoomAtPoint(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY)
-      return
+  // 滚轮（用户反馈 2026-08-20；AC-R2 必修 2026-08-21）：
+  // - Ctrl+滚轮 = 缩放（光标锚定，地图式）；默认 = 上下滚动；Shift = 横向滚动
+  // - 原生非被动监听（范式同 TabBar/CalendarWorkspace/DiffTabContent）：React onWheel 走根委托且 passive，
+  //   preventDefault 无效 → Ctrl+滚轮时 Electron 默认整应用缩放与图缩放同时发生（macOS 捏合同源）
+  React.useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault()
+      userInteractedRef.current = true
+      if (e.ctrlKey) {
+        zoomAtPoint(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY)
+        return
+      }
+      // Y6：deltaMode 归一化（line=16px，page=视口高）
+      const vpH = viewport.clientHeight
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? vpH : 1
+      const dy = e.deltaY * unit
+      if (e.shiftKey) {
+        setPan((p) => ({ ...p, x: clampPan(p.x - dy, 'x') }))
+        return
+      }
+      setPan((p) => ({ ...p, y: clampPan(p.y - dy, 'y') }))
     }
-    // Y6：deltaMode 归一化（line=16px，page=视口高）
-    const vpH = viewportRef.current?.clientHeight ?? 600
-    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? vpH : 1
-    const dy = e.deltaY * unit
-    if (e.shiftKey) {
-      setPan((p) => ({ ...p, x: clampPan(p.x - dy, 'x') }))
-      return
-    }
-    setPan((p) => ({ ...p, y: clampPan(p.y - dy, 'y') }))
-  }, [zoomAtPoint])
+    viewport.addEventListener('wheel', onWheel, { passive: false })
+    return () => viewport.removeEventListener('wheel', onWheel)
+  }, [zoomAtPoint, clampPan])
 
   /** 初始布局：70% 缩放 + 左右居中（顶部对齐） */
   const zoomIn = React.useCallback(() => { userInteractedRef.current = true; zoomAtCenter(1 + ZOOM_STEP) }, [zoomAtCenter])
@@ -359,7 +364,6 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp}
-        onWheel={handleWheel}
       >
         {renderFailed ? (
           <div className="p-2 text-xs text-muted-foreground overflow-auto h-full">

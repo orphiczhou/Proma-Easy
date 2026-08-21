@@ -215,15 +215,17 @@ export function VoiceDictationApp({ embedded = false }: { embedded?: boolean }):
         targetInputId,
         outputContextId: outputContextId ?? undefined,
       })
-      // 先让主进程释放旧会话，再把按钮恢复为可开始状态。
-      await window.electronAPI.hideVoiceDictation().catch(console.error)
+      // AC-R2 Y10：先呈现提交结果再隐藏浮窗（hide 之后 setMessage 写入的是已隐藏窗口，用户看不到）；
+      // toast 条件放宽为 embedded + clipboard 模式（clipboard 模式下 targetInputId 恒为 null，
+      // 原条件永远不成立 → 静默无提示）
       setCommitResult(result)
       setStatus('completed')
       setMessage(result.message)
-      if (embedded && targetInputId && result.mode === 'clipboard') {
+      if (embedded && result.mode === 'clipboard') {
         const notify = result.success ? toast.warning : toast.error
         notify(result.message)
       }
+      await window.electronAPI.hideVoiceDictation().catch(console.error)
       setDictationSource(null)
       setDictationTarget(null)
       setDictationOutputContext(null)

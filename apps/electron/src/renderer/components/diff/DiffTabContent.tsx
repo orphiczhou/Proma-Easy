@@ -1780,6 +1780,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   title={`${filePath.split('/').pop() || 'HTML'} 渲染预览`}
                   sandbox="allow-scripts allow-forms"
                   referrerPolicy="no-referrer"
+                  data-proma-preview={sessionId}
                 />
               ) : (
                 <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-muted-foreground">

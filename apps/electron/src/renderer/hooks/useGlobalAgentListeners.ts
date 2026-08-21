@@ -67,6 +67,7 @@ import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { previewFileMapAtom, previewPanelOpenMapAtom, pendingUxElementRefMapAtom, uxElementRefPoolMapAtom, clickToFixPanelAtom, pendingCtfChangesMapAtom, type CtfChangeItem } from '@/atoms/preview-atoms'
+import { rememberPreviewFrame } from '@/lib/ctf-preview-frame'
 import { ensurePreviewSplit } from '@/components/nanju/ClickToFixPanel'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
@@ -629,6 +630,8 @@ export function useGlobalAgentListeners(): void {
         // 面板定位在元素下方；选择选项前点击其他区域/再次点选时关闭。
         const rawRect = (msg as { rect?: { x?: number; y?: number; w?: number; h?: number } }).rect
         const sourceFrame = previewFrames.find((f) => f.contentWindow === event.source) ?? null
+        // Y3：缓存点击来源 frame，后续宿主→iframe 指令优先下发给它（多预览并存时不再取错目标）
+        rememberPreviewFrame(sourceFrame)
         if (rawRect && typeof rawRect.x === 'number' && typeof rawRect.y === 'number' && sourceFrame) {
           const frameRect = sourceFrame.getBoundingClientRect()
           const elemRect = {
@@ -649,6 +652,7 @@ export function useGlobalAgentListeners(): void {
         // 即时调整结果：成功则入待接受清单（面板选项在 iframe 内已即时应用）
         const resultFrame = previewFrames.find((f) => f.contentWindow === event.source)
         if (!resultFrame) return
+        rememberPreviewFrame(resultFrame)
         const ok = (msg as { ok?: boolean }).ok === true
         if (ok) {
           const item = {
@@ -683,6 +687,7 @@ export function useGlobalAgentListeners(): void {
       // 空白点击：节流 2s（Y10：连点空白不反复注入会话）
       if (msg.kind === 'blank-click') {
         const blankFrame = previewFrames.find((f) => f.contentWindow === event.source)
+        if (blankFrame) rememberPreviewFrame(blankFrame)
         if (blankFrame && Date.now() - blankClickLastTsRef.current > 2000) {
           blankClickLastTsRef.current = Date.now()
           void window.electronAPI.reportClickToFix({

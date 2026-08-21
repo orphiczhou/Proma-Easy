@@ -70,7 +70,10 @@ export function toggleVoiceDictationWindow(options: VoiceDictationToggleOptions 
 
   const targetIsProma = captureVoiceDictationTarget(options.targetIsProma)
   const outputMode = getSettings().voiceDictation?.outputMode ?? 'auto'
-  const routeToPromaInput = shouldRouteVoiceDictationToPromaInput(targetIsProma, outputMode)
+  // AC-R2 Y10：点选语音（ctf-voice-*）有显式输入目标（元素角标收集器），剪贴板输出模式对它
+  // 无意义且会静默丢失意见（文本只进剪贴板，角标不出现、清单不进、无提示）——强制路由到 Proma 输入
+  const isCtfVoiceInput = typeof options.sourceInputId === 'string' && options.sourceInputId.startsWith('ctf-voice-')
+  const routeToPromaInput = isCtfVoiceInput || shouldRouteVoiceDictationToPromaInput(targetIsProma, outputMode)
   const outputContextId = randomUUID()
   beginVoiceDictationOutputContext(outputContextId, { routeToPromaInput, outputMode })
   activeOutputContextId = outputContextId

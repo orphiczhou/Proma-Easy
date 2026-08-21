@@ -15,6 +15,7 @@ import { clickToFixPanelAtom, pendingCtfChangesMapAtom, uxElementRefPoolMapAtom,
 import { currentAgentSessionIdAtom, agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
 import { VOICE_DICTATION_INSERT_EVENT, VOICE_DICTATION_PREVIEW_EVENT } from '@/lib/voice-input-focus'
+import { getPreviewFrame } from '@/lib/ctf-preview-frame'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
 import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
 
@@ -41,9 +42,10 @@ export function ensurePreviewSplit(store: JotaiStore, sessionId: string): void {
 /** 4 预设色（D1 修订：红/蓝/绿/靛蓝） */
 const PRESET_COLORS = ['#DC2626', '#4F46E5', '#059669', '#6366F1']
 
-/** 发送修改指令到预览 iframe（即时应用） */
+/** 发送修改指令到预览 iframe（即时应用）。
+ *  Y3：目标解析见 lib/ctf-preview-frame —— 点击来源 frame 优先，多预览并存时不再取错目标 */
 function postToPreviewFrame(action: string, id: string, value?: unknown): void {
-  const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+  const frame = getPreviewFrame()
   if (!frame?.contentWindow) return
   frame.contentWindow.postMessage(
     { __promaCtfApply: true, action, id, value },
@@ -91,8 +93,7 @@ export function ClickToFixPanel(): React.ReactElement | null {
         return next
       })
       // 元素角标+窄条：iframe 内 annotate（计数+1，点击看意见）
-      const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
-      frame?.contentWindow?.postMessage({ __promaCtfApply: true, action: 'annotate', id: elementId, text }, '*')
+      getPreviewFrame()?.contentWindow?.postMessage({ __promaCtfApply: true, action: 'annotate', id: elementId, text }, '*')
     }
     window.addEventListener(VOICE_DICTATION_INSERT_EVENT, onInsert)
     return () => window.removeEventListener(VOICE_DICTATION_INSERT_EVENT, onInsert)
@@ -276,7 +277,7 @@ export function CtfChangesBar(): React.ReactElement | null {
       })
     }
     const check = (): void => {
-      const f = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+      const f = getPreviewFrame()
       const visible = !!f && f.offsetWidth > 0
       setPreviewVisible(visible)
       if (visible && f) {
@@ -312,7 +313,7 @@ export function CtfChangesBar(): React.ReactElement | null {
     const item = changes[index]
     if (!item) return
     // 撤销 iframe 内即时效果：voice 项清角标计数；其余恢复原始样式
-    const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+    const frame = getPreviewFrame()
     if (frame?.contentWindow) {
       if (item.action === 'voice') {
         frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'remove-annotation', id: item.ref.id }, '*')
@@ -329,7 +330,7 @@ export function CtfChangesBar(): React.ReactElement | null {
   }
 
   const discardAll = (): void => {
-    const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+    const frame = getPreviewFrame()
     if (frame?.contentWindow) {
       frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'undo-all' }, '*')
     }
@@ -371,7 +372,7 @@ export function CtfChangesBar(): React.ReactElement | null {
       return
     }
     // Y1：接受成功后清理 iframe 内 inline 效果与角标/窄条（不依赖重载）
-    const frame = document.querySelector('iframe[src*="prototype"]') as HTMLIFrameElement | null
+    const frame = getPreviewFrame()
     frame?.contentWindow?.postMessage({ __promaCtfApply: true, action: 'undo-all' }, '*')
     setChangesMap((prev) => {
       const next = new Map(prev)
