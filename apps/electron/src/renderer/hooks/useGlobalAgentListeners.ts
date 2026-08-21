@@ -672,12 +672,13 @@ export function useGlobalAgentListeners(): void {
             ensurePreviewSplit(store, sessionId)
             store.set(pendingCtfChangesMapAtom, (prev) => {
               const list = prev.get(sessionId) ?? []
-              // R2：同一元素连续改动合并为一条（保留最新）；R4：时间窗去重防伪造脚本刷清单
-              const merged = list.filter((c) => c.ref.id !== item.ref.id)
-              const deduped = merged.filter((c) => !(c.ref.id === item.ref.id && item.appliedAt - c.appliedAt < 1500))
+              // R2：同一元素连续的快速操作（color/delete/move）合并为一条（保留最新）；
+              // N1（AC-R2 复核）：voice 项不参与合并——否则"语音意见→顺手改个颜色"会把意见从清单里
+              // 静默挤掉（角标还在但接受批次不含该意见，调度员永远不会应用）
+              const merged = list.filter((c) => c.ref.id !== item.ref.id || c.action === 'voice')
               const next = new Map(prev)
               // 清单上限 24（防异常/伪造刷爆）
-              next.set(sessionId, [...deduped, item].slice(-24))
+              next.set(sessionId, [...merged, item].slice(-24))
               return next
             })
           }
