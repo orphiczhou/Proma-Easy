@@ -52,7 +52,7 @@ import {
   updateShortcutOverrides,
 } from '@/lib/shortcut-registry'
 import { getFileParentPath } from '@/lib/file-utils'
-import { CTF_VOICE_INPUT_PREFIX } from '@/components/nanju/ClickToFixPanel'
+import { CTF_VOICE_INPUT_PREFIX } from '../../../main/lib/ctf-voice'
 import {
   shouldFallbackVoiceDictationToActiveTab,
   VOICE_DICTATION_CLEAR_PREVIEW_EVENT,

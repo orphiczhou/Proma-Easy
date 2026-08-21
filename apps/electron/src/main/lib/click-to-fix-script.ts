@@ -7,11 +7,17 @@
  * 宿主 → iframe 指令（__promaCtfApply）：color/delete/move/drag-start/text-edit/undo/undo-all/
  * annotate/remove-annotation，即时生效、可撤销。v0.17.58：text-edit 原地编辑；拖拽改会话级
  * 持续模式 + 绝对偏移（absX/absY）上报（拖拽基线取 computed transform，覆盖样式表歧义）。
+ * v0.17.59（WO1）：computed transform 完整矩阵解析（parseMatrixFull）+ 序列化器
+ * （applyTranslate，m16 的 tz/旋转/缩放分量不再丢）；finish 上报 finalTransform 一等字段
+ * （写入 el.style.transform 的同一字符串）；undo 按 value.action 选择性还原（同元素多动作
+ * 撤销粒度互不影响）；拖拽会话 abort 守卫（exitDragMode 中止进行中的拖动并还原）；
+ * textSnapshot 按控件形态分支（value / innerHTML 结构快照）；textEditingEl 守卫（原地编辑
+ * 中点击不误弹面板，修改类指令/undo-all 清空）；nativeEditable 白名单补 email/number。
  *
  * ⚠️ 本文件是注入脚本的唯一事实源：local-file-protocol.ts 把本常量包进 <script> 标签
  * 注入 proma-file:// HTML 响应。历史上 renderer/lib/click-to-fix.ts 的可读副本 + 协议层
  * minified tag 双源维护，v0.17.54 被迫同改两处、Round1 曾发生 ldx/ldy 分叉事故，已收敛到此。
- * 注意：脚本体是模板字面量字符串——反斜杠须写 \\，\n 须写 \\n，禁止 ${ 插值。
+ * 注意：脚本体是模板字面量字符串——正则的反斜杠须写 \\\\（双反斜杠），\\n 须写 \\\\n，禁止 ${ 插值。
  *
  * 角标/窄条/意见浮层（annotate）自 v0.17.56 起为 document 级 overlay（AC-R2 Y4）：
  * 不再向元素 appendChild（IMG/INPUT/VIDEO/CANVAS/TEXTAREA 等替换元素会抛
@@ -42,29 +48,66 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     try { parent.postMessage(Object.assign({ __promaClickToFix: true, filePath: location.href }, payload), '*'); } catch (e) { /* 宿主不存在或被拦，静默 */ }
   }
 
-  // P2b：解析 computed transform 的平移分量（tx/ty）。matrix(a,b,c,d,tx,ty) 6 值；
-  // matrix3d(...) 16 值（平移在 [12]/[13]）；none/空/解析失败 → 0,0。只取 tx/ty：
-  // commit 报文最终写死 translate(absX,absY)，旋转/缩放分量不参与点选纠错语义
-  function parseMatrixTranslate(tr) {
-    if (!tr || tr === 'none') return { tx: 0, ty: 0 };
+  // v0.17.59（WO1①）：完整解析 computed transform（替换 v0.17.58 的 parseMatrixTranslate）。
+  // m6 = matrix(a,b,c,d,tx,ty) 6 值（长度 <6 → none）；m16 = matrix3d(...) 16 值（严格
+  // ===16 校验，不再 >=14 宽容）；none/空/畸形 → kind:'none'。平移槽：m6=[4]/[5]，m16=[12]/[13]
+  function parseMatrixFull(tr) {
+    if (!tr || tr === 'none') return { kind: 'none' };
     var mm = String(tr).match(/matrix3d\\(([^)]+)\\)/);
     if (mm) {
       var p16 = mm[1].split(',');
-      if (p16.length >= 14) return { tx: parseFloat(p16[12]) || 0, ty: parseFloat(p16[13]) || 0 };
-      return { tx: 0, ty: 0 };
+      if (p16.length === 16) {
+        var v16 = [];
+        for (var i = 0; i < 16; i++) v16.push(parseFloat(p16[i]) || 0);
+        return { kind: 'm16', m16: v16 };
+      }
+      return { kind: 'none' };
     }
     var m6 = String(tr).match(/matrix\\(([^)]+)\\)/);
-    if (!m6) return { tx: 0, ty: 0 };
+    if (!m6) return { kind: 'none' };
     var p6 = m6[1].split(',');
-    if (p6.length < 6) return { tx: 0, ty: 0 };
-    return { tx: parseFloat(p6[4]) || 0, ty: parseFloat(p6[5]) || 0 };
+    if (p6.length < 6) return { kind: 'none' };
+    var v6 = [];
+    for (var j = 0; j < 6; j++) v6.push(parseFloat(p6[j]) || 0);
+    return { kind: 'm6', m6: v6 };
   }
 
-  // P2b：拖拽基线 = computed transform 的 tx/ty（含样式表 transform，如历史 translate(31px,-9px)），
-  // 不再直接用 inline el.style.transform——inline 覆盖样式表会让首拖位置跳变
+  // v0.17.59（WO1②）：矩阵序列化器——在解析结果上叠加平移 (dx,dy)。
+  // m6 改 [4]/[5]，m16 改 [12]/[13]，其余值原样保留（含 m16[14] 的 tz、旋转/缩放分量）。
+  // 输出：none → translate(x,y)；m6 线性部 (a,b,c,d)==(1,0,0,1) → translate(x,y)
+  // （保持 e2e 断言 translate(51px, -5px) 的格式与空格风格不变）；m6 非单位 → matrix(...)；
+  // m16 → matrix3d(...) 16 值原样
+  function applyTranslate(parsed, dx, dy) {
+    if (parsed.kind === 'm16') {
+      var m16 = parsed.m16.slice();
+      m16[12] = Math.round(m16[12] + dx);
+      m16[13] = Math.round(m16[13] + dy);
+      return 'matrix3d(' + m16.join(', ') + ')';
+    }
+    if (parsed.kind === 'm6') {
+      var m = parsed.m6;
+      if (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1) {
+        return 'translate(' + Math.round(m[4] + dx) + 'px, ' + Math.round(m[5] + dy) + 'px)';
+      }
+      var m6o = m.slice();
+      m6o[4] = Math.round(m6o[4] + dx);
+      m6o[5] = Math.round(m6o[5] + dy);
+      return 'matrix(' + m6o.join(', ') + ')';
+    }
+    return 'translate(' + Math.round(dx) + 'px, ' + Math.round(dy) + 'px)';
+  }
+
+  function computedMatrixOf(el) {
+    try { return parseMatrixFull(window.getComputedStyle(el).transform); }
+    catch (e) { return { kind: 'none' }; }
+  }
+
+  // 平移分量读取（absX/absY 上报用；v0.17.59 起由 parseMatrixFull 派生）
   function computedTranslateOf(el) {
-    try { return parseMatrixTranslate(window.getComputedStyle(el).transform); }
-    catch (e) { return { tx: 0, ty: 0 }; }
+    var p = computedMatrixOf(el);
+    if (p.kind === 'm6') return { tx: p.m6[4] || 0, ty: p.m6[5] || 0 };
+    if (p.kind === 'm16') return { tx: p.m16[12] || 0, ty: p.m16[13] || 0 };
+    return { tx: 0, ty: 0 };
   }
 
   // 供快速选项面板定位用的 rect（iframe 文档内坐标）；宿主会叠加 iframe 在视口内的偏移
@@ -146,11 +189,19 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
   // ===== P2a：拖拽会话级持续模式 =====
   // dragMode 非空时：目标元素反复可拖（pointerdown 常驻，不再 once）；该元素 click 不弹面板；
   // 退出：其他修改指令 / undo-all / 30s 无拖动 / 点击其他 data-ai-id 元素（用户转去做别的）
-  var dragMode = null; // { el, id, timer, pointerDown, mouseleave }
+  // v0.17.59（M9）：形状 { el, timer, pointerDown, abort }——abort 为进行中拖拽会话的中止器
+  //（pointerDown 时挂入），exitDragMode 统一调用；旧 id 字段为死代码已删
+  var dragMode = null; // { el, timer, pointerDown, abort }
+  // v0.17.59（WO1⑧）：当前原地编辑文本的元素——click 捕获守卫（编辑中点击不误弹面板），
+  // 修改类指令（豁免表同 exitDragMode：annotate/remove-annotation/undo/drag-start）与 undo-all 清空
+  var textEditingEl = null;
 
   function exitDragMode() {
     if (!dragMode) return;
     if (dragMode.timer) clearTimeout(dragMode.timer);
+    // v0.17.59（M8/WO1⑤）：中止进行中的拖拽会话——active 时还原 prevInline；
+    // 监听移除无条件执行（与 finish 幂等互斥，重复调用无副作用）
+    if (typeof dragMode.abort === 'function') { try { dragMode.abort(); } catch (e) {} }
     try { dragMode.el.removeEventListener('pointerdown', dragMode.pointerDown); } catch (e) {}
     if (dragMode.el.style.cursor === 'move') dragMode.el.style.cursor = '';
     dragMode = null;
@@ -167,6 +218,10 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     var tid = e.target && e.target.id ? String(e.target.id) : '';
     if (tid.indexOf('proma-ctf-') === 0) return;
     var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
+
+    // v0.17.59（WO1⑧）：原地编辑中的元素（或其内部节点）的点击不当作点选——
+    // 防止打断编辑/误弹面板；编辑结束（finish/blur）或指令清空后恢复
+    if (textEditingEl && (target === textEditingEl || (textEditingEl.contains && textEditingEl.contains(target)))) return;
 
     // P2a：拖拽模式下点击其他 data-ai-id 元素 = 用户转去做别的，退出拖拽模式并照常弹面板
     if (dragMode && target && target !== dragMode.el) exitDragMode();
@@ -242,20 +297,40 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     }
     return { ok: true };
   }
-  function undoChange(id) {
+  // v0.17.59（WO1⑥）：按 value.action 选择性还原——宿主单撤清单某条时只还原该动作
+  // 触碰的属性，同元素的其它动作不受影响（撤销粒度）；value 缺失（undo-all / 旧报文）→
+  // 全量还原（兼容既有行为）
+  function undoChange(id, value) {
     var el = document.querySelector('[data-ai-id="' + id + '"]');
     var orig = originalStyles[id];
     if (!el || !orig) return { ok: false };
-    el.style.backgroundColor = orig.bg;
-    el.style.color = orig.color;
-    el.style.opacity = orig.opacity;
-    el.style.transform = orig.transform;
-    el.style.textDecoration = '';
-    // P1：只恢复编辑过文本的元素（未动过文本的元素不碰 innerText，防重建子树破坏嵌套结构）
-    if (orig.textSaved) {
-      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value = orig.textSnapshot || '';
-      else el.innerText = orig.textSnapshot || '';
+    var act = value && value.action ? String(value.action) : '';
+    if (act === 'color') {
+      el.style.color = orig.color;
+    } else if (act === 'move') {
+      el.style.transform = orig.transform;
+    } else if (act === 'text') {
+      // WO1⑦：结构快照按控件形态分支还原（INPUT/TEXTAREA → value；否则整树 innerHTML）
+      if (orig.textSaved) {
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value = orig.textSnapshot || '';
+        else el.innerHTML = orig.textSnapshot || '';
+      }
+    } else if (act === 'delete') {
+      el.style.opacity = orig.opacity;
+      el.style.textDecoration = '';
+    } else {
+      el.style.backgroundColor = orig.bg;
+      el.style.color = orig.color;
+      el.style.opacity = orig.opacity;
+      el.style.transform = orig.transform;
+      el.style.textDecoration = '';
+      if (orig.textSaved) {
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.value = orig.textSnapshot || '';
+        else el.innerHTML = orig.textSnapshot || '';
+      }
     }
+    // 裁决补充（WO1⑥）：text-edit 异常中断残留的 contenteditable='true' 顺手清理
+    if (el.getAttribute('contenteditable') === 'true') el.removeAttribute('contenteditable');
     // 不删 originalStyles：同一元素可多次撤销（每次回原始态，重复幂等）
     return { ok: true };
   }
@@ -270,6 +345,11 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
       // 用户可能边拖边听写意见或在清单条上单撤某项，不必打断拖拽）
       if (dragMode && d.action !== 'drag-start' && d.action !== 'annotate' && d.action !== 'remove-annotation' && d.action !== 'undo') {
         exitDragMode();
+      }
+      // v0.17.59（WO1⑧）：原地编辑被打断——修改类指令与 undo-all 清空 textEditingEl
+      //（豁免表同 exitDragMode：annotate/remove-annotation/undo/drag-start 不清）
+      if (textEditingEl && d.action !== 'drag-start' && d.action !== 'annotate' && d.action !== 'remove-annotation' && d.action !== 'undo') {
+        textEditingEl = null;
       }
       if (d.action === 'annotate') {
         var aEl = document.querySelector('[data-ai-id="' + d.id + '"]');
@@ -303,8 +383,10 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         }
         return;
       }
-      if (d.action === 'undo') { undoChange(d.id); return; }
+      // v0.17.59（WO3②）：undo 报文携带 value.action → 选择性还原
+      if (d.action === 'undo') { undoChange(d.id, d.value); return; }
       if (d.action === 'undo-all') {
+        textEditingEl = null;
         Object.keys(originalStyles).forEach(function (id) { undoChange(id); });
         Object.keys(annotations).forEach(function (id) { removeAnnotationNodes(annotations[id]); delete annotations[id]; });
         // 兜底清扫（Y5：含 strip；防注册表外残留）
@@ -322,15 +404,18 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         // P2a：持续模式——pointerdown 常驻（不再 once），每轮拖动独立上报；exitDragMode 统一解绑
         var pointerDown = function (ev) {
           if (!dragMode || dragMode.el !== el) return;
+          // v0.17.59（M3）：交互起点即重置 idle 计时（防长按未动期间 30s 计时器到期误退场）
+          armDragIdleTimer();
           var sx = ev.clientX, sy = ev.clientY, active = true, lastDx = 0, lastDy = 0;
           var prevInline = el.style.transform || '';
-          // P2b：基线取 computed transform 的 tx/ty（含样式表 transform），首拖不跳变
-          var base = computedTranslateOf(el);
+          // v0.17.59（WO1③）：基线取 computed transform 的完整矩阵（含样式表 transform、
+          // 旋转/缩放/translateZ），拖动全程用序列化器叠加平移——3D/旋转分量不再被压平
+          var base = computedMatrixOf(el);
           var mv = function (ev2) {
             if (!active) return;
             var dx = ev2.clientX - sx, dy = ev2.clientY - sy;
             lastDx = dx; lastDy = dy;
-            el.style.transform = 'translate(' + (base.tx + dx) + 'px, ' + (base.ty + dy) + 'px)';
+            el.style.transform = applyTranslate(base, dx, dy);
           };
           var finish = function (dx, dy) {
             active = false;
@@ -345,26 +430,38 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
               el.style.transform = prevInline;
               return;
             }
-            el.style.transform = 'translate(' + (base.tx + rdx) + 'px, ' + (base.ty + rdy) + 'px)';
+            // v0.17.59（WO1④）：终态串单一来源——写入 el.style.transform 与上报 finalTransform
+            // 用同一个字符串，宿主/调度员直接写死即所见即所得（矩阵序列化只在注入脚本内发生）
+            var finalT = applyTranslate(base, rdx, rdy);
+            el.style.transform = finalT;
             // 拖拽结束后的 click 不再触发点选面板（仅限该元素）
             suppressClickUntil = Date.now() + 400;
             suppressClickTarget = el;
-            // P2b：上报绝对偏移 absX/absY（最终 computed transform 的 tx/ty），
-            // 调度员写死 translate(absX,absY) 即所见即所得；dx/dy 保留兼容
+            // P2b：上报绝对偏移 absX/absY（最终 computed transform 的 tx/ty）+ finalTransform
+            // 终态串；dx/dy 保留兼容
             var abs = computedTranslateOf(el);
-            reportToHost({ kind: 'change-result', id: dragId, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: rdx, dy: rdy, absX: Math.round(abs.tx), absY: Math.round(abs.ty) } });
+            reportToHost({ kind: 'change-result', id: dragId, action: 'move', ok: true, type: el.getAttribute('data-ai-type') || '元素', text: (el.innerText || el.value || '').trim().slice(0, 40), value: { dx: rdx, dy: rdy, absX: Math.round(abs.tx), absY: Math.round(abs.ty), finalTransform: finalT } });
           };
           var up = function (ev2) { finish(ev2.clientX - sx, ev2.clientY - sy); };
           // 兜底：拖出 iframe 后指针事件被宿主截走时，以最后已知位移收口
           var leave = function () { if (active) finish(lastDx, lastDy); };
+          // v0.17.59（M8/WO1⑤）：会话中止器——active 时还原 prevInline；监听移除无条件
+          //（与 finish 幂等拆分，abort 挂到 dragMode 供 exitDragMode 调用）
+          var abort = function () {
+            if (active) { active = false; el.style.transform = prevInline; }
+            document.removeEventListener('mousemove', mv);
+            document.removeEventListener('mouseup', up);
+            el.removeEventListener('mouseleave', leave);
+          };
           // R1：pointer capture 到元素——拖出 iframe 边界后 move/up 仍派发给元素，不丢 mouseup
           try { el.setPointerCapture(ev.pointerId); } catch (err) { /* 降级：document 级监听 */ }
           document.addEventListener('mousemove', mv);
           document.addEventListener('mouseup', up);
           el.addEventListener('mouseleave', leave);
+          dragMode.abort = abort;
           ev.preventDefault();
         };
-        dragMode = { el: el, id: dragId, timer: null, pointerDown: pointerDown };
+        dragMode = { el: el, timer: null, pointerDown: pointerDown, abort: null };
         el.style.cursor = 'move';
         el.addEventListener('pointerdown', pointerDown);
         armDragIdleTimer();
@@ -374,7 +471,10 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         var tEl = document.querySelector('[data-ai-id="' + d.id + '"]');
         if (!tEl) return;
         var tag = tEl.tagName;
-        var nativeEditable = tag === 'TEXTAREA' || (tag === 'INPUT' && ['text', 'search', 'url', 'tel', 'password'].indexOf(String(tEl.type || 'text')) >= 0);
+        // v0.17.59（WO9）：原生可编辑白名单补 email/number（纯文本输入型，可 focus+select 键入）；
+        // date/time/datetime-local/month/week/range/color/checkbox/radio/file 等选择器型
+        // 有意排除——弹原生选择 UI 无法键入，走 degraded 由宿主切输入框路径
+        var nativeEditable = tag === 'TEXTAREA' || (tag === 'INPUT' && ['text', 'search', 'url', 'tel', 'password', 'email', 'number'].indexOf(String(tEl.type || 'text')) >= 0);
         // P1：替换元素（IMG/VIDEO/非文本 INPUT 等）或无可编辑文本 → 退化上报，宿主切输入框走「其他」路径
         if (!nativeEditable) {
           var replacedTags = ['IMG', 'VIDEO', 'AUDIO', 'CANVAS', 'SVG', 'IFRAME', 'EMBED', 'OBJECT', 'INPUT', 'SELECT'];
@@ -387,8 +487,11 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         var tOrig = originalStyles[d.id];
         if (!tOrig.textSaved) {
           tOrig.textSaved = true;
-          tOrig.textSnapshot = nativeEditable ? String(tEl.value || '') : String(tEl.innerText || '');
+          // v0.17.59（WO1⑦）：快照按控件形态分支——原生控件存 value，其余存 innerHTML
+          //（结构快照，undo 整树还原，防 innerText 重建子树丢嵌套标签）
+          tOrig.textSnapshot = nativeEditable ? String(tEl.value || '') : String(tEl.innerHTML || '');
         }
+        textEditingEl = tEl;
         if (nativeEditable) {
           // P1：原生输入控件直接 focus+select 原地编辑；Enter 确认（textarea Ctrl/Cmd+Enter，Enter 换行），Esc 取消，blur 确认
           var nPrev = String(tEl.value || '');
@@ -396,6 +499,7 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
           var nFinish = function (commit, restore) {
             if (nDone) return;
             nDone = true;
+            if (textEditingEl === tEl) textEditingEl = null;
             tEl.removeEventListener('keydown', nKey, true);
             tEl.removeEventListener('blur', nBlur);
             if (restore) tEl.value = nPrev;
@@ -419,17 +523,19 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
         }
         // P1：通用元素 contentEditable 原地编辑：focus + 全选现有文本；Enter/blur 确认，Esc 取消
         var cPrevAttr = tEl.getAttribute('contenteditable');
-        var cPrev = String(tEl.innerText || '');
+        // v0.17.59（WO1⑦）：Esc 还原用结构快照（innerHTML），防 innerText 重建丢嵌套标签
+        var cPrevHTML = String(tEl.innerHTML || '');
         var cDone = false;
         var cFinish = function (commit, restore) {
           if (cDone) return;
           cDone = true;
+          if (textEditingEl === tEl) textEditingEl = null;
           tEl.removeEventListener('keydown', cKey, true);
           tEl.removeEventListener('blur', cBlur);
           if (cPrevAttr === null) tEl.removeAttribute('contenteditable'); else tEl.setAttribute('contenteditable', cPrevAttr);
-          if (restore) tEl.innerText = cPrev;
+          if (restore) tEl.innerHTML = cPrevHTML;
           var cAfter = String(tEl.innerText || '').trim();
-          if (commit && cAfter !== cPrev.trim()) {
+          if (commit && cAfter !== cPrevHTML.trim()) {
             suppressClickUntil = Date.now() + 400;
             suppressClickTarget = tEl;
             reportToHost({ kind: 'change-result', id: d.id, action: 'text', ok: true, type: tEl.getAttribute('data-ai-type') || '元素', text: cAfter.slice(0, 40), value: cAfter });

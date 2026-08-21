@@ -18,30 +18,9 @@ import { VOICE_DICTATION_INSERT_EVENT, VOICE_DICTATION_PREVIEW_EVENT } from '@/l
 import { getPreviewFrame } from '@/lib/ctf-preview-frame'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
 import { previewPanelOpenMapAtom } from '@/atoms/preview-atoms'
+import { CTF_VOICE_INPUT_PREFIX, parseCtfVoiceTarget } from '../../../main/lib/ctf-voice'
 
 type JotaiStore = ReturnType<typeof useStore>
-
-/** 语音意见收集器的 sourceInputId 前缀（点选元素旁的语音 bar 用）
- *  格式：ctf-voice-<agentSessionId>-<elementId>。两者都可能含 '-'（agentSid 是 36 字符
- *  uuid、元素 id 是 kebab-case），解析先按 uuid 固定结构切分，再 lastIndexOf 兕底。
- *  导出供 GlobalShortcuts 判定同一前缀（P3：ctf-voice 目标不抢焦点回输入框）。 */
-export const CTF_VOICE_INPUT_PREFIX = 'ctf-voice-'
-
-/** agent 会话 id 的 uuid 形状（8-4-4-4-12，共 36 字符）——用于 targetInputId 前缀解析 */
-const AGENT_SID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/** 从 ctf-voice-<agentSid>-<elementId> 解析归属（P3：uuid 精确切分优先，lastIndexOf 兕底） */
-function parseCtfVoiceTarget(targetInputId: string): { agentSid: string; elementId: string } | null {
-  const rest = targetInputId.slice(CTF_VOICE_INPUT_PREFIX.length)
-  // agentSid 是 uuid（36 字符，自身含 4 个 '-'）且分隔符恰在 rest[36]：先按固定结构切
-  if (rest.length > 37 && rest[36] === '-' && AGENT_SID_UUID_RE.test(rest.slice(0, 36))) {
-    return { agentSid: rest.slice(0, 36), elementId: rest.slice(37) }
-  }
-  // 兕底（非 uuid 会话 id）：取最后一个 '-'——元素 id 含 '-' 时会切错，仅防御性保留
-  const dashIdx = rest.lastIndexOf('-')
-  if (dashIdx <= 0) return null
-  return { agentSid: rest.slice(0, dashIdx), elementId: rest.slice(dashIdx + 1) }
-}
 
 /** 点选纠错交互强制并列展示：聊天 + 原型分屏（用户反馈：交互确认 UX 界面时必须并列）
  *  - 若当前是 preview 独立 tab → tearOff 为分屏；
@@ -356,12 +335,14 @@ export function CtfChangesBar(): React.ReactElement | null {
     const item = changes[index]
     if (!item) return
     // 撤销 iframe 内即时效果：voice 项清角标计数；其余恢复原始样式
+    // v0.17.59（WO3②）：undo 报文携带 value.action——iframe 按动作选择性还原，
+    // 同元素其它动作的即时效果不受单条撤销影响（撤销粒度）
     const frame = getPreviewFrame()
     if (frame?.contentWindow) {
       if (item.action === 'voice') {
         frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'remove-annotation', id: item.ref.id }, '*')
       } else {
-        frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'undo', id: item.ref.id }, '*')
+        frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'undo', id: item.ref.id, value: { action: item.action } }, '*')
       }
     }
     setChangesMap((prev) => {
@@ -394,8 +375,9 @@ export function CtfChangesBar(): React.ReactElement | null {
     // 并列展示：接受后用户看会话执行 + 原型刷新，聊天与原型需并排
     ensurePreviewSplit(store, sessionId)
     try {
-      // P2b（v0.17.58）：move 条目携带 finalTransform（最终 transform 文本），
-      // 调度员直接写死 translate(absX,absY)——所见即所得，消除增量语义歧义
+      // v0.17.59（WO3①）：move 三级回退——iframe 上报 finalTransform 存在则原样透传；
+      // 否则 absX/absY 拼 translate；再否则无字段（宿主不再拼装任何矩阵，
+      // 矩阵序列化只发生在注入脚本内，消除双源分叉）
       const reportItems = changes.map((c) => {
         const base = {
           id: c.ref.id,
@@ -405,7 +387,10 @@ export function CtfChangesBar(): React.ReactElement | null {
           value: c.value,
         }
         if (c.action === 'move') {
-          const v = c.value as { absX?: number; absY?: number } | undefined
+          const v = c.value as { absX?: number; absY?: number; finalTransform?: string } | undefined
+          if (typeof v?.finalTransform === 'string' && v.finalTransform) {
+            return { ...base, finalTransform: v.finalTransform }
+          }
           if (typeof v?.absX === 'number' && typeof v?.absY === 'number') {
             return { ...base, finalTransform: `translate(${Math.round(v.absX)}px, ${Math.round(v.absY)}px)` }
           }

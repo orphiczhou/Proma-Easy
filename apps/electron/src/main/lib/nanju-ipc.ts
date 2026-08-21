@@ -19,6 +19,42 @@ import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snaps
 import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
 import { findNanjuProjectBySession, advanceNanjuStage, getNanjuPhaseGatePrompt } from './nanju-phase-gate'
 
+/** 点选纠错批量提交清单的单条项（宿主 ClickToFixPanel reportItems 的 JSON 形状） */
+export interface CtfCommitItem {
+  id?: string
+  type?: string
+  label?: string
+  action?: string
+  value?: unknown
+  /** move 专属：iframe 上报的终态 transform 串（或宿主 absX/absY 回退拼出的 translate） */
+  finalTransform?: string
+}
+
+/** 点选纠错批量提交的修改明细文本（WO4，v0.17.59 抽纯函数并 export，供测试复用）。
+ *  move 三级回退：finalTransform（绝对终值，直接写死，勿与现有样式叠加）→
+ *  absX/absY 拼 translate（同语义）→ legacy dx/dy 增量；text 分支补齐 v0.17.58
+ *  缺失的值透传（此前 text 值被丢弃，调度员拿不到改后文本）；color/delete/voice 维持 */
+export function buildCtfCommitDetail(items: CtfCommitItem[]): string {
+  return items.map((it) => {
+    const what = `${it.type ?? '元素'}「${it.label || it.id}」（data-ai-id=${it.id}）`
+    if (it.action === 'color') return `- ${what}：背景色改为 ${String(it.value)}`
+    if (it.action === 'delete') return `- ${what}：删除`
+    if (it.action === 'move') {
+      if (typeof it.finalTransform === 'string' && it.finalTransform) {
+        return `- ${what}：将 transform 设为 ${it.finalTransform}（绝对终值，直接写死，勿与现有样式叠加）`
+      }
+      const v = it.value as { dx?: number; dy?: number; absX?: number; absY?: number } | undefined
+      if (typeof v?.absX === 'number' && typeof v?.absY === 'number') {
+        return `- ${what}：将 transform 设为 translate(${Math.round(v.absX)}px, ${Math.round(v.absY)}px)（绝对终值，直接写死，勿与现有样式叠加）`
+      }
+      return `- ${what}：平移 (${v?.dx ?? 0}px, ${v?.dy ?? 0}px)`
+    }
+    if (it.action === 'text') return `- ${what}：文字改为「${String(it.value ?? '')}」`
+    if (it.action === 'voice') return `- ${what}：用户意见「${String(it.value ?? '')}」`
+    return `- ${what}：${it.action}`
+  }).join('\n')
+}
+
 /** 点选纠错消息防抖：`${sessionId}:${elementId}:${kind}` → 上次注入时间 */
 const clickToFixLastSent = new Map<string, number>()
 import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } from './nanju-orchestrator'
@@ -119,21 +155,10 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     // 面板选项指令（interaction-spec 交互1 快速选项）：直接转化为修改指令消息
     const actionLabel = (() => {
       if (input.kind === 'commit-changes') {
-        // 待接受清单一次性提交：结构化列出全部即时调整
+        // 待接受清单一次性提交：结构化列出全部即时调整（WO4：明细构建抽 buildCtfCommitDetail 纯函数）
         let detail = ''
         try {
-          const items = JSON.parse(input.action ?? '[]') as Array<{ id?: string; type?: string; label?: string; action?: string; value?: unknown }>
-          detail = items.map((it) => {
-            const what = `${it.type ?? '元素'}「${it.label || it.id}」（data-ai-id=${it.id}）`
-            if (it.action === 'color') return `- ${what}：背景色改为 ${String(it.value)}`
-            if (it.action === 'delete') return `- ${what}：删除`
-            if (it.action === 'move') {
-              const v = it.value as { dx?: number; dy?: number } | undefined
-              return `- ${what}：平移 (${v?.dx ?? 0}px, ${v?.dy ?? 0}px)`
-            }
-            if (it.action === 'voice') return `- ${what}：用户意见「${String(it.value ?? '')}」`
-            return `- ${what}：${it.action}`
-          }).join('\n')
+          detail = buildCtfCommitDetail(JSON.parse(input.action ?? '[]') as CtfCommitItem[])
         } catch {
           detail = input.action ?? ''
         }

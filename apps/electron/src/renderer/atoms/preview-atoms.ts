@@ -113,8 +113,8 @@ export const clickToFixPanelAtom = atom<ClickToFixPanelState | null>(null)
 export interface CtfChangeItem {
   ref: UxElementRef
   action: 'color' | 'delete' | 'move' | 'voice' | 'text'
-  /** color=色值；delete 无；move={dx,dy,absX?,absY?}（v0.17.58 起含绝对偏移）；voice/text=文本 */
-  value?: string | { dx: number; dy: number; absX?: number; absY?: number }
+  /** color=色值；delete 无；voice/text=文本；move={dx,dy,absX?,absY?,finalTransform?}（v0.17.59：finalTransform 为 iframe 上报的终态串，宿主只透传，不拼装矩阵） */
+  value?: string | { dx: number; dy: number; absX?: number; absY?: number; finalTransform?: string }
   appliedAt: number
 }
 /** 每会话待接受的即时调整清单（接受调整后一次性发给会话执行并清空） */

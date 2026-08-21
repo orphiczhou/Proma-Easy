@@ -676,7 +676,7 @@ export function useGlobalAgentListeners(): void {
               filePath: store.get(previewFileMapAtom).get(sessionId)?.filePath ?? '',
               capturedAt: Date.now(),
             },
-            action: (sanitize(msg.action, 12) ?? 'color') as 'color' | 'delete' | 'move' | 'text',
+            action: (sanitize(msg.action, 12) ?? 'color') as CtfChangeItem['action'],
             value: (msg as { value?: unknown }).value as CtfChangeItem['value'],
             appliedAt: Date.now(),
           }
@@ -685,11 +685,11 @@ export function useGlobalAgentListeners(): void {
             ensurePreviewSplit(store, sessionId)
             store.set(pendingCtfChangesMapAtom, (prev) => {
               const list = prev.get(sessionId) ?? []
-              // R2：同一元素连续的快速操作（color/delete/move/text）合并为一条（保留最新）；
-              // N1（AC-R2 复核）：voice 项不参与合并——否则"语音意见→顺手改个颜色"会把意见从清单里
-              // 静默挤掉（角标还在但接受批次不含该意见，调度员永远不会应用）；
-              // P1（v0.17.58）：text 归快速操作类，同元素多次改文字只保留最新
-              const merged = list.filter((c) => c.ref.id !== item.ref.id || c.action === 'voice')
+              // R2/M6（v0.17.59）：同元素同动作双键合并保留最新——不同动作共存，
+              // 单条撤销粒度（WO3②）才有意义；N1（AC-R2 复核）：voice 项不参与合并——
+              // 否则"语音意见→顺手改个颜色"会把意见从清单里静默挤掉（角标还在但接受
+              // 批次不含该意见，调度员永远不会应用），豁免必须在代码里可见
+              const merged = list.filter((c) => !(c.ref.id === item.ref.id && c.action === item.action) || c.action === 'voice')
               const next = new Map(prev)
               // 清单上限 24（防异常/伪造刷爆）
               next.set(sessionId, [...merged, item].slice(-24))
