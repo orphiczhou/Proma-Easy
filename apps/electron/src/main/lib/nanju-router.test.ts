@@ -102,10 +102,10 @@ describe('quick/iterative 默认分级映射', () => {
     }
   })
 
-  test('quick 路由：requirements → prototype → coding → delivered；iterative 路由完整五阶段', () => {
-    expect(getRoute('quick').map((n) => n.id)).toEqual(['requirements', 'prototype', 'coding', 'delivered'])
+  test('quick 路由：requirements → prototype → coding → testing → delivered；iterative 路由完整六阶段（Sprint B 起 testing 入路由）', () => {
+    expect(getRoute('quick').map((n) => n.id)).toEqual(['requirements', 'prototype', 'coding', 'testing', 'delivered'])
     expect(getRoute('iterative').map((n) => n.id)).toEqual([
-      'requirements', 'prototype', 'architecture', 'planning', 'coding', 'delivered',
+      'requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered',
     ])
   })
 
@@ -134,7 +134,7 @@ describe('quick/iterative 默认分级映射', () => {
 })
 
 describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
-  test('coding 节点定义：全栈开发 / deepseek-v4-pro / 08_APP/index.html / next=delivered', () => {
+  test('coding 节点定义：全栈开发 / deepseek-v4-pro / 08_APP/index.html / next=testing（Sprint B 改向）', () => {
     for (const mode of ['quick', 'iterative'] as const) {
       const coding = getPhaseNode(mode, 'coding')
       expect(coding?.role).toBe('fullstack-developer')
@@ -142,7 +142,7 @@ describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
       expect(coding?.channel).toBe('deepseek')
       expect(coding?.model).toBe('deepseek-v4-pro')
       expect(coding?.outputPath).toBe('08_APP/index.html')
-      expect(coding?.next).toBe('delivered')
+      expect(coding?.next).toBe('testing')
       expect(coding?.requiresUserConfirmation).toBe(true)
       expect(coding?.requiresAC).toBe(false)
       expect(coding?.retryLimit).toBe(2)
@@ -233,5 +233,50 @@ describe('AC 家族多样性断言', () => {
       attackerChannel: 'deepseek',
       defenderChannel: 'glm-zhipu',
     })).not.toThrow()
+  })
+})
+
+describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', () => {
+  test('testing 节点定义：测试工程师 / MiniMax-M3（运行时解析标记）/ 06_TESTS/features/index.feature / next=delivered', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const testing = getPhaseNode(mode, 'testing')
+      expect(testing?.role).toBe('test-engineer')
+      expect(testing?.title).toBe('测试工程师')
+      expect(testing?.channel).toBe('minimax') // 家族标记；实际渠道在构建委派指令时运行时解析（同 prototype）
+      expect(testing?.model).toBe('MiniMax-M3')
+      expect(testing?.outputPath).toBe('06_TESTS/features/index.feature')
+      expect(testing?.next).toBe('delivered')
+      expect(testing?.requiresUserConfirmation).toBe(false) // 机器判定收口（裁判规则），不做人肉确认
+      expect(testing?.requiresAC).toBe(false)
+      expect(testing?.retryLimit).toBe(2) // PRD §9.3：测试回炉上限 2 次
+      expect(testing?.taskWeight).toBe(mode === 'quick' ? 'light' : 'medium')
+    }
+  })
+
+  test('testing 作者与 coding 作者（deepseek 系）异构，且与 AC 防御者（glm 系）满足家族多样性', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const testing = getPhaseNode(mode, 'testing')!
+      const coding = getPhaseNode(mode, 'coding')!
+      const actors = resolveACActors(testing)
+      expect(channelFamily(testing.channel)).not.toBe(channelFamily(coding.channel))
+      expect(() => assertACFamilyDiversity({
+        authorChannel: testing.channel,
+        attackerChannel: actors.attacker.channel,
+        defenderChannel: actors.defender.channel,
+      })).not.toThrow()
+    }
+  })
+
+  test('testing 约束含映射前提（先读 08_APP 实码提 data-ai-id）与透明 skip 语义', () => {
+    const constraints = getPhaseNode('quick', 'testing')!.constraints.join('\n')
+    expect(constraints).toContain('先 Read 08_APP/index.html')
+    expect(constraints).toContain('禁止臆造 selector')
+    expect(constraints).toContain('unmapped')
+    expect(constraints).toContain('禁止严格时刻断言')
+  })
+
+  test('FORMAT_CHECKS：testing 接受 Feature: + Scenario:（中文 Gherkin 最低结构）', () => {
+    expect(checkOutputFormat('testing', 'Feature: 读书笔记\nScenario: US-01 添加笔记\n  Given 用户在列表页')).toBe(true)
+    expect(checkOutputFormat('testing', '# 这只是 markdown，没有 Gherkin 结构')).toBe(false)
   })
 })

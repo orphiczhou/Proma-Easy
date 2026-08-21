@@ -9,6 +9,7 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 import { AgentView } from '@/components/agent/AgentView'
 import { PreviewPanel } from '@/components/diff/PreviewPanel'
+import { GwtProgressCard } from '@/components/nanju/GwtProgressCard'
 import { useAtom, useAtomValue } from 'jotai'
 import { previewPanelOpenMapAtom, previewSplitRatioAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { PreviewFile } from '@/atoms/preview-atoms'
@@ -78,12 +79,15 @@ export function NanjuWorkspaceView({ sessionId }: NanjuWorkspaceViewProps): Reac
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      {/* 左侧：Agent 对话 */}
+      {/* 左侧：Agent 对话（顶部叠加 GWT 验收测试进度卡片，Sprint B） */}
       <div
         className="flex flex-col min-w-0 h-full"
         style={previewOpen ? { flex: `0 0 calc(${splitRatio * 100}% - 4px)` } : { flex: '1 1 auto' }}
       >
-        <AgentView sessionId={sessionId} />
+        <GwtProgressCard sessionId={sessionId} />
+        <div className="flex-1 min-h-0">
+          <AgentView sessionId={sessionId} />
+        </div>
       </div>
 
       {/* 可拖拽分隔条 */}

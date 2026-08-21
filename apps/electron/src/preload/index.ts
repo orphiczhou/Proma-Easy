@@ -1305,6 +1305,32 @@ export interface ElectronAPI {
   onNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
   offNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
 
+  /** 南大向导 GWT 验收测试进度事件（P1 Sprint B） */
+  onNanjuGwtProgress: (callback: (event: unknown, data: {
+    sessionId: string
+    projectId: string
+    phase: 'start' | 'scenario-start' | 'scenario-end' | 'done'
+    current: number
+    total: number
+    scenario?: string
+    scenarioStatus?: 'pass' | 'fail' | 'skip'
+    passed: number
+    failed: number
+    skipped: number
+  }) => void) => void
+  offNanjuGwtProgress: (callback: (event: unknown, data: {
+    sessionId: string
+    projectId: string
+    phase: 'start' | 'scenario-start' | 'scenario-end' | 'done'
+    current: number
+    total: number
+    scenario?: string
+    scenarioStatus?: 'pass' | 'fail' | 'skip'
+    passed: number
+    failed: number
+    skipped: number
+  }) => void) => void
+
   /** Agent 会话工具 open_preview 触发的预览请求事件 */
   onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
   offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
@@ -2980,6 +3006,13 @@ const electronAPI: ElectronAPI = {
   },
   offNanjuHtmlPreview: (callback) => {
     ipcRenderer.removeListener('nanju:html-preview-detected', callback)
+  },
+
+  onNanjuGwtProgress: (callback) => {
+    ipcRenderer.on('nanju:gwt-progress', callback)
+  },
+  offNanjuGwtProgress: (callback) => {
+    ipcRenderer.removeListener('nanju:gwt-progress', callback)
   },
 
   onAgentOpenPreview: (callback) => {

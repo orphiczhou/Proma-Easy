@@ -57,6 +57,7 @@ import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { getNanjuRouterPrompt } from './nanju-router-prompt'
 import { checkNanjuRouterGate, verifyPhaseOutput } from './nanju-router-gate'
+import type { GwtProgressEvent } from './nanju-gwt-runner'
 import { resolveProjectInstructions } from './project-instruction-resolver'
 import { combinePromaInstructionFiles } from './adapters/pi-resource-loader-overrides'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
@@ -245,6 +246,8 @@ export class AgentOrchestrator {
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, PromaPermissionMode>()
+  /** 南大向导 GWT 验收：正在跑测试的项目（防同项目重复触发） */
+  private runningGwtProjects = new Set<string>()
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
@@ -441,6 +444,168 @@ export class AgentOrchestrator {
    * 调用方负责设置本地 existingSdkSessionId = undefined 和流程控制（break/continue）。
    *
    */
+  // ===== 南大向导 GWT 验收测试（P1 Sprint B：testing 阶段机器裁判闭环） =====
+
+  /** 注入一条可见的 assistant 消息（可见化模式，与 PHASE_ADVANCE 拦截注入同型） */
+  private injectNanjuAssistantMessage(sessionId: string, text: string): void {
+    this.eventBus.emit(sessionId, {
+      kind: 'sdk_message',
+      message: {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text }] },
+        parent_tool_use_id: null,
+        uuid: randomUUID(),
+      } as unknown as SDKMessage,
+    })
+  }
+
+  /** GWT 交付门禁：testing → delivered 必须已有 verdict=pass 的测试报告（机器裁判收口） */
+  private checkNanjuGwtDeliveryGate(workspaceSlug: string, projectId: string): string | null {
+    try {
+      const { existsSync, readFileSync } = require('node:fs')
+      const { getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
+      const { join } = require('node:path')
+      const reportPath = join(getNanjuProjectDir(workspaceSlug, projectId), '06_TESTS', 'report.json')
+      if (!existsSync(reportPath)) {
+        return '测试尚未执行（06_TESTS/report.json 不存在）。请先声明 <!-- PHASE_ADVANCE: testing --> 触发自动验收测试，全部通过后系统会自动交付。'
+      }
+      const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as { verdict?: string; passed?: number; scenariosTotal?: number }
+      if (report?.verdict !== 'pass') {
+        return `验收测试未通过（${report?.passed ?? 0}/${report?.scenariosTotal ?? 0} 个场景通过）。请按测试报告修复缺陷后重跑（声明 <!-- PHASE_ADVANCE: testing -->）。`
+      }
+      return null
+    } catch (e) {
+      return `测试报告读取失败：${e instanceof Error ? e.message : String(e)}`
+    }
+  }
+
+  /** 阶段推进 Todo 兑底（从 PHASE_ADVANCE 检测块抽出的复用段：本会话 open Todo 批量完成） */
+  private finalizeNanjuPhaseTodos(sessionId: string): void {
+    try {
+      const { listTodos, updateTodo } = require('./planning-manager') as typeof import('./planning-manager')
+      const openTodos = listTodos({ status: 'open', limit: 100 })
+      const linked = openTodos.filter((t) =>
+        t.sessionLinks?.some((l) => l.sessionId === sessionId)
+        && !t.nativeOrigin)
+      for (const t of linked) {
+        try { updateTodo({ id: t.id, status: 'completed' }) } catch { /* 单条失败不阻断 */ }
+      }
+      if (linked.length > 0) {
+        console.log(`[南大路由] 阶段推进收尾：已自动完成 ${linked.length} 个本会话 Todo`)
+      }
+    } catch (todoErr) {
+      console.warn(`[南大路由] Todo 自动收尾失败（不影响推进）:`, todoErr instanceof Error ? todoErr.message : String(todoErr))
+    }
+  }
+
+  /**
+   * 触发 GWT 验收测试（异步，不阻塞本轮 result 流）。
+   *
+   * 触发时机：PHASE_ADVANCE: testing 重入（currentStage 已是 testing）——
+   * 首次 = 场景已生成；重跑 = coding 缺陷已修复。完成后按规则裁判结果处理：
+   * - pass → updateNanjuProject(delivered) + Todo 收尾 + 交付完成富语（机器裁判收口）
+   * - fail 未超限（<2 次）→ 注入失败清单与回炉指令 + 续接 L1 委派 coding 修复
+   * - fail 超限（≥2 次）→ 注入人工介入提示（notify_user 语义）
+   */
+  private triggerNanjuGwtRun(input: {
+    workspaceSlug: string
+    projectId: string
+    projectName: string
+    projectMode: 'quick' | 'iterative'
+    sessionId: string
+    resume: { channelId: string; modelId?: string; workspaceId?: string; permissionModeOverride?: PromaPermissionMode }
+  }): void {
+    const { workspaceSlug, projectId, projectName, projectMode, sessionId, resume } = input
+    if (this.runningGwtProjects.has(projectId)) {
+      console.log(`[南大路由] GWT 验收已在进行中：${projectName}，忽略重复触发`)
+      return
+    }
+    this.runningGwtProjects.add(projectId)
+
+    // 进度 IPC：主窗广播（NANJU_PREVIEW_CHANNEL 同型模式）
+    const emitProgress = (p: GwtProgressEvent): void => {
+      try {
+        const { getMainWindow } = require('./main-window-store') as typeof import('./main-window-store')
+        const win = getMainWindow()
+        win?.webContents.send('nanju:gwt-progress', { sessionId, projectId, ...p })
+      } catch { /* IPC 失败不影响测试执行 */ }
+    }
+
+    this.injectNanjuAssistantMessage(
+      sessionId,
+      '🧪 开始自动验收测试：系统将在应用内测试标签中逐场景执行（每个场景独立重载页面，避免状态串扰），完成后自动汇总裁判并给出测试报告。',
+    )
+
+    void (async () => {
+      try {
+        const { runNanjuGwtAcceptance } = require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
+        const outcome = await runNanjuGwtAcceptance({
+          workspaceSlug,
+          projectId,
+          projectName,
+          projectMode,
+          sessionId,
+          controller: browserController,
+          onProgress: emitProgress,
+        })
+        if (outcome.verdict === 'pass') {
+          // 机器裁判收口：全场景通过 + US 全覆盖 → 直接交付（推进即事实）
+          const { updateNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
+          updateNanjuProject(workspaceSlug, projectId, { currentStage: 'delivered' })
+          console.log(`[南大路由] ✅ GWT 验收通过，项目交付: ${projectName}`)
+          this.finalizeNanjuPhaseTodos(sessionId)
+          this.injectNanjuAssistantMessage(
+            sessionId,
+            outcome.summaryText + '\n\n🎉 项目已全部完成交付！\n\n向导流程到此结束。产出物在项目目录（01_PRD / 02_UX_DESIGN / 08_APP），可运行应用入口 08_APP/index.html，可随时回看。想继续做新东西？在南大向导首页点「快速做一个工具」开始新项目。',
+          )
+        } else if (outcome.retryLimitReached) {
+          // 重试超限 → 人工介入（handlePhaseResult notify_user 语义的产品化落地）
+          this.injectNanjuAssistantMessage(
+            sessionId,
+            outcome.summaryText + `\n\n⛔ 测试回炉已达上限（${outcome.retryCount} 次），转为人工介入。请查看测试报告 ${outcome.reportMdPath}，然后告诉调度员：终止项目、继续人工修复，或跳过测试直接交付。`,
+          )
+        } else {
+          // fail 未超限 → 注入失败清单与回炉指令，续接 L1 委派 coding 修复（≤2 次）
+          this.injectNanjuAssistantMessage(
+            sessionId,
+            outcome.summaryText + '\n\n失败清单：\n' + outcome.failListText
+            + '\n\n请 continue_delegation 委派「全栈开发」修复以上缺陷（仅改 08_APP/ 下代码，不得改 06_TESTS/ 与 01_PRD/），'
+            + '修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
+          )
+          setTimeout(() => {
+            runRegisteredHeadlessAgent(
+              {
+                sessionId,
+                userMessage: '验收测试未全部通过。请按系统注入的失败清单处理：用 continue_delegation 委派全栈开发修复缺陷（仅改 08_APP/），修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                channelId: resume.channelId,
+                modelId: resume.modelId,
+                workspaceId: resume.workspaceId,
+                permissionModeOverride: resume.permissionModeOverride,
+                startedAt: Date.now(),
+              },
+              {
+                source: 'delegation',
+                onError: (error: string) => console.warn(`[南大路由] GWT 回炉续接错误:`, error),
+                onComplete: () => {},
+                onTitleUpdated: () => {},
+              },
+            ).catch((e: unknown) => {
+              console.warn(`[南大路由] GWT 回炉续接失败:`, e instanceof Error ? e.message : String(e))
+            })
+          }, 1500)
+        }
+      } catch (e) {
+        console.error(`[南大路由] GWT 验收执行异常:`, e)
+        this.injectNanjuAssistantMessage(
+          sessionId,
+          `⚠️ 验收测试执行异常：${e instanceof Error ? e.message : String(e)}。请检查 08_APP/index.html 与 06_TESTS/ 产物完整性，修复后重新声明推进 <!-- PHASE_ADVANCE: testing -->。`,
+        )
+      } finally {
+        this.runningGwtProjects.delete(projectId)
+      }
+    })()
+  }
+
   private prepareSessionNotFoundRecovery(
     sessionId: string,
     queryOptions: RecoverableAgentQueryOptions,
@@ -1916,26 +2081,44 @@ export class AgentOrchestrator {
                           }, project.projectId)
                         } catch { /* 埋点失败不影响推进 */ }
                       }
-                      updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
-                      console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
-                      nanjuPhaseAdvanced = newStage ?? null
-                      // Todo 纪律兜底（P3/L4）：调度员经常忘记在阶段推进时收尾 Todo，
-                      // 程序化把该会话关联的 open Todo 标记完成（nativeOrigin 外部来源不动，
-                      // 避免同步到系统提醒事项的副作用；只处理本会话通过 TaskCreate 建的）。
-                      try {
-                        const { listTodos, updateTodo } = require('./planning-manager') as typeof import('./planning-manager')
-                        const openTodos = listTodos({ status: 'open', limit: 100 })
-                        const linked = openTodos.filter((t) =>
-                          t.sessionLinks?.some((l) => l.sessionId === sessionId)
-                          && !t.nativeOrigin)
-                        for (const t of linked) {
-                          try { updateTodo({ id: t.id, status: 'completed' }) } catch { /* 单条失败不阻断 */ }
+                      // Sprint B：testing 阶段推进语义分叉（机器裁判闭环）
+                      // ① PHASE_ADVANCE: testing 重入（currentStage 已是 testing）= 场景已生成/缺陷已修复
+                      //    → Harness 异步触发 GwtRunner（不改阶段；完成后按裁判结果注入/续接）
+                      // ② PHASE_ADVANCE: delivered（当前 testing）= 要求交付
+                      //    → 必须已有 verdict=pass 的测试报告，否则拦截（机器裁判收口）
+                      const isTestingSelfAdvance = project.currentStage === 'testing' && newStage === 'testing'
+                      const isDeliverFromTesting = project.currentStage === 'testing' && newStage === 'delivered'
+                      if (isTestingSelfAdvance) {
+                        console.log(`[南大路由] testing 重入推进：触发 GWT 验收测试（${project.name}）`)
+                        this.triggerNanjuGwtRun({
+                          workspaceSlug,
+                          projectId: project.projectId,
+                          projectName: project.name,
+                          projectMode: project.mode,
+                          sessionId,
+                          resume: { channelId, modelId, workspaceId, permissionModeOverride },
+                        })
+                        // 不改 currentStage（保持 testing）；不设 nanjuPhaseAdvanced（不触发通用续接，
+                        // GwtRunner 完成后按裁判结果自行注入/续接）
+                      } else if (isDeliverFromTesting) {
+                        const gateError = this.checkNanjuGwtDeliveryGate(workspaceSlug, project.projectId)
+                        if (gateError) {
+                          console.log(`[南大路由] GWT 交付门禁拦截，不推进: ${gateError}`)
+                          this.injectNanjuAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}`)
+                        } else {
+                          updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
+                          console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
+                          nanjuPhaseAdvanced = newStage ?? null
+                          this.finalizeNanjuPhaseTodos(sessionId)
                         }
-                        if (linked.length > 0) {
-                          console.log(`[南大路由] 阶段推进收尾：已自动完成 ${linked.length} 个本会话 Todo`)
-                        }
-                      } catch (todoErr) {
-                        console.warn(`[南大路由] Todo 自动收尾失败（不影响推进）:`, todoErr instanceof Error ? todoErr.message : String(todoErr))
+                      } else {
+                        updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
+                        console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
+                        nanjuPhaseAdvanced = newStage ?? null
+                        // Todo 纪律兜底（P3/L4）：调度员经常忘记在阶段推进时收尾 Todo，
+                        // 程序化把该会话关联的 open Todo 标记完成（nativeOrigin 外部来源不动，
+                        // 避免同步到系统提醒事项的副作用；只处理本会话通过 TaskCreate 建的）。
+                        this.finalizeNanjuPhaseTodos(sessionId)
                       }
                     }
                   } else {

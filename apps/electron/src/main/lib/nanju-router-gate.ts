@@ -39,6 +39,8 @@ const PHASE_TOOL_WHITELIST: Record<PhaseId, Set<string>> = {
   architecture: new Set(ACTIVE_PHASE_TOOLS),
   planning: new Set(ACTIVE_PHASE_TOOLS),
   coding: new Set(ACTIVE_PHASE_TOOLS),
+  // Sprint B：testing 与 coding 同白名单（调度员需要委派/等待/Read/AskUserQuestion/预览）
+  testing: new Set(ACTIVE_PHASE_TOOLS),
   delivered: new Set(['Read', 'LS', 'AskUserQuestion']),
 }
 
@@ -77,7 +79,7 @@ export function checkNanjuRouterGate(
     if (PHASE_TOOL_WHITELIST.delivered.has(toolName)) return null
     return {
       behavior: 'deny',
-      message: '🎉 该项目已全部交付完成。\n\n· 想回看产出 → 项目目录 01_PRD / 02_UX_DESIGN / 08_APP（可运行应用入口 08_APP/index.html，右侧文件面板可浏览）\n· 想做新项目 → 在南大向导首页点「快速做一个工具」/「长期迭代项目」\n\n向导流程已收口。如需继续迭代：可在首页新建项目，或在普通 Agent 会话中继续修改 08_APP 代码。',
+      message: '🎉 该项目已全部交付完成。\n\n· 想回看产出 → 项目目录 01_PRD / 02_UX_DESIGN / 08_APP（可运行应用入口 08_APP/index.html，右侧文件面板可浏览）\n· 想看测试报告 → 06_TESTS/report.json 与 06_TESTS/features/（验收场景与判定结果）\n· 想做新项目 → 在南大向导首页点「快速做一个工具」/「长期迭代项目」\n\n向导流程已收口。如需继续迭代：可在首页新建项目，或在普通 Agent 会话中继续修改 08_APP 代码。',
     }
   }
 

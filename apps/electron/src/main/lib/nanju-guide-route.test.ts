@@ -9,10 +9,10 @@ import { describe, expect, test } from 'bun:test'
 import { getGuideRoute, getRoute, AC_PRESETS } from './nanju-router'
 
 describe('getGuideRoute（nanju:get-route 数据面）', () => {
-  test('quick：4 个阶段（含 delivered 哨兵），taskWeight=light，acActors=light 预设', () => {
+  test('quick：5 个阶段（含 delivered 哨兵；Sprint B 起 testing 入路由），taskWeight=light，acActors=light 预设', () => {
     const route = getGuideRoute('quick')
-    expect(route.length).toBe(4)
-    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'coding', 'delivered'])
+    expect(route.length).toBe(5)
+    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'coding', 'testing', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('light')
@@ -24,9 +24,9 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(sentinel?.outputPath).toBe('')
   })
 
-  test('iterative：6 个阶段（含 delivered 哨兵），taskWeight=medium，acActors=medium 预设', () => {
+  test('iterative：7 个阶段（含 delivered 哨兵；Sprint B 起 testing 入路由），taskWeight=medium，acActors=medium 预设', () => {
     const route = getGuideRoute('iterative')
-    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'planning', 'coding', 'delivered'])
+    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('medium')
@@ -45,12 +45,14 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(iterative.find((p) => p.id === 'coding')?.outputPath).toBe('08_APP/index.html')
   })
 
-  test('prototype next 指向：quick→coding，iterative→architecture（路由分叉点）；coding next=delivered（两链共同收口）', () => {
+  test('prototype next 指向：quick→coding，iterative→architecture（路由分叉点）；coding next=testing（Sprint B 改向）；testing next=delivered（两链共同裁判收口）', () => {
     expect(getGuideRoute('quick').find((p) => p.id === 'prototype')?.next).toBe('coding')
     expect(getGuideRoute('iterative').find((p) => p.id === 'prototype')?.next).toBe('architecture')
     expect(getGuideRoute('iterative').find((p) => p.id === 'planning')?.next).toBe('coding')
-    expect(getGuideRoute('quick').find((p) => p.id === 'coding')?.next).toBe('delivered')
-    expect(getGuideRoute('iterative').find((p) => p.id === 'coding')?.next).toBe('delivered')
+    expect(getGuideRoute('quick').find((p) => p.id === 'coding')?.next).toBe('testing')
+    expect(getGuideRoute('iterative').find((p) => p.id === 'coding')?.next).toBe('testing')
+    expect(getGuideRoute('quick').find((p) => p.id === 'testing')?.next).toBe('delivered')
+    expect(getGuideRoute('iterative').find((p) => p.id === 'testing')?.next).toBe('delivered')
   })
 
   test('requiresAC 硬门禁仅 architecture 为 true', () => {

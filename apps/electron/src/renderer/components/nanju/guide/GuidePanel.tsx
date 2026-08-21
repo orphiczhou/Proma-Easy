@@ -221,7 +221,7 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
         {data.notice && <NoticeBar text={data.notice} tone="info" />}
         {modeBubble && (
           <NoticeBar
-            text={`两种模式：快消型 3 步（需求→原型→交付）；长期迭代型 5 步（+架构+规划，AC 审计更强）。点右上「对照」查看另一种模式。`}
+            text={`两种模式：快消型 4 步（需求→原型→开发→测试）；长期迭代型 6 步（+架构+规划，AC 审计更强）。点右上「对照」查看另一种模式。`}
             tone="info"
             onClose={() => setModeBubble(false)}
           />

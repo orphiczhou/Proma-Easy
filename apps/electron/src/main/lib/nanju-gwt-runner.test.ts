@@ -1,0 +1,633 @@
+/**
+ * GWT 验收测试执行器单测（P1 Sprint B：v0.17.62）
+ *
+ * 覆盖面：
+ * - 纯函数：selector 归一 / steps.json schema 校验 / PRD US 提取 / 规则裁判 / 报告生成
+ * - 执行器（mock BrowserController）：全 op 类型执行 / 断言超时 fail / 预检 unmapped-skip /
+ *   场景声明 skip / 场景隔离重载 / 失败截图 / 进度事件序列
+ * - 编排入口（runNanjuGwtAcceptance）：报告 schema（report.json）/ retryCount 累计 /
+ *   judge.verdict 埋点落盘 / 入口缺失降级
+ *
+ * config-paths 按 nanju-router-gate.test.ts 既有模式 mock.module 指向 tmpdir。
+ */
+import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+/** 当前 fixture 根目录（mock 的 getWorkspaceFilesDir 每次调用时读取） */
+let fixtureRoot = ''
+
+// partial mock：spread 真实模块后再覆盖路径函数。
+// bun 的 mock.module 全局生效（跨测试文件），全量替换会让后续加载的
+// nanju-ipc 链路（chat-tools-watcher → getChatToolsConfigPath）炸掉——
+// 只覆盖需要的两个导出，其余保持真实实现。
+const actualConfigPaths = await import('./config-paths')
+mock.module('./config-paths', () => ({
+  ...actualConfigPaths,
+  getWorkspaceFilesDir: () => fixtureRoot,
+  getAgentWorkspacePath: () => fixtureRoot,
+}))
+
+const {
+  normalizeGwtSelector,
+  validateScenarioFileContent,
+  parseUserStories,
+  scenarioUserStory,
+  judgeGwtResult,
+  buildReportMarkdown,
+  buildSummaryText,
+  runGwtSuite,
+  runNanjuGwtAcceptance,
+  GWT_RETRY_LIMIT,
+} = await import('./nanju-gwt-runner')
+import type { GwtBrowserAdapter, GwtScenarioFile, GwtProgressEvent, NanjuGwtOutcome } from './nanju-gwt-runner'
+
+afterEach(() => {
+  if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+  fixtureRoot = ''
+})
+
+// ===== FakePage：按模板表达式特征模拟 DOM 状态（selector/kind 从 JSON 字符串参数提取） =====
+
+class FakePage {
+  elements = new Map<string, { visible: boolean; text: string }>()
+  clicks: Array<{ x: number; y: number }> = []
+  keys: string[] = []
+  fills: Array<{ selector: string; text: string }> = []
+  /** eval op 直通钩子（魔数表达式） */
+  customEval: ((expr: string) => unknown) | null = null
+  /** loadFileInTab 调用计数（场景隔离验证） */
+  reloads = 0
+
+  private strings(expr: string): string[] {
+    const out: string[] = []
+    for (const m of expr.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+      try { out.push(JSON.parse(`"${m[1]}"`)) } catch { /* 非法 JSON 串跳过 */ }
+    }
+    return out
+  }
+
+  eval(expr: string): unknown {
+    if (this.customEval && !expr.includes('document.querySelector')) return this.customEval(expr)
+    const strings = this.strings(expr)
+    const sel = strings[0] ?? ''
+    if (expr.includes('dispatchEvent')) {
+      this.fills.push({ selector: sel, text: strings[1] ?? '' })
+      return { ok: true }
+    }
+    if (expr.includes('getBoundingClientRect')) {
+      return this.elements.has(sel) ? { x: 8, y: 16 } : null
+    }
+    if (expr.startsWith('(() => !!document.querySelector')) {
+      return this.elements.has(sel)
+    }
+    // 完整断言模板（特征：els.length === 0 分支；strings = [selector, kind, contains?]）
+    if (expr.includes('els.length === 0')) {
+      const kind = strings[1] ?? ''
+      if (!this.elements.has(sel)) return { ok: false, actual: '元素不存在' }
+      if (kind === 'selector') return { ok: true, actual: '元素存在' }
+      if (kind === 'visible') {
+        const visible = this.elements.get(sel)?.visible === true
+        return { ok: visible, actual: visible ? '元素可见' : '元素不可见' }
+      }
+      if (kind === 'count') {
+        const n = this.elements.has(sel) ? 1 : 0
+        const expectMatch = /n === (\d+)/.exec(expr)
+        const expect = expectMatch ? Number(expectMatch[1]) : 0
+        return { ok: n === expect, actual: `数量 ${n}` }
+      }
+      // contains 取模板最后一个 JSON 字符串（text 分支的 expect；kind 字符串会出现多次）
+      const contains = strings[strings.length - 1] ?? ''
+      const text = this.elements.get(sel)?.text ?? ''
+      const ok = text.includes(contains)
+      return { ok, actual: JSON.stringify(text).slice(0, 120) }
+    }
+    return undefined
+  }
+}
+
+function makeMockController(page: FakePage): GwtBrowserAdapter {
+  return {
+    createLocalFileTab: async () => ({ tabId: 'tab-gwt-1' }),
+    loadFileInTab: async () => { page.reloads += 1 },
+    evaluateInTab: async (_sessionId, _tabId, expr) => page.eval(expr),
+    clickPointInTab: async (_sessionId, _tabId, x, y) => { page.clicks.push({ x, y }) },
+    pressKeyInTab: async (_sessionId, _tabId, key) => { page.keys.push(key) },
+    screenshot: async () => ({ base64: Buffer.from('fake-png-bytes').toString('base64') }),
+    closeTab: async () => null,
+  }
+}
+
+/** 标准读书笔记场景（全 op 类型） */
+function noteScenario(overrides: Partial<GwtScenarioFile> = {}): GwtScenarioFile {
+  return {
+    feature: 'us-01',
+    scenario: 'US-01 成功添加一条读书笔记',
+    skip: false,
+    skipReason: null,
+    steps: [
+      { kind: 'given', text: '用户在笔记列表页面', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } },
+      { kind: 'when', text: '用户输入书名「百年孤独」', op: { type: 'fill', selector: 'data-ai-id=input-title', value: '百年孤独' } },
+      { kind: 'when', text: '用户点击「保存」按钮', op: { type: 'click', selector: 'data-ai-id=btn-save' } },
+      { kind: 'when', text: '用户按回车确认', op: { type: 'press', value: 'Enter' } },
+      { kind: 'when', text: '等待列表刷新', op: { type: 'wait-selector', selector: 'data-ai-id=view-note-list', timeoutMs: 2000 } },
+      { kind: 'then', text: '笔记列表中显示「百年孤独」', op: { type: 'assert-text', selector: 'data-ai-id=view-note-list', contains: '百年孤独', timeoutMs: 300 } },
+    ],
+    ...overrides,
+  }
+}
+
+// ===== selector 归一 =====
+
+describe('normalizeGwtSelector', () => {
+  test('三种合法形态统一归一为 [data-ai-id="xxx"]', () => {
+    expect(normalizeGwtSelector('data-ai-id=btn-save')).toBe('[data-ai-id="btn-save"]')
+    expect(normalizeGwtSelector('[data-ai-id="btn-save"]')).toBe('[data-ai-id="btn-save"]')
+    expect(normalizeGwtSelector("[data-ai-id='btn-save']")).toBe('[data-ai-id="btn-save"]')
+    expect(normalizeGwtSelector('  data-ai-id = input-title  ')).toBe('[data-ai-id="input-title"]')
+  })
+
+  test('非法形态返回 null（不允许臆造任意 CSS）', () => {
+    expect(normalizeGwtSelector('#main .btn')).toBeNull()
+    expect(normalizeGwtSelector('data-ai-id=1abc')).toBeNull()          // 首字符非字母
+    expect(normalizeGwtSelector('data-ai-id=a b')).toBeNull()           // 含空格
+    expect(normalizeGwtSelector('[data-ai-id="ok"] .child')).toBeNull() // 复合选择器
+    expect(normalizeGwtSelector('')).toBeNull()
+  })
+})
+
+// ===== steps.json schema 校验 =====
+
+describe('validateScenarioFileContent', () => {
+  test('合法文件通过校验', () => {
+    const { scenario, errors } = validateScenarioFileContent(JSON.stringify(noteScenario()))
+    expect(errors).toEqual([])
+    expect(scenario?.feature).toBe('us-01')
+    expect(scenario?.steps.length).toBe(6)
+  })
+
+  test('JSON 损坏返回解析错误', () => {
+    const { scenario, errors } = validateScenarioFileContent('{broken')
+    expect(scenario).toBeNull()
+    expect(errors[0]).toContain('JSON 解析失败')
+  })
+
+  test('op.type 白名单外拒绝', () => {
+    const raw = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'navigate', selector: 'data-ai-id=a' } }] })
+    const { errors } = validateScenarioFileContent(raw)
+    expect(errors.some((e) => e.includes('白名单'))).toBe(true)
+  })
+
+  test('click 缺 selector 拒绝；selector 非法（任意 CSS）拒绝', () => {
+    const noSel = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'click' } }] })
+    expect(validateScenarioFileContent(noSel).errors.some((e) => e.includes('selector'))).toBe(true)
+    const badSel = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'click', selector: '#main' } }] })
+    expect(validateScenarioFileContent(badSel).errors.some((e) => e.includes('非法'))).toBe(true)
+  })
+
+  test('op=null 必须显式 unmapped:true', () => {
+    const raw = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'given', text: 'x', op: null }] })
+    expect(validateScenarioFileContent(raw).errors.some((e) => e.includes('unmapped'))).toBe(true)
+  })
+
+  test('eval 仅限 then 步骤', () => {
+    const raw = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'eval', expression: 'true' } }] })
+    expect(validateScenarioFileContent(raw).errors.some((e) => e.includes('仅允许 then'))).toBe(true)
+  })
+
+  test('assert-count 需要 count 非负整数', () => {
+    const bad = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'then', text: 'x', op: { type: 'assert-count', selector: 'data-ai-id=a', count: -1 } }] })
+    expect(validateScenarioFileContent(bad).errors.length).toBeGreaterThan(0)
+  })
+
+  test('steps 空数组拒绝', () => {
+    const raw = JSON.stringify({ feature: 'us-01', scenario: 's', skip: false, skipReason: null, steps: [] })
+    expect(validateScenarioFileContent(raw).errors[0]).toContain('非空数组')
+  })
+})
+
+// ===== PRD 用户故事提取 =====
+
+describe('parseUserStories / scenarioUserStory', () => {
+  test('提取 US-xx 并两位化去重保序', () => {
+    expect(parseUserStories('## US-1 添加笔记\n### US-02 删除\n再看 US-1')).toEqual(['US-01', 'US-02'])
+    expect(parseUserStories('没有故事')).toEqual([])
+  })
+
+  test('场景标识优先从 scenario 匹配，兜底 feature', () => {
+    expect(scenarioUserStory({ feature: 'us-01', scenario: 'US-02 保存场景' })).toBe('US-02')
+    expect(scenarioUserStory({ feature: 'us-03', scenario: '边界场景' })).toBe('US-03')
+    expect(scenarioUserStory({ feature: 'misc', scenario: '无标识' })).toBeNull()
+  })
+})
+
+// ===== 规则裁判 =====
+
+describe('judgeGwtResult（裁判=规则非模型）', () => {
+  const us = ['US-01', 'US-02']
+  const r = (feature: string, scenario: string, status: 'pass' | 'fail' | 'skip') => ({ feature, scenario, status })
+
+  test('全场景通过 + US 全覆盖 = pass', () => {
+    const j = judgeGwtResult([r('us-01', 'US-01 添加', 'pass'), r('us-02', 'US-02 删除', 'pass')], us)
+    expect(j.verdict).toBe('pass')
+    expect(j.passed).toBe(2)
+    expect(j.uncoveredUs).toEqual([])
+  })
+
+  test('任一场景失败 = fail', () => {
+    const j = judgeGwtResult([r('us-01', 'US-01 添加', 'pass'), r('us-02', 'US-02 删除', 'fail')], us)
+    expect(j.verdict).toBe('fail')
+    expect(j.failed).toBe(1)
+  })
+
+  test('用户故事无覆盖（全 skip）= fail（覆盖性硬约束）', () => {
+    const j = judgeGwtResult([r('us-01', 'US-01 添加', 'skip'), r('us-02', 'US-02 删除', 'pass')], us)
+    expect(j.verdict).toBe('fail')
+    expect(j.uncoveredUs).toEqual(['US-01'])
+    expect(j.coveredUs).toEqual(['US-02'])
+  })
+
+  test('零场景 = fail（空报告不允许交付）', () => {
+    expect(judgeGwtResult([], us).verdict).toBe('fail')
+  })
+
+  test('skip 场景不计入通过性但保持透明统计', () => {
+    const j = judgeGwtResult([r('us-01', 'US-01 a', 'pass'), r('us-01', 'US-01 b', 'skip')], ['US-01'])
+    expect(j.verdict).toBe('pass')
+    expect(j.skipped).toBe(1)
+  })
+})
+
+// ===== 报告生成 =====
+
+describe('buildReportMarkdown / buildSummaryText', () => {
+  test('pass 摘要自然语言口径', () => {
+    const j = judgeGwtResult([{ feature: 'us-01', scenario: 'US-01 a', status: 'pass' }], ['US-01'])
+    expect(buildSummaryText(j, '06_TESTS/report-x.md')).toContain('我们测试了 1 个场景，全部通过')
+    expect(buildSummaryText(j, '06_TESTS/report-x.md')).toContain('覆盖 1 条用户故事')
+  })
+
+  test('fail 摘要含失败数与未覆盖清单', () => {
+    const j = judgeGwtResult([
+      { feature: 'us-01', scenario: 'US-01 a', status: 'pass' },
+      { feature: 'us-01', scenario: 'US-01 b', status: 'fail' },
+    ], ['US-01', 'US-02'])
+    const s = buildSummaryText(j, 'r.md')
+    expect(s).toContain('2 个场景中 1 个失败')
+    expect(s).toContain('US-02 无可执行场景')
+  })
+
+  test('报告 md 含判定/统计/明细表', () => {
+    const j = judgeGwtResult([{ feature: 'us-01', scenario: 'US-01 a', status: 'pass' }], ['US-01'])
+    const md = buildReportMarkdown({
+      generatedAt: '2026-08-22T00:00:00.000Z',
+      verdict: j.verdict, entry: '08_APP/index.html',
+      scenariosTotal: j.scenariosTotal, passed: j.passed, failed: j.failed, skipped: j.skipped,
+      coveredUs: j.coveredUs, uncoveredUs: j.uncoveredUs, retryCount: 0,
+      scenarios: [{ feature: 'us-01', scenario: 'US-01 a', status: 'pass', reason: null, failedStep: null, screenshot: null, durationMs: 10 }],
+    }, '测试项目')
+    expect(md).toContain('# 验收测试报告 — 测试项目')
+    expect(md).toContain('✅ 全部通过')
+    expect(md).toContain('| 1 | us-01 / US-01 a | ✅ pass |')
+  })
+})
+
+// ===== 执行器（mock controller） =====
+
+describe('runGwtSuite（mock BrowserController）', () => {
+  test('全 op 类型执行：click/fill/press/wait-selector/assert 均触达，场景 pass', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '百年孤独' })
+    page.elements.set('[data-ai-id="input-title"]', { visible: true, text: '' })
+    page.elements.set('[data-ai-id="btn-save"]', { visible: true, text: '保存' })
+    const events: GwtProgressEvent[] = []
+    const results = await runGwtSuite({
+      sessionId: 's1',
+      entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [noteScenario()],
+      controller: makeMockController(page),
+      screenshotDir: null,
+      onProgress: (e) => events.push(e),
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.fills).toEqual([{ selector: '[data-ai-id="input-title"]', text: '百年孤独' }])
+    expect(page.clicks.length).toBe(1)
+    expect(page.keys).toEqual(['Enter'])
+    // 进度事件序列：start → scenario-start → scenario-end → done
+    expect(events.map((e) => e.phase)).toEqual(['start', 'scenario-start', 'scenario-end', 'done'])
+    expect(events[2]?.scenarioStatus).toBe('pass')
+  })
+
+  test('断言超时：窗口内不满足 → fail + failedStep 期望/实际', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '（空列表）' })
+    const results = await runGwtSuite({
+      sessionId: 's1',
+      entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [noteScenario({ steps: [{ kind: 'then', text: '显示「百年孤独」', op: { type: 'assert-text', selector: 'data-ai-id=view-note-list', contains: '百年孤独', timeoutMs: 60 } }] })],
+      controller: makeMockController(page),
+      screenshotDir: null,
+    })
+    const r = results[0]!
+    expect(r.status).toBe('fail')
+    expect(r.failedStep?.expected).toContain('百年孤独')
+    expect(r.failedStep?.actual).toContain('（空列表）')
+    expect(r.reason).toContain('期望')
+  })
+
+  test('预检拦截：click selector 初始不存在 → unmapped-skip 不执行半截', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '' })
+    // btn-missing 未注册 → 预检 2s 窗口后判 unmapped-skip
+    const results = await runGwtSuite({
+      sessionId: 's1',
+      entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [noteScenario()],
+      controller: makeMockController(page),
+      screenshotDir: null,
+    })
+    const r = results[0]!
+    expect(r.status).toBe('skip')
+    expect(r.reason).toContain('unmapped-skip')
+    expect(page.clicks.length).toBe(0) // 未执行任何 click
+  })
+
+  test('场景声明 skip：透明跳过不执行', async () => {
+    const page = new FakePage()
+    const results = await runGwtSuite({
+      sessionId: 's1',
+      entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [noteScenario({ skip: true, skipReason: '涉及后端接口，Sprint B 范围外' })],
+      controller: makeMockController(page),
+      screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('skip')
+    expect(results[0]?.reason).toContain('范围外')
+    expect(page.reloads).toBe(0)
+  })
+
+  test('场景隔离：每个场景 loadFileInTab 重载一次', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="btn-save"]', { visible: true, text: '保存' })
+    const mk = (): GwtScenarioFile => ({
+      feature: 'us-01', scenario: 'US-01 场景A', skip: false, skipReason: null,
+      steps: [{ kind: 'when', text: '点击保存', op: { type: 'click', selector: 'data-ai-id=btn-save' } }],
+    })
+    await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [mk(), mk()],
+      controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(page.reloads).toBe(2)
+    expect(page.clicks.length).toBe(2)
+  })
+
+  test('失败截图：fail 场景落 screenshots 目录并在结果中记录相对路径', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gwt-shot-'))
+    try {
+      const page = new FakePage()
+      page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '别的' })
+      const results = await runGwtSuite({
+        sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+        scenarios: [noteScenario({ steps: [{ kind: 'then', text: 'x', op: { type: 'assert-text', selector: 'data-ai-id=view-note-list', contains: '百年孤独', timeoutMs: 60 } }] })],
+        controller: makeMockController(page),
+        screenshotDir: dir,
+      })
+      const r = results[0]!
+      expect(r.status).toBe('fail')
+      expect(r.screenshot).toMatch(/^06_TESTS\/screenshots\/fail-us-01-\d+\.png$/)
+      expect(existsSync(join(dir, (r.screenshot ?? '').split('/').pop()!))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('eval op：仅 then、truthy 通过、falsy 失败', async () => {
+    const page = new FakePage()
+    page.customEval = (expr) => expr.includes('running') ? true : false
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [
+        { feature: 'us-01', scenario: 'US-01 eval 通过', skip: false, skipReason: null, steps: [{ kind: 'then', text: '状态为运行中', op: { type: 'eval', expression: 'window.__state === "running"' } }] },
+        { feature: 'us-01', scenario: 'US-02 eval 失败', skip: false, skipReason: null, steps: [{ kind: 'then', text: '状态为已停止', op: { type: 'eval', expression: 'window.__state === "stopped"' } }] },
+      ],
+      controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(results[1]?.status).toBe('fail')
+  })
+
+  test('assert-count / assert-visible 语义', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="badge"]', { visible: false, text: '' })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 可见性', skip: false, skipReason: null,
+        steps: [{ kind: 'then', text: '徽标可见', op: { type: 'assert-visible', selector: 'data-ai-id=badge', timeoutMs: 60 } }],
+      }],
+      controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('fail')
+    expect(results[0]?.failedStep?.actual).toBe('元素不可见')
+  })
+})
+
+// ===== 编排入口（runNanjuGwtAcceptance：报告 schema + retry + 埋点） =====
+
+function setupProjectFixture(opts: {
+  stepsFiles?: Record<string, string>
+  prd?: string
+  appHtml?: string
+  prevReport?: Record<string, unknown>
+}): void {
+  const dir = mkdtempSync(join(tmpdir(), 'gwt-accept-'))
+  fixtureRoot = dir
+  const projectDir = join(dir, 'project-p1')
+  mkdirSync(join(projectDir, '06_TESTS', 'features'), { recursive: true })
+  mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+  mkdirSync(join(projectDir, '08_APP'), { recursive: true })
+  writeFileSync(join(projectDir, '01_PRD', 'prd.md'), opts.prd ?? '# PRD\n## US-01 添加读书笔记\n## US-02 删除读书笔记\n')
+  writeFileSync(join(projectDir, '08_APP', 'index.html'), opts.appHtml ?? '<!DOCTYPE html><html><body><div data-ai-id="view-note-list"></div></body></html>')
+  for (const [name, content] of Object.entries(opts.stepsFiles ?? {})) {
+    writeFileSync(join(projectDir, '06_TESTS', 'features', name), content)
+  }
+  if (opts.prevReport) {
+    writeFileSync(join(projectDir, '06_TESTS', 'report.json'), JSON.stringify(opts.prevReport))
+  }
+}
+
+const PASSING_STEPS = JSON.stringify({
+  feature: 'us-01',
+  scenario: 'US-01 添加读书笔记',
+  skip: false,
+  skipReason: null,
+  steps: [
+    { kind: 'given', text: '在列表页', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } },
+    { kind: 'then', text: '列表可见', op: { type: 'assert-count', selector: 'data-ai-id=view-note-list', count: 1 } },
+  ],
+})
+
+const FAILING_STEPS = JSON.stringify({
+  feature: 'us-01',
+  scenario: 'US-01 添加读书笔记',
+  skip: false,
+  skipReason: null,
+  steps: [
+    { kind: 'then', text: '列表含目标文本', op: { type: 'assert-text', selector: 'data-ai-id=view-note-list', contains: '不存在的文本', timeoutMs: 60 } },
+  ],
+})
+
+function fullPassPage(): FakePage {
+  const page = new FakePage()
+  page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '百年孤独' })
+  return page
+}
+
+describe('runNanjuGwtAcceptance', () => {
+  test('全通过：report.json schema 完整 + verdict=pass + retryCount=0 + 埋点落盘', async () => {
+    const coveringBothUs = JSON.stringify({
+      feature: 'us-01', scenario: 'US-01 添加读书笔记', skip: false, skipReason: null,
+      steps: [
+        { kind: 'given', text: '在列表页', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } },
+        { kind: 'then', text: '列表可见', op: { type: 'assert-count', selector: 'data-ai-id=view-note-list', count: 1 } },
+      ],
+    })
+    setupProjectFixture({
+      stepsFiles: {
+        'us-01.steps.json': coveringBothUs,
+        'us-02.steps.json': coveringBothUs.replace(/US-01/g, 'US-02').replace(/us-01/g, 'us-02'),
+      },
+    })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(outcome.verdict).toBe('pass')
+    expect(outcome.retryCount).toBe(0)
+    expect(outcome.retryLimitReached).toBe(false)
+    expect(outcome.summaryText).toContain('全部通过')
+
+    // report.json schema 校验
+    const report = JSON.parse(readFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), 'utf-8'))
+    expect(report.verdict).toBe('pass')
+    expect(report.scenariosTotal).toBe(2)
+    expect(report.passed).toBe(2)
+    expect(report.failed).toBe(0)
+    expect(report.coveredUs.sort()).toEqual(['US-01', 'US-02'])
+    expect(report.uncoveredUs).toEqual([])
+    expect(Array.isArray(report.scenarios)).toBe(true)
+    expect(report.scenarios[0]).toMatchObject({ feature: 'us-01', status: 'pass' })
+
+    // judge.verdict 埋点落盘（推进即事实口径）
+    const telemetryDir = join(fixtureRoot, '_telemetry')
+    expect(existsSync(telemetryDir)).toBe(true)
+    const files = readdirSync(telemetryDir).filter((f) => f.endsWith('.jsonl'))
+    expect(files.length).toBe(1)
+    const events = readFileSync(join(telemetryDir, files[0]!), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(events.length).toBe(1)
+    expect(events[0]?.eventType).toBe('judge.verdict')
+    expect(events[0]?.payload.verdict).toBe('pass')
+    expect(events[0]?.payload.scenarios_total).toBe(2)
+  })
+
+  test('覆盖性：US 未全覆盖时 verdict=fail（report.json 以裁判为准）', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS } })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(outcome.verdict).toBe('fail') // US-02 无场景 → 覆盖性失败
+    expect(outcome.judgement.uncoveredUs).toEqual(['US-02'])
+    expect(outcome.failListText).toContain('US-02')
+  })
+
+  test('失败与重试累计：首轮 fail retryCount=0 → 重跑 fail retryCount=1 → 再跑 retryLimitReached', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': FAILING_STEPS } })
+    const run = (): Promise<NanjuGwtOutcome> => runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(GWT_RETRY_LIMIT).toBe(2)
+    const first = await run()
+    expect(first.verdict).toBe('fail')
+    expect(first.retryCount).toBe(0)
+    expect(first.retryLimitReached).toBe(false)
+    const second = await run()
+    expect(second.retryCount).toBe(1)
+    expect(second.retryLimitReached).toBe(false)
+    const third = await run()
+    expect(third.retryCount).toBe(2)
+    expect(third.retryLimitReached).toBe(true)
+    // 埋点三轮均落盘（fail 轮次也记，漏斗分析口径）
+    const telemetryFile = join(fixtureRoot, '_telemetry')
+    const files = existsSync(telemetryFile)
+      ? readdirSync(telemetryFile).filter((f) => f.endsWith('.jsonl'))
+      : []
+    expect(files.length).toBe(1)
+    const lines = readFileSync(join(telemetryFile, files[0]!), 'utf-8').trim().split('\n')
+    expect(lines.length).toBe(3)
+    const events = lines.map((l) => JSON.parse(l))
+    expect(events.every((e) => e.eventType === 'judge.verdict')).toBe(true)
+    expect(events.map((e) => e.payload.retry_round)).toEqual([0, 1, 2])
+    expect(events.every((e) => e.payload.verdict === 'fail')).toBe(true)
+  })
+
+  test('重试计数语义：上轮 fail 后重跑通过 → retryCount 继承（第 2 次重跑）；pass 后再跑 → 归零', async () => {
+    const bothUs = (us: string): string => JSON.stringify({
+      feature: us.toLowerCase(), scenario: `${us} 场景`, skip: false, skipReason: null,
+      steps: [{ kind: 'then', text: '列表可见', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } }],
+    })
+    setupProjectFixture({
+      stepsFiles: { 'us-01.steps.json': FAILING_STEPS },
+      prevReport: { verdict: 'fail', retryCount: 1 },
+    })
+    // 换成会通过的版本（覆盖两条 US）
+    writeFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'features', 'us-01.steps.json'), bothUs('US-01'))
+    writeFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'features', 'us-02.steps.json'), bothUs('US-02'))
+    const run = (): Promise<NanjuGwtOutcome> => runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    const first = await run()
+    expect(first.verdict).toBe('pass')
+    expect(first.retryCount).toBe(2) // 上轮 fail(retryCount=1) 后的第二次重跑
+    const second = await run()
+    expect(second.verdict).toBe('pass')
+    expect(second.retryCount).toBe(0) // 上轮已 pass → 归零
+  })
+
+  test('schema 非法文件：降级为 skip 场景透明记录，不执行', async () => {
+    setupProjectFixture({ stepsFiles: { 'bad.steps.json': '{"feature":"us-01","scenario":1}' } })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(new FakePage()),
+    })
+    expect(outcome.verdict).toBe('fail')
+    expect(outcome.judgement.skipped).toBe(1)
+    expect(outcome.results[0]?.reason).toContain('schema 校验失败')
+  })
+
+  test('入口缺失：08_APP/index.html 不存在 → 全场景降级 skip + fail', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS } })
+    rmSync(join(fixtureRoot, 'project-p1', '08_APP', 'index.html'))
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(new FakePage()),
+    })
+    expect(outcome.verdict).toBe('fail')
+    expect(outcome.results[0]?.reason).toContain('08_APP/index.html 不存在')
+  })
+
+  test('人读报告归档：06_TESTS/report-*.md 落盘', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS } })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(existsSync(outcome.reportMdPath)).toBe(true)
+    expect(outcome.reportMdPath).toMatch(/06_TESTS\/report-\d{8}-\d{6}\.md$/)
+    expect(readFileSync(outcome.reportMdPath, 'utf-8')).toContain('# 验收测试报告')
+  })
+})

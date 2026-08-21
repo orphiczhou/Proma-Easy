@@ -18,7 +18,11 @@ import { join } from 'node:path'
 /** 当前 fixture 根目录（mock 的 getWorkspaceFilesDir 每次调用时读取） */
 let fixtureRoot = ''
 
+// partial mock：spread 真实模块后再覆盖路径函数（bun mock.module 全局生效，
+// 全量替换会泄漏破坏 nanju-ipc 链路的 getChatToolsConfigPath 导入）
+const actualConfigPaths = await import('./config-paths')
 mock.module('./config-paths', () => ({
+  ...actualConfigPaths,
   getWorkspaceFilesDir: () => fixtureRoot,
   getAgentWorkspacePath: () => fixtureRoot,
 }))
@@ -38,11 +42,11 @@ function htmlDoc(body: string): string {
  * project-p1/{08_APP|02_UX_DESIGN} 产出文件 + 可选同目录资源文件。
  * 返回可直接喂给 verifyPhaseOutput 的 workspaceSlug。
  */
-function setupFixture(opts: { stage: 'coding' | 'prototype'; html: string; files?: Record<string, string> }): string {
+function setupFixture(opts: { stage: 'coding' | 'prototype' | 'testing'; html: string; files?: Record<string, string> }): string {
   const dir = mkdtempSync(join(tmpdir(), 'nanju-gate-'))
   fixtureRoot = dir
-  const outputDirName = opts.stage === 'coding' ? '08_APP' : '02_UX_DESIGN'
-  const outputFileName = opts.stage === 'coding' ? 'index.html' : 'prototype.html'
+  const outputDirName = opts.stage === 'coding' ? '08_APP' : opts.stage === 'testing' ? '06_TESTS/features' : '02_UX_DESIGN'
+  const outputFileName = opts.stage === 'coding' ? 'index.html' : opts.stage === 'testing' ? 'index.feature' : 'prototype.html'
   mkdirSync(join(dir, `project-${PROJECT_ID}`, outputDirName), { recursive: true })
   writeFileSync(join(dir, `project-${PROJECT_ID}`, outputDirName, outputFileName), opts.html)
   for (const [name, content] of Object.entries(opts.files ?? {})) {
@@ -177,5 +181,37 @@ describe('verifyPhaseOutput 分层边界（阶段与体积，AC F-002 存量回�
       html: '<!DOCTYPE html><html><body>x</body></html>',
     })
     expect(verifyPhaseOutput(ws, PROJECT_ID, 'coding')).toContain('产出文件过小')
+  })
+})
+
+describe('verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁）', () => {
+  const featureDoc = (body: string): string =>
+    `# 读书笔记验收场景\n${body}`
+
+  test('合规汇总入口（Feature: + Scenario: 结构）通过', () => {
+    const ws = setupFixture({
+      stage: 'testing',
+      html: featureDoc('Feature: US-01 读书笔记\n  Scenario: US-01 添加笔记\n    Given 用户在列表页\n    When 输入书名\n    Then 列表显示'),
+    })
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toBeNull()
+  })
+
+  test('非 Gherkin 结构拦截（缺 Scenario:；内容加长过体积检查）', () => {
+    const ws = setupFixture({
+      stage: 'testing',
+      html: featureDoc('Feature: US-01 读书笔记\n（这里只有 Feature 没有任何场景定义，补充说明文本用于超过一百字节的最低体积门槛，确保体积检查不先行拦截本用例的格式断言。）'),
+    })
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toContain('格式不符合要求')
+  })
+
+  test('汇总入口缺失拦截：index.feature 不存在', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-gate-'))
+    fixtureRoot = dir
+    mkdirSync(join(dir, `project-${PROJECT_ID}`, '06_TESTS'), { recursive: true })
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: PROJECT_ID, name: 't', mode: 'quick', status: 'active',
+      currentStage: 'testing', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), sessionId: 'session-1',
+    }]))
+    expect(verifyPhaseOutput(WORKSPACE_SLUG, PROJECT_ID, 'testing')).toContain('产出文件不存在')
   })
 })

@@ -1351,6 +1351,80 @@ export class BrowserController {
     })
   }
 
+  // ===== GWT 验收测试执行原语（P1 Sprint B：nanju-gwt-runner 专用通道） =====
+  //
+  // 设计要点（设计稿 §3/Q3）：测试标签用 webContents.loadFile 直载 08_APP/index.html，
+  // 绕开 proma-file:// 预览协议的 click-to-fix 注入脚本——CDP 合成输入 isTrusted=true 会
+  // 误触点选纠错面板，对测试执行是干扰（e2e-v59 已验证该行为）。file:// 作用域也与
+  // coding 约束「localStorage 键名加项目前缀」的说明完全一致。
+  // evaluateInTab 的表达式由 GwtRunner 内部固定模板生成（selector/期望值 JSON 序列化注入，
+  // 非自由 JS）；eval 类 op 由 GwtRunner 侧过 assertBrowserScript 校验后传入。
+
+  /** GWT：创建验收测试专用标签并 loadFile 直载本地入口（不抢 Agent 工作标签，用户可见）。 */
+  async createLocalFileTab(sessionId: string, filePath: string): Promise<{ tabId: string; url: string }> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    this.assertRiskDisclaimerAcknowledged()
+    const tab = this.createTab(browserSession, false, false)
+    this.activateDisplayTab(browserSession, tab)
+    this.trace(browserSession, tab, 'tab', `验收测试标签已创建：${path.basename(filePath)}`)
+    this.emit(browserSession)
+    await this.runTabOperation(browserSession, tab, undefined, async () => {
+      await withBrowserCdpTimeout(() => tab.view.webContents.loadFile(filePath), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000)
+      this.updateNavigationState(browserSession, tab)
+      return { tabId: tab.tabId, url: tab.state.url }
+    })
+    return { tabId: tab.tabId, url: tab.state.url }
+  }
+
+  /** GWT：场景隔离——同一测试标签重新 loadFile（同代码同结果，重试公平）。 */
+  async loadFileInTab(sessionId: string, tabId: string, filePath: string): Promise<void> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    await this.runTabOperation(browserSession, tab, undefined, async () => {
+      await withBrowserCdpTimeout(() => tab.view.webContents.loadFile(filePath), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000)
+      this.updateNavigationState(browserSession, tab)
+    })
+  }
+
+  /** GWT：固定模板表达式求值（Runtime.evaluate + awaitPromise + returnByValue，e2e 已验证模式）。 */
+  async evaluateInTab(sessionId: string, tabId: string, expression: string, signal?: AbortSignal): Promise<unknown> {
+    assertBrowserScript(expression)
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) =>
+      this.executePageExpression(tab, expression, operationSignal))
+  }
+
+  /** GWT：坐标级真实点击（pre-move → mousePressed → mouseReleased，规避合成事件抑制 quirk）。 */
+  async clickPointInTab(sessionId: string, tabId: string, x: number, y: number, signal?: AbortSignal): Promise<void> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    await this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' }, undefined, operationSignal)
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, undefined, operationSignal)
+      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, undefined, operationSignal)
+      this.trace(browserSession, tab, 'click', `测试点击 (${Math.round(x)}, ${Math.round(y)})`, 'dispatched')
+    })
+  }
+
+  /** GWT：键盘事件（rawKeyDown/keyUp，支持 Enter/Escape/Tab 等导航键，press 同型语义）。 */
+  async pressKeyInTab(sessionId: string, tabId: string, key: string, signal?: AbortSignal): Promise<void> {
+    const action = parseBrowserPressAction(key)
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    await this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+      if (action.kind === 'key') {
+        const keyEvent = { key: action.key, code: action.code, windowsVirtualKeyCode: action.windowsVirtualKeyCode }
+        await this.cdp(tab, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...keyEvent }, undefined, operationSignal)
+        await this.cdp(tab, 'Input.dispatchKeyEvent', { type: 'keyUp', ...keyEvent }, undefined, operationSignal)
+      } else {
+        await this.cdp(tab, 'Input.insertText', { text: action.text }, undefined, operationSignal)
+      }
+      this.trace(browserSession, tab, 'press', `测试按键 ${key}`, 'dispatched')
+    })
+  }
+
   async close(sessionId: string): Promise<void> {
     const browserSession = this.sessions.get(sessionId)
     if (!browserSession) {

@@ -16,7 +16,7 @@ import type { GuideRoutePhase } from '@proma/shared'
 
 // ===== 类型定义 =====
 
-export type PhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding' | 'delivered'
+export type PhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding' | 'testing' | 'delivered'
 
 /** AC 审计强度分级：quick 模式全阶段 light（快模型攻防），iterative 模式全阶段 medium（强模型攻防） */
 export type TaskWeight = 'light' | 'medium'
@@ -242,12 +242,41 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresUserConfirmation: true, // 预览 + 用户确认（Sprint A 骨架的核心收口）
     requiresAC: false,              // 不开 red 硬门禁；AC 攻防指令仍由 buildL2TaskWithAC 自动注入
     retryLimit: 2,
+    next: 'testing',                // Sprint B：coding → testing（测试验收后再交付）
+    taskWeight: defaultWeight,
+  }
+
+  // testing 阶段（P1 Sprint B：GWT 验收测试 + 裁判判定闭环）
+  // 作者选 MiniMax-M3（minimax 家族标记，运行时解析同 prototype）：与 coding 作者（deepseek 系）异构，
+  // 且与 light/medium 两套 AC 预设防御者（glm 系）均满足家族多样性断言。
+  // 机器判定收口（requiresUserConfirmation=false）：全场景通过 + 用户故事全覆盖 = 自动交付。
+  const testing: PhaseNode = {
+    id: 'testing',
+    role: 'test-engineer',
+    title: '测试工程师',
+    channel: 'minimax',
+    model: 'MiniMax-M3',
+    task: '你是测试工程师。依据 PRD 用户故事清单，为每条故事生成 GWT 验收场景（中文 Gherkin）'
+      + '及可执行的步骤映射（steps.json），写入 06_TESTS/。',
+    outputPath: '06_TESTS/features/index.feature', // 汇总入口文件（FORMAT_CHECKS 用）
+    constraints: [
+      '场景派生：从 01_PRD/prd.md 用户故事清单（US-xx）逐条生成验收场景，每条故事至少 1 个 happy path 场景，场景命名「US-xx 场景标题」',
+      '映射前提（硬性）：先 Read 08_APP/index.html（及 08_APP/ 内被引用的 js），从实际代码提取 data-ai-id 清单，再写步骤映射；禁止臆造 selector',
+      '双文件成对产出：每个 us-XX 一个 us-XX.feature（中文 Gherkin：Feature/Scenario/Given/When/Then）+ 一个 us-XX.steps.json（机器可执行步骤脚本，schema 见任务描述），两文件语义必须一致',
+      '汇总入口：把全部场景汇总写入 06_TESTS/features/index.feature（每条用户故事一个 Feature 段，保持与分文件同名对应）',
+      'selector 只允许 [data-ai-id="xxx"] 形态（与原型/代码同一套 ID）；操作步骤 op 白名单：click/fill/press/wait-selector/assert-text/assert-visible/assert-count/eval，每步可配 timeoutMs（断言类默认 4000，轮询窗口内重试，禁止严格时刻断言）',
+      '无法可靠映射到实际元素的步骤：该步 op 置 null 且 unmapped=true，并在场景级标 skip:true + skipReason 说明（透明跳过，不臆造）；eval 仅限 then 步骤读状态（如倒计时剩余值），禁止页面无关操作',
+      '只在项目目录 06_TESTS/ 下写入文件，禁止触碰 08_APP/ 等其他目录',
+    ],
+    requiresUserConfirmation: false, // 机器判定收口（裁判规则：全场景通过 + US 全覆盖 = 交付），不做人肉确认
+    requiresAC: false,               // AC 指令仍由 buildL2TaskWithAC 注入
+    retryLimit: 2,                   // PRD §9.3：测试不通过回炉 coding 上限 2 次
     next: 'delivered',
     taskWeight: defaultWeight,
   }
 
   if (mode === 'quick') {
-    return [REQUIREMENTS, prototype, coding, SENTINEL]
+    return [REQUIREMENTS, prototype, coding, testing, SENTINEL]
   }
 
   const architecture: PhaseNode = {
@@ -282,7 +311,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     taskWeight: defaultWeight,
   }
 
-  return [REQUIREMENTS, prototype, architecture, planning, coding, SENTINEL]
+  return [REQUIREMENTS, prototype, architecture, planning, coding, testing, SENTINEL]
 }
 
 const ROUTES: Record<ProjectMode, PhaseNode[]> = {
@@ -360,6 +389,9 @@ const FORMAT_CHECKS: Record<PhaseId, (content: string) => boolean> = {
   // coding 入口是 HTML，比 prototype 多给 <script：最低格式底线为 HTML 文档或含脚本
   // （完整「可运行」由 L2 自测 + 引用校验分层保证，不在此收紧）
   coding: (c) => c.includes('<html') || c.includes('<!DOCTYPE') || c.includes('<script'),
+  // testing 汇总入口是中文 Gherkin：最低结构底线 Feature: + Scenario:
+  // （真正的可执行性由 GwtRunner 的 steps.json schema 校验 + selector 预检分层保证）
+  testing: (c) => c.includes('Feature:') && c.includes('Scenario:'),
   architecture: (c) => c.includes('# ') || c.includes('## '),
   planning: (c) => c.includes('# ') || c.includes('## '),
   delivered: () => true,

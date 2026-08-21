@@ -46,7 +46,7 @@ export function resolveMinimaxM3Channel(channels: Channel[]): ResolvedChannelMod
 }
 
 /**
- * 运行时解析 prototype 阶段的 MiniMax-M3 作者渠道（视觉模型）。
+ * 运行时解析 prototype / testing 阶段的 MiniMax-M3 作者渠道（视觉模型）。
  * 未配置时抛中文错误，提示用户先在设置中配置 minimax 渠道。
  */
 export function resolvePrototypeAuthor(): ResolvedChannelModel {
@@ -56,7 +56,7 @@ export function resolvePrototypeAuthor(): ResolvedChannelModel {
   const resolved = resolveMinimaxM3Channel(listChannels())
   if (!resolved) {
     throw new Error(
-      '未找到可用的 MiniMax 渠道：UX 原型阶段需要 MiniMax-M3（视觉模型）作为作者执行截图自检。' +
+      '未找到可用的 MiniMax 渠道：UX 原型 / 验收测试阶段需要 MiniMax-M3 作为作者执行。' +
       '请在「设置 → 渠道」中添加 provider 为 minimax 且包含已启用的 MiniMax-M3 模型的渠道，然后重试。',
     )
   }
@@ -74,6 +74,8 @@ function getPriorArtifacts(workspaceSlug: string, projectId: string, currentPhas
     planning: ['01_PRD/prd.md', '03_ARCHITECTURE/architecture.md'],
     // quick 模式下后两个文件不存在，existsSync 自动过滤（零特判）
     coding: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '05_PROJECT_PLAN/plan.md'],
+    // testing：PRD（用户故事清单）+ 原型（交互基准）；实码 08_APP 由 constraints 强制 L2 自读
+    testing: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html'],
   }
 
   const files = priorFiles[currentPhase] ?? []
@@ -113,6 +115,7 @@ export function buildL2TaskWithAC(
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
+  const isTesting = phase.id === 'testing'
   const parts: string[] = [
     '你是' + phase.title + '。' + phase.task,
     '',
@@ -130,14 +133,14 @@ export function buildL2TaskWithAC(
     parts.push('')
   }
 
-  // prototype / coding 阶段：前序必读强调（PRD 用户故事与 AC 清单是后续视觉/功能检查的对照基准）
-  const needsUserStoryChecklist = isPrototype || isCoding
+  // prototype / coding / testing 阶段：前序必读强调（PRD 用户故事与 AC 清单是后续视觉/功能/验收检查的对照基准）
+  const needsUserStoryChecklist = isPrototype || isCoding || isTesting
   if (needsUserStoryChecklist) {
     parts.push('## 前序必读：PRD 用户故事清单')
     parts.push('01_PRD/prd.md 包含用户故事与验收标准（AC）清单，是你的必读输入。')
     parts.push('你必须先完整 Read 该文件，把每条用户故事列成对照清单；')
     parts.push(
-      '后续的' + (isPrototype ? '原型设计、截图自检、AC 审计' : '代码生成、运行自测、AC 审计')
+      '后续的' + (isPrototype ? '原型设计、截图自检、AC 审计' : isTesting ? 'GWT 验收场景生成、步骤映射、AC 审计' : '代码生成、运行自测、AC 审计')
       + '都必须逐条对照该用户故事清单执行，不得遗漏任何一条。',
     )
     if (isCoding) {
@@ -156,6 +159,33 @@ export function buildL2TaskWithAC(
   parts.push('## 产出文件')
   parts.push('请将产出写入：' + projectDir + '/' + phase.outputPath)
   parts.push('')
+
+  // testing 阶段：steps.json 机器可执行 schema（双文件契约的机器侧）
+  if (isTesting) {
+    parts.push('## steps.json 格式规范（机器可执行，Harness 会严格校验并执行）')
+    parts.push('每个 ' + projectDir + '/06_TESTS/features/us-XX.feature 配一个同名 us-XX.steps.json，结构如下：')
+    parts.push('```json')
+    parts.push(JSON.stringify({
+      feature: 'us-01',
+      scenario: '成功添加一条读书笔记',
+      skip: false,
+      skipReason: null,
+      steps: [
+        { kind: 'given', text: '用户在笔记列表页面', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } },
+        { kind: 'when', text: '用户输入书名「百年孤独」', op: { type: 'fill', selector: 'data-ai-id=input-title', value: '百年孤独' } },
+        { kind: 'when', text: '用户点击「保存」按钮', op: { type: 'click', selector: 'data-ai-id=btn-save' } },
+        { kind: 'then', text: '笔记列表中显示「百年孤独」', op: { type: 'assert-text', selector: 'data-ai-id=view-note-list', contains: '百年孤独', timeoutMs: 4000 } },
+      ],
+    }, null, 2))
+    parts.push('```')
+    parts.push('op.type 白名单：click / fill / press / wait-selector / assert-text / assert-visible / assert-count / eval。')
+    parts.push('· press 的 value 写键名（如 Enter、Escape、Tab）；assert-count 用 count（非负整数）；')
+    parts.push('· eval 仅限 then 步骤读页面状态（如倒计时剩余值），表达式必须自包含并在页面上可求值；')
+    parts.push('· 断言类默认 timeoutMs=4000（轮询窗口内重试），禁止依赖严格时刻的断言；')
+    parts.push('· 无法可靠映射的步骤：op 置 null 且 unmapped:true，场景标 skip:true + skipReason（透明跳过，不臆造）；')
+    parts.push('· selector 只允许 data-ai-id=xxx 形态，ID 必须来自实际代码，与 .feature 文字描述一一对应。')
+    parts.push('')
+  }
 
   // prototype 阶段：截图渲染自检循环（先于 AC 审计，确保视觉闭环）
   if (isPrototype) {
@@ -242,8 +272,8 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   // 新阶段 Todo 强制前缀（向导图进度徽标按此解析；delivered 无新 Todo，PRD 修订 Y5）
   const nextTodoPrefix = nextPhase !== 'delivered' ? PHASE_TODO_PREFIX[nextPhase as Exclude<typeof nextPhase, 'delivered'>] : null
 
-  // prototype 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析
-  const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
+  // prototype / testing 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析
+  const authorOverride = phase.id === 'prototype' || phase.id === 'testing' ? resolvePrototypeAuthor() : null
   const authorChannel = authorOverride?.channelId ?? phase.channel
   const authorModel = authorOverride?.modelId ?? phase.model
 
@@ -341,21 +371,47 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。',
         '      全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。',
       ]
+      : stage === 'testing'
+      ? [
+        '4. 【验收测试环节】（测试阶段核心：生成场景 → 系统自动执行 → 按报告处理）：',
+        '   a. 子会话完成后，用 Read 检查以下文件已生成：',
+        '      - ' + projectDir + '/06_TESTS/features/index.feature（场景汇总入口）',
+        '      - ' + projectDir + '/06_TESTS/features/ 下的 us-XX.feature 与同名 us-XX.steps.json（成对）',
+        '   b. 向用户简要说明：测试场景已生成，声明推进后系统将自动执行浏览器验收测试',
+        '      （在应用内测试标签中运行，每个场景独立重载页面，结果汇总为测试报告）。',
+        '   c. 进入第 5 步收口（输出推进标记触发系统执行测试）。',
+      ]
       : [
         '4. 【必须】先调用 open_preview 工具（file_path=' + projectDir + '/' + phase.outputPath + '）',
         '   确保右侧分屏正在展示产出文件，然后用 AskUserQuestion 请求用户确认。',
         '   确认时提醒用户：「右侧预览面板已展示产出文件，请查看后确认。」',
       ]),
-    '5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
-    '   再输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
-    ...(nextTodoPrefix
+    ...(stage === 'testing'
       ? [
-        '   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。',
-        '   【强制】所有 Todo 标题必须以「' + nextTodoPrefix + '」开头（如「' + nextTodoPrefix + '等待子会话产出」），',
-        '   不带此前缀的 Todo 无法计入向导图阶段进度徽标。',
+        '5. 场景生成完成后的收口（机器判定，无用户确认环节）：',
+        '   【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
+        '   再输出推进标记：<!-- PHASE_ADVANCE: testing -->（推进到自身 = 触发 Harness 自动执行 GWT 验收测试）。',
+        '   测试结果由系统注入消息告知，按结果处理：',
+        '   - ✅ 全部通过：项目自动交付（delivered），无需再做任何操作。',
+        '   - ❌ 有失败场景：按系统注入的失败清单 continue_delegation 委派「全栈开发」修复缺陷',
+        '     （仅改 08_APP/ 下的代码，不得改 06_TESTS/ 与 01_PRD/），修复完成后重新输出',
+        '     <!-- PHASE_ADVANCE: testing --> 重跑测试。',
+        '   - ⚠️ 有 skip 场景（unmapped）：如需补测，continue_delegation 委派「测试工程师」仅重新映射缺失场景。',
+        '   - ⛔ 回炉超过 2 次：系统会通知用户人工介入，等待用户指示。',
+        '   项目交付后无需再创建新阶段 Todo。',
       ]
       : [
-        '   项目已交付，无需再创建新阶段 Todo。',
+        '5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
+        '   再输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
+        ...(nextTodoPrefix
+          ? [
+            '   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。',
+            '   【强制】所有 Todo 标题必须以「' + nextTodoPrefix + '」开头（如「' + nextTodoPrefix + '等待子会话产出」），',
+            '   不带此前缀的 Todo 无法计入向导图阶段进度徽标。',
+          ]
+          : [
+            '   项目已交付，无需再创建新阶段 Todo。',
+          ]),
       ]),
     '',
     '### 你绝对不能做的',

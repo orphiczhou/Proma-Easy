@@ -55,7 +55,11 @@ const QUICK_ROUTE: GuideRoutePhase[] = [
   }),
   makePhase({
     id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '08_APP/index.html', retryLimit: 2, next: 'delivered', taskWeight: 'light', acActors: LIGHT_ACTORS,
+    outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'light', acActors: LIGHT_ACTORS,
+  }),
+  makePhase({
+    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'minimax', model: 'MiniMax-M3',
+    outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'light', acActors: LIGHT_ACTORS,
   }),
   SENTINEL,
 ]
@@ -76,7 +80,11 @@ const ITERATIVE_ROUTE: GuideRoutePhase[] = [
   }),
   makePhase({
     id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '08_APP/index.html', retryLimit: 2, next: 'delivered', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
+    outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
+  }),
+  makePhase({
+    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'minimax', model: 'MiniMax-M3',
+    outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
   }),
   SENTINEL,
 ]
@@ -87,23 +95,25 @@ const NO_PROGRESS = null
 // ===== AC-02：DSL 结构正确性 =====
 
 describe('buildGuideDsl 结构（AC-02）', () => {
-  test('quick 版：含 REQ/PROTO/CODE 主阶段与 delivered 终点，不含 ARCH/PLAN', () => {
+  test('quick 版：含 REQ/PROTO/CODE/TEST 主阶段与 delivered 终点，不含 ARCH/PLAN', () => {
     const dsl = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(dsl).toContain('REQ[')
     expect(dsl).toContain('PROTO[')
     expect(dsl).toContain('CODE[')
+    expect(dsl).toContain('TEST[')
     expect(dsl).toContain('DONE([\"交付 delivered')
     expect(dsl.includes('ARCH')).toBe(false)
     expect(dsl.includes('PLAN')).toBe(false)
   })
 
-  test('iterative 版：含 REQ/PROTO/ARCH/PLAN/CODE 五个主阶段', () => {
+  test('iterative 版：含 REQ/PROTO/ARCH/PLAN/CODE/TEST 六个主阶段', () => {
     const dsl = buildGuideDsl({ mode: 'iterative', route: ITERATIVE_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(dsl).toContain('REQ[')
     expect(dsl).toContain('PROTO[')
     expect(dsl).toContain('ARCH[')
     expect(dsl).toContain('PLAN[')
     expect(dsl).toContain('CODE[')
+    expect(dsl).toContain('TEST[')
   })
 
   test('两版 outputPath 与 nanju-router 一致', () => {
@@ -146,12 +156,16 @@ describe('buildGuideDsl 结构（AC-02）', () => {
     expect(dsl.slice(codeIndex)).toContain('可运行应用代码<br/>08_APP/index.html')
   })
 
-  test('prototype 特有环节：截图自检循环 + 独立视觉裁决；哨兵节点被过滤', () => {
+  test('prototype 特有环节 + testing 特有环节（GWT 执行/规则裁判/回炉）+ 哨兵节点被过滤', () => {
     const dsl = buildGuideDsl({ mode: 'iterative', route: ITERATIVE_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(dsl).toContain('PROTO_SS{\"截图渲染自检循环')
     expect(dsl).toContain('PROTO_VIS{\"独立视觉裁决')
-    // 哨兵（id=delivered）不产生第六个 subgraph，只有 REQ/PROTO/ARCH/PLAN/CODE 五个 subgraph
-    expect(dsl.match(/subgraph SG_/g)?.length).toBe(5)
+    // testing 子图：Harness 执行 GWT + 规则裁判（机器判定收口）+ 回炉 coding 循环
+    expect(dsl).toContain('TEST_GWT{\"Harness 执行 GWT')
+    expect(dsl).toContain('TEST_JUDGE{\"规则裁判 judge.verdict')
+    expect(dsl).toContain('回炉 coding（≤2 次）')
+    // 哨兵（id=delivered）不产生第七个 subgraph，只有 REQ/PROTO/ARCH/PLAN/CODE/TEST 六个 subgraph
+    expect(dsl.match(/subgraph SG_/g)?.length).toBe(6)
   })
 
   test('对照模式（progress=null）不注入状态 class，仅注入中性参考样式 st-ref（AC-11 修订）', () => {
@@ -379,12 +393,14 @@ describe('computeStageStates 边界态（AC-12）', () => {
     expect(result.notice).toBeNull()
   })
 
-  test('testing 遗留值：全 pending 无高亮 + 收口提示（不崩溃）', () => {
+  test('testing 阶段（Sprint B 入路由）：前序 done + testing current + 后续 pending（正常序比较）', () => {
     const result = computeStageStates({ mode: 'iterative', currentStage: 'testing', status: 'active' }, ITERATIVE_ROUTE)
-    expect(result.stageStates.coding).toBe('pending')
+    expect(result.stageStates.requirements).toBe('done')
+    expect(result.stageStates.prototype).toBe('done')
+    expect(result.stageStates.coding).toBe('done')
+    expect(result.stageStates.testing).toBe('current')
     expect(result.stageStates.delivered).toBe('pending')
-    expect(result.notice).toContain('测试')
-    expect(result.notice).toContain('向导流程已交付')
+    expect(result.notice).toBeNull()
   })
 
   test('未知 stage：全 pending + 数据异常提示（不崩溃）', () => {

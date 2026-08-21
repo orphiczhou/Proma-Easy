@@ -19,8 +19,8 @@ import { PHASE_TODO_PREFIX } from '@proma/shared'
 
 export type GuideMode = 'quick' | 'iterative'
 export type StageViewStatus = 'done' | 'current' | 'pending'
-/** 除 delivered 终点外的五个可执行阶段 */
-export type GuidePhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding'
+/** 除 delivered 终点外的六个可执行阶段（Sprint B 起 testing 入路由） */
+export type GuidePhaseId = 'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding' | 'testing'
 
 /** 阶段主节点 id（SVG 交互锚点，稳定不变） */
 export const GUIDE_MAIN_NODE_ID: Record<GuidePhaseId, string> = {
@@ -29,6 +29,7 @@ export const GUIDE_MAIN_NODE_ID: Record<GuidePhaseId, string> = {
   architecture: 'ARCH',
   planning: 'PLAN',
   coding: 'CODE',
+  testing: 'TEST',
 }
 
 /** Todo 完成度徽标数据 */
@@ -64,6 +65,7 @@ const NODE_ID_TARGETS: Array<{ prefix: string; target: GuideNodeTarget }> = [
   { prefix: 'ARCH', target: 'architecture' },
   { prefix: 'PLAN', target: 'planning' },
   { prefix: 'CODE', target: 'coding' },
+  { prefix: 'TEST', target: 'testing' },
   { prefix: 'USER', target: 'user' },
   { prefix: 'MODE', target: 'mode' },
   { prefix: 'DONE', target: 'done' },
@@ -85,6 +87,7 @@ const TODO_LOOSE_KEYWORDS: Array<{ phase: GuidePhaseId; keywords: string[] }> = 
   { phase: 'architecture', keywords: ['架构'] },
   { phase: 'planning', keywords: ['规划', '工程', '计划'] },
   { phase: 'coding', keywords: ['开发', '编码'] },
+  { phase: 'testing', keywords: ['测试'] },
 ]
 
 /**
@@ -172,12 +175,7 @@ export function computeStageStates(
     return { stageStates: allPending(), abandoned: false, notice: '尚未选择项目模式，请先在对话中选择快消型或长期迭代型' }
   }
 
-  // 遗留 stage 值（不在路由内）：testing 全 pending，无高亮 + 收口提示（coding 已入路由，走正常序比较）
-  if (project.currentStage === 'testing') {
-    return { stageStates: allPending(), abandoned: false, notice: '项目已进入测试阶段（测试功能属后续版本，向导流程已交付）' }
-  }
-
-  // 正常：按路由序逐个比较
+  // 正常：按路由序逐个比较（testing 已入路由，Sprint B 起正常展示三态）
   const index = order.indexOf(project.currentStage as GuidePhaseId)
   if (index === -1) {
     return { stageStates: allPending(), abandoned: false, notice: `数据异常：未知阶段「${project.currentStage}」，请刷新或检查项目元数据` }
@@ -201,12 +199,13 @@ const PHASE_OUTPUT_LABEL: Record<GuidePhaseId, string> = {
   architecture: '产出架构文档',
   planning: '产出工程计划',
   coding: '可运行应用代码',
+  testing: 'GWT 验收测试',
 }
 
-/** 交付终点 label 第二行（quick 与 iterative 语义不同，PRD §3.2/§3.3；coding 已入图，两版均交付到应用代码） */
+/** 交付终点 label 第二行（quick 与 iterative 语义不同，PRD §3.2/§3.3；Sprint B 起两版均经测试裁判交付） */
 const DONE_SUB_LABEL: Record<GuideMode, string> = {
-  quick: '项目可用',
-  iterative: '项目可用 · 交付完成',
+  quick: '项目可用 · 验收通过',
+  iterative: '项目可用 · 验收交付完成',
 }
 
 /** 明/暗两套 classDef 色值（南大语义色，PRD §3.1 + design-system DOC-2.4）
@@ -267,6 +266,18 @@ function buildPhaseSubgraph(
   lines.push(`    subgraph SG_${main}["${CIRCLED_NUMBERS[index]} ${phase.title} ${phase.role} · ${phase.model}"]`)
   lines.push('        direction TB')
   lines.push(`        ${main}["${PHASE_OUTPUT_LABEL[phaseId]}<br/>${phase.outputPath}${todoLabel}"]`)
+
+  // testing 特化：场景生成（AC 审计后）→ Harness 执行 → 规则裁判（机器判定收口，无用户确认）
+  if (phaseId === 'testing') {
+    lines.push(`        ${main} --> ${atk}["攻击者审查（AC ${weight}）"]`)
+    lines.push(`        ${atk} --> ${def}["防御者裁决"]`)
+    lines.push(`        ${def} -->|"red → 修复后重新攻击"| ${atk}`)
+    lines.push(`        ${def} -->|"无 red"| ${main}_GWT{"Harness 执行 GWT<br/>场景×步骤 · data-ai-id 锚点"}`)
+    lines.push(`        ${main}_GWT -->|"❌ 失败场景 → 回炉 coding（≤2 次）"| ${main}`)
+    lines.push(`        ${main}_GWT -->|"全场景通过"| ${main}_JUDGE{"规则裁判 judge.verdict<br/>全通过 + US 全覆盖 = 交付"}`)
+    lines.push('    end')
+    return { lines, mainNode: main, exitNode: `${main}_JUDGE`, edgeCount: 6 }
+  }
 
   if (isPrototype) {
     // prototype 特有：截图渲染自检循环（先于 AC 审计）+ 独立视觉裁决（防作者自证）
@@ -353,7 +364,13 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
     if (prevExit) {
       // 跨阶段推进边：前阶段出口 → 本阶段主节点
       const fromId = phases[i - 1]?.id as GuidePhaseId
-      const edgeLabel = i === 1 ? '确认' : fromId === 'prototype' ? '全部用户故事通过' : '确认'
+      const edgeLabel = i === 1
+        ? '确认'
+        : fromId === 'prototype'
+          ? '全部用户故事通过'
+          : fromId === 'coding'
+            ? '应用验证通过'
+            : '确认'
       lines.push('')
       lines.push(`    ${prevExit} -->|"${edgeLabel}"| ${mainNode}`)
       // 已通过边判定：前阶段 done 且非 abandoned（推进已实际发生）
@@ -371,6 +388,7 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
     const subs = [`${mainNode}_ATK`, `${mainNode}_DEF`, exitNode]
     if (phaseId === 'prototype') subs.unshift(`${mainNode}_SS`, `${mainNode}_VIS`)
     if (phaseId === 'architecture') subs.splice(2, 0, `${mainNode}_GATE`)
+    if (phaseId === 'testing') subs.splice(2, 0, `${mainNode}_GWT`)
     allNodeIds.push(...subs)
 
     // 进度 class 注入（对照模式 progress=null 时不注入任何状态 class）
@@ -386,9 +404,13 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
     }
   })
 
-  // 交付终点：边标签忠实于路由语义（quick 由 prototype 用户故事收口 → 全部通过；iterative 由 planning 用户确认 → 确认）
+  // 交付终点：边标签忠实于路由语义（Sprint B 起两模式均由 testing 裁判交付；prototype 直连 DONE 为遗留路由兼容）
   const last = phases[phases.length - 1]
-  const doneEdgeLabel = (last?.id as GuidePhaseId | undefined) === 'prototype' ? '全部用户故事通过' : '确认'
+  const doneEdgeLabel = (last?.id as GuidePhaseId | undefined) === 'testing'
+    ? '全场景通过 · 裁判判定'
+    : (last?.id as GuidePhaseId | undefined) === 'prototype'
+      ? '全部用户故事通过'
+      : '确认'
   lines.push('')
   lines.push(`    ${prevExit} -->|"${doneEdgeLabel}"| DONE(["交付 delivered<br/>${DONE_SUB_LABEL[mode]}"])`)
   if (progress && !abandoned && statusOf((last?.id ?? 'planning') as GuidePhaseId) === 'done') {

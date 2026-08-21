@@ -51,7 +51,20 @@ flowchart TD
         CODE_UC -->|"补充意见"| CODE
     end
 
-    CODE_UC -->|"确认"| DONE(["交付 delivered<br/>项目可用"])
+    CODE_UC -->|"应用验证通过"| TEST
+
+    subgraph SG_TEST["④ 测试工程师 test-engineer · MiniMax-M3"]
+        direction TB
+        TEST["GWT 验收测试<br/>06_TESTS/features/index.feature"]
+        TEST --> TEST_ATK["攻击者审查（AC light）"]
+        TEST_ATK --> TEST_DEF["防御者裁决"]
+        TEST_DEF -->|"red → 修复后重新攻击"| TEST_ATK
+        TEST_DEF -->|"无 red"| TEST_GWT{"Harness 执行 GWT<br/>场景×步骤 · data-ai-id 锚点"}
+        TEST_GWT -->|"❌ 失败场景 → 回炉 coding（≤2 次）"| TEST
+        TEST_GWT -->|"全场景通过"| TEST_JUDGE{"规则裁判 judge.verdict<br/>全通过 + US 全覆盖 = 交付"}
+    end
+
+    TEST_JUDGE -->|"全场景通过 · 裁判判定"| DONE(["交付 delivered<br/>项目可用 · 验收通过"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
@@ -63,6 +76,8 @@ flowchart TD
     class PROTO st-current
     class CODE st-pending
     class CODE_ATK,CODE_DEF,CODE_UC st-pending
+    class TEST st-pending
+    class TEST_ATK,TEST_DEF,TEST_GWT,TEST_JUDGE st-pending
     class REQ_ATK,REQ_DEF,REQ_UC st-sub-done
     linkStyle 7 stroke:#059669,stroke-width:2.5px
 "
@@ -145,7 +160,20 @@ flowchart TD
         CODE_UC -->|"补充意见"| CODE
     end
 
-    CODE_UC -->|"确认"| DONE(["交付 delivered<br/>项目可用 · 交付完成"])
+    CODE_UC -->|"应用验证通过"| TEST
+
+    subgraph SG_TEST["⑥ 测试工程师 test-engineer · MiniMax-M3"]
+        direction TB
+        TEST["GWT 验收测试<br/>06_TESTS/features/index.feature"]
+        TEST --> TEST_ATK["攻击者审查（AC medium）"]
+        TEST_ATK --> TEST_DEF["防御者裁决"]
+        TEST_DEF -->|"red → 修复后重新攻击"| TEST_ATK
+        TEST_DEF -->|"无 red"| TEST_GWT{"Harness 执行 GWT<br/>场景×步骤 · data-ai-id 锚点"}
+        TEST_GWT -->|"❌ 失败场景 → 回炉 coding（≤2 次）"| TEST
+        TEST_GWT -->|"全场景通过"| TEST_JUDGE{"规则裁判 judge.verdict<br/>全通过 + US 全覆盖 = 交付"}
+    end
+
+    TEST_JUDGE -->|"全场景通过 · 裁判判定"| DONE(["交付 delivered<br/>项目可用 · 验收交付完成"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
@@ -160,6 +188,8 @@ flowchart TD
     class PLAN_ATK,PLAN_DEF,PLAN_UC st-pending
     class CODE st-pending
     class CODE_ATK,CODE_DEF,CODE_UC st-pending
+    class TEST st-pending
+    class TEST_ATK,TEST_DEF,TEST_GWT,TEST_JUDGE st-pending
     class REQ_ATK,REQ_DEF,REQ_UC st-sub-done
     class PROTO_SS,PROTO_VIS,PROTO_ATK,PROTO_DEF,PROTO_UC st-sub-done
     linkStyle 7,18 stroke:#059669,stroke-width:2.5px
