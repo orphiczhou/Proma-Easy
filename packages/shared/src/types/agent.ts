@@ -1659,6 +1659,8 @@ export const AGENT_IPC_CHANNELS = {
   LIST_SESSIONS: 'agent:list-sessions',
   /** 获取未归档会话列表，供左侧 active 视图使用 */
   LIST_ACTIVE_SESSIONS: 'agent:list-active-sessions',
+  /** 查询指定会话是否正在运行（watchdog 兜底用） */
+  IS_SESSION_ACTIVE: 'agent:is-session-active',
   /** 获取归档会话列表，进入归档视图时按需调用 */
   LIST_ARCHIVED_SESSIONS: 'agent:list-archived-sessions',
   /** 获取归档会话数量，不返回归档元数据 */

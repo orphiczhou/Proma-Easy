@@ -67,7 +67,8 @@ export class AgentAskUserService {
 
       signal.addEventListener('abort', () => {
         if (this.pendingRequests.has(request.requestId)) {
-          this.pendingRequests.delete(request.requestId)
+          // 仅 resolve、不删除条目：stop/错误中止的 turn 结束时，由编排器 finally 统一
+          // 清理并广播 ask_user_resolved；若在此提前删除，renderer 横幅会残留。
           resolve({ behavior: 'deny', message: '操作已中止' })
         }
       }, { once: true })

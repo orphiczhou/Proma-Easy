@@ -65,6 +65,7 @@ import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { resolvePlanningDeletionPermission } from './planning-permission-policy'
 import { askUserService } from './agent-ask-user-service'
+import { runRegisteredHeadlessAgent } from './agent-headless-runner-registry'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
@@ -2113,10 +2114,17 @@ export class AgentOrchestrator {
                 uuid: randomUUID(),
               } as unknown as SDKMessage,
             })
-            // 释放当前会话锁，延迟自动发消息触发下一阶段
-            releaseActiveRun()
+            // 正常完成本轮（completeRun 内释放会话锁并发 STREAM_COMPLETE、驱动队列协调器），
+            // renderer 收到完成信号后解除 Running/输入锁定；续接 run 由下方延迟触发。
+            completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
             setTimeout(() => {
-              this.sendMessage(
+              // 必须走注册的 headless 通道续接，而非直连 this.sendMessage：后者绕过
+              // agent-service 布线，无 wc 注册、无启动信号、无完成信号，续接 run 的
+              // 全部流式事件会被事件中间件静默丢弃（v0.17.60 UI 冻结根因）。
+              // runRegisteredHeadlessAgent 自动注册 wc 并发 external_run_started
+              // （renderer activateExternalAgentRun 原生支持，不抢前台焦点），
+              // 结束时正常发 STREAM_COMPLETE 并驱动队列协调器。
+              runRegisteredHeadlessAgent(
                 {
                   sessionId,
                   userMessage: '请继续下一阶段的工作。',
@@ -2127,13 +2135,13 @@ export class AgentOrchestrator {
                   startedAt: Date.now(),
                 },
                 {
-                  onRunStarted: () => {},
-                  onComplete: () => {
-                    // 自动续接的 onComplete 不需要额外处理——消息已持久化到 JSONL，
-                    // 渲染端通过 IPC 的 agent-session-updated 事件刷新
-                  },
+                  source: 'delegation',
                   onError: (error: string) => {
                     console.warn(`[南大路由] 自动续接错误:`, error)
+                  },
+                  onComplete: () => {
+                    // 自动续接的 onComplete 不需要额外处理——消息已持久化到 JSONL，
+                    // 渲染端通过 STREAM_COMPLETE / agent-session-updated 事件刷新
                   },
                   onTitleUpdated: () => {},
                 },
@@ -2141,7 +2149,6 @@ export class AgentOrchestrator {
                 console.warn(`[南大路由] 自动续接失败:`, e instanceof Error ? e.message : String(e))
               })
             }, 1500)
-            // 不走正常 completeRun（已手动释放锁）
             return
           }
 
@@ -2305,8 +2312,19 @@ export class AgentOrchestrator {
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       releaseActiveRun()
       permissionService.clearSessionPending(sessionId)
-      // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
-      // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
+      // turn 结束后，本 run 发起的 AskUserQuestion 已不可能被有效响应：
+      // 清理 pending 并广播 ask_user_resolved，让 renderer 横幅不再残留霸占输入
+      // （若锁已被更新的 run 接管，其 pending 归新 run 所有，跳过）。
+      if (!this.activeSessions.has(sessionId)) {
+        for (const pending of askUserService.getPendingRequests()) {
+          if (pending.sessionId !== sessionId) continue
+          this.eventBus.emit(sessionId, {
+            kind: 'proma_event',
+            event: { type: 'ask_user_resolved', requestId: pending.requestId },
+          })
+        }
+        askUserService.clearSessionPending(sessionId)
+      }
       exitPlanService.clearSessionPending(sessionId)
     }
   }

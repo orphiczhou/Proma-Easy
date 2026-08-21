@@ -2073,6 +2073,12 @@ export function registerIpcHandlers(): void {
     async (): Promise<AgentSessionMeta[]> => listActiveAgentSessions(),
   )
 
+  // 查询指定会话是否正在运行（renderer watchdog 兜底）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.IS_SESSION_ACTIVE,
+    (_event, sessionId: string): boolean => isAgentSessionActive(sessionId),
+  )
+
   // 获取归档会话列表（进入归档视图时按需加载）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_ARCHIVED_SESSIONS,

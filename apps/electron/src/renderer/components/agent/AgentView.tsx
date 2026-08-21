@@ -743,6 +743,24 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   React.useEffect(() => {
     setHistoryQuoteNavigation(null)
   }, [sessionId])
+  // 兜底：挂载/切会话时若本地 running=true 但主进程已无此活跃 run（完成事件丢失等），
+  // 清除 running 防止输入永久锁死；正常活跃 run 不受影响。
+  React.useEffect(() => {
+    let cancelled = false
+    window.electronAPI.isAgentSessionActive(sessionId)
+      .then((active) => {
+        if (cancelled || active) return
+        setStreamingStates((prev) => {
+          const current = prev.get(sessionId)
+          if (!current?.running) return prev
+          const map = new Map(prev)
+          map.set(sessionId, { ...current, running: false })
+          return map
+        })
+      })
+      .catch(() => { /* 兜底失败不影响正常流程 */ })
+    return () => { cancelled = true }
+  }, [sessionId, setStreamingStates])
   // 父组件同步生成的 ID，同时提供给 RichTextInput 与 SpeechButton，避免工具栏 memo 捕获空值。
   const agentVoiceInputId = React.useId()
   React.useEffect(() => {

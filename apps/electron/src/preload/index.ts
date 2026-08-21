@@ -511,6 +511,9 @@ export interface ElectronAPI {
   /** 获取未归档会话列表，供左侧 active 视图使用 */
   listActiveAgentSessions: () => Promise<AgentSessionMeta[]>
 
+  /** 查询指定会话是否正在运行（watchdog 兜底用） */
+  isAgentSessionActive: (sessionId: string) => Promise<boolean>
+
   /** 获取归档会话列表，进入归档视图时按需调用 */
   listArchivedAgentSessions: () => Promise<AgentSessionMeta[]>
 
@@ -1763,6 +1766,10 @@ const electronAPI: ElectronAPI = {
 
   listActiveAgentSessions: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_ACTIVE_SESSIONS)
+  },
+
+  isAgentSessionActive: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.IS_SESSION_ACTIVE, sessionId)
   },
 
   listArchivedAgentSessions: () => {

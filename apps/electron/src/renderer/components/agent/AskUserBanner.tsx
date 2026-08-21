@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Send, X } from 'lucide-react'
 import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -46,6 +46,7 @@ interface AskUserBannerProps {
 export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactElement | null {
   const [allRequests, setAllRequests] = useAtom(allPendingAskUserRequestsAtom)
   const [drafts, setDrafts] = useAtom(askUserDraftsAtom)
+  const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const requests = allRequests.get(sessionId) ?? []
   const [submitting, setSubmitting] = React.useState(false)
@@ -141,19 +142,24 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [request?.requestId])
 
-  /** 关闭问题 & 终止 Agent */
+  /** 关闭横幅；仅当对应 run 仍在运行时才附带终止 Agent（陈旧横幅只做清理，不误杀后续 run） */
   const handleDismiss = (): void => {
-    // 立即标记 streaming 停止，避免 UI 残留
-    setStreamingStates((prev) => {
-      const current = prev.get(sessionId)
-      if (!current || !current.running) return prev
-      const map = new Map(prev)
-      map.set(sessionId, {
-        ...current,
-        running: false,
+    const agentRunning = streamingStates.get(sessionId)?.running === true
+    if (agentRunning) {
+      // 立即标记 streaming 停止，避免 UI 残留
+      setStreamingStates((prev) => {
+        const current = prev.get(sessionId)
+        if (!current || !current.running) return prev
+        const map = new Map(prev)
+        map.set(sessionId, {
+          ...current,
+          running: false,
+        })
+        return map
       })
-      return map
-    })
+      // 终止 Agent
+      window.electronAPI.stopAgent(sessionId).catch(console.error)
+    }
     // 清除当前 session 所有待处理的 AskUser 请求
     setAllRequests((prev) => {
       const map = new Map(prev)
@@ -161,8 +167,6 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
       return map
     })
     clearDrafts(requests.map((r) => r.requestId))
-    // 终止 Agent
-    window.electronAPI.stopAgent(sessionId).catch(console.error)
   }
 
   if (!request) return null
@@ -291,7 +295,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
               type="button"
               className="size-5 flex items-center justify-center rounded-md text-muted-foreground/50 hover:text-foreground hover:bg-muted/60 transition-colors"
               onClick={handleDismiss}
-              title="关闭并终止 Agent"
+              title="关闭（Agent 运行中会一并终止）"
             >
               <X className="size-3.5" />
             </button>
