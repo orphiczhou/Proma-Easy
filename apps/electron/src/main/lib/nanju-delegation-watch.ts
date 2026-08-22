@@ -67,6 +67,14 @@ interface WatchEntry {
   tracked: Map<string, TrackedDelegation>
 }
 
+/** 计数转述（AC U-1 去行话）：failCount/errorCount → 连续失败/执行异常次数 */
+function narrativeGuardCounts(guard: GuardErrorRecord): string {
+  const parts: string[] = []
+  if (guard.failCount > 0) parts.push(`连续失败 ${guard.failCount} 次`)
+  if (guard.errorCount > 0) parts.push(`执行异常 ${guard.errorCount} 次`)
+  return parts.join('、')
+}
+
 /** L2 委派超时观察哨（按 L1 会话维度观察其运行中委派） */
 export class NanjuDelegationWatcher {
   private watches = new Map<string, WatchEntry>()
@@ -180,17 +188,24 @@ export class NanjuDelegationWatcher {
     const stopText = stopped
       ? `已强制停止子会话「${delegation.title}」（stop_delegation）`
       : `子会话「${delegation.title}」已不在运行（可能刚好完成或已被停止）`
+    // AC L-1/U-1（v0.17.65）：熔断说明收敛为单一出口（circuitNote），且只在新触发熔断时
+    // 才说「不再自动续接」（与 orchestrator circuitSuffix 口径一致）；计数转述去行话。
+    const circuitNote = guard?.justOpened
+      ? `阶段「${stage}」已触发熔断（${guard ? narrativeGuardCounts(guard) : ''}），系统不再自动续接，转人工介入。`
+      : ''
     this.deps.injectMessage(
       sessionId,
       `⛔ 南大护栏·硬超时：${stopText}，该委派已 ${hardMin} 分钟无响应。\n`
-      + (guard?.justOpened ? `阶段「${stage}」已触发熔断（fail=${guard.failCount} error=${guard.errorCount}），系统不再自动续接，转人工介入。\n` : '')
+      + (circuitNote ? circuitNote + '\n' : '')
       + `现场已保留：产物文件未删除，可打开子会话查看半成品状态。\n`
-      + `请检查产出后重派该角色；或告知用户选择：终止项目 / 人工接手 / 跳过该环节。`,
+      + `请查看失败摘要后由你或用户决定：修复后重派 / 请用户裁决 / 查看报告。`,
     )
     this.deps.sendContinuation(
       sessionId,
-      `系统通知：你委派的子会话「${delegation.title}」已达硬超时（${hardMin} 分钟无响应），已被系统强制停止${guard?.justOpened ? '，且该阶段已触发熔断（不再自动续接）' : ''}。`
-      + `请 Read 检查该阶段产出文件：基本完整 → continue_delegation 追加收尾指令；无产出/严重不完整 → 重新 delegate_agent 重派该阶段任务；需要用户决策（终止/人工接手/跳过）→ AskUserQuestion。`,
+      `系统通知：你委派的子会话「${delegation.title}」已达硬超时（${hardMin} 分钟无响应），已被系统强制停止`
+      + (circuitNote ? `，且${circuitNote.slice(0, -1)}` : '') + '。'
+      + `请先 Read 查看该阶段产出文件与失败摘要，再决定：基本完整 → continue_delegation 追加收尾指令；`
+      + `无产出/严重不完整 → 修复后重新 delegate_agent 重派；需要用户裁决（终止/人工接手/跳过）→ AskUserQuestion。`,
     )
   }
 }

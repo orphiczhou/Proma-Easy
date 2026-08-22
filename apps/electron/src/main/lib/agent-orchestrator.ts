@@ -523,12 +523,12 @@ export class AgentOrchestrator {
    * - pass → updateNanjuProject(delivered) + Todo 收尾 + 交付完成富语（机器裁判收口）
    * - error（执行异常）→ errorCount 独立计数（v0.17.64 #6）：errorCount≥1 即熔断，转人工介入
    *   （不自动烧回炉；排查环境后重跑属用户指示的复位路径）
-   * - fail 未超限（<2 次）且未熔断（v0.17.64：failCount≥2 或 errorCount≥1 即熔断，熔断后拒绝自动续接）
+   * - fail 未超限（<3 次，回炉预算未耗尽）且未熔断（v0.17.65 AC Z-1：failCount≥3 或 errorCount≥1 即熔断，熔断后拒绝自动续接）
    *   → 按失败构成分流（v0.17.63 AC L-001）：
    *   · behavior（assert 行为类）→ 回炉 coding 修复代码
    *   · mapping（selector 等待超时/未映射）→ 回炉 testing 重写 steps.json 映射（不烧 coding 预算）
    *   · coverage（US 缺场景）→ 回炉 testing 补场景；PRD 缺 US-xx 清单 → 指引补 PRD（需用户确认）
-   * - fail 超限（≥2 次，映射与修复合计）→ 注入人工介入提示（notify_user 语义）
+   * - fail 超限（≥3 次，1 首产 + 2 回炉）→ 注入人工介入提示（notify_user 语义）
    */
   private triggerNanjuGwtRun(input: {
     workspaceSlug: string
@@ -591,10 +591,10 @@ export class AgentOrchestrator {
         })
         // 熔断状态机接入（v0.17.64 Sprint C1）：GWT fail/error 轮次计入 phaseGuards.testing
         // （写入点收敛 updatePhaseGuard，与 report.json 的 retryCount/errorCount 同节奏写入），
-        // pass 轮清零；failCount≥2 或 errorCount≥1 即熔断（NANJU_GUARDS 阈值）。
+        // pass 轮清零；failCount≥3（1 首产 + 2 回炉，AC Z-1）或 errorCount≥1 即熔断（NANJU_GUARDS 阈值）。
         let gwtCircuitOpen = false
         let gwtCircuitJustOpened = false
-        let gwtCircuitCounts = ''
+        let gwtCircuitNarrative = ''
         try {
           const { updatePhaseGuard, isPhaseGuardCircuitOpen } = require('./nanju-project') as typeof import('./nanju-project')
           const guardKind = outcome.verdict === 'pass' ? 'reset' : outcome.verdict === 'error' ? 'error' : 'fail'
@@ -604,7 +604,11 @@ export class AgentOrchestrator {
           })
           gwtCircuitOpen = isPhaseGuardCircuitOpen(current).open
           gwtCircuitJustOpened = !isPhaseGuardCircuitOpen(previous ?? undefined).open && gwtCircuitOpen
-          gwtCircuitCounts = `fail=${current.failCount} error=${current.errorCount}`
+          // AC U-1（v0.17.65）：话术去行话——failCount/errorCount 转述为「连续失败/执行异常」次数
+          const narrativeParts: string[] = []
+          if (current.failCount > 0) narrativeParts.push(`连续失败 ${current.failCount} 次`)
+          if (current.errorCount > 0) narrativeParts.push(`执行异常 ${current.errorCount} 次`)
+          gwtCircuitNarrative = narrativeParts.join('、')
           if (gwtCircuitJustOpened) {
             try {
               const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
@@ -623,9 +627,11 @@ export class AgentOrchestrator {
         } catch (guardErr) {
           console.warn('[南大护栏] GWT 熔断计数更新失败（不影响结果处理）:', guardErr instanceof Error ? guardErr.message : String(guardErr))
         }
-        // 熔断后缀：人工介入话术（拒绝自动续接的分支共用以保持口径一致）
+        // AC U-1（v0.17.65）：三选项裁决口径单出口——「熔断/查看测试报告/三选项」各只出现一遍。
+        // 熔断态才说「不再自动续接回炉」（L-1 口径一致）；非熔断分支不含熔断字样。
+        const humanDecisionLine = `请查看测试报告 ${outcome.reportMdPath}，由用户裁决：终止项目 / 人工修复后继续 / 跳过测试直接交付（告诉调度员你的选择即可）。`
         const circuitSuffix = gwtCircuitOpen
-          ? `\n\n⛔ 该阶段已触发熔断（${gwtCircuitCounts}），系统不再自动续接回炉。请查看测试报告，由用户裁决：终止项目 / 人工修复后继续 / 跳过测试直接交付（告诉调度员你的选择即可）。`
+          ? `\n\n⛔ 该阶段已触发熔断（${gwtCircuitNarrative}），系统不再自动续接回炉。${humanDecisionLine}`
           : ''
         if (outcome.verdict === 'pass') {
           // 机器裁判收口：全场景通过 + US 全覆盖 → 直接交付（推进即事实）
@@ -640,21 +646,23 @@ export class AgentOrchestrator {
         } else if (outcome.verdict === 'error') {
           // 执行异常（v0.17.63，AC Z-005/L-003）：报告已落盘（verdict=error）+ retryCount 已计数；
           // v0.17.64：errorCount 独立计数后 errorCount≥1 即熔断——不再自动烧回炉续接，转人工介入
+          // v0.17.65 AC U-1：去重——正文只说异常事实，「熔断/查看报告/三选项」由 circuitSuffix
+          // （熔断态）或 humanDecisionLine（计数更新失败的兑底）单一出口承载
           this.injectNanjuAssistantMessage(
             sessionId,
             outcome.summaryText
             + (outcome.retryLimitReached
               ? `\n\n⛔ 测试执行异常累计已达上限（${outcome.retryCount} 轮），转为人工介入。`
-              : '\n\n⛔ 测试执行异常已触发阶段熔断（执行异常非代码缺陷，重试无意义），转为人工介入。')
-            + `请查看测试报告 ${outcome.reportMdPath}，然后告诉调度员：终止项目、排查环境后重试，或跳过测试直接交付。`
-            + circuitSuffix,
+              : '\n\n⛔ 测试执行异常（执行异常非代码缺陷，重试无意义），转为人工介入。')
+            + (gwtCircuitOpen ? circuitSuffix : `\n\n${humanDecisionLine}`),
           )
         } else if (outcome.retryLimitReached || gwtCircuitOpen) {
-          // 重试超限 / 熔断（fail≥2 或 error≥1）→ 人工介入（handlePhaseResult notify_user 语义的产品化落地）
+          // 重试超限 / 熔断（fail≥3 或 error≥1，AC Z-1）→ 人工介入（handlePhaseResult notify_user 语义的产品化落地）
+          // v0.17.65 AC U-1：报告路径与三选项收敛到 circuitSuffix/humanDecisionLine 单出口
           this.injectNanjuAssistantMessage(
             sessionId,
-            outcome.summaryText + `\n\n⛔ 测试回炉已达上限（${outcome.retryCount} 次），转为人工介入。请查看测试报告 ${outcome.reportMdPath}，然后告诉调度员：终止项目、继续人工修复，或跳过测试直接交付。`
-            + circuitSuffix,
+            outcome.summaryText + `\n\n⛔ 测试回炉已达上限（${outcome.retryCount} 次），转为人工介入。`
+            + (gwtCircuitOpen ? circuitSuffix : `\n\n${humanDecisionLine}`),
           )
         } else if (outcome.failureKind === 'coverage' && outcome.prdUserStoriesMissing) {
           // 覆盖性基准缺失（v0.17.63，AC F-002）：PRD 缺 US-xx 清单 → 指引补 PRD

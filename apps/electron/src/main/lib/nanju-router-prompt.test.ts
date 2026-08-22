@@ -291,11 +291,16 @@ describe('L1 调度员指令（v0.17.64：超时纪律 + 收口果断性）', ()
     fixtureRoot = ''
   })
 
-  test('步骤 2 超时纪律：显式 timeoutSeconds=1200 + 催办 + 35min stop_delegation + 不无限等待', () => {
+  test('步骤 2 超时纪律：显式 timeoutSeconds=1200 + running 先 stop 再续接/重派（不催办）+ 不无限等待', () => {
     const prompt = buildPrompt('requirements')
     expect(prompt).toContain('timeoutSeconds=1200')
-    expect(prompt).toContain('continue_delegation 催办一次')
-    expect(prompt).toContain('stop_delegation 终止')
+    // v0.17.65 AC Z-2：continue_delegation 对 running 委派必 throw——不再教 L1 催办，
+    // 改为「先 stop_delegation 终止，再 continue_delegation 追加新指令或 delegate_agent 重派」
+    expect(prompt).not.toContain('continue_delegation 催办')
+    expect(prompt).toContain('stop_delegation 终止该子会话')
+    expect(prompt).toContain('continue_delegation 向已停止的子会话追加新指令')
+    expect(prompt).toContain('delegate_agent 重派')
+    expect(prompt).toContain('running 中的委派不能直接 continue_delegation')
     expect(prompt).toContain('不要反复无限等待')
   })
 

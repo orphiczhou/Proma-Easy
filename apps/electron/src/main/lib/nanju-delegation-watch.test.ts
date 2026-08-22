@@ -7,13 +7,51 @@
  *
  * 纯逻辑单测：不依赖 electron / agent-collaboration-tools 真实实现。
  */
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
 import {
   NanjuDelegationWatcher,
   type NanjuDelegationWatchDeps,
   type WatchedDelegation,
 } from './nanju-delegation-watch'
 import { NANJU_GUARDS, type NanjuGuardStage } from './nanju-project'
+import type { AgentEventBus } from './agent-event-bus'
+
+// —— AC Z-4（v0.17.65）真实链路测试：停止委派时清理未决 blockedEvents ——
+// mock 掉会话/运行器/模型选择依赖后加载真实 agent-collaboration-tools，走 delegate_agent →
+// ask_user 阻塞 → stop_delegation / forceStopDelegation，断言 pendingBlockedEvents 清空
+// （同 ID continue_delegation 重派后 hasPendingBlockedEvents=false，硬超时不再被陈旧事件豁免）。
+// 注：session-manager 与 model-selection 需完全 stub（不 spread 真实模块）——
+// 真实模块的传递依赖链上有顶层 `import ... from 'electron'`（workspace/builtin-mcp/
+// channel-manager），bun 测试环境缺 electron 二进制会触发下载（仓库既有规避模式）。
+// 两个 mock 目标均不被本文件其余用例依赖（纯逻辑观察哨测试），无泄漏。
+let z4ChildSeq = 0
+// 注：stub 需覆盖同批测试文件静态闭包的具名绑定——nanju-ipc.test 动态 import nanju-ipc.ts →
+// nanju-snapshot.ts 具名导入 forkAgentSession/getAgentSessionMeta/updateAgentSessionMeta，
+// nanju-orchestrator.ts 具名导入 createAgentSession（bun mock.module 跨文件生效，缺导出会在
+// 链接期抛 SyntaxError）。其余导出未被本批闭包引用，不需补。
+mock.module('./agent-session-manager', () => ({
+  createAgentSession: () => ({ id: `child-z4-${++z4ChildSeq}` }),
+  getAgentSessionMeta: () => undefined,
+  updateAgentSessionMeta: () => {},
+  listAgentSessions: () => [],
+  getAgentSessionSDKMessages: () => [],
+  forkAgentSession: async () => ({ id: `child-z4-fork-${++z4ChildSeq}` }),
+}))
+mock.module('./agent-headless-runner-registry', () => ({
+  runRegisteredHeadlessAgent: () => Promise.resolve(), // 不触发 onComplete，委派保持 running
+  stopRegisteredAgent: () => {},
+}))
+mock.module('./agent-model-selection', () => ({
+  assertEnabledModelForChannel: (input: { modelId?: string }) => input.modelId ?? 'model-z4',
+  listEnabledAgentModelsForChannel: () => ({ channelId: 'ch-z4', channelName: 'z4', provider: 'z4', models: [] }),
+  pickDefaultModelForChannel: () => 'model-z4',
+}))
+const {
+  buildPiCollaborationTools,
+  registerCollaborationEventBus,
+  listRunningDelegationsForParent,
+  forceStopDelegation,
+} = await import('./agent-collaboration-tools')
 
 const SOFT = NANJU_GUARDS.delegationSoftTimeoutMs
 const HARD = NANJU_GUARDS.delegationHardTimeoutMs
@@ -238,5 +276,94 @@ describe('观察对象生命周期', () => {
     h.clock.now += 60_000
     h.watcher.poll()
     expect(h.injections).toHaveLength(1) // del-2 还没到
+  })
+})
+
+describe('AC Z-4（v0.17.65）：停止委派清理未决 blockedEvents（重派不被陈旧事件豁免）', () => {
+  interface Z4ToolDef {
+    name: string
+    execute: (toolCallId: string, params: unknown) => Promise<unknown>
+  }
+
+  function buildZ4Tools(): Z4ToolDef[] {
+    // 假 sdk：defineTool 原样返回定义（name/execute 可直接调用）
+    const fakeSdk = { defineTool: (def: unknown) => def }
+    return buildPiCollaborationTools(fakeSdk as never, {
+      sessionId: 'parent-z4',
+      channelId: 'ch-z4',
+      modelId: 'model-z4',
+      workspaceId: 'ws-z4',
+    }) as Z4ToolDef[]
+  }
+
+  /** 注册假 EventBus；返回 emitBlocked(childSessionId, requestId) 注入未决阻塞事件 */
+  function attachFakeEventBus(): (childSessionId: string, requestId: string) => void {
+    let handler: ((sessionId: string, payload: unknown) => void) | null = null
+    registerCollaborationEventBus({
+      on: (cb: (sessionId: string, payload: unknown) => void) => {
+        handler = cb
+      },
+      emit: (sessionId: string, payload: unknown) => {
+        handler?.(sessionId, payload)
+      },
+    } as unknown as AgentEventBus)
+    return (childSessionId: string, requestId: string) => {
+      handler?.(childSessionId, {
+        kind: 'proma_event',
+        event: {
+          type: 'ask_user_request',
+          request: { requestId, questions: [{ question: '继续吗？', options: [{ label: '继续' }] }] },
+        },
+      })
+    }
+  }
+
+  function parseZ4Result(res: unknown): Record<string, unknown> {
+    const payload = res as { content: Array<{ type: string; text: string }> }
+    return JSON.parse(payload.content[0]?.text ?? '{}') as Record<string, unknown>
+  }
+
+  test('stop_delegation 与 forceStopDelegation 均清理未决事件：停止后 blocked 状态不构成豁免', async () => {
+    const tools = buildZ4Tools()
+    const emitBlocked = attachFakeEventBus()
+    const delegate = tools.find((t) => t.name === 'mcp__collaboration__delegate_agent')
+    const stop = tools.find((t) => t.name === 'mcp__collaboration__stop_delegation')
+    expect(delegate && stop).toBeTruthy()
+
+    // 委派 1：blocked → stop_delegation 工具通道
+    const created1 = parseZ4Result(await delegate!.execute('tc-z4-d1', { task: 'Z-4 用例任务一' })) as {
+      delegation: { delegationId: string; childSessionId: string }
+    }
+    emitBlocked(created1.delegation.childSessionId, 'req-z4-1')
+    expect(
+      listRunningDelegationsForParent('parent-z4')
+        .some((d) => d.delegationId === created1.delegation.delegationId && d.hasPendingBlockedEvents),
+    ).toBe(true) // 修复前：未决事件存在
+
+    const stopped1 = parseZ4Result(await stop!.execute('tc-z4-s1', { delegationId: created1.delegation.delegationId })) as {
+      stopped: boolean
+      delegation: { pendingBlockedEvents: unknown[] }
+    }
+    expect(stopped1.stopped).toBe(true)
+    // AC Z-4 核心：停止即清理——同 ID continue_delegation 重派后 hasPendingBlockedEvents
+    // = getPendingBlockedEvents(id).length>0 = false，观察哨不再误判「等用户」而豁免硬超时
+    expect(stopped1.delegation.pendingBlockedEvents).toHaveLength(0)
+
+    // 委派 2：blocked → forceStopDelegation 程序化通道（watcher 硬超时兑底用）
+    const created2 = parseZ4Result(await delegate!.execute('tc-z4-d2', { task: 'Z-4 用例任务二' })) as {
+      delegation: { delegationId: string; childSessionId: string }
+    }
+    emitBlocked(created2.delegation.childSessionId, 'req-z4-2')
+    expect(
+      listRunningDelegationsForParent('parent-z4')
+        .some((d) => d.delegationId === created2.delegation.delegationId && d.hasPendingBlockedEvents),
+    ).toBe(true)
+    const force = forceStopDelegation('parent-z4', created2.delegation.delegationId)
+    expect(force.stopped).toBe(true)
+    // 强停后该委派退出运行清单；重派同 ID 时不会再被陈旧 blocked 事件豁免
+    expect(
+      listRunningDelegationsForParent('parent-z4')
+        .filter((d) => d.delegationId === created2.delegation.delegationId),
+    ).toHaveLength(0)
   })
 })

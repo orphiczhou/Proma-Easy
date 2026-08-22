@@ -671,6 +671,12 @@ function stopDelegation(parentSessionId: string, delegationId: string): Record<s
   }
 
   stopRegisteredAgent(record.childSessionId)
+  // AC Z-4（v0.17.65）：停止即清理该委派的未决阻塞事件（置 resolved，保留事件记录可回查）。
+  // continue_delegation 重派会复用同一 delegationId——若陈旧 blocked 事件残留，观察哨
+  // （nanju-delegation-watch）会把重派误判为「等用户」而豁免硬超时，挂死无法兑底。
+  for (const be of blockedEvents.values()) {
+    if (be.delegationId === delegationId && !be.resolved) be.resolved = true
+  }
   markDelegationFinished(record, 'cancelled')
   return {
     delegation: getDelegationSummary(record),

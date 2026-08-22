@@ -75,8 +75,12 @@ export const NANJU_GUARDS = {
   delegationHardTimeoutMs: 35 * 60 * 1000,
   /** 超时轮询间隔（毫秒，默认 60 秒）：精度下限，实际触发时点最多滞后一个间隔 */
   delegationPollIntervalMs: 60 * 1000,
-  /** 熔断阈值：阶段 failCount 累计达到该值即熔断（与 PhaseNode.retryLimit/testing GWT_RETRY_LIMIT=2 对齐） */
-  phaseFailBreakThreshold: 2,
+  /**
+   * 熔断阈值：阶段失败事件数（failCount 从 1 起累计）达到该值即熔断。
+   * 3 = 首次产出失败 1 次 + 回炉失败 2 次（与 testing GWT_RETRY_LIMIT=2 的回炉预算时点对齐；
+   * v0.17.65 AC Z-1：原值 2 会让首产失败后仅剩 1 次回炉，回炉预算被缩水 1 轮）。
+   */
+  phaseFailBreakThreshold: 3,
   /** 熔断阈值：阶段 errorCount 累计达到该值即熔断（执行异常重试无意义，1 次即熔断） */
   phaseErrorBreakThreshold: 1,
 } as const

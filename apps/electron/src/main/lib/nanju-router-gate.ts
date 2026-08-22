@@ -161,9 +161,22 @@ export function verifyPhaseOutput(
       if (!hasScenarios) {
         return '缺少可执行场景：06_TESTS/features/ 下至少一个 .feature 需同时含 Feature: 与 Scenario:（index.feature 可为纯索引，场景允许分布在 us-XX.feature 分文件）'
       }
-      const hasStepsJson = readdirSync(featuresDir).some((f) => f.endsWith('.steps.json'))
-      if (!hasStepsJson) {
-        return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个 *.steps.json（与 us-XX.feature 成对产出）'
+      // AC I-1（v0.17.65）：占位产物拦截——至少一个 *.steps.json 可 JSON.parse 且解析后
+      // feature/scenario 均为非空字符串（与 GwtRunner 执行期 schema 校验闭环；
+      // 完整合法性仍由执行期兑底，这里只拦截空占位文件过关）
+      const hasValidStepsJson = readdirSync(featuresDir)
+        .filter((f) => f.endsWith('.steps.json'))
+        .some((f) => {
+          try {
+            const parsed = JSON.parse(readFileSync(join(featuresDir, f), 'utf-8')) as { feature?: unknown; scenario?: unknown }
+            return typeof parsed?.feature === 'string' && parsed.feature.trim() !== ''
+              && typeof parsed?.scenario === 'string' && parsed.scenario.trim() !== ''
+          } catch {
+            return false
+          }
+        })
+      if (!hasValidStepsJson) {
+        return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个可解析且含非空 feature/scenario 的 *.steps.json（与 us-XX.feature 成对产出；空占位文件不算）'
       }
     }
   }

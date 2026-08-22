@@ -239,6 +239,29 @@ describe('verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口�
     expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toContain('缺少可执行步骤映射')
   })
 
+  test('steps.json 占位拦截（v0.17.65 AC I-1）：空 JSON / 缺 feature 或 scenario 的占位文件不算，需可解析且字段非空', () => {
+    const base = featureDoc('Feature: US-01 读书笔记\n  Scenario: US-01 添加笔记\n    Given 用户在列表页\n    When 输入书名\n    Then 列表显示')
+    // 空对象占位 → 拦截
+    const empty = setupFixture({ stage: 'testing', html: base, files: { 'us-01.steps.json': '{}' } })
+    expect(verifyPhaseOutput(empty, PROJECT_ID, 'testing')).toContain('缺少可执行步骤映射')
+    // scenario 为空串 → 拦截
+    const noScenario = setupFixture({ stage: 'testing', html: base, files: { 'us-01.steps.json': '{"feature":"us-01","scenario":""}' } })
+    expect(verifyPhaseOutput(noScenario, PROJECT_ID, 'testing')).toContain('缺少可执行步骤映射')
+    // 非法 JSON → 拦截
+    const broken = setupFixture({ stage: 'testing', html: base, files: { 'us-01.steps.json': '{not json' } })
+    expect(verifyPhaseOutput(broken, PROJECT_ID, 'testing')).toContain('缺少可执行步骤映射')
+    // 多文件中只要有一个合法即可通过
+    const mixed = setupFixture({
+      stage: 'testing',
+      html: base,
+      files: {
+        'us-00.steps.json': '{}',
+        'us-01.steps.json': '{"feature":"us-01","scenario":"US-01 添加笔记","skip":false,"skipReason":null,"steps":[]}',
+      },
+    })
+    expect(verifyPhaseOutput(mixed, PROJECT_ID, 'testing')).toBeNull()
+  })
+
   test('汇总入口缺失拦截：index.feature 不存在', () => {
     const dir = mkdtempSync(join(tmpdir(), 'nanju-gate-'))
     fixtureRoot = dir
