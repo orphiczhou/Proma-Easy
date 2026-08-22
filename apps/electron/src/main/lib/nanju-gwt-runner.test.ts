@@ -685,7 +685,7 @@ describe('runNanjuGwtAcceptance', () => {
     expect(outcome.failListText).toContain('映射类')
   })
 
-  test('执行异常：controller 抛异常 → verdict=error 报告落盘 + error 轮次计入 retryCount（AC Z-005）', async () => {
+  test('执行异常：controller 抛异常 → verdict=error 报告落盘 + error 轮次计入 retryCount（AC Z-005）+ errorCount 独立计数（v0.17.64 #6）', async () => {
     setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS } })
     const run = (): Promise<NanjuGwtOutcome> => runNanjuGwtAcceptance({
       workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
@@ -698,14 +698,18 @@ describe('runNanjuGwtAcceptance', () => {
     expect(first.retryCount).toBe(0)
     expect(first.retryLimitReached).toBe(false)
     expect(first.summaryText).toContain('执行异常')
+    // 独立异常计数（#6 拆 Z-005 口径）：首轮 error → errorCount=1（retryCount 仍 0 起）
+    expect(first.errorCount).toBe(1)
     // error 报告落盘（不再裸抛断链）
     const report = JSON.parse(readFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), 'utf-8'))
     expect(report.verdict).toBe('error')
     expect(report.errorReason).toContain('CDP attach 失败')
-    // error 轮次计入重试：重跑仍异常 → retryCount=1
+    expect(report.errorCount).toBe(1)
+    // error 轮次计入重试：重跑仍异常 → retryCount=1，errorCount 独立累计到 2
     const second = await run()
     expect(second.verdict).toBe('error')
     expect(second.retryCount).toBe(1)
+    expect(second.errorCount).toBe(2)
   })
 
   test('失败与重试累计：首轮 fail retryCount=0 → 重跑 fail retryCount=1 → 再跑 retryLimitReached', async () => {
@@ -718,13 +722,16 @@ describe('runNanjuGwtAcceptance', () => {
     const first = await run()
     expect(first.verdict).toBe('fail')
     expect(first.retryCount).toBe(0)
+    expect(first.errorCount).toBe(0) // fail 轮不计异常（v0.17.64 #6 拆分）
     expect(first.retryLimitReached).toBe(false)
     expect(first.failureKind).toBe('behavior') // assert 断言失败 → 回炉 coding（AC L-001）
     const second = await run()
     expect(second.retryCount).toBe(1)
+    expect(second.errorCount).toBe(0)
     expect(second.retryLimitReached).toBe(false)
     const third = await run()
     expect(third.retryCount).toBe(2)
+    expect(third.errorCount).toBe(0)
     expect(third.retryLimitReached).toBe(true)
     // 埋点三轮均落盘（fail 轮次也记，漏斗分析口径）
     const telemetryFile = join(fixtureRoot, '_telemetry')

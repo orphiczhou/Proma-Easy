@@ -234,6 +234,47 @@ export function sessionAllowsSubDelegation(sessionId: string): boolean {
   return sessionsAllowingSubDelegation.has(sessionId)
 }
 
+// ===== 南大向导 L2 委派超时兑底查询接口（v0.17.64 Sprint C1） =====
+
+/** 父会话下运行中委派的精简视图（orchestrator 轮询用，不暴露内部 Record） */
+export interface RunningDelegationView {
+  delegationId: string
+  childSessionId: string
+  title: string
+  role: string
+  /** 委派记录创建时间（毫秒；注意 continue_delegation 重派后不重置，超时计时以 orchestrator 侧首次观测为准） */
+  startedAt: number
+  /** 是否有未解决的阻塞事件（等用户回答/权限）：用户驱动的等待不计入烧钱超时 */
+  hasPendingBlockedEvents: boolean
+}
+
+/** 列出父会话下全部运行中委派（内存 live Map；重启后的遗留委派不在内） */
+export function listRunningDelegationsForParent(parentSessionId: string): RunningDelegationView[] {
+  return Array.from(delegations.values())
+    .filter((item) => item.parentSessionId === parentSessionId && item.status === 'running')
+    .map((item) => ({
+      delegationId: item.delegationId,
+      childSessionId: item.childSessionId,
+      title: item.title,
+      role: item.role,
+      startedAt: item.startedAt,
+      hasPendingBlockedEvents: getPendingBlockedEvents(item.delegationId).length > 0,
+    }))
+}
+
+/**
+ * 程序化强停委派（stop_delegation 工具的内部通道，供 orchestrator 硬超时兑底使用）。
+ * 找不到记录/状态非 running 时返回 stopped:false（幂等，不抛错）。
+ */
+export function forceStopDelegation(parentSessionId: string, delegationId: string): { stopped: boolean; note?: string } {
+  try {
+    const result = stopDelegation(parentSessionId, delegationId) as { stopped?: boolean; note?: string }
+    return { stopped: result?.stopped === true, note: result?.note }
+  } catch (e) {
+    return { stopped: false, note: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 interface DelegateAgentArgs {
   title?: string
   role?: AgentDelegationRole

@@ -190,6 +190,8 @@ export function buildL2TaskWithAC(
   // prototype 阶段：截图渲染自检循环（先于 AC 审计，确保视觉闭环）
   if (isPrototype) {
     parts.push('## 截图渲染自检循环（必须执行，先于 AC 审计）')
+    parts.push('⏱ 时长预算（硬性，v0.17.64）：整个原型阶段（生成+截图自检+AC 攻防+视觉裁决）预算 ≤30 分钟；')
+    parts.push('   超时应收敛交付当前最优版本（附未解决项说明），而非继续无限迭代。')
     parts.push('每次生成或修改原型 HTML 后，你必须：')
     parts.push('1. 用 chrome-devtools MCP 的 new_page 打开 file://' + projectDir + '/' + phase.outputPath + '（原型绝对路径）。')
     parts.push('2. 用 take_screenshot 获取渲染截图。')
@@ -231,6 +233,9 @@ export function buildL2TaskWithAC(
   parts.push('   注意：攻击者和防御者是不同模型家族，不能串通。')
   parts.push('3. 【审计状态机（严格顺序，不可跳步）】：攻击者 → 防御者裁决 → 若有 red：修复 → 【必须重新委派攻击者复审】→ 再防御者确认 → 仍无 red 才算通过。')
   parts.push('   注意：修复后必须回到步骤 1（重新攻击），不允许「修复后只让防御者确认」就结束——防御者的职责是对攻击发现做裁决，不是代替攻击者复审。无 red 时跳过本步骤。')
+  parts.push('   ⏱ 轮次预算（硬性，v0.17.64）：攻防修复循环 ≤2 轮。第 2 轮防御确认后无论 red 是否清零都必须收敛：')
+  parts.push('   red 清零 → 审计通过；仍有 red → 停止修复，把未解决 red 整理成「已知问题清单」（逐条：severity/证据/建议）')
+  parts.push('   随产出文件一并返回，交调度员内用户裁决。禁止第 3 轮攻击修复。')
   if (isPrototype) {
     parts.push('4. 独立视觉裁决（防作者自证，仅 UX 原型阶段）：攻防通过后，')
     parts.push('   用 delegate_agent(inline:true, channel=' + author.channel + ', model=' + author.model + ') 创建视觉验证者。')
@@ -238,6 +243,7 @@ export function buildL2TaskWithAC(
     parts.push('   要求它仅依据这两样证据输出 red/yellow/green 结论与逐条对照结果，不允许参考你的自述。')
     parts.push('   审查项必含「导航布局合规」：场景索引是否为顶部横向分页窄条（≤48px、sticky 置顶、US-xx 命名）、是否出现纵向全屏索引、核心场景是否首屏可见。')
     parts.push('5. 视觉裁决为 red → 回到「截图渲染自检循环」修复，再重新走攻防与视觉裁决；green/yellow 才算审计通过。')
+    parts.push('   ⏱ 视觉裁决 red 回炉 ≤2 次（v0.17.64）：第 2 次回炉后仍 red → 收敛交付，未解决项进「已知问题清单」交用户裁决，不再回炉。')
     parts.push('6. 审计通过后，返回产出文件路径、AC 审计结论摘要与视觉裁决结论。')
   } else {
     parts.push('4. 审计通过后，返回产出文件路径和 AC 审计结论摘要。')
@@ -299,10 +305,15 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     '   --- task 开始 ---',
     l2Task,
     '   --- task 结束 ---',
-    '2. 用 wait_for_delegations 等待子会话完成。',
+    '2. 用 wait_for_delegations 等待子会话完成（显式传 timeoutSeconds=1200，即 20 分钟）。',
     '   如果返回 status="blocked" + pendingBlockedEvents（子会话有问题要问用户），',
     '   用你自己的 AskUserQuestion 向用户转述，收到回答后用 answer_delegation_question 代答，',
     '   再调 wait_for_delegations 继续等待。',
+    '   超时纪律（系统侧另有软/硬超时兑底，这里是你应做的第一步）：',
+    '   - wait 返回仍 running（超 20 分钟）→ continue_delegation 催办一次：「报告当前进度，如已接近完成请收尾」；',
+    '   - 二次等待仍 running（约 35 分钟）→ stop_delegation 终止，检查产出后重派该任务；',
+    '   - wait 返回 status=cancelled/failed 或收到系统超时通知 → 按系统注入的指引检查产物后重派，',
+    '     不要反复无限等待同一个无响应的子会话。',
     '3. 子会话完成后，用 Read 检查产出文件：' + projectDir + '/' + phase.outputPath,
     '   子会话已经内部完成了 AC 审计，产出文件是 AC 通过的版本。',
     ...(stage === 'prototype'
@@ -390,6 +401,9 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     ...(stage === 'testing'
       ? [
         '5. 场景生成完成后的收口（机器判定，无用户确认环节）：',
+        '   【果断收口】双文件核验通过（index/us-XX.feature + 成对 steps.json）后【立即】输出推进标记收口——',
+        '   testing 是机器判定收口（requiresUserConfirmation=false）：不要等待用户确认、不要以「核实/澄清」',
+        '   代替推进；除非核验不通过需要修复，否则唯一正确动作就是输出推进标记。',
         '   【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
         '   再输出推进标记：<!-- PHASE_ADVANCE: testing -->（推进到自身 = 触发 Harness 自动执行 GWT 验收测试）。',
         '   测试结果由系统注入消息告知，按注入消息的分流指引处理（三类失败成因不同、修复通道不同）：',
@@ -408,6 +422,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       : [
         '5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
         '   再输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
+        '   （用户已确认通过后不得再以「再核实/再澄清」推迟推进——立即输出推进标记收口，无追加确认轮。）',
         ...(nextTodoPrefix
           ? [
             '   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。',

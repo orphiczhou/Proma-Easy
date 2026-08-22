@@ -15,6 +15,8 @@ export type TelemetryEventType =
   | 'project.created' | 'dialog.submitted' | 'role.switched'
   | 'prd.confirmed' | 'prototype.confirmed' | 'coding.executed'
   | 'judge.verdict' | 'project.finished' | 'architecture.confirmed'
+  // v0.17.64 Sprint C1：熔断与阶段时长护栏埋点
+  | 'circuit_break' | 'phase.elapsed'
 
 export interface TelemetryEvent {
   eventId: string

@@ -144,12 +144,27 @@ export function verifyPhaseOutput(
   // testing 阶段（v0.17.63，AC I-001）：可执行契约存在性门禁——06_TESTS/features/ 下
   // 至少一个 *.steps.json（与 us-XX.feature 成对）。成对一致性与 JSON/schema 合法性由
   // GwtRunner 的 schema 校验分层保证，此处只做最低存在性（防止只交汇总入口就过关）。
+  // v0.17.64（实证③）：Scenario 检查改为目录兑底——「总览+分文件」结构中 index.feature
+  // 是索引（可无 Scenario:），场景在各 us-XX.feature；只查入口会误拦合法结构。
   if (phaseId === 'testing') {
     const featuresDir = dirname(filePath)
-    const hasStepsJson = existsSync(featuresDir)
-      && readdirSync(featuresDir).some((f) => f.endsWith('.steps.json'))
-    if (!hasStepsJson) {
-      return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个 *.steps.json（与 us-XX.feature 成对产出）'
+    if (existsSync(featuresDir)) {
+      const featureFiles = readdirSync(featuresDir).filter((f) => f.endsWith('.feature'))
+      const hasScenarios = featureFiles.some((f) => {
+        try {
+          const fc = readFileSync(join(featuresDir, f), 'utf-8')
+          return fc.includes('Feature:') && fc.includes('Scenario:')
+        } catch {
+          return false
+        }
+      })
+      if (!hasScenarios) {
+        return '缺少可执行场景：06_TESTS/features/ 下至少一个 .feature 需同时含 Feature: 与 Scenario:（index.feature 可为纯索引，场景允许分布在 us-XX.feature 分文件）'
+      }
+      const hasStepsJson = readdirSync(featuresDir).some((f) => f.endsWith('.steps.json'))
+      if (!hasStepsJson) {
+        return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个 *.steps.json（与 us-XX.feature 成对产出）'
+      }
     }
   }
 

@@ -1,7 +1,24 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Channel } from '@proma/shared'
-import { buildL2TaskWithAC, resolveMinimaxM3Channel } from './nanju-router-prompt'
-import { getPhaseNode } from './nanju-router'
+
+/**
+ * L1 prompt（getNanjuRouterPrompt）经 findNanjuProjectBySession 读项目元数据，
+ * 依赖 config-paths.getWorkspaceFilesDir——按仓库既有模式（nanju-router-gate.test.ts）
+ * 先 mock.module 指向 tmpdir，再动态导入被测模块（静态导入会在 mock 前解析真实模块）。
+ */
+let fixtureRoot = ''
+const actualConfigPaths = await import('./config-paths')
+mock.module('./config-paths', () => ({
+  ...actualConfigPaths,
+  getWorkspaceFilesDir: () => fixtureRoot,
+  getAgentWorkspacePath: () => fixtureRoot,
+}))
+
+const { buildL2TaskWithAC, resolveMinimaxM3Channel, getNanjuRouterPrompt } = await import('./nanju-router-prompt')
+const { getPhaseNode } = await import('./nanju-router')
 
 /** 构造测试用渠道 */
 function makeChannel(overrides: Partial<Channel> = {}): Channel {
@@ -210,5 +227,90 @@ describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；v0.1
   test('testing 作者（deepseek）与 AC 攻防满足家族多样性断言（不抛错；不再要求与 coding 异构）', () => {
     const phase = getPhaseNode('iterative', 'testing')!
     expect(() => buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')).not.toThrow()
+  })
+})
+
+describe('AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①：UX 阶段 50min~3.5h 失控）', () => {
+  const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
+
+  test('AC 审计状态机注入轮次预算：攻防修复 ≤2 轮 + 未清零收敛为已知问题清单（所有阶段）', () => {
+    for (const stage of ['prototype', 'coding', 'testing'] as const) {
+      const phase = getPhaseNode('quick', stage)!
+      const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+      expect(task).toContain('轮次预算（硬性，v0.17.64）：攻防修复循环 ≤2 轮')
+      expect(task).toContain('第 2 轮防御确认后无论 red 是否清零都必须收敛')
+      expect(task).toContain('已知问题清单')
+      expect(task).toContain('禁止第 3 轮攻击修复')
+    }
+  })
+
+  test('prototype 阶段：总预算 ≤30 分钟提示 + 视觉裁决 red 回炉 ≤2 次', () => {
+    const phase = getPhaseNode('quick', 'prototype')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('整个原型阶段（生成+截图自检+AC 攻防+视觉裁决）预算 ≤30 分钟')
+    expect(task).toContain('超时应收敛交付当前最优版本')
+    expect(task).toContain('视觉裁决 red 回炉 ≤2 次（v0.17.64）')
+    expect(task).toContain('不再回炉')
+  })
+
+  test('非 prototype 阶段不含 prototype 专属时长预算（内环预算仍注入）', () => {
+    const phase = getPhaseNode('quick', 'coding')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).not.toContain('预算 ≤30 分钟')
+    expect(task).not.toContain('视觉裁决 red 回炉')
+  })
+})
+
+describe('L1 调度员指令（v0.17.64：超时纪律 + 收口果断性）', () => {
+  /** 构造项目 fixture 并返回 prompt（stage 决定阶段；不建 prd 时 getPrdSummary 返回占位） */
+  function buildPrompt(stage: 'requirements' | 'testing', opts: { prd?: boolean } = {}): string {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-prompt-'))
+    fixtureRoot = dir
+    const projectDir = join(dir, 'project-demo')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    if (opts.prd) {
+      writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 添加读书笔记\n内容补齐最低体积。')
+    }
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'demo',
+      name: '读书笔记',
+      mode: 'quick',
+      status: 'active',
+      currentStage: stage,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      sessionId: 'session-1',
+    }]))
+    const prompt = getNanjuRouterPrompt('test-ws', 'session-1')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(() => {
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('步骤 2 超时纪律：显式 timeoutSeconds=1200 + 催办 + 35min stop_delegation + 不无限等待', () => {
+    const prompt = buildPrompt('requirements')
+    expect(prompt).toContain('timeoutSeconds=1200')
+    expect(prompt).toContain('continue_delegation 催办一次')
+    expect(prompt).toContain('stop_delegation 终止')
+    expect(prompt).toContain('不要反复无限等待')
+  })
+
+  test('testing 收口果断性（实证④）：立即输出推进标记，不等用户确认、不以核实/澄清代替推进', () => {
+    const prompt = buildPrompt('testing')
+    expect(prompt).toContain('【果断收口】双文件核验通过')
+    expect(prompt).toContain('不要等待用户确认')
+    expect(prompt).toContain('不要以「核实/澄清」')
+    expect(prompt).toContain('<!-- PHASE_ADVANCE: testing -->')
+  })
+
+  test('非 testing 阶段：用户确认后立即收口，不得以再核实/再澄清推迟推进（一句话强化，不改语义）', () => {
+    const prompt = buildPrompt('requirements', { prd: true })
+    expect(prompt).toContain('不得再以「再核实/再澄清」推迟推进')
+    // 确认环节语义未变：仍要求用户确认（requiresUserConfirmation=true 的阶段）
+    expect(prompt).toContain('AskUserQuestion')
   })
 })

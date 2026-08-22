@@ -1,0 +1,196 @@
+/**
+ * 南大 L2 委派超时兜底（v0.17.64 Sprint C1，实证②）
+ *
+ * 背景：deepseek 渠道 L2 委派两次挂起（JSONL 仅委派简报零响应 1h+），系统层
+ * 没有任何委派时长上限。本模块以「观察哨 + 轮询」实现两级超时：
+ * - 软超时（默认 20min）：向 L1 注入催办 + 续接催办（检查状态或重派）
+ * - 硬超时（默认 35min）：stop_delegation 强停 + 记 errorCount（进熔断计数）+ 注入重派指令
+ *
+ * 阈值与轮询间隔见 NANJU_GUARDS（nanju-project.ts，集中可调常量）。
+ * 设计要点：
+ * - 依赖全部注入（时间/委派查询/强停/计数/注入/续接），orchestrator 负责接线，
+ *   本模块纯逻辑可单测（mock 委派与时间即可触发软/硬超时）；
+ * - continue_delegation 重派后重新计时（委派记录从 running 消失再出现即重置时钟）；
+ * - 等用户回答/权限的阻塞（pendingBlockedEvents）是用户驱动循环，时长控制明确
+ *   排除：阻塞期间时钟重置，恢复后重新计时。
+ */
+
+import { NANJU_GUARDS, type NanjuGuardStage } from './nanju-project'
+
+/** 运行中委派的观察视图（orchestrator 从 agent-collaboration-tools 提供） */
+export interface WatchedDelegation {
+  delegationId: string
+  childSessionId: string
+  title: string
+  startedAt: number
+  hasPendingBlockedEvents: boolean
+}
+
+/** 熔断计数写入结果（由 orchestrator 经 updatePhaseGuard 单一写入点产出） */
+export interface GuardErrorRecord {
+  justOpened: boolean
+  failCount: number
+  errorCount: number
+}
+
+/** 依赖注入面（测试可全量 mock；生产实现见 agent-orchestrator.ts 接线） */
+export interface NanjuDelegationWatchDeps {
+  /** 时间源（默认 Date.now；测试注入虚拟时钟） */
+  now?: () => number
+  /** 列出 L1 会话下运行中委派 */
+  listRunningDelegations: (parentSessionId: string) => WatchedDelegation[]
+  /** 强停委派（stop_delegation 程序化通道） */
+  forceStopDelegation: (parentSessionId: string, delegationId: string) => { stopped: boolean }
+  /**
+   * 读取观察对象当前阶段；返回 null 表示项目不存在/不活跃/阶段已收口/会话解绑 → 移除观察。
+   */
+  getActiveProjectStage: (workspaceSlug: string, projectId: string, parentSessionId: string) => NanjuGuardStage | null
+  /** 记 errorCount（进熔断计数；返回是否新触发熔断与最新计数） */
+  recordGuardError: (workspaceSlug: string, projectId: string, stage: NanjuGuardStage, note: string) => GuardErrorRecord
+  /** 向 L1 注入可见 assistant 消息 */
+  injectMessage: (parentSessionId: string, text: string) => void
+  /** 向 L1 续接下发指令（催办/重派；orchestrator 侧处理忙碌重试） */
+  sendContinuation: (parentSessionId: string, message: string) => void
+  /** 日志（默认 console.log） */
+  log?: (message: string) => void
+}
+
+interface TrackedDelegation {
+  firstSeenAt: number
+  softFired: boolean
+  hardFired: boolean
+}
+
+interface WatchEntry {
+  workspaceSlug: string
+  projectId: string
+  tracked: Map<string, TrackedDelegation>
+}
+
+/** L2 委派超时观察哨（按 L1 会话维度观察其运行中委派） */
+export class NanjuDelegationWatcher {
+  private watches = new Map<string, WatchEntry>()
+  private readonly now: () => number
+  private readonly log: (message: string) => void
+
+  constructor(private readonly deps: NanjuDelegationWatchDeps) {
+    this.now = deps.now ?? (() => Date.now())
+    this.log = deps.log ?? ((message: string) => console.log(message))
+  }
+
+  /** 观察中的 L1 会话数（0 时调用方可停轮询定时器） */
+  get size(): number {
+    return this.watches.size
+  }
+
+  /** 登记观察（幂等；项目状态由 getActiveProjectStage 在轮询时持续核验） */
+  register(workspaceSlug: string, parentSessionId: string, projectId: string): void {
+    if (this.watches.has(parentSessionId)) return
+    this.watches.set(parentSessionId, { workspaceSlug, projectId, tracked: new Map() })
+    this.log(`[南大护栏] L2 委派超时观察哨已登记: ${projectId}`)
+  }
+
+  /** 移除观察（测试与异常清理用） */
+  unregister(parentSessionId: string): void {
+    this.watches.delete(parentSessionId)
+  }
+
+  /**
+   * 单轮轮询：对账运行中委派 → 逐个判定软/硬超时并执行动作。
+   * 幂等：单委派的软/硬超时各只触发一次；重派后重新计时。
+   */
+  poll(): void {
+    for (const [sessionId, watch] of this.watches) {
+      const stage = this.deps.getActiveProjectStage(watch.workspaceSlug, watch.projectId, sessionId)
+      if (!stage) {
+        this.watches.delete(sessionId)
+        this.log(`[南大护栏] 观察对象已收口/失效，移除观察: ${watch.projectId}`)
+        continue
+      }
+
+      const running = this.deps.listRunningDelegations(sessionId)
+      // 对账：消失的委派移除追踪；新出现的（含 continue_delegation 重派）重新计时
+      const runningIds = new Set(running.map((d) => d.delegationId))
+      for (const id of watch.tracked.keys()) {
+        if (!runningIds.has(id)) watch.tracked.delete(id)
+      }
+      const now = this.now()
+      for (const d of running) {
+        if (!watch.tracked.has(d.delegationId)) {
+          watch.tracked.set(d.delegationId, { firstSeenAt: now, softFired: false, hardFired: false })
+        }
+      }
+
+      for (const d of running) {
+        const tracked = watch.tracked.get(d.delegationId)
+        if (!tracked) continue
+        if (d.hasPendingBlockedEvents) {
+          // 等用户回答/权限是用户驱动循环（时长控制明确排除）：时钟重置，恢复后重新计时
+          tracked.firstSeenAt = this.now()
+          tracked.softFired = false
+          continue
+        }
+        const elapsed = this.now() - tracked.firstSeenAt
+        if (elapsed >= NANJU_GUARDS.delegationHardTimeoutMs && !tracked.hardFired) {
+          tracked.hardFired = true
+          tracked.softFired = true
+          this.handleHardTimeout(watch, sessionId, stage, d)
+        } else if (elapsed >= NANJU_GUARDS.delegationSoftTimeoutMs && !tracked.softFired) {
+          tracked.softFired = true
+          this.handleSoftTimeout(sessionId, d)
+        }
+      }
+    }
+  }
+
+  /** 软超时：注入催办 + 续接催办（检查状态或重派） */
+  private handleSoftTimeout(sessionId: string, delegation: WatchedDelegation): void {
+    const softMin = Math.round(NANJU_GUARDS.delegationSoftTimeoutMs / 60000)
+    const hardMin = Math.round(NANJU_GUARDS.delegationHardTimeoutMs / 60000)
+    this.deps.injectMessage(
+      sessionId,
+      `⏰ 南大护栏·软超时：子会话「${delegation.title}」已 ${softMin} 分钟无响应。请检查该子会话状态（侧边栏打开查看）；确认卡死可 stop_delegation 终止后重派；若仍在推进可继续等待（${hardMin} 分钟硬超时将强制停止并计入熔断）。`,
+    )
+    this.deps.sendContinuation(
+      sessionId,
+      `系统提醒：你委派的子会话「${delegation.title}」已 ${softMin} 分钟无响应。请检查其状态（list_delegations 或打开子会话查看）：确认卡死 → stop_delegation 终止后重新 delegate_agent 重派；仍在推进 → 继续等待并告知用户；需要用户决策 → AskUserQuestion。`,
+    )
+  }
+
+  /**
+   * 硬超时：强停 + 记 errorCount（进熔断计数）+ 注入重派指令。
+   * 新触发熔断时由 orchestrator 侧的 recordGuardError 返回 justOpened 并记 circuit_break 埋点。
+   */
+  private handleHardTimeout(watch: WatchEntry, sessionId: string, stage: NanjuGuardStage, delegation: WatchedDelegation): void {
+    const hardMin = Math.round(NANJU_GUARDS.delegationHardTimeoutMs / 60000)
+    let stopped = false
+    try {
+      stopped = this.deps.forceStopDelegation(sessionId, delegation.delegationId).stopped
+    } catch (e) {
+      this.log(`[南大护栏] 强停委派异常: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    let guard: GuardErrorRecord | null = null
+    try {
+      guard = this.deps.recordGuardError(watch.workspaceSlug, watch.projectId, stage, `L2 委派硬超时（${delegation.title}）`)
+    } catch (e) {
+      this.log(`[南大护栏] 熔断计数更新失败（不影响强停结果）: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    const stopText = stopped
+      ? `已强制停止子会话「${delegation.title}」（stop_delegation）`
+      : `子会话「${delegation.title}」已不在运行（可能刚好完成或已被停止）`
+    this.deps.injectMessage(
+      sessionId,
+      `⛔ 南大护栏·硬超时：${stopText}，该委派已 ${hardMin} 分钟无响应。\n`
+      + (guard?.justOpened ? `阶段「${stage}」已触发熔断（fail=${guard.failCount} error=${guard.errorCount}），系统不再自动续接，转人工介入。\n` : '')
+      + `现场已保留：产物文件未删除，可打开子会话查看半成品状态。\n`
+      + `请检查产出后重派该角色；或告知用户选择：终止项目 / 人工接手 / 跳过该环节。`,
+    )
+    this.deps.sendContinuation(
+      sessionId,
+      `系统通知：你委派的子会话「${delegation.title}」已达硬超时（${hardMin} 分钟无响应），已被系统强制停止${guard?.justOpened ? '，且该阶段已触发熔断（不再自动续接）' : ''}。`
+      + `请 Read 检查该阶段产出文件：基本完整 → continue_delegation 追加收尾指令；无产出/严重不完整 → 重新 delegate_agent 重派该阶段任务；需要用户决策（终止/人工接手/跳过）→ AskUserQuestion。`,
+    )
+  }
+}

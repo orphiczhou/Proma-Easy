@@ -301,6 +301,8 @@ export interface GwtReportJson {
   coveredUs: string[]
   uncoveredUs: string[]
   retryCount: number
+  /** 执行异常独立计数（v0.17.64 #6，拆 Z-005 口径）：error 轮次累计，pass 轮清零；与 retryCount（非 pass 合计）并存。旧报告无此字段 */
+  errorCount?: number
   scenarios: Array<{
     feature: string
     scenario: string
@@ -709,6 +711,8 @@ export interface NanjuGwtOutcome {
   reportMdPath: string
   /** 本轮重试编号（首次执行=0；非 pass 轮次含 error 后每回炉重跑 +1，合计 ≤ GWT_RETRY_LIMIT） */
   retryCount: number
+  /** 执行异常累计轮次（v0.17.64 #6 独立计数：仅 verdict=error 轮次 +1，pass 轮清零；接熔断状态机 errorCount） */
+  errorCount: number
   retryLimitReached: boolean
   summaryText: string
   /** 失败清单（回炉缺陷/映射修复描述） */
@@ -779,12 +783,16 @@ export async function runNanjuGwtAcceptance(input: {
   //    v0.17.63（AC Z-005）：error 轮次同样计入重试（非 pass 即累计），
   //    避免「持续异常不写报告 → retryCount 永远 0 → 永不触发人工介入」。
   //    回炉预算语义：testing 侧重映射与 coding 修复合计 ≤ 2 次（择简口径，不改既有计数结构）。
+  //    v0.17.64（#6）：errorCount 独立拆出（仅 error 轮累计，pass 清零），接熔断状态机——
+  //    fail（产出缺陷）与 error（执行异常）成因不同，熔断阈值与修复通道均不同。
   let prevRetryCount = 0
+  let prevErrorCount = 0
   let prevFailed = false
   if (existsSync(reportJsonPath)) {
     try {
-      const prev = JSON.parse(readFileSync(reportJsonPath, 'utf-8')) as { retryCount?: number; verdict?: string }
+      const prev = JSON.parse(readFileSync(reportJsonPath, 'utf-8')) as { retryCount?: number; errorCount?: number; verdict?: string }
       prevRetryCount = typeof prev.retryCount === 'number' ? prev.retryCount : 0
+      prevErrorCount = typeof prev.errorCount === 'number' ? prev.errorCount : 0
       prevFailed = prev.verdict === 'fail' || prev.verdict === 'error'
     } catch { /* 损坏报告按首次处理 */ }
   }
@@ -834,6 +842,12 @@ export async function runNanjuGwtAcceptance(input: {
         ? classifyGwtFailure(results)
         : null
   const verdict: NanjuGwtOutcome['verdict'] = errorReason ? 'error' : judgement.verdict
+  // 独立异常计数（#6）：仅 error 轮累计，pass 轮清零（与 retryCount 的非 pass 合计口径并存）
+  const errorCount = verdict === 'pass'
+    ? 0
+    : verdict === 'error'
+      ? (prevFailed ? prevErrorCount : 0) + 1
+      : (prevFailed ? prevErrorCount : 0)
   const report: GwtReportJson = {
     generatedAt: new Date().toISOString(),
     verdict,
@@ -848,6 +862,7 @@ export async function runNanjuGwtAcceptance(input: {
     coveredUs: judgement.coveredUs,
     uncoveredUs: judgement.uncoveredUs,
     retryCount,
+    errorCount,
     scenarios: results.map((r) => ({
       feature: r.feature, scenario: r.scenario, status: r.status, reason: r.reason,
       failedStep: r.failedStep, screenshot: r.screenshot, durationMs: r.durationMs,
@@ -877,6 +892,7 @@ export async function runNanjuGwtAcceptance(input: {
       error_reason: errorReason ?? undefined,
       duration_ms: results.reduce((sum, r) => sum + r.durationMs, 0),
       retry_round: retryCount,
+      error_round: errorCount,
     }, input.projectId)
   } catch { /* 埋点失败不影响主流程 */ }
 
@@ -910,6 +926,7 @@ export async function runNanjuGwtAcceptance(input: {
     reportJsonPath,
     reportMdPath,
     retryCount,
+    errorCount,
     retryLimitReached: retryCount >= GWT_RETRY_LIMIT,
     summaryText,
     failListText: failLines.join('\n'),

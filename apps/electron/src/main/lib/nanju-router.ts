@@ -398,10 +398,13 @@ const FORMAT_CHECKS: Record<PhaseId, (content: string) => boolean> = {
   // coding 入口是 HTML，比 prototype 多给 <script：最低格式底线为 HTML 文档或含脚本
   // （完整「可运行」由 L2 自测 + 引用校验分层保证，不在此收紧）
   coding: (c) => c.includes('<html') || c.includes('<!DOCTYPE') || c.includes('<script'),
-  // testing 汇总入口是中文 Gherkin：最低结构底线 Feature: + Scenario:
+  // testing 汇总入口是中文 Gherkin：v0.17.64 目录兑底——index.feature 允许为纯索引
+  // （只要求 Feature:，不强制 Scenario:），可执行场景可分布在各 us-XX.feature 分文件；
+  // 「目录内至少一个 .feature 含 Feature:+Scenario:」的兑底检查在 verifyPhaseOutput
+  // （nanju-router-gate.ts，有目录上下文），此处只把入口文件的最低结构底线收敛为 Feature:。
   // （真正的可执行性由 GwtRunner 的 steps.json schema 校验 + 执行期轮询分层保证；
   //   steps.json 存在性门禁见 verifyPhaseOutput，v0.17.63 AC I-001）
-  testing: (c) => c.includes('Feature:') && c.includes('Scenario:'),
+  testing: (c) => c.includes('Feature:'),
   architecture: (c) => c.includes('# ') || c.includes('## '),
   planning: (c) => c.includes('# ') || c.includes('## '),
   delivered: () => true,
