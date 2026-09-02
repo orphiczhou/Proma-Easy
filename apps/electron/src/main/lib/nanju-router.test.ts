@@ -102,8 +102,8 @@ describe('quick/iterative 默认分级映射', () => {
     }
   })
 
-  test('quick 路由：requirements → prototype → coding → testing → delivered；iterative 路由完整六阶段（Sprint B 起 testing 入路由）', () => {
-    expect(getRoute('quick').map((n) => n.id)).toEqual(['requirements', 'prototype', 'coding', 'testing', 'delivered'])
+  test('quick 路由：requirements → prototype → architecture → coding → testing → delivered（W7 v0.17.69 两模式必经架构师）；iterative 路由完整七阶段', () => {
+    expect(getRoute('quick').map((n) => n.id)).toEqual(['requirements', 'prototype', 'architecture', 'coding', 'testing', 'delivered'])
     expect(getRoute('iterative').map((n) => n.id)).toEqual([
       'requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered',
     ])
@@ -150,10 +150,11 @@ describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
     }
   })
 
-  test('路由改向：quick prototype.next=coding；iterative planning.next=coding（两条链均贯通到代码交付）', () => {
-    expect(getPhaseNode('quick', 'prototype')?.next).toBe('coding')
-    expect(getPhaseNode('iterative', 'planning')?.next).toBe('coding')
+  test('路由统一：两模式 prototype.next=architecture（W7 v0.17.69，删除分叉）；iterative planning.next=coding；quick architecture.next=coding', () => {
+    expect(getPhaseNode('quick', 'prototype')?.next).toBe('architecture')
     expect(getPhaseNode('iterative', 'prototype')?.next).toBe('architecture')
+    expect(getPhaseNode('iterative', 'planning')?.next).toBe('coding')
+    expect(getPhaseNode('quick', 'architecture')?.next).toBe('coding')
   })
 
   test('FORMAT_CHECKS：coding 接受 <html / <!DOCTYPE / <script（入口可运行）', () => {
@@ -299,11 +300,27 @@ describe('工程品类上游标注门禁（W3，v0.17.66）', () => {
     }
   })
 
-  test('architecture 约束含品类终判要求（可修正 PRD 初判）', () => {
+  test('architecture 约束含品类终判要求（可修正 PRD 初判）；W7 v0.17.69 quick 变体不再 undefined', () => {
     const constraints = getPhaseNode('iterative', 'architecture')!.constraints.join('\n')
     expect(constraints).toContain('工程品类终判')
     expect(constraints).toContain('可修正 PRD 初判')
-    // quick 模式无 architecture 阶段
-    expect(getPhaseNode('quick', 'architecture')).toBeUndefined()
+    // W7 断言反转（R7）：quick 必经架构师环节（轻量变体）
+    const quickArch = getPhaseNode('quick', 'architecture')
+    expect(quickArch).toBeDefined()
+    expect(quickArch?.requiresAC).toBe(false)
+    expect(quickArch?.requiresUserConfirmation).toBe(true)
+    expect(quickArch?.taskWeight).toBe('light')
+    expect(quickArch?.outputPath).toBe('03_ARCHITECTURE/architecture.md')
+    // 两变体均含环境探测与缺失报告指令（W7 v3 §六）
+    for (const mode of ['quick', 'iterative'] as const) {
+      const c = getPhaseNode(mode, 'architecture')!.constraints.join('\n')
+      expect(c).toContain('工程环境探测')
+      expect(c).toContain('projectEnv: ready')
+      expect(c).toContain('不擅自安装')
+    }
+    // iterative 变体专属：模板必读 + 环境配置清单节（W7 v3 §五）
+    const iterC = getPhaseNode('iterative', 'architecture')!.constraints.join('\n')
+    expect(iterC).toContain('必读工程模板')
+    expect(iterC).toContain('## 环境配置')
   })
 })

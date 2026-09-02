@@ -135,13 +135,15 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
       .catch((e: unknown) => console.warn('[向导图] 对照模式路由拉取失败:', e))
   }, [viewMode, compareMode, comparePhases.length, data.project])
 
-  // W2 S1/S3：进度输入（含 subStage）+ 有效展开集合（默认派生随 current 阶段）
+  // W2 S1/S3 + W2c/W7（v0.17.69）：进度输入（含 subStage/envState/regressions）+
+  // 有效展开集合（默认派生随 current 阶段）
   const guideProgress = React.useMemo(() => ({
     stageStates: data.stageStates,
     todoStats: data.todoStats,
     abandoned: data.abandoned,
     subStage: data.subStage ?? undefined,
-  }), [data.stageStates, data.todoStats, data.abandoned, data.subStage])
+    envState: data.envState ?? undefined,
+  }), [data.stageStates, data.todoStats, data.abandoned, data.subStage, data.envState])
 
   /** 当前 current 阶段（推进检测用；无 current = 已交付/放弃/未选模式） */
   const currentPhaseId = React.useMemo(() => {
@@ -163,6 +165,15 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
   // 阶段推进/切换项目：展开集合收敛回默认（跟随新 current；手动多开不跨推进保留）
   React.useEffect(() => { setExpandedOverride(null) }, [currentPhaseId, data.project?.projectId])
 
+  // W2c（v0.17.69）：active 回归边（阶段 id 对，GuideFlow 按 LS/ES class 匹配 SVG 边注入脉冲动画）
+  const activeRegressionEdges = React.useMemo(
+    () => (data.regressions ?? [])
+      .filter((r) => r.active)
+      .map((r) => ({ from: r.from, to: r.to })),
+    [data.regressions],
+  )
+  React.useEffect(() => { setExpandedOverride(null) }, [currentPhaseId, data.project?.projectId])
+
   // DSL memo 化（硬约束：字符串 memo 防抖；依赖不变 → 引用相等 → GuideFlow 零重渲染，AC-09）
   const dsl = React.useMemo(() => {
     if (!data.project || data.phases.length === 0) return null
@@ -175,9 +186,15 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
       route: data.phases,
       progress: guideProgress,
       expandedPhases,
+      regressions: (data.regressions ?? undefined)?.map((r) => ({
+        from: r.from as GuidePhaseId,
+        to: r.to as GuidePhaseId,
+        count: r.count,
+        active: r.active,
+      })),
       isDark,
     })
-  }, [data.project, data.phases, guideProgress, expandedPhases, viewMode, comparePhases, compareMode, isDark])
+  }, [data.project, data.phases, guideProgress, expandedPhases, data.regressions, viewMode, comparePhases, compareMode, isDark])
 
   const selectedPhase = selectedPhaseId ? data.phases.find((p) => p.id === selectedPhaseId) ?? null : null
 
@@ -309,7 +326,7 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
           <NoticeBar text={`预览另一种模式（${compareMode === 'quick' ? '快消型' : '长期迭代型'}）流程，非本项目进度。`} tone="info" onClose={() => setViewMode('project')} />
         )}
         <div className="flex-1 min-h-0">
-          <GuideFlow dsl={dsl} onNodeClick={handleNodeClick} />
+          <GuideFlow dsl={dsl} onNodeClick={handleNodeClick} activeRegressionEdges={activeRegressionEdges} />
         </div>
         {/* 图例（§5.2）：绿=已完成、主色脉冲=进行中、灰=未开始 */}
         <div className="flex items-center gap-3 px-3 py-1.5 border-t border-border/40 text-[11px] text-muted-foreground shrink-0">

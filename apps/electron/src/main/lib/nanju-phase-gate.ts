@@ -194,6 +194,20 @@ export function syncNanjuGuideConfirmState(workspaceSlug: string, sessionId: str
 
     // 产出达标判定与阶段推进门禁同一标准：UC 态 = 「可推进，等你确认」（sequence 存在性
     // 已收窄 stage 到六阶段，与 verifyPhaseOutput 的 PhaseId 参数面兼容）
+    //
+    // M4（AC 审计 A5，v0.17.69）：architecture 阶段先同步环境状态再验证——L2 报告
+    // missing 但尚未推进的窗口，envReady 若未置位（undefined）会被门禁按存量豁免
+    // 放行 → ARCH_UC 误亮（「可推进」但环境实际未就绪）。此处在 verify 前复用
+    // PHASE_ADVANCE 置位块的同一解析函数（syncProjectEnvStateFromArchitectureDoc，
+    // 幂等），让 missing 事实先落盘 → 门禁正确拦截 → UC 不误亮，同时 ARCH_ENV
+    // blocked 态随置位广播可见（「环境卡住」上图）。
+    if (stage === 'architecture') {
+      try {
+        const { syncProjectEnvStateFromArchitectureDoc } =
+          require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
+        syncProjectEnvStateFromArchitectureDoc(workspaceSlug, project.projectId, sessionId)
+      } catch { /* 同步失败不影响后续判定（门禁按置位前状态降级） */ }
+    }
     const { verifyPhaseOutput } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
     if (verifyPhaseOutput(workspaceSlug, project.projectId, stage as Parameters<typeof verifyPhaseOutput>[2]) !== null) return false // 产出未达标，维持产出中态
 

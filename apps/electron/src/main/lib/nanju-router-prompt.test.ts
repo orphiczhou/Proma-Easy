@@ -374,3 +374,95 @@ describe('L1 调度员指令（v0.17.64：超时纪律 + 收口果断性）', ()
     expect(prompt).toContain('AskUserQuestion')
   })
 })
+
+// ===== W7 架构师环境指令 + W2c 意见收集轮回归标记（v0.17.69） =====
+
+describe('architecture L2 环境配置指令（W7 B3：探测 + projectEnv 标记行 + 缺失只报告）', () => {
+  test('两模式 L2 任务均含环境节指令与 projectEnv 标记行要求', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const phase = getPhaseNode(mode, 'architecture')!
+      const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
+      expect(task).toContain('## 环境配置（必须执行')
+      expect(task).toContain('探测命令幂等')
+      expect(task).toContain('projectEnv: ready')
+      expect(task).toContain('projectEnv: missing:')
+      expect(task).toContain('禁止安装/升级/修改任何系统配置')  // U3：缺失只报告不安装
+      expect(task).toContain('## 环境配置」节的清单表')
+    }
+  })
+
+  test('quick architecture 免 inline AC（U1 方案 A：无攻防段，产出自查替代）；iterative 保留攻防', () => {
+    const quickPhase = getPhaseNode('quick', 'architecture')!
+    const quickTask = buildL2TaskWithAC(quickPhase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD', [], '/tmp/project')
+    expect(quickTask).not.toContain('AC 对抗审计（必须执行）')
+    expect(quickTask).toContain('产出自查（代替 AC 攻防')
+    expect(quickTask).toContain('30-60 行精简')
+    const iterPhase = getPhaseNode('iterative', 'architecture')!
+    const iterTask = buildL2TaskWithAC(iterPhase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD', [], '/tmp/project')
+    expect(iterTask).toContain('AC 对抗审计（必须执行）')
+  })
+})
+
+describe('L1 指令：意见收集轮回归标记 + architecture 环境确认流程（A2 + B3）', () => {
+  // prototype 阶段 L1 走 resolvePrototypeAuthor（require channel-manager）——
+  // 测试环境注入固定 minimax 渠道（mock 仅本文件生效）
+  mock.module('./channel-manager', () => ({
+    listChannels: () => [{
+      id: 'ch-minimax-uuid', enabled: true, provider: 'minimax',
+      models: [{ id: 'MiniMax-M3', name: 'MiniMax-M3', enabled: true }],
+    }],
+  }))
+  /** 构造项目 fixture 并返回 prompt（复用文件级 fixtureRoot——mock 的 getWorkspaceFilesDir 读它） */
+  function buildPromptFor(stage: string, files?: Record<string, string>): string | undefined {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-w7-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pw7')
+    mkdirSync(projectDir, { recursive: true })
+    for (const [name, content] of Object.entries(files ?? {})) {
+      const full = join(projectDir, name)
+      mkdirSync(join(full, '..'), { recursive: true })
+      writeFileSync(full, content)
+    }
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pw7', name: 'W7 测试项目', mode: 'iterative', status: 'active',
+      currentStage: stage, createdAt: '', updatedAt: '', sessionId: 's-pw7', workspaceSlug: root,
+    }]))
+    return getNanjuRouterPrompt('test-ws', 's-pw7')
+  }
+
+  test('prototype 意见收集轮指令含 NANJU_REGRESSION 标记要求（A2 触发点 2）', () => {
+    const prompt = buildPromptFor('prototype')
+    expect(prompt).toContain('NANJU_REGRESSION')
+    expect(prompt).toContain('硬规则未覆盖的表述')
+    expect(prompt).toContain('【不要】输出该标记')
+  })
+
+  test('architecture L1 指令：环境缺失确认安装流程 + 合并确认 + 未就绪禁止推进', () => {
+    const prompt = buildPromptFor('architecture')
+    expect(prompt).toContain('【架构确认 + 环境配置环节】')
+    expect(prompt).toContain('projectEnv: missing:')
+    expect(prompt).toContain('确认安装')
+    expect(prompt).toContain('用户级标准安装目录')
+    expect(prompt).toContain('合并确认')
+    expect(prompt).toContain('【不要】输出推进标记')
+  })
+
+  test('M7 安装前预校验：architecture.md 清单含 typo 组件 → prompt 注入「预校验未通过」+ 禁止进入安装确认', () => {
+    const prompt = buildPromptFor('architecture', {
+      '03_ARCHITECTURE/architecture.md':
+        '# 架构文档（M7 预校验用例，内容补齐最低体积要求）\n\nprojectCategory: desktop-app\n\n## 技术选型\n\nTauri 桌面程序两层架构，UI 层与系统层分离。\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| rustcc | 1.75 | 编译 |\n| node | 20 | 前端 |\n\nprojectEnv: missing: rustcc\n',
+    })
+    expect(prompt).toContain('主进程环境清单预校验【未通过】')
+    expect(prompt).toContain('rustcc')
+    expect(prompt).toContain('【不得】向用户确认安装')
+  })
+
+  test('M7 安装前预校验：清单合法 → prompt 注入「预校验通过」', () => {
+    const prompt = buildPromptFor('architecture', {
+      '03_ARCHITECTURE/architecture.md':
+        '# 架构文档（M7 预校验用例，内容补齐最低体积要求）\n\nprojectCategory: desktop-app\n\n## 技术选型\n\nTauri 桌面程序两层架构，UI 层与系统层分离。\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| rustc | 1.75 | 编译 |\n| node | 20 | 前端 |\n\nprojectEnv: missing: rustc\n',
+    })
+    expect(prompt).toContain('主进程环境清单预校验通过')
+    // 首轮无产出文档时无预校验注入（buildPromptFor('architecture') 不带 files 场景已由上一用例覆盖）
+  })
+})

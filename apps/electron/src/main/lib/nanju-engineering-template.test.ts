@@ -24,8 +24,16 @@ const {
   getProjectTemplateDir,
   buildCategoryGuideLines,
   CATEGORY_META,
+  validateEnvChecklist,
+  parseEnvChecklistFromDoc,
+  extractRawCategoryMarker,
+  parseProjectEnvMarker,
+  syncProjectEnvStateFromArchitectureDoc,
 } = await import('./nanju-engineering-template')
-const { setProjectCategory, getProjectCategory, PROJECT_CATEGORIES, isProjectCategory } = await import('./nanju-project')
+const {
+  setProjectCategory, getProjectCategory, PROJECT_CATEGORIES, isProjectCategory,
+  setProjectEnvState, getProjectEnvState,
+} = await import('./nanju-project')
 
 function makeFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'nanju-eng-tpl-'))
@@ -246,5 +254,234 @@ describe('setProjectCategory / getProjectCategory', () => {
     expect(isProjectCategory('desktop-app')).toBe(true)
     expect(isProjectCategory('Web-Fullstack')).toBe(false)
     expect(isProjectCategory('')).toBe(false)
+  })
+})
+
+// ===== R2 规则校验层（W7，v0.17.69）：品类枚举 + 环境清单组件校验 =====
+
+describe('validateEnvChecklist（R2 第 4 层兜底）', () => {
+  test('合法组件（品类白名单 + 共享集）通过', () => {
+    expect(validateEnvChecklist('desktop-app', ['rustc', 'cargo', 'node', 'git'])).toEqual({ ok: true, problems: [] })
+    expect(validateEnvChecklist('web-fullstack', ['node', 'npm', 'bun'])).toEqual({ ok: true, problems: [] })
+    expect(validateEnvChecklist('cli-tool', ['python3', 'pip', 'node'])).toEqual({ ok: true, problems: [] })
+  })
+
+  test('typo 组件拦截（rustcc / nodee 不在白名单）', () => {
+    const result = validateEnvChecklist('desktop-app', ['rustc', 'rustcc', 'nodee'])
+    expect(result.ok).toBe(false)
+    // 只有 rustcc / nodee 两条 problem（合法的 rustc 不产生拦截项）
+    expect(result.problems).toHaveLength(2)
+    expect(result.problems.some((p) => p.includes('rustcc'))).toBe(true)
+    expect(result.problems.some((p) => p.includes('nodee'))).toBe(true)
+  })
+
+  test('跨品类组件拦截（desktop-app 清单含 xcodebuild → 不在 desktop 白名单）', () => {
+    expect(validateEnvChecklist('desktop-app', ['xcodebuild']).ok).toBe(false)
+    // mobile-app 白名单内合法
+    expect(validateEnvChecklist('mobile-app', ['xcodebuild', 'node']).ok).toBe(true)
+  })
+
+  test('空清单拦截（环境节缺失/表格为空）', () => {
+    const result = validateEnvChecklist('desktop-app', [])
+    expect(result.ok).toBe(false)
+    expect(result.problems[0]).toContain('环境配置清单为空')
+  })
+
+  test('组件名大小写归一（Rustc/CARGO 视同 rustc/cargo；trailing 空格容忍）', () => {
+    expect(validateEnvChecklist('desktop-app', [' Rustc ', 'CARGO'])).toEqual({ ok: true, problems: [] })
+    // rust ≠ rustc（拼写不同的组件仍拦）
+    expect(validateEnvChecklist('desktop-app', [' Rust ']).ok).toBe(false)
+  })
+
+  test('模板有「环境」节时以模板清单为准（覆盖白名单：模板含 deno 则 deno 合法）', () => {
+    const tpl = '# 模板\n\n## 环境\n\n| deno | 1.4 |\n| node | 20 |\n\n## 其他\n'
+    expect(validateEnvChecklist('web-fullstack', ['deno'], tpl)).toEqual({ ok: true, problems: [] })
+    // 模板清单外组件仍拦
+    expect(validateEnvChecklist('web-fullstack', ['rustc'], tpl).ok).toBe(false)
+  })
+
+  test('品类六枚举校验链（isProjectCategory 接入校验层，B5）', () => {
+    for (const c of PROJECT_CATEGORIES) expect(isProjectCategory(c)).toBe(true)
+    expect(isProjectCategory('desktop')).toBe(false)
+    expect(isProjectCategory('web')).toBe(false)
+    expect(isProjectCategory('')).toBe(false)
+  })
+})
+
+describe('extractRawCategoryMarker（宽松品类标记提取，R2 品类幻觉拦截）', () => {
+  test('提取最后一次出现的原始值（不限枚举——非法值也要能看见）', () => {
+    expect(extractRawCategoryMarker('projectCategory: desktop\n后续 projectCategory: desktop-app')).toBe('desktop-app')
+    expect(extractRawCategoryMarker('projectCategory: desktop')).toBe('desktop')
+    expect(extractRawCategoryMarker('projectCategory: web')).toBe('web')
+  })
+
+  test('无标记返回 null；projectEnv 行不误匹配', () => {
+    expect(extractRawCategoryMarker('# 无标记文档\n\nprojectEnv: ready\n')).toBeNull()
+  })
+
+  test('与 extractProjectCategoryFromDoc 互补：枚举限定提取只见合法值', () => {
+    const doc = 'projectCategory: desktop\n'
+    expect(extractProjectCategoryFromDoc(doc)).toBeNull()   // 枚举正则看不见非法值
+    expect(extractRawCategoryMarker(doc)).toBe('desktop')   // 宽松提取看得见 → 门禁可拦
+  })
+})
+
+describe('parseEnvChecklistFromDoc（architecture.md 环境节解析）', () => {
+  test('提取表格第一列（跳过表头与分隔行）；节截止于下一标题', () => {
+    const doc = '# 架构\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| rustc | 1.75 | 编译 |\n| node | 20 | 前端 |\n\n## 下节\n\n| notenv | 1 | x |\n'
+    expect(parseEnvChecklistFromDoc(doc)).toEqual(['rustc', 'node'])
+  })
+
+  test('无环境节 → 空数组', () => {
+    expect(parseEnvChecklistFromDoc('# 架构\n\n## 技术选型\n\n无环境节。\n')).toEqual([])
+  })
+})
+
+// ===== W7 前移契约 + 环境状态（v0.17.69） =====
+
+describe('materializeEngineeringTemplate 前移标注（R3 前移契约）', () => {
+  test('annotateInitialGuess：模板头部注入「⏳ 初判参考」标注行', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-e'), { recursive: true })
+    const path = materializeEngineeringTemplate(fixtureRoot, 'e', 'desktop-app', undefined, { annotateInitialGuess: true })
+    expect(path).toBeTruthy()
+    const content = readFileSync(path!, 'utf-8')
+    expect(content).toContain('⏳ 初判参考，以架构师终判为准')
+    expect(content).toContain('# 桌面应用 · 工程模板')
+  })
+
+  test('默认（无 opts）：纯复制无标注（coding 权威落位不变）', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-f'), { recursive: true })
+    const path = materializeEngineeringTemplate(fixtureRoot, 'f', 'desktop-app')
+    const content = readFileSync(path!, 'utf-8')
+    expect(content).not.toContain('初判参考')
+  })
+})
+
+describe('前移契约：architecture 推进仅 materialize 不写 projectCategory（B2）', () => {
+  test('materialize 落位后 projectCategory 仍为 null（品类写入只在 coding 推进钩子）', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-g'), { recursive: true })
+    // 模拟 prototype→architecture 推进钩子：仅 materialize（前移落位）
+    const initial = resolveProjectCategoryForCoding(fixtureRoot, 'g') ?? { category: 'web-fullstack' as const, source: 'default' as const }
+    materializeEngineeringTemplate(fixtureRoot, 'g', initial.category, undefined, { annotateInitialGuess: true })
+    // 前移契约：模板已落位但品类状态未写入
+    expect(existsSync(join(root, 'project-g', '00_ENGINEERING_TEMPLATE', 'template.md'))).toBe(true)
+    expect(getProjectCategory(fixtureRoot, 'g')).toBeNull()
+    // coding 推进钩子才写品类（既有 setProjectCategory 语义）
+    setProjectCategory(fixtureRoot, 'g', initial.category, initial.source)
+    expect(getProjectCategory(fixtureRoot, 'g')).toEqual({ category: 'web-fullstack', source: 'default' })
+  })
+})
+
+describe('setProjectEnvState / 品类变更重置（B3 + R8）', () => {
+  test('置位与读回：envReady/envCheck/checkedAt', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-h'), { recursive: true })
+    setProjectEnvState(fixtureRoot, 'h', false, [{ component: 'rustc', ok: false, reason: '缺失', attemptedAt: '2026-09-03T00:00:00Z' }])
+    const state = getProjectEnvState(fixtureRoot, 'h')
+    expect(state.envReady).toBe(false)
+    expect(state.missingComponents).toEqual(['rustc'])
+    expect(state.envCheck).toHaveLength(1)
+  })
+
+  test('未置位（存量项目）：envReady undefined + 空缺失清单（门禁豁免口径）', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-i'), { recursive: true })
+    const state = getProjectEnvState(fixtureRoot, 'i')
+    expect(state.envReady).toBeUndefined()
+    expect(state.missingComponents).toEqual([])
+  })
+
+  test('品类变更重置 envReady（R8：desktop→cli 时清未检查态）；同品类不变', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-j'), { recursive: true })
+    setProjectCategory(fixtureRoot, 'j', 'desktop-app', 'architecture')
+    setProjectEnvState(fixtureRoot, 'j', true, [{ component: 'rustc', ok: true, attemptedAt: '' }])
+    expect(getProjectEnvState(fixtureRoot, 'j').envReady).toBe(true)
+    // 品类变更（Rust CLI 重判）→ envReady 重置为 undefined
+    setProjectCategory(fixtureRoot, 'j', 'cli-tool', 'architecture')
+    const after = getProjectEnvState(fixtureRoot, 'j')
+    expect(after.envReady).toBeUndefined()
+    expect(after.envCheck).toEqual([])
+    // 同品类重复写入不重置（幂等）
+    setProjectEnvState(fixtureRoot, 'j', true, [{ component: 'bun', ok: true, attemptedAt: '' }])
+    setProjectCategory(fixtureRoot, 'j', 'cli-tool', 'prd')
+    expect(getProjectEnvState(fixtureRoot, 'j').envReady).toBe(true)
+  })
+})
+
+// ===== M3（AC 审计 A4）：projectEnv 标记行解析放宽 + 置位共用函数 =====
+
+describe('parseProjectEnvMarker（M3 正则放宽）', () => {
+  test('标准形态：ready / missing 半角冒号逗号', () => {
+    expect(parseProjectEnvMarker('# 架构\n\nprojectEnv: ready\n')).toEqual({ ready: true, missing: [] })
+    expect(parseProjectEnvMarker('projectEnv: missing:rustc,cargo\n')).toEqual({ ready: false, missing: ['rustc', 'cargo'] })
+  })
+
+  test('放宽形态：行首缩进 / projectEnv 与冒号间空白 / 冒号后空白', () => {
+    expect(parseProjectEnvMarker('  projectEnv : ready\n')).toEqual({ ready: true, missing: [] })
+    expect(parseProjectEnvMarker('\tprojectEnv:  missing: rustc,cargo\n')).toEqual({ ready: false, missing: ['rustc', 'cargo'] })
+  })
+
+  test('全角容错：全角冒号（主体与 missing 后）+ 全角逗号/顿号分隔', () => {
+    expect(parseProjectEnvMarker('projectEnv：ready')).toEqual({ ready: true, missing: [] })
+    expect(parseProjectEnvMarker('projectEnv：missing：rustc，cargo、node\n')).toEqual({ ready: false, missing: ['rustc', 'cargo', 'node'] })
+  })
+
+  test('多行取最后一次（文档修订覆盖正文）；missing 无组件清单 → 空数组', () => {
+    expect(parseProjectEnvMarker('projectEnv: ready\n中间修订\nprojectEnv: missing:node\n')).toEqual({ ready: false, missing: ['node'] })
+    expect(parseProjectEnvMarker('projectEnv: missing:\n')).toEqual({ ready: false, missing: [] })
+  })
+
+  test('无标记行 → null（调用方 warn + 不置位）', () => {
+    expect(parseProjectEnvMarker('# 架构文档\n\n## 环境配置\n\n| node | 20 |\n')).toBeNull()
+  })
+})
+
+describe('syncProjectEnvStateFromArchitectureDoc（M4 共用函数：解析+置位+幂等）', () => {
+  const ARCH_READY = '# 架构\n\n## 环境配置\n\n| 组件 | 版本 |\n| --- | --- |\n| node | 20 |\n| rustc | 1.75 |\n\nprojectEnv: ready\n'
+
+  test('解析标记行并置位（ready→true；missing→false+缺失组件 ok=false）', () => {
+    const root = makeFixture()
+    const projectDir = join(root, 'project-m4a')
+    mkdirSync(join(projectDir, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(projectDir, '03_ARCHITECTURE', 'architecture.md'), ARCH_READY)
+    syncProjectEnvStateFromArchitectureDoc(fixtureRoot, 'm4a')
+    let state = getProjectEnvState(fixtureRoot, 'm4a')
+    expect(state.envReady).toBe(true)
+    expect(state.missingComponents).toEqual([])
+
+    // missing 形态（全角冒号 + 冒号后空白，M3 放宽）
+    writeFileSync(join(projectDir, '03_ARCHITECTURE', 'architecture.md'),
+      '# 架构\n\n## 环境配置\n\n| 组件 | 版本 |\n| --- | --- |\n| node | 20 |\n| rustc | 缺失 |\n\n  projectEnv: missing: rustc\n')
+    syncProjectEnvStateFromArchitectureDoc(fixtureRoot, 'm4a')
+    state = getProjectEnvState(fixtureRoot, 'm4a')
+    expect(state.envReady).toBe(false)
+    expect(state.missingComponents).toEqual(['rustc'])
+  })
+
+  test('幂等：状态未变不重写（第二次调用后 checkedAt 不变）', () => {
+    const root = makeFixture()
+    const projectDir = join(root, 'project-m4b')
+    mkdirSync(join(projectDir, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(projectDir, '03_ARCHITECTURE', 'architecture.md'), ARCH_READY)
+    syncProjectEnvStateFromArchitectureDoc(fixtureRoot, 'm4b')
+    const first = JSON.parse(readFileSync(join(projectDir, '_project-info.json'), 'utf-8')) as { checkedAt?: string }
+    syncProjectEnvStateFromArchitectureDoc(fixtureRoot, 'm4b')
+    const second = JSON.parse(readFileSync(join(projectDir, '_project-info.json'), 'utf-8')) as { checkedAt?: string }
+    expect(second.checkedAt).toBe(first.checkedAt)
+  })
+
+  test('无标记行：不置位（envReady 保持 undefined——门禁豁免口径）+ 架构文档缺失不抛', () => {
+    const root = makeFixture()
+    const projectDir = join(root, 'project-m4c')
+    mkdirSync(join(projectDir, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(projectDir, '03_ARCHITECTURE', 'architecture.md'), '# 架构文档（无标记行）\n\n补齐最低字节数的架构内容，此处无 projectEnv 标记行。\n')
+    syncProjectEnvStateFromArchitectureDoc(fixtureRoot, 'm4c')
+    expect(getProjectEnvState(fixtureRoot, 'm4c').envReady).toBeUndefined()
+    // 文档不存在：静默跳过
+    syncProjectEnvStateFromArchitectureDoc(fixtureRoot, 'm4-nonexistent')
   })
 })

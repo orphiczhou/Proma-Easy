@@ -47,6 +47,10 @@ export interface NanjuGuideData {
    * 错配着色）；null = 无子步骤数据（渲染端降级为现状全灰，安全）。
    */
   subStage: string | null
+  /** ARCH_ENV 环境三态（W7 R9；与 subStage 同拍校验同因：仅 architecture 阶段消费） */
+  envState: 'done' | 'blocked' | null
+  /** 回归边投影（W2c；与阶段无关，直接透出） */
+  regressions: Array<{ from: string; to: string; count: number; active: boolean }> | null
   abandoned: boolean
   /** Header 追加提示条文案 */
   notice: string | null
@@ -71,6 +75,10 @@ interface GuideSubProgress {
   currentStage: string
   subStage: string
   seq: number
+  /** W7 R9：ARCH_ENV 环境三态（缺失 = 无环境事件，按序列推导降级） */
+  envState?: 'done' | 'blocked'
+  /** W2c：回归边投影（缺失 = 无回归事件） */
+  regressions?: Array<{ from: string; to: string; count: number; active: boolean }>
 }
 
 export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDataOptions): NanjuGuideData {
@@ -209,7 +217,13 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
       if (!payload || payload.sessionId !== sessionId) return
       if (payload.seq <= guideSeqRef.current) return
       guideSeqRef.current = payload.seq
-      setGuideProgress({ currentStage: payload.currentStage, subStage: payload.subStage, seq: payload.seq })
+      setGuideProgress({
+        currentStage: payload.currentStage,
+        subStage: payload.subStage,
+        seq: payload.seq,
+        envState: payload.envState,
+        regressions: payload.regressions,
+      })
     }
     window.electronAPI.onNanjuGuideProgress?.(handler)
     return () => {
@@ -226,16 +240,23 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
   }, [project, phases])
 
   // 子步骤仅在与 project.currentStage 同拍时暴露（事件/快照先于轮询 project 刷新到达时
-  // 丢弃一个周期，guide-dsl 前缀匹配亦双重兑底——错拍不会着色，安全）
+  // 丢弃一个周期，guide-dsl 前缀匹配亦双重兑底——错拍不会着色，安全）；envState 同拍
+  // 校验同因（仅 architecture 阶段消费）；regressions 与阶段无直接绑定，直接透出。
   const subStage = guideProgress && project && guideProgress.currentStage === project.currentStage
     ? (guideProgress.subStage || null)
     : null
+  const envState = guideProgress && project && guideProgress.currentStage === project.currentStage
+    ? (guideProgress.envState ?? null)
+    : null
+  const regressions = guideProgress?.regressions ?? null
 
   return {
     project,
     phases,
     stageStates: stageDerived.stageStates,
     subStage,
+    envState,
+    regressions,
     abandoned: stageDerived.abandoned,
     notice: stageDerived.notice,
     todoStats,

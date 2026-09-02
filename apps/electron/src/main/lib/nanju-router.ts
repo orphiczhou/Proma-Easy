@@ -221,7 +221,8 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     requiresUserConfirmation: true,
     requiresAC: false,
     retryLimit: 2,
-    next: mode === 'quick' ? 'coding' : 'architecture',
+    // W7（v0.17.69）：两模式统一经过架构师环节（用户裁决「不能免掉」，U1）
+    next: 'architecture',
     taskWeight: defaultWeight,
   }
 
@@ -288,31 +289,83 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     taskWeight: defaultWeight,
   }
 
-  if (mode === 'quick') {
-    return [REQUIREMENTS, prototype, coding, testing, SENTINEL]
-  }
+  /**
+   * 环境探测与缺失报告约束（W7 v3 §六，v0.17.69）：两变体共用。
+   * 探测命令幂等（只读版本号）；缺失只报告不擅自安装（U3：用户显式确认后
+   * 由 L2 按确认清单安装，安装动作在 router-prompt 的环境子环节指令中）。
+   */
+  const ENV_PROBE_CONSTRAINTS = [
+    '工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：'
+      + 'web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；'
+      + 'CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）',
+    '缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），'
+      + '缺失组件等待用户确认后再装；文档结尾单独一行输出标记：`projectEnv: ready`（全部就绪）'
+      + '或 `projectEnv: missing:<组件逗号清单>`（有缺失）——系统按此标记拦截未就绪推进',
+  ]
 
-  const architecture: PhaseNode = {
-    id: 'architecture',
-    role: 'architect',
-    title: '架构师',
-    channel: 'deepseek',
-    model: 'deepseek-v4-pro',
-    task: '你是架构设计师。根据 PRD 和原型，产出架构文档。',
-    outputPath: '03_ARCHITECTURE/architecture.md',
-    constraints: [
-      '技术选型 + 目录结构',
-      'API 规范设计',
-      // 工程品类终判（W3，v0.17.66）：架构师对项目形态的判断优先于 PRD 初判
-      // （resolveProjectCategoryForCoding 按 architecture > prd 顺序提取）；
-      // 未标注时 coding 降级 web-fullstack（对本地程序/CLI 等形态会误配工程模板）。
-      '工程品类终判（必须）：' + CATEGORY_MARKER_GUIDE + '；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在架构文档显目位置',
-    ],
-    requiresUserConfirmation: true,
-    requiresAC: true,
-    retryLimit: 2,
-    next: 'planning',
-    taskWeight: defaultWeight,
+  // architecture 节点（W7，v0.17.69：两模式统一必经，按 mode 输出变体——复用同一
+  // PhaseNode 与 defaultWeight 惯例，quick 轻量化方案 A + 四层兑底，用户 U1-U5 已确认）：
+  // - quick 变体：免 AC 攻防；用户确认与环境就绪合并为一次（一条消息看架构摘要+环境清单）。
+  // - iterative 变体：完整 AC 攻防 + 职责扩充（模板参考 + 环境配置清单节）。
+  const architecture: PhaseNode = mode === 'quick'
+    ? {
+      id: 'architecture',
+      role: 'architect',
+      title: '架构师',
+      channel: 'deepseek',
+      model: 'deepseek-v4-pro',
+      task: '你是架构设计师。根据 PRD 和原型，产出精简架构文档（约 30-60 行）：'
+        + '品类终判（projectCategory 标记）+ 技术选型（每项一句话理由）'
+        + '+ 组件清单（含环境探测结果）+ 环境就绪结论。',
+      outputPath: '03_ARCHITECTURE/architecture.md',
+      constraints: [
+        '品类终判（必须）：' + CATEGORY_MARKER_GUIDE + '；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置',
+        '架构精简为快消定位服务：不写长篇目录树/接口定义，技术选型与组件清单为主（长期演进细节交给工程模板参考）',
+        ...ENV_PROBE_CONSTRAINTS,
+      ],
+      requiresUserConfirmation: true, // 合并确认：架构摘要 + 环境清单一条消息确认（U1 方案 A）
+      requiresAC: false,              // 免 AC 攻防；兜底 = 规则校验层（R2）+ 合并确认 + envReady 门禁
+      retryLimit: 2,
+      next: 'coding',
+      taskWeight: defaultWeight,
+    }
+    : {
+      id: 'architecture',
+      role: 'architect',
+      title: '架构师',
+      channel: 'deepseek',
+      model: 'deepseek-v4-pro',
+      task: '你是架构设计师。根据 PRD 和原型，产出架构文档（技术选型、目录结构、API 规范、'
+        + '环境配置清单）。',
+      outputPath: '03_ARCHITECTURE/architecture.md',
+      constraints: [
+        '技术选型 + 目录结构',
+        'API 规范设计',
+        // 工程品类终判（W3，v0.17.66）：架构师对项目形态的判断优先于 PRD 初判
+        // （resolveProjectCategoryForCoding 按 architecture > prd 顺序提取）；
+        // 未标注时 coding 降级 web-fullstack（对本地程序/CLI 等形态会误配工程模板）。
+        '工程品类终判（必须）：' + CATEGORY_MARKER_GUIDE + '；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在架构文档显目位置',
+        // W7 v3 §五（v0.17.69）：模板前移契约——prototype→architecture 推进时已按初判落位
+        // 00_ENGINEERING_TEMPLATE/template.md（头部标注「初判参考」），架构师终判前必读
+        '品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；'
+          + '若项目目录无该文件，按品类自行降级判定），终判若与初判不一致，以终判为准并说明理由',
+        // W7 v3 §五.2（v0.17.69）：环境配置清单节（表格列固定，供规则校验层解析）
+        '架构文档必含「## 环境配置」节：清单表（列：组件 | 版本 | 用途 | 安装命令 | 验证命令），'
+          + '按品类列全运行时/包管理器/构建工具；环境探测结果与缺失标记写入验证命令列备注',
+        ...ENV_PROBE_CONSTRAINTS,
+      ],
+      requiresUserConfirmation: true,
+      requiresAC: true,
+      retryLimit: 2,
+      next: 'planning',
+      taskWeight: defaultWeight,
+    }
+
+  // W7（v0.17.69）：quick 也必经架构师环节（轻量变体，免 AC/合并确认）——用户裁决
+  // 「快消型流程和持续迭代流程里面，向导 Agent 团队都不能忽略架构师角色」；
+  // quick 链：requirements → prototype → architecture → coding → testing → delivered。
+  if (mode === 'quick') {
+    return [REQUIREMENTS, prototype, architecture, coding, testing, SENTINEL]
   }
 
   const planning: PhaseNode = {

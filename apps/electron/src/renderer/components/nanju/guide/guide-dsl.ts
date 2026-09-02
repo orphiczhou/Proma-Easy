@@ -41,11 +41,23 @@ export const GUIDE_MAIN_NODE_ID: Record<GuidePhaseId, string> = {
 export const GUIDE_SUBSTAGE_SEQUENCE: Record<GuidePhaseId, readonly string[]> = {
   requirements: ['REQ', 'REQ_ATK', 'REQ_DEF', 'REQ_UC'],
   prototype: ['PROTO', 'PROTO_SS', 'PROTO_ATK', 'PROTO_DEF', 'PROTO_VIS', 'PROTO_UC'],
-  architecture: ['ARCH', 'ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_UC'],
+  architecture: ['ARCH', 'ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_ENV', 'ARCH_UC'],
   planning: ['PLAN', 'PLAN_ATK', 'PLAN_DEF', 'PLAN_UC'],
   coding: ['CODE', 'CODE_UC'],
   testing: ['TEST', 'TEST_ATK', 'TEST_DEF', 'TEST_GWT', 'TEST_JUDGE'],
 }
+
+/** 跨大环节回归边（W2c，v0.17.69）：主进程 regressionEvents 按边聚合的投影 */
+export interface GuideRegressionEdge {
+  from: GuidePhaseId
+  to: GuidePhaseId
+  count: number
+  /** 回归进行中（项目当前处于 to 阶段）：琥珀高亮 + 脉冲动画；收敛后浅琥珀留痕 */
+  active?: boolean
+}
+
+/** ARCH_ENV 环境子步骤二态（W7 R9 + AC 审计 M5：verified→done / failed→blocked；探测中由 subStage 推导兜底） */
+export type GuideEnvState = 'done' | 'blocked'
 
 /**
  * 按 subStage 推导当前阶段序列内三态（规则与主进程 deriveGuideSubStates 同一契约，
@@ -86,7 +98,7 @@ export function deriveSubStageStates(
 const PHASE_SUB_NODE_FLOW: Record<GuidePhaseId, readonly string[]> = {
   requirements: ['REQ_ATK', 'REQ_DEF', 'REQ_UC'],
   prototype: ['PROTO_SS', 'PROTO_ATK', 'PROTO_DEF', 'PROTO_VIS', 'PROTO_UC'],
-  architecture: ['ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_UC'],
+  architecture: ['ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_ENV', 'ARCH_UC'],
   planning: ['PLAN_ATK', 'PLAN_DEF', 'PLAN_UC'],
   coding: ['CODE_ATK', 'CODE_DEF', 'CODE_UC'],
   testing: ['TEST_ATK', 'TEST_DEF', 'TEST_GWT', 'TEST_JUDGE'],
@@ -138,6 +150,11 @@ export interface GuideProgress {
    * 降级为现状（子节点无细分着色），安全。
    */
   subStage?: string
+  /**
+   * 环境配置子步骤三态（W7 R9，v0.17.69）：强制映射 ARCH_ENV（优先于 subStage 序列
+   * 推导）；缺失 = 无环境事件，按序列推导降级。blocked → st-blocked（S2 预留 class 启用）。
+   */
+  envState?: GuideEnvState
 }
 
 export interface BuildGuideDslInput {
@@ -154,6 +171,12 @@ export interface BuildGuideDslInput {
    * 展开（折叠仅进度模式生效）。
    */
   expandedPhases?: GuidePhaseId[]
+  /**
+   * 跨大环节回归边（W2c，v0.17.69）：主进程 regressionEvents 投影。进度模式渲染
+   * PROTO→REQ 数据驱动回指边 + TEST 分流结构边着色/计数；对照模式（progress=null）
+   * 只画结构边（回归数据边不渲染——无项目上下文）。
+   */
+  regressions?: GuideRegressionEdge[]
 }
 
 /**
@@ -363,17 +386,29 @@ const PASSED_EDGE_STYLE: Record<'light' | 'dark', string> = {
   dark: 'stroke:#34D399,stroke-width:2.5px',
 }
 
+/** 回归边样式（W2c，v0.17.69，设计稿 §3.3）：active 琥珀强调（#D97706 对齐 --color-warning）；
+ *  收敛后浅琥珀留痕 + 次数徽标（U3 用户裁决：留痕） */
+const REGRESSION_EDGE_STYLE: Record<'light' | 'dark', string> = {
+  light: 'stroke:#D97706,stroke-width:2.5px',
+  dark: 'stroke:#F59E0B,stroke-width:2.5px',
+}
+const REGRESSION_TRACE_STYLE: Record<'light' | 'dark', string> = {
+  light: 'stroke:#FBBF24,stroke-width:1.5px',
+  dark: 'stroke:#92400E,stroke-width:1.5px',
+}
+
 /** mermaid label 转义：引号与换行占位由生成器控制，这里仅处理双引号 */
 function escapeLabel(text: string): string {
   return text.replace(/"/g, '#quot;')
 }
 
-/** 生成单个阶段的 subgraph 内部结构；返回 { lines, mainNode, exitNode, edgeCount }；跨阶段边由调用方输出 */
+/** 生成单个阶段的 subgraph 内部结构；返回 { lines, mainNode, exitNode, edgeCount, subNodes, postEdgeLines }；跨阶段边由调用方输出 */
 function buildPhaseSubgraph(
   phase: GuideRoutePhase,
   index: number,
   todoLabel: string,
-): { lines: string[]; mainNode: string; exitNode: string; edgeCount: number } {
+  regressions: GuideRegressionEdge[],
+): { lines: string[]; mainNode: string; exitNode: string; edgeCount: number; subNodes: string[]; postEdgeLines: string[] } {
   const phaseId = phase.id as GuidePhaseId
   const main = GUIDE_MAIN_NODE_ID[phaseId]
   const atk = `${main}_ATK`
@@ -382,8 +417,14 @@ function buildPhaseSubgraph(
   const weight = phase.taskWeight ?? 'medium'
   const isPrototype = phaseId === 'prototype'
   const isArchitecture = phaseId === 'architecture'
+  /** 回归计数徽标（同边回归事件的 count；无事件时不显示） */
+  const regCount = (from: GuidePhaseId, to: GuidePhaseId): string => {
+    const hit = regressions.find((r) => r.from === from && r.to === to)
+    return hit ? ` ×${hit.count}` : ''
+  }
 
   const lines: string[] = []
+  const postEdgeLines: string[] = []
   let edgeCount = 0
   // subgraph 标题：① 角色名 角色英文 · 模型（渠道为运行时解析值/家族标记，不直接展示，修订 Y8）
   lines.push(`    subgraph SG_${main}["${CIRCLED_NUMBERS[index]} ${phase.title} ${phase.role} · ${phase.model}"]`)
@@ -391,15 +432,58 @@ function buildPhaseSubgraph(
   lines.push(`        ${main}["${PHASE_OUTPUT_LABEL[phaseId]}<br/>${phase.outputPath}${todoLabel}"]`)
 
   // testing 特化：场景生成（AC 审计后）→ Harness 执行 → 规则裁判（机器判定收口，无用户确认）
+  // W2c（v0.17.69）：GWT 失败边按 v0.17.63 实际分流拆两条忠实边（替换原「回炉 coding」假边
+  // ——假边指向 TEST 主节点，与 behavior→coding / mapping→testing 分流不符）
   if (phaseId === 'testing') {
     lines.push(`        ${main} --> ${atk}["攻击者审查（AC ${weight}）"]`)
     lines.push(`        ${atk} --> ${def}["防御者裁决"]`)
     lines.push(`        ${def} -->|"red → 修复后重新攻击"| ${atk}`)
     lines.push(`        ${def} -->|"无 red"| ${main}_GWT{"Harness 执行 GWT<br/>场景×步骤 · data-ai-id 锚点"}`)
-    lines.push(`        ${main}_GWT -->|"❌ 失败场景 → 回炉 coding（≤2 次）"| ${main}`)
+    lines.push(`        ${main}_GWT -.->|"映射失败→重测${regCount('testing', 'testing')}"| ${main}`)
     lines.push(`        ${main}_GWT -->|"全场景通过"| ${main}_JUDGE{"规则裁判 judge.verdict<br/>全通过 + US 全覆盖 = 交付"}`)
+    // 行为类后置边（TEST_GWT -.-> CODE）跨 subgraph，在 postEdgeLines 返回，
+    // 由主体 postLines 循环单独计入 edgeIndex（此处 edgeCount 只含 subgraph 内 6 条，
+    // 勿双计——AC 审计 A1：双计会使 post 边及后续所有边索引 +1，testing 展开 + 回归事件时
+    // 数据边索引越界导致 mermaid updateLink 抛错、整图渲染失败）
+    postEdgeLines.push(`    ${main}_GWT -.->|"行为失败→回炉开发${regCount('testing', 'coding')}"| ${GUIDE_MAIN_NODE_ID.coding}`)
+    return {
+      lines: [...lines, '    end'], mainNode: main, exitNode: `${main}_JUDGE`,
+      edgeCount: 6, subNodes: [`${main}_ATK`, `${main}_DEF`, `${main}_GWT`, `${main}_JUDGE`],
+      postEdgeLines,
+    }
+  }
+
+  // architecture 特化（W7，v0.17.69）：ARCH_ENV 环境配置子步骤入图——
+  // iterative（requiresAC）：AC 攻防后接环境配置再确认；quick：精简链 ARCH → ARCH_ENV → ARCH_UC
+  //（免 AC 攻防，U1 方案 A；图与 buildL2TaskWithAC 的 skipInlineAC 行为一致）
+  if (isArchitecture) {
+    const envNode = `${main}_ENV["环境配置/调通<br/>组件探测 · 缺失确认安装"]`
+    if (phase.requiresAC) {
+      // 修订 Y2：AC red 硬门禁 = ARCH_DEF 独立出口边（忠实于 handlePhaseResult 先门禁后确认）
+      lines.push(`        ${main} --> ${atk}["攻击者审查（AC ${weight}）"]`)
+      lines.push(`        ${atk} --> ${def}["防御者裁决"]`)
+      lines.push(`        ${def} -->|"red → 修复后重新攻击"| ${atk}`)
+      lines.push(`        ${def} -->|"有 red · AC 结论硬门禁"| ${main}_GATE{"AC 结论硬门禁<br/>red 时通知用户后重审"}`)
+      lines.push(`        ${main}_GATE -->|"处理后重新攻击"| ${atk}`)
+      lines.push(`        ${def} -->|"无 red"| ${envNode}`)
+      lines.push(`        ${main}_ENV -->|"环境就绪"| ${uc}{"用户确认<br/>预览 ${phase.outputPath}"}`)
+      lines.push(`        ${uc} -->|"补充意见"| ${main}`)
+      lines.push('    end')
+      return {
+        lines, mainNode: main, exitNode: uc, edgeCount: 8,
+        subNodes: [atk, def, `${main}_GATE`, `${main}_ENV`, uc],
+        postEdgeLines,
+      }
+    }
+    // quick 精简链：无 ATK/DEF/GATE（免 inline AC）；环境配置与用户确认直接串联
+    lines.push(`        ${main} --> ${envNode}`)
+    lines.push(`        ${main}_ENV -->|"环境就绪"| ${uc}{"用户确认<br/>架构摘要 + 环境清单合并确认<br/>预览 ${phase.outputPath}"}`)
     lines.push('    end')
-    return { lines, mainNode: main, exitNode: `${main}_JUDGE`, edgeCount: 6 }
+    return {
+      lines, mainNode: main, exitNode: uc, edgeCount: 2,
+      subNodes: [`${main}_ENV`, uc],
+      postEdgeLines,
+    }
   }
 
   if (isPrototype) {
@@ -416,16 +500,10 @@ function buildPhaseSubgraph(
   lines.push(`        ${atk} --> ${def}["防御者裁决"]`)
   lines.push(`        ${def} -->|"red → 修复后重新攻击"| ${atk}`)
   edgeCount += 2
-  if (isArchitecture && phase.requiresAC) {
-    // 修订 Y2：AC red 硬门禁 = ARCH_DEF 独立出口边（忠实于 handlePhaseResult 先门禁后确认）
-    lines.push(`        ${def} -->|"有 red · AC 结论硬门禁"| ${main}_GATE{"AC 结论硬门禁<br/>red 时通知用户后重审"}`)
-    lines.push(`        ${main}_GATE -->|"处理后重新攻击"| ${atk}`)
-    lines.push(`        ${def} -->|"无 red"| ${uc}{"用户确认<br/>预览 ${phase.outputPath}"}`)
-    edgeCount += 3
-  } else {
-    lines.push(`        ${def} -->|"无 red"| ${uc}{"用户确认<br/>预览 ${phase.outputPath}"}`)
-    edgeCount += 1
-  }
+  // architecture 已在上方特化分支提前 return（W7 ARCH_ENV）；此处只处理
+  // requirements/planning/coding 的通用 ATK→DEF→UC 链
+  lines.push(`        ${def} -->|"无 red"| ${uc}{"用户确认<br/>预览 ${phase.outputPath}"}`)
+  edgeCount += 1
   if (isPrototype) {
     lines.push(`        ${def} -->|"无 red"| ${main}_VIS{"独立视觉裁决<br/>防作者自证"}`)
     lines.push(`        ${main}_VIS -->|"red → 回截图自检"| ${main}_SS`)
@@ -436,7 +514,7 @@ function buildPhaseSubgraph(
   edgeCount += 1
   lines.push('    end')
 
-  return { lines, mainNode: main, exitNode: uc, edgeCount }
+  return { lines, mainNode: main, exitNode: uc, edgeCount, subNodes: [], postEdgeLines }
 }
 
 /**
@@ -463,6 +541,8 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
   // 边索引计数：linkStyle 需要按边声明顺序的 0 基索引
   let edgeIndex = 0
   const passedEdgeIndexes: number[] = []
+  /** 回归边索引（W2c，v0.17.69）：琅琅 linkStyle + active 动画匹配用（from/to 阶段 id） */
+  const regressionEdgeIndexes: Array<{ index: number; edge: { from: GuidePhaseId; to: GuidePhaseId } }> = []
   const statusOf = (id: GuidePhaseId | 'delivered'): StageViewStatus => progress?.stageStates[id] ?? 'pending'
   const abandoned = progress?.abandoned ?? false
 
@@ -517,38 +597,86 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
       allNodeIds.push(main)
       prevExit = main
     } else {
-      const { lines: subLines, exitNode, edgeCount } = buildPhaseSubgraph(phase, i, todoLabel)
+      const { lines: subLines, exitNode, edgeCount, subNodes, postEdgeLines: postLines } =
+        buildPhaseSubgraph(phase, i, todoLabel, input.regressions ?? [])
       lines.push('')
       lines.push(...subLines)
+      // testing 的映射类回归边（TEST_GWT -.-> TEST）在 subgraph 内第 5 条（0 基第 4）；
+      // 行为类后置边由 postLines 循环逐条计数（edgeCount 不含 post 边，防双计）
+      if (phaseId === 'testing') {
+        regressionEdgeIndexes.push({ index: edgeIndex + 4, edge: { from: 'testing', to: 'testing' } })
+      }
       edgeIndex += edgeCount
       prevExit = exitNode
-      // 全量节点收集（对照模式中性着色用）
+      // 跨 subgraph 后置边（testing 行为类回炉 TEST_GWT→CODE）：紧跟该 subgraph 输出，
+      // 边索引连续计入；回归边索引单独收集（琅琅 linkStyle 用）
+      for (const pe of postLines) {
+        lines.push('')
+        lines.push(pe)
+        edgeIndex += 1
+        if (phaseId === 'testing') {
+          regressionEdgeIndexes.push({ index: edgeIndex - 1, edge: { from: 'testing', to: 'coding' } })
+        }
+      }
+      // 全量节点收集（对照模式中性着色用）：优先用 buildPhaseSubgraph 的结构流清单
+      //（testing/architecture 特化分支已维护；requirements/planning/coding 走通用链）
       allNodeIds.push(main)
-      const subNodes = [`${main}_ATK`, `${main}_DEF`, exitNode]
-      if (phaseId === 'prototype') subNodes.unshift(`${main}_SS`, `${main}_VIS`)
-      if (phaseId === 'architecture') subNodes.splice(2, 0, `${main}_GATE`)
-      if (phaseId === 'testing') subNodes.splice(2, 0, `${main}_GWT`)
-      allNodeIds.push(...subNodes)
-      subs.push(...subNodes)
+      const flowNodes = subNodes.length > 0
+        ? subNodes
+        : (() => {
+          const generic = [`${main}_ATK`, `${main}_DEF`, exitNode]
+          if (phaseId === 'prototype') generic.unshift(`${main}_SS`, `${main}_VIS`)
+          return generic
+        })()
+      allNodeIds.push(...flowNodes)
+      subs.push(...flowNodes)
     }
 
     // 进度 class 注入（对照模式 progress=null 时不注入任何状态 class）
     if (progress) {
       // W2 S2：current 阶段且有有效 subStage → 主节点按序列位置着色（产出完成等确认时
       // 主节点转 done、脉冲移到 UC 节点）；折叠框聚合阶段态不用细分；其余维持阶段三态
-      const subStageStates = status === 'current' && !collapsed && progress.subStage
+      let subStageStates = status === 'current' && !collapsed && progress.subStage
         && GUIDE_SUBSTAGE_SEQUENCE[phaseId].includes(progress.subStage)
         ? derivePhaseSubNodeStates(phaseId, progress.subStage)
         : null
+      // W7 R9（v0.17.69）：envState 强制映射 ARCH_ENV（优先于 subStage 序列推导）——
+      // 环境事件是独立数据源（探测中/就绪/缺失），UC 态特殊化把中间节点画 pending
+      // 的规则不适用于 ARCH_ENV；blocked 单独走 st-blocked（S2 预留 class 在此启用）。
+      // 不依赖 subStage 有效：subStageStates 为 null（无/未知 subStage）时也单独注入。
+      const envBlockedNodes: string[] = []
+      const envSoloClass: string | null = !collapsed && phaseId === 'architecture'
+        && progress.envState && subs.includes('ARCH_ENV')
+        ? progress.envState === 'blocked' ? 'st-blocked'
+          : 'st-sub-done'
+        : null
+      if (subStageStates && envSoloClass === 'st-blocked') {
+        delete subStageStates.ARCH_ENV
+        envBlockedNodes.push('ARCH_ENV')
+      } else if (subStageStates && envSoloClass) {
+        subStageStates = { ...subStageStates, ARCH_ENV: progress.envState as StageViewStatus }
+      }
       classAssignments.push(`class ${main} st-${subStageStates?.[main] ?? status}`)
       if (subStageStates && subs.length > 0) {
         // 子节点按推导三态分组（st-sub-done 弱绿 / st-current 脉冲 / st-pending 灰），
-        // 替代现状「current 阶段子节点全灰」；分组顺序按结构流（首现顺序稳定可测）
+        // 替代现状「current 阶段子节点全灰」；分组顺序按结构流（首现顺序稳定可测）。
+        // blocked 节点（ARCH_ENV 缺失态）跳过三态分组，单独走 st-blocked
         const groups: Record<StageViewStatus, string[]> = { done: [], current: [], pending: [] }
-        for (const id of subs) groups[subStageStates[id] ?? 'pending'].push(id)
+        for (const id of subs) {
+          if (envBlockedNodes.includes(id)) continue
+          groups[subStageStates[id] ?? 'pending'].push(id)
+        }
         if (groups.done.length > 0) subDoneGroups.push(groups.done.join(','))
         if (groups.current.length > 0) classAssignments.push(`class ${groups.current.join(',')} st-current`)
         if (groups.pending.length > 0) classAssignments.push(`class ${groups.pending.join(',')} st-pending`)
+        // st-blocked（W2c/W7）：ARCH_ENV 环境缺失态（env.setup.failed）——从分组中
+        // 剔除后单独注入，避免与三态 class 冲突
+        for (const bn of envBlockedNodes) {
+          classAssignments.push(`class ${bn} st-blocked`)
+        }
+      } else if (envSoloClass && !collapsed && phaseId === 'architecture' && subs.includes('ARCH_ENV')) {
+        // current 阶段但无有效 subStage（现状降级不着色）时，ARCH_ENV 仍按 envState 单独着色
+        classAssignments.push(`class ARCH_ENV ${envSoloClass}`)
       } else if (status === 'done') {
         // 子节点跟随阶段 done 着色（st-sub-done 弱一档，PRD §4.1.4）
         if (subs.length > 0) subDoneGroups.push(subs.join(','))
@@ -573,6 +701,26 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
   }
   edgeIndex += 1
 
+  // 跨大环节回归数据边（W2c，v0.17.69）：PROTO→REQ 回指等无结构边对应的回归——有事件才画
+  //（TEST 分流两条是结构忠实边，已在 buildPhaseSubgraph 渲染，不在此重复）；
+  // 对照模式（progress=null）不画（无项目上下文）。回归边 label 带触发原因短句 + 次数。
+  if (progress && input.regressions && !abandoned) {
+    for (const reg of input.regressions) {
+      // testing 分流边已由结构边承载，跳过
+      if (reg.from === 'testing') continue
+      const fromMain = GUIDE_MAIN_NODE_ID[reg.from]
+      const toMain = GUIDE_MAIN_NODE_ID[reg.to]
+      if (!fromMain || !toMain) continue
+      const label = reg.from === 'prototype' && reg.to === 'requirements'
+        ? `新需求回改 PRD ×${reg.count}`
+        : `${reg.from} → ${reg.to} 回归 ×${reg.count}`
+      lines.push('')
+      lines.push(`    ${fromMain} -.->|"${label}"| ${toMain}`)
+      regressionEdgeIndexes.push({ index: edgeIndex, edge: { from: reg.from, to: reg.to } })
+      edgeIndex += 1
+    }
+  }
+
   // classDef + class + linkStyle（进度模式：状态着色；对照模式：中性参考样式）
   if (progress) {
     lines.push('')
@@ -585,6 +733,25 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
     if (passedEdgeIndexes.length > 0) {
       const style = PASSED_EDGE_STYLE[isDark ? 'dark' : 'light']
       lines.push(`    linkStyle ${passedEdgeIndexes.join(',')} ${style}`)
+    }
+    // 回归边 linkStyle（W2c）：active 琥珀强调（动画由 GuideFlow SVG 后处理注入）；
+    // 收敛后浅琥珀留痕。对照模式无此段（无回归数据）。
+    if (regressionEdgeIndexes.length > 0 && input.regressions) {
+      const activeSet = new Set(
+        input.regressions.filter((r) => r.active).map((r) => `${r.from}->${r.to}`),
+      )
+      const activeIdx: number[] = []
+      const traceIdx: number[] = []
+      for (const { index, edge } of regressionEdgeIndexes) {
+        if (activeSet.has(`${edge.from}->${edge.to}`)) activeIdx.push(index)
+        else traceIdx.push(index)
+      }
+      if (traceIdx.length > 0) {
+        lines.push(`    linkStyle ${traceIdx.join(',')} ${REGRESSION_TRACE_STYLE[isDark ? 'dark' : 'light']}`)
+      }
+      if (activeIdx.length > 0) {
+        lines.push(`    linkStyle ${activeIdx.join(',')} ${REGRESSION_EDGE_STYLE[isDark ? 'dark' : 'light']}`)
+      }
     }
   } else {
     // 对照模式：无进度状态，注入统一中性色块（反差配色与进度图一致，语义不表状态）

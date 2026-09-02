@@ -748,6 +748,11 @@ export class AgentOrchestrator {
           }, 1500)
         } else if (outcome.failureKind === 'mapping') {
           // 映射类失败（AC L-001 分流）：selector 等待超时/未映射 → 回 testing 重写映射，不烧 coding 预算
+          // W2c（v0.17.69）：失败分流观测——记回归事件（testing→testing 自环重写映射）
+          try {
+            const { recordGwtFailureRegression } = require('./nanju-regression') as typeof import('./nanju-regression')
+            recordGwtFailureRegression(workspaceSlug, projectId, 'mapping', { sessionId })
+          } catch { /* 回归记录失败不影响分流 */ }
           this.injectNanjuAssistantMessage(
             sessionId,
             outcome.summaryText + '\n\n失败清单：\n' + outcome.failListText
@@ -778,6 +783,11 @@ export class AgentOrchestrator {
           }, 1500)
         } else {
           // 行为类失败（AC L-001 分流）：assert 断言不满足 → 回炉 coding 修复（≤2 次）
+          // W2c（v0.17.69）：失败分流观测——记回归事件（testing→coding 回炉开发）
+          try {
+            const { recordGwtFailureRegression } = require('./nanju-regression') as typeof import('./nanju-regression')
+            recordGwtFailureRegression(workspaceSlug, projectId, 'behavior', { sessionId })
+          } catch { /* 回归记录失败不影响分流 */ }
           this.injectNanjuAssistantMessage(
             sessionId,
             outcome.summaryText + '\n\n失败清单：\n' + outcome.failListText
@@ -2444,6 +2454,29 @@ export class AgentOrchestrator {
                 const textBlocks = (lastAccumulated as { message?: { content?: Array<{ type: string; text?: string }> } })?.message?.content
                 const fullText = (textBlocks ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
                 const phaseMatch = fullText.match(/(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)/i)
+                // W2c（v0.17.69）：意见收集轮 L1 语义回归标记检测（PHASE_ADVANCE 同型字符串检测；
+                // 判定协议 v1 第 3 条——硬规则未命中时 L1 语义判定启动，只标建议，
+                // 写入走主进程唯一写入点 recordRegressionEvent，judgment 必附审计日志）
+                const regressionMatch = fullText.match(/<!--\s*NANJU_REGRESSION:\s*([^-]+?)\s*-->/)
+                if (regressionMatch && !phaseMatch) {
+                  try {
+                    const { listNanjuProjects: listProj } = require('./nanju-project') as typeof import('./nanju-project')
+                    const proj = listProj(workspaceSlug).find((p: { sessionId?: string }) => p.sessionId === sessionId)
+                    // 仅 prototype 阶段的意见收集轮生效（标记语义绑定 UX→PRD 回归；其他阶段防误标）
+                    if (proj && proj.currentStage === 'prototype') {
+                      const { recordRegressionEvent } = require('./nanju-regression') as typeof import('./nanju-regression')
+                      const judgment = regressionMatch[1]?.trim() || 'L1 语义判定：意见引入 PRD 未有的新需求'
+                      recordRegressionEvent(workspaceSlug, proj.projectId, 'prototype', 'requirements', judgment, {
+                        opinion: fullText.slice(0, 500),
+                        judgment,
+                        sessionId,
+                      })
+                      console.log(`[南大回归] L1 语义判定标记：${proj.name} prototype→requirements（${judgment}）`)
+                    }
+                  } catch (e) {
+                    console.warn('[南大回归] 标记检测异常（不阻断）:', e instanceof Error ? e.message : String(e))
+                  }
+                }
                 if (phaseMatch) {
                   const newStage = phaseMatch[1]?.toLowerCase()
                   console.log(`[南大路由] 检测到 PHASE_ADVANCE: ${newStage}`)
@@ -2453,6 +2486,21 @@ export class AgentOrchestrator {
                   const projects = listNanjuProjects(workspaceSlug)
                   const project = projects.find((p: { sessionId: string }) => p.sessionId === sessionId)
                   if (project) {
+                    // W7（v0.17.69 + AC 审计 M3/M4）：architecture 产出验证前置位——解析
+                    // architecture.md 的 projectEnv 标记行写 envReady（write-then-gate：先置位
+                    // 再跑含 envReady 门禁的 verifyPhaseOutput，避免首推进被自己未置位的门禁
+                    // 误拦）。解析+置位逻辑已抽 syncProjectEnvStateFromArchitectureDoc 共用
+                    //（M3 正则放宽 + 幂等 + 无标记行 warn），与 syncNanjuGuideConfirmState
+                    // result 侧复用同一实现，防两处解析口径漂移。
+                    if (project.currentStage === 'architecture') {
+                      try {
+                        const { syncProjectEnvStateFromArchitectureDoc } =
+                          require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
+                        syncProjectEnvStateFromArchitectureDoc(workspaceSlug, project.projectId, sessionId)
+                      } catch (e) {
+                        console.warn('[南大路由] 环境状态置位失败（不阻断验证）:', e instanceof Error ? e.message : String(e))
+                      }
+                    }
                     const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
                     if (verifyError) {
                       console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
@@ -2477,6 +2525,18 @@ export class AgentOrchestrator {
                           recordTelemetry(workspaceSlug, 'coding.executed', {
                             project_id: project.projectId, mode: project.mode,
                             entry: '08_APP/index.html',
+                          }, project.projectId)
+                        } catch { /* 埋点失败不影响推进 */ }
+                      }
+                      // arch.executed 埋点（W7，v0.17.69）：architecture 阶段推进成功 = 架构师
+                      // 环节（含环境探测）首次两模式可观测的交付事实（推进即事实口径，同 coding.executed）
+                      if (project.currentStage === 'architecture') {
+                        try {
+                          const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+                          const { getPhaseNode } = require('./nanju-router') as typeof import('./nanju-router')
+                          recordTelemetry(workspaceSlug, 'arch.executed', {
+                            project_id: project.projectId, mode: project.mode,
+                            requires_ac: getPhaseNode(project.mode, 'architecture')?.requiresAC ?? false,
                           }, project.projectId)
                         } catch { /* 埋点失败不影响推进 */ }
                       }
@@ -2556,6 +2616,27 @@ export class AgentOrchestrator {
                               )
                             }
                           } catch { /* 检查失败不阻断推进 */ }
+                        }
+                        // 工程模板前移落位（W7 R3 前移契约，v0.17.69）：即将进入 architecture
+                        // ——按 PRD 初判/默认品类 materialize 模板到 00_ENGINEERING_TEMPLATE/
+                        //（头部标注「初判参考」），【不写 projectCategory】：品类写入与权威
+                        // 重落位只在 coding 推进钩子（防 existing?? 幂等污染终判）。
+                        if (newStage === 'architecture') {
+                          try {
+                            const {
+                              resolveProjectCategoryForCoding,
+                              materializeEngineeringTemplate,
+                            } = require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
+                            const initial = resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
+                              ?? { category: 'web-fullstack' as const, source: 'default' as const }
+                            const templatePath = materializeEngineeringTemplate(
+                              workspaceSlug, project.projectId, initial.category,
+                              undefined, { annotateInitialGuess: true },
+                            )
+                            console.log(`[南大路由] 工程模板前移落位: ${project.name} → ${initial.category}（${initial.source}，初判参考）${templatePath ? '' : '（模板缺失，架构师按品类自行降级）'}`)
+                          } catch (e) {
+                            console.warn('[南大路由] 工程模板前移落位异常（不阻断推进）:', e instanceof Error ? e.message : String(e))
+                          }
                         }
                         // 工程品类判定与模板落位（W3，v0.17.66）：即将进入 coding——从
                         // architecture/prd 提取 projectCategory 写入 _project-info.json，并把

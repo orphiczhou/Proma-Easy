@@ -5,6 +5,30 @@ import { resolveGuideNodeTarget, type GuideNodeTarget } from './guide-dsl'
 interface GuideFlowProps {
   dsl: string
   onNodeClick: (target: GuideNodeTarget) => void
+  /**
+   * active 回归边（W2c，v0.17.69）：主进程 regressionEvents 投影中 active=true 的边
+   *（阶段 id 对）。SVG 后处理按 mermaid 边 path 的 data-id 前缀匹配（v11.15.0 实测：
+   * getEdgeId 生成 `L_{from}_{to}_{counter}`，insertEdge 写入 path[data-id]；flowchart
+   * 边 class 仅 edge-thickness/pattern/flowchart-link 三段式，**无端点前缀 class**——
+   * AC 审计 A2 勘误：原 LS/ES 选择器在本仓锁定版本永不命中，已废弃）。
+   */
+  activeRegressionEdges?: Array<{ from: string; to: string }>
+}
+
+/**
+ * 回归边端点映射：阶段 id → 边的卖际节点 id（mermaid 边 data-id 的端点段）。
+ * 一般阶段主节点与阶段 id 同名（REQ/PROTO/…）；testing 两条分流边从 TEST_GWT
+ * 出发而非 TEST 主节点（忠实于 v0.17.63 失败分流的卖际源点）。
+ */
+const REGRESSION_EDGE_NODE_ID: Record<string, string> = {
+  testing: 'TEST_GWT',
+}
+
+/** 回归边（阶段 id 对）→ mermaid 边 data-id 前缀选择器 */
+function regressionEdgeSelector(edge: { from: string; to: string }): string {
+  const fromNode = REGRESSION_EDGE_NODE_ID[edge.from] ?? edge.from
+  const toNode = REGRESSION_EDGE_NODE_ID[edge.to] ?? edge.to
+  return `path[data-id^="L_${fromNode}_${toNode}_"]`
 }
 
 const ZOOM_MIN = 0.3
@@ -18,6 +42,8 @@ const DEBOUNCE_MS = 350
 const PULSE_CSS = `
 .guide-node-current { animation: guide-pulse 1.6s ease-in-out infinite; }
 @keyframes guide-pulse { 0%,100% { filter: drop-shadow(0 0 2px rgba(79,70,229,.9)); } 50% { filter: drop-shadow(0 0 7px rgba(79,70,229,.55)); } }
+.guide-edge-active { animation: guide-edge-pulse 1.6s ease-in-out infinite; }
+@keyframes guide-edge-pulse { 0%,100% { stroke-opacity: .45; } 50% { stroke-opacity: 1; } }
 .guide-flow-svg svg [data-id], .guide-flow-svg svg [id^="flowchart-"] { cursor: pointer; }
 `
 
@@ -34,7 +60,7 @@ function extractNodeId(el: Element): string | null {
   return null
 }
 
-export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElement {
+export function GuideFlow({ dsl, onNodeClick, activeRegressionEdges }: GuideFlowProps): React.ReactElement {
   const [renderedSvg, setRenderedSvg] = React.useState<string | null>(null)
   const [renderFailed, setRenderFailed] = React.useState(false)
 
@@ -204,10 +230,21 @@ export function GuideFlow({ dsl, onNodeClick }: GuideFlowProps): React.ReactElem
       node.addEventListener('click', handler)
       disposers.push(() => node.removeEventListener('click', handler))
     }
+
+    // W2c（v0.17.69）：active 回归边脉冲动画——按 mermaid 边 path 的 data-id 前缀匹配
+    //（`L_{from}_{to}_{counter}`，v11.15.0 实测锚点；端点用 REGRESSION_EDGE_NODE_ID
+    // 映射，testing 分流边从 TEST_GWT 出发），命中加 guide-edge-active。
+    // 部署批次以 querySelector 命中数 > 0 验证（AC 审计 A2 收口条件）。
+    if (activeRegressionEdges && activeRegressionEdges.length > 0) {
+      for (const edge of activeRegressionEdges) {
+        const paths = container.querySelectorAll(regressionEdgeSelector(edge))
+        paths.forEach((p) => p.classList.add('guide-edge-active'))
+      }
+    }
     return () => {
       for (const dispose of disposers) dispose()
     }
-  }, [renderedSvg, onNodeClick, applyInitialLayout])
+  }, [renderedSvg, onNodeClick, applyInitialLayout, activeRegressionEdges])
 
   // 拖拽平移：仅 Ctrl+拖动（用户反馈：拖动需按住 Ctrl，避免与常规操作冲突）；
   // pointer capture 确保 SVG 子元素不吞事件、指针移出仍持续跟踪

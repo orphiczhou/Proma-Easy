@@ -7,7 +7,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, dirname, resolve, sep } from 'node:path'
-import { listNanjuProjects, type NanjuProject } from './nanju-project'
+import { listNanjuProjects, getProjectCategory, getProjectEnvState, type NanjuProject } from './nanju-project'
 import { getPhaseNode, type PhaseId, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
 
@@ -177,6 +177,53 @@ export function verifyPhaseOutput(
         })
       if (!hasValidStepsJson) {
         return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个可解析且含非空 feature/scenario 的 *.steps.json（与 us-XX.feature 成对产出；空占位文件不算）'
+      }
+    }
+  }
+
+  // architecture 阶段（W7，v0.17.69）：品类幻觉拦截 + 环境清单规则校验 + envReady 门禁
+  // （R4 终裁挂点：拦 architecture→coding（quick）/ architecture→planning（iterative）推进）。
+  if (phaseId === 'architecture') {
+    const {
+      resolveProjectCategoryForCoding,
+      extractRawCategoryMarker,
+      parseEnvChecklistFromDoc,
+      validateEnvChecklist,
+    } = require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
+    const { isProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
+
+    // R2 第 1 道：品类标记值校验（宽松提取——枚举限定正则看不见非法值）。
+    // 未标注不是错误（web-default 降级）；标注了但值非法 = 品类幻觉，拦。
+    const rawMarker = extractRawCategoryMarker(content)
+    if (rawMarker !== null && !isProjectCategory(rawMarker.toLowerCase())) {
+      return `架构文档品类标记非法：projectCategory: ${rawMarker}（合法值为 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一）`
+    }
+
+    // resolved 品类（W3 口径：existing ?? architecture/prd 提取 ?? web-default）。
+    // web-fullstack 免环境门禁（W7 v3 §6.1）；其余品类校验 envReady。
+    const existing = getProjectCategory(workspaceSlug, projectId)
+    const resolved = existing ?? resolveProjectCategoryForCoding(workspaceSlug, projectId)
+      ?? { category: 'web-fullstack' as const, source: 'default' as const }
+    if (resolved.category !== 'web-fullstack') {
+      const { envReady, missingComponents } = getProjectEnvState(workspaceSlug, projectId)
+      if (envReady === false) {
+        // 显式未就绪：拦截（缺失组件清单可见化）
+        const missing = missingComponents.length > 0 ? missingComponents.join('、') : '未知组件'
+        return `环境未就绪（${missing}）：请先完成工程环境配置（回到架构师环节执行安装/调通，或与用户确认换技术栈/降级）`
+      }
+      if (envReady === undefined) {
+        // 存量豁免（R8 禁裸 !==true）：envReady 字段缺失 = 未检查，不误拦。
+        // S4 后续可改补探测（首次推进时补一次最小探测置位）。
+        // envReady 由 agent-orchestrator 在本验证前解析 projectEnv 标记行置位
+        //（write-then-gate）；新流程项目若 L2 未输出标记行，也走此豁免（低敏感度）。
+      } else {
+        // envReady === true：环境清单规则校验（R2 第 2 道——已就绪但清单含 typo/幻觉
+        // 组件时拦下，防 LLM 幻觉包名进入安装阶段）
+        const checklist = parseEnvChecklistFromDoc(content)
+        const validation = validateEnvChecklist(resolved.category, checklist)
+        if (!validation.ok) {
+          return `环境配置清单校验未通过：${validation.problems.join('；')}`
+        }
       }
     }
   }

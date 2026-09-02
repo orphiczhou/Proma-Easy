@@ -74,6 +74,19 @@ export interface PhaseGuardState {
   lastErrorAt?: string
 }
 
+/**
+ * 跨大环节回归事件（W2c 判定协议 v1，AC plan-audit A4/A11）：
+ * from/to 为阶段 id（如 prototype→requirements / testing→coding），count 为同边
+ * 5 分钟窗口内去重合并后的累计次数；at 为该事件（组）首次触发时间。
+ */
+export interface RegressionEvent {
+  from: ProjectStage
+  to: ProjectStage
+  at: string
+  reason: string
+  count: number
+}
+
 /** _project-info.json 文件结构（项目目录内，createNanjuProject 时创建） */
 export interface NanjuProjectInfoFile {
   projectId: string
@@ -97,6 +110,24 @@ export interface NanjuProjectInfoFile {
    * 唯一写入点 setProjectSubStage（阶段推进/产出确认钩子），避免多写入点漂移。
    */
   subStage?: string
+  /**
+   * 跨大环节回归事件（W2c，v0.17.69）：UX→PRD 新需求 / GWT 失败回炉等跨阶段回退的
+   * 留痕记录。唯一写入点 recordRegressionEvent（nanju-regression.ts，同 to 5 分钟
+   * 窗口内合并 count++）；渲染端按 from/to 聚合画回归边。缺失 = 无回归（新/存量项目）。
+   */
+  regressionEvents?: RegressionEvent[]
+  /**
+   * 工程环境就绪状态（W7，v0.17.69）：architecture 阶段解析 architecture.md 的
+   * `projectEnv:` 标记行后由 setProjectEnvState 置位（唯一写入点）。
+   * true = 全部就绪；false = 有缺失（组件清单见 envCheck）；undefined = 未检查
+   * （存量项目豁免口径：门禁只在显式 false 时拦截，见 nanju-router-gate.ts）。
+   * 品类变更时由 setProjectCategory diff 重置为 undefined（R8：换品类需重新检查）。
+   */
+  envReady?: boolean
+  /** 环境检查明细（与 envReady 同批写入）：组件/版本/是否就绪/缺失原因/检查时间 */
+  envCheck?: Array<{ component: string; version?: string; ok: boolean; reason?: string; attemptedAt: string }>
+  /** 最近一次环境检查时间（ISO） */
+  checkedAt?: string
 }
 
 /**
@@ -267,8 +298,10 @@ export function deleteNanjuProject(
 
 // ===== 熔断状态机（v0.17.64 Sprint C1：Sprint C 设计稿 Q2） =====
 
-/** 读取 _project-info.json（不存在/损坏返回 null，不抛错——门禁与计数均容错降级） */
-function readProjectInfo(workspaceSlug: string, projectId: string): NanjuProjectInfoFile | null {
+/** 读取 _project-info.json（不存在/损坏返回 null，不抛错——门禁与计数均容错降级）。
+ *  v0.17.69 起导出：nanju-regression.ts 的回归事件读写复用同一 read-construct-write
+ *  纪律（保留未知字段向后兼容），避免第二套读写实现漂移。 */
+export function readProjectInfo(workspaceSlug: string, projectId: string): NanjuProjectInfoFile | null {
   try {
     const path = getProjectInfoPath(workspaceSlug, projectId)
     if (!existsSync(path)) return null
@@ -278,8 +311,9 @@ function readProjectInfo(workspaceSlug: string, projectId: string): NanjuProject
   }
 }
 
-/** 原子写回 _project-info.json（目录缺失时先建——老项目升级路径；保留未知字段向后兼容） */
-function writeProjectInfo(workspaceSlug: string, projectId: string, info: NanjuProjectInfoFile): void {
+/** 原子写回 _project-info.json（目录缺失时先建——老项目升级路径；保留未知字段向后兼容）。
+ *  v0.17.69 起导出（同 readProjectInfo，供 nanju-regression.ts 复用）。 */
+export function writeProjectInfo(workspaceSlug: string, projectId: string, info: NanjuProjectInfoFile): void {
   const projectDir = getNanjuProjectDir(workspaceSlug, projectId)
   if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true })
   writeJsonFileAtomic(join(projectDir, '_project-info.json'), info)
@@ -366,6 +400,10 @@ export function updatePhaseGuard(
 /**
  * 写入品类判定结果（保留未知字段向后兼容；老项目无该字段时自动补齐骨架）。
  * 唯一写入点：coding 推进钩子（agent-orchestrator）调用，避免多写入点漂移。
+ *
+ * R8 品类变更重置（W7，v0.17.69）：已存品类 ≠ 新品类 → envReady 清 undefined
+ * （resetEnvReady 语义并入此函数，保持唯一写入点纪律）——换品类后环境清单
+ * 基准变化，旧 envReady 结论失效，需在重新进入 architecture 流程时重新检查。
  */
 export function setProjectCategory(
   workspaceSlug: string,
@@ -382,6 +420,13 @@ export function setProjectCategory(
     workspaceSlug,
     projectDir: `project-${projectId}`,
     docDirs: [],
+  }
+  // 品类变更 diff（R8）：重置环境就绪状态（undefined = 未检查，门禁按存量豁免放行）
+  if (base.projectCategory !== undefined && base.projectCategory !== category) {
+    base.envReady = undefined
+    base.checkedAt = undefined
+    // envCheck 明细一并清空：旧品类组件清单对新品类无参考意义
+    base.envCheck = undefined
   }
   base.projectCategory = category
   base.projectCategorySource = source
@@ -438,4 +483,60 @@ export function getProjectSubStage(
   projectId: string,
 ): string | null {
   return readProjectInfo(workspaceSlug, projectId)?.subStage ?? null
+}
+
+// ===== 工程环境就绪状态（W7，v0.17.69：architecture 阶段环境配置主进程置位） =====
+
+/** 环境检查明细项（与 envCheck 字段同构；setProjectEnvState 入参用） */
+export interface ProjectEnvCheckItem {
+  component: string
+  version?: string
+  ok: boolean
+  reason?: string
+  attemptedAt: string
+}
+
+/**
+ * 写入环境就绪状态（唯一写入点，setProjectCategory 同型纪律）。
+ * 触发点：agent-orchestrator 在 architecture 产出验证前解析 architecture.md 的
+ * `projectEnv: ready` / `projectEnv: missing:<组件列表>` 标记行后调用（write-then-gate：
+ * 先置位再跑含 envReady 门禁的 verifyPhaseOutput）。老项目无文件时自动补齐骨架。
+ */
+export function setProjectEnvState(
+  workspaceSlug: string,
+  projectId: string,
+  ready: boolean,
+  check: ProjectEnvCheckItem[],
+): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  base.envReady = ready
+  base.envCheck = check
+  base.checkedAt = new Date().toISOString()
+  writeProjectInfo(workspaceSlug, projectId, base)
+}
+
+/**
+ * 读取环境就绪状态。返回 envReady（undefined = 未检查：存量项目/尚未解析标记行）
+ * 与缺失组件清单（envCheck 中 ok=false 的组件名，错误消息用）。
+ */
+export function getProjectEnvState(
+  workspaceSlug: string,
+  projectId: string,
+): { envReady: boolean | undefined; missingComponents: string[]; envCheck: ProjectEnvCheckItem[] } {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const envCheck = info?.envCheck ?? []
+  return {
+    envReady: info?.envReady,
+    missingComponents: envCheck.filter((c) => !c.ok).map((c) => c.component),
+    envCheck,
+  }
 }

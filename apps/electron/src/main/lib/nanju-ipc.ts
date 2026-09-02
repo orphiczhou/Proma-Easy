@@ -180,6 +180,32 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
         : input.kind === 'commit-changes' && actionLabel
           ? `【点选纠错·批量修改】${actionLabel}`
           : `【点选纠错】我点了${isCodingStage ? '应用' : '原型'}空白处，没有选中可修改元素。`
+    // W2c（v0.17.69）：点选批量提交的回归硬规则检测——委派前路由点。意见文本 = commit
+    // 明细（含语音意见项）；PRD 缺失时不检测（回归语义不成立）；仅 prototype 阶段
+    //（coding 阶段点选不回写 PRD，无回归语义）。命中 → 记回归事件（prototype→requirements）。
+    if (input.kind === 'commit-changes' && !isCodingStage) {
+      try {
+        let detailText = ''
+        try {
+          detailText = buildCtfCommitDetail(JSON.parse(input.action ?? '[]') as CtfCommitItem[])
+        } catch {
+          detailText = input.action ?? ''
+        }
+        const { readFileSync: prdRead, existsSync: prdExists } = await import('node:fs')
+        const { join: prdJoin } = await import('node:path')
+        const { getNanjuProjectDir } = await import('./nanju-project')
+        const prdPath = prdJoin(getNanjuProjectDir(input.workspaceSlug, project.projectId), '01_PRD', 'prd.md')
+        if (prdExists(prdPath)) {
+          const { detectRegressionSignal, recordRegressionEvent } = await import('./nanju-regression')
+          const signal = detectRegressionSignal([detailText], prdRead(prdPath, 'utf-8'))
+          if (signal?.regress) {
+            recordRegressionEvent(input.workspaceSlug, project.projectId, 'prototype', 'requirements',
+              `点选批量修改引入新用户故事 ${signal.matched ?? ''}（硬规则 ${signal.rule}）`,
+              { opinion: detailText.slice(0, 500), sessionId: input.sessionId })
+          }
+        }
+      } catch { /* 回归检测失败不影响点选消息注入 */ }
+    }
     // 会话可能空闲（等用户意见时是 idle）：queueAgentMessage 要求会话运行中，
     // 点选消息语义等同用户新消息——用 runAgent 开新一轮（带真实 webContents 流式回显）。
     void runAgent(

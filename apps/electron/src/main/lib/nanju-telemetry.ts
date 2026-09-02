@@ -17,6 +17,9 @@ export type TelemetryEventType =
   | 'judge.verdict' | 'project.finished' | 'architecture.confirmed'
   // v0.17.64 Sprint C1：熔断与阶段时长护栏埋点
   | 'circuit_break' | 'phase.elapsed'
+  // v0.17.69 W2c/W7：回归流 + 架构师环节 + 环境配置
+  | 'regression.detected' | 'arch.executed'
+  | 'env.check.executed' | 'env.setup.verified' | 'env.setup.failed'
 
 export interface TelemetryEvent {
   eventId: string

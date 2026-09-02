@@ -22,12 +22,13 @@ export type GuideProgressStage =
 /**
  * 各阶段子步骤推进序列（首元素 = 主节点 id = 阶段开始即「作者产出中」）。
  * S1 诚实两态起步：主进程只写 {主节点} 与 {主节点}_UC 两个值（产出中/等用户确认）；
- * ATK/DEF/GATE/VIS/GWT/JUDGE 等中间节点由 derive 推导（AC 攻防/GWT/env 细分留 S4 接数据源）。
+ * ATK/DEF/GATE/VIS/GWT/JUDGE 等中间节点由 derive 推导；ARCH_ENV 三态由 envState 载荷
+ * 强制映射（W7 R9，v0.17.69），优先于 subStage 序列推导。
  */
 export const GUIDE_SUBSTAGE_SEQUENCE: Record<GuideProgressStage, readonly string[]> = {
   requirements: ['REQ', 'REQ_ATK', 'REQ_DEF', 'REQ_UC'],
   prototype: ['PROTO', 'PROTO_SS', 'PROTO_ATK', 'PROTO_DEF', 'PROTO_VIS', 'PROTO_UC'],
-  architecture: ['ARCH', 'ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_UC'],
+  architecture: ['ARCH', 'ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_ENV', 'ARCH_UC'],
   planning: ['PLAN', 'PLAN_ATK', 'PLAN_DEF', 'PLAN_UC'],
   coding: ['CODE', 'CODE_UC'],
   testing: ['TEST', 'TEST_ATK', 'TEST_DEF', 'TEST_GWT', 'TEST_JUDGE'],
@@ -35,6 +36,24 @@ export const GUIDE_SUBSTAGE_SEQUENCE: Record<GuideProgressStage, readonly string
 
 /** 子步骤三态（与渲染端 StageViewStatus 同名同义） */
 export type GuideSubStageState = 'done' | 'current' | 'pending'
+
+/**
+ * 环境配置子步骤（ARCH_ENV）二态（W7 R9 映射契约 + AC 审计 M5 收缩，v0.17.69）：
+ * - done = env.setup.verified（全部就绪置位）
+ * - blocked = env.setup.failed（缺失置位，渲染端 st-blocked）
+ * 原设计的 'current'（探测执行中）已删：探测发生在 L2 子会话内部，主进程直到
+ * 标记行被写入才有事实可广播，无任何代码路径发出该值（死代码）——ARCH_ENV 探测中
+ * 的着色由 subStage 序列推导兜底。序列中 ARCH_ENV 位于 GATE 之后 UC 之前（两侧同步）。
+ */
+export type GuideEnvState = 'done' | 'blocked'
+
+/** 回归边投影（与 nanju-regression.ts RegressionEdge 同构；事件/快照载荷用） */
+export interface GuideProgressRegression {
+  from: string
+  to: string
+  count: number
+  active: boolean
+}
 
 /** 阶段 → 主节点 id（序列首元素；未知/无子步骤阶段返回 undefined）——阶段推进点写 subStage 用 */
 export function getGuideStageMainNodeId(stage: string): string | undefined {
@@ -92,6 +111,16 @@ export interface GuideProgressEvent {
   currentStage: string
   subStage: string
   seq: number
+  /** 环境配置子步骤三态（W7 R9；缺失 = 无环境事件，渲染端按序列推导降级） */
+  envState?: GuideEnvState
+  /** 回归边投影（W2c；缺失 = 无回归事件） */
+  regressions?: GuideProgressRegression[]
+}
+
+/** 事件附加载荷（emitGuideProgress 可选第五参；与 GuideProgressEvent 可选字段对应） */
+export interface GuideProgressExtra {
+  envState?: GuideEnvState
+  regressions?: GuideProgressRegression[]
 }
 
 /** 冷启动快照（nanju:get-guide-progress 返回值） */
@@ -99,6 +128,10 @@ export interface GuideProgressSnapshot {
   currentStage: string
   subStage: string
   seq: number
+  /** 由 _project-info.json envReady 推导（true→done / false→blocked；缺失 = undefined） */
+  envState?: GuideEnvState
+  /** 回归事件投影（getRegressionEvents + projectRegressions；无事件时缺失） */
+  regressions?: GuideProgressRegression[]
 }
 
 /**
@@ -106,19 +139,26 @@ export interface GuideProgressSnapshot {
  * 返回本次事件 seq（无窗口/异常时 seq 已自增，保证后续事件仍严格递增；-1 仅作防御兜底）。
  *
  * 调用纪律：先 setProjectSubStage 落盘再调本函数（write-then-emit，见文件头注释）。
+ * extra（v0.17.69，W2c/W7）：envState（ARCH_ENV 三态）与 regressions（回归边投影）
+ * 随事件携带；subStage 不变的纯状态更新（环境置位/回归写入）只传 extra 即可。
  */
 export function emitGuideProgress(
   sessionId: string,
   projectId: string,
   currentStage: string,
   subStage: string,
+  extra?: GuideProgressExtra,
 ): number {
   guideProgressSeq += 1
   const seq = guideProgressSeq
   try {
     const { getMainWindow } = require('./main-window-store') as typeof import('./main-window-store')
     const win = getMainWindow()
-    win?.webContents.send('nanju:guide-progress', { sessionId, projectId, currentStage, subStage, seq } satisfies GuideProgressEvent)
+    win?.webContents.send('nanju:guide-progress', {
+      sessionId, projectId, currentStage, subStage, seq,
+      envState: extra?.envState,
+      regressions: extra?.regressions,
+    } satisfies GuideProgressEvent)
   } catch { /* 主窗口不可用不影响主流程；seq 已计入，渲染端冷启动 snapshot 仍可取到最新数据 */ }
   return seq
 }
@@ -127,21 +167,31 @@ export function emitGuideProgress(
  * 冷启动快照：读 _project-info.json 的 subStage + _nanju-projects.json 的 currentStage，
  * 连同当前 seq 一并返回（渲染端挂载时先拉 snapshot 作初值再监听事件，消除空窗）。
  * 项目不存在返回 null（渲染端降级为无子步骤态）。
+ * v0.17.69：附带 envReady 推导的 envState（true→done / false→blocked）与回归事件投影
+ * （regressions）——事件丢失时快照兑底（探测中 current 态短暂，丢失退化为序列推导）。
  */
 export function getGuideProgressSnapshot(
   workspaceSlug: string,
   projectId: string,
 ): GuideProgressSnapshot | null {
   try {
-    const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+    const { listNanjuProjects, readProjectInfo, getProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
     const project = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)
     if (!project) return null
-    const { getProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
-    return {
+    const info = readProjectInfo(workspaceSlug, projectId)
+    const snapshot: GuideProgressSnapshot = {
       currentStage: project.currentStage,
       subStage: getProjectSubStage(workspaceSlug, projectId) ?? '',
       seq: guideProgressSeq,
     }
+    if (info?.envReady === true) snapshot.envState = 'done'
+    else if (info?.envReady === false) snapshot.envState = 'blocked'
+    const events = info?.regressionEvents ?? []
+    if (events.length > 0) {
+      const { projectRegressions } = require('./nanju-regression') as typeof import('./nanju-regression')
+      snapshot.regressions = projectRegressions(events, project.currentStage)
+    }
+    return snapshot
   } catch {
     return null
   }

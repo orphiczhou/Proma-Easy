@@ -1304,11 +1304,14 @@ export interface ElectronAPI {
   /** 南大项目：获取执行路由总图数据（阶段 + AC 攻防解析；含 id='delivered' 哨兵节点，渲染端自行过滤） */
   nanjuGetRoute: (mode: 'quick' | 'iterative') => Promise<unknown[]>
 
-  /** 南大向导：向导图阶段内子步骤冷启动快照（W2 S1；项目不存在返回 null） */
+  /** 南大向导：向导图阶段内子步骤冷启动快照（W2 S1；项目不存在返回 null）。
+   *  v0.17.69：附带 envState（W7 R9 环境三态）与 regressions（W2c 回归边投影，可选）。 */
   nanjuGetGuideProgress: (workspaceSlug: string, projectId: string) => Promise<{
     currentStage: string
     subStage: string
     seq: number
+    envState?: 'done' | 'blocked'
+    regressions?: Array<{ from: string; to: string; count: number; active: boolean }>
   } | null>
 
   /** 南大向导：向导图阶段内子步骤进度事件（W2 S1；seq 单调递增，渲染端 seq 高者胜） */
@@ -1318,6 +1321,8 @@ export interface ElectronAPI {
     currentStage: string
     subStage: string
     seq: number
+    envState?: 'done' | 'blocked'
+    regressions?: Array<{ from: string; to: string; count: number; active: boolean }>
   }) => void) => void
   offNanjuGuideProgress: (callback: (event: unknown, data: {
     sessionId: string
@@ -1325,6 +1330,8 @@ export interface ElectronAPI {
     currentStage: string
     subStage: string
     seq: number
+    envState?: 'done' | 'blocked'
+    regressions?: Array<{ from: string; to: string; count: number; active: boolean }>
   }) => void) => void
 
   /** 南大 HTML 原型自动预览事件 */

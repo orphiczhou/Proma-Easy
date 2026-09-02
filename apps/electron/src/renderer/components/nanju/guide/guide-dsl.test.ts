@@ -54,7 +54,13 @@ const QUICK_ROUTE: GuideRoutePhase[] = [
   makePhase({ taskWeight: 'light', acActors: LIGHT_ACTORS }),
   makePhase({
     id: 'prototype', role: 'ux-advisor', title: 'UX 顾问', channel: 'minimax', model: 'MiniMax-M3',
-    outputPath: '02_UX_DESIGN/prototype.html', retryLimit: 2, next: 'coding', taskWeight: 'light', acActors: LIGHT_ACTORS,
+    outputPath: '02_UX_DESIGN/prototype.html', retryLimit: 2, next: 'architecture', taskWeight: 'light', acActors: LIGHT_ACTORS,
+  }),
+  // W7（v0.17.69）：quick 必经架构师轻量变体（requiresAC=false → DSL 精简链 ARCH→ENV→UC）
+  makePhase({
+    id: 'architecture', role: 'architect', title: '架构师', channel: 'deepseek', model: 'deepseek-v4-pro',
+    outputPath: '03_ARCHITECTURE/architecture.md', retryLimit: 2, next: 'coding', taskWeight: 'light',
+    requiresAC: false, acActors: LIGHT_ACTORS,
   }),
   makePhase({
     id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'deepseek', model: 'deepseek-v4-pro',
@@ -102,15 +108,19 @@ const ALL_ITERATIVE: GuidePhaseId[] = ['requirements', 'prototype', 'architectur
 // ===== AC-02：DSL 结构正确性 =====
 
 describe('buildGuideDsl 结构（AC-02）', () => {
-  test('quick 版：含 REQ/PROTO/CODE/TEST 主阶段与 delivered 终点，不含 ARCH/PLAN', () => {
+  test('quick 版：含 REQ/PROTO/ARCH/CODE/TEST 主阶段与 delivered 终点，不含 PLAN（W7 v0.17.69 断言反转：quick 必经 ARCH 轻量变体）', () => {
     const dsl = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(dsl).toContain('REQ[')
     expect(dsl).toContain('PROTO[')
+    expect(dsl).toContain('ARCH[')
+    expect(dsl).toContain('ARCH_ENV')
     expect(dsl).toContain('CODE[')
     expect(dsl).toContain('TEST[')
     expect(dsl).toContain('DONE([\"交付 delivered')
-    expect(dsl.includes('ARCH')).toBe(false)
+    // quick 无 planning；轻量变体精简链 ARCH→ENV→UC（无 ATK/DEF/GATE）
     expect(dsl.includes('PLAN')).toBe(false)
+    expect(dsl).not.toContain('ARCH_ATK')
+    expect(dsl).not.toContain('ARCH_GATE')
   })
 
   test('iterative 版：含 REQ/PROTO/ARCH/PLAN/CODE/TEST 六个主阶段', () => {
@@ -170,7 +180,10 @@ describe('buildGuideDsl 结构（AC-02）', () => {
     // testing 子图：Harness 执行 GWT + 规则裁判（机器判定收口）+ 回炉 coding 循环
     expect(dsl).toContain('TEST_GWT{\"Harness 执行 GWT')
     expect(dsl).toContain('TEST_JUDGE{\"规则裁判 judge.verdict')
-    expect(dsl).toContain('回炉 coding（≤2 次）')
+    expect(dsl).toContain('TEST_GWT -.->|"映射失败→重测"| TEST')
+    expect(dsl).toContain('TEST_GWT -.->|"行为失败→回炉开发"| CODE')
+    // 旧假边文本已删除（W2c：指向 TEST 主节点，与 v0.17.63 失败分流不符）
+    expect(dsl).not.toContain('回炉 coding（≤2 次）')
     // 哨兵（id=delivered）不产生第七个 subgraph，只有 REQ/PROTO/ARCH/PLAN/CODE/TEST 六个 subgraph
     expect(dsl.match(/subgraph SG_/g)?.length).toBe(6)
   })
@@ -231,7 +244,7 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
       expandedPhases: ALL_ITERATIVE,
       isDark: false,
     })
-    expect(dsl).toContain('class ARCH_ATK,ARCH_DEF,ARCH_GATE,ARCH_UC st-pending')
+    expect(dsl).toContain('class ARCH_ATK,ARCH_DEF,ARCH_GATE,ARCH_ENV,ARCH_UC st-pending')
     expect(dsl).toContain('class PLAN_ATK,PLAN_DEF,PLAN_UC st-pending')
     expect(dsl).toContain('class CODE_ATK,CODE_DEF,CODE_UC st-pending')
   })
@@ -451,7 +464,7 @@ describe('DSL 快照样例（两版 × 代表性进度态）', () => {
   test('quick · prototype 进行中', () => {
     const dsl = buildGuideDsl({
       mode: 'quick', route: QUICK_ROUTE,
-      progress: { stageStates: { requirements: 'done', prototype: 'current', delivered: 'pending' } },
+      progress: { stageStates: { requirements: 'done', prototype: 'current', architecture: 'pending', delivered: 'pending' } },
       isDark: false,
     })
     expect(dsl).toMatchSnapshot()
@@ -551,7 +564,7 @@ describe('buildGuideDsl 展开/折叠（W2 S3）', () => {
   test('默认展开 = current 阶段：其余折叠为单代表框（无 subgraph），跨阶段边直连代表框', () => {
     const dsl = buildGuideDsl({
       mode: 'quick', route: QUICK_ROUTE,
-      progress: { stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' } },
+      progress: { stageStates: { requirements: 'done', prototype: 'current', architecture: 'pending', coding: 'pending', delivered: 'pending' } },
       isDark: false,
     })
     // 只有 current 阶段 PROTO 输出 subgraph
@@ -559,20 +572,24 @@ describe('buildGuideDsl 展开/折叠（W2 S3）', () => {
     expect(dsl).toContain('subgraph SG_PROTO')
     // 折叠框：id=主节点（锚点兼容）+ 标题/产出/状态行摘要
     expect(dsl).toContain('REQ["① 需求分析师 requirement-analyst · deepseek-v4-pro<br/>产出 PRD<br/>✓ 已完成"]')
-    expect(dsl).toContain('CODE["③ 全栈开发 fullstack-developer · deepseek-v4-pro<br/>可运行应用代码<br/>未开始"]')
+    // W7：ARCH 折叠框为③、CODE 顺延为④
+    expect(dsl).toContain('ARCH["③ 架构师 architect · deepseek-v4-pro<br/>产出架构文档<br/>未开始"]')
+    expect(dsl).toContain('CODE["④ 全栈开发 fullstack-developer · deepseek-v4-pro<br/>可运行应用代码<br/>未开始"]')
     // 折叠阶段不输出内部边/子节点
     expect(dsl.includes('REQ_ATK')).toBe(false)
     expect(dsl.includes('CODE_UC')).toBe(false)
-    // 跨阶段边：REQ 代表框 → PROTO 主节点（前阶段出口=折叠框自身）
+    expect(dsl.includes('ARCH_ENV')).toBe(false)
+    // 跨阶段边：REQ 代表框 → PROTO 主节点（前阶段出口=折叠框自身）；PROTO 出口→ARCH 折叠框
     expect(dsl).toContain('REQ -->|"确认"| PROTO')
-    expect(dsl).toContain('PROTO_UC -->|"全部用户故事通过"| CODE')
+    expect(dsl).toContain('PROTO_UC -->|"全部用户故事通过"| ARCH')
+    expect(dsl).toContain('ARCH -->|"确认"| CODE')
   })
 
   test('折叠框状态行三态 + Todo 徽标（行内拼接）', () => {
     const dsl = buildGuideDsl({
       mode: 'quick', route: QUICK_ROUTE,
       progress: {
-        stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' },
+        stageStates: { requirements: 'done', prototype: 'current', architecture: 'pending', coding: 'pending', delivered: 'pending' },
         todoStats: { requirements: { done: 3, total: 3 }, coding: { done: 0, total: 2 } },
       },
       isDark: false,
@@ -613,13 +630,14 @@ describe('buildGuideDsl 展开/折叠（W2 S3）', () => {
       isDark: false,
     })
     expect(all).toBe(withPhases)
-    expect(all.match(/subgraph SG_/g)?.length).toBe(4)
+    // W7：quick 五阶段（REQ/PROTO/ARCH/CODE/TEST）
+    expect(all.match(/subgraph SG_/g)?.length).toBe(5)
   })
 
   test('无 current 阶段（已交付）默认全折叠：紧凑摘要视图 + 折叠框可正常着色', () => {
     const dsl = buildGuideDsl({
       mode: 'quick', route: QUICK_ROUTE,
-      progress: { stageStates: { requirements: 'done', prototype: 'done', coding: 'done', testing: 'done', delivered: 'done' } },
+      progress: { stageStates: { requirements: 'done', prototype: 'done', architecture: 'done', coding: 'done', testing: 'done', delivered: 'done' } },
       isDark: false,
     })
     expect((dsl.match(/subgraph SG_/g) ?? []).length).toBe(0)
@@ -633,7 +651,7 @@ describe('buildGuideDsl 展开/折叠（W2 S3）', () => {
     expect(resolveExpandedPhases(QUICK_ROUTE, doneCur)).toEqual(new Set(['prototype']))
     const noCurrent = { stageStates: { requirements: 'done', delivered: 'done' } as Partial<Record<GuidePhaseId | 'delivered', 'done' | 'current' | 'pending'>> }
     expect(resolveExpandedPhases(QUICK_ROUTE, noCurrent)).toEqual(new Set())
-    expect(resolveExpandedPhases(QUICK_ROUTE, null)).toEqual(new Set(['requirements', 'prototype', 'coding', 'testing']))
+    expect(resolveExpandedPhases(QUICK_ROUTE, null)).toEqual(new Set(['requirements', 'prototype', 'architecture', 'coding', 'testing']))
   })
 
   test('deriveSubStageStates / derivePhaseSubNodeStates（渲染端纯函数，契约详见 nanju-guide-progress.test.ts 交叉锁定）', () => {
@@ -646,7 +664,7 @@ describe('buildGuideDsl 展开/折叠（W2 S3）', () => {
     })
     // UC 态（A2 必修-3/4 修订）：中间节点一律 pending，序列外结构节点继承基线 pending
     expect(derivePhaseSubNodeStates('architecture', 'ARCH_UC')).toEqual({
-      ARCH: 'done', ARCH_ATK: 'pending', ARCH_DEF: 'pending', ARCH_GATE: 'pending', ARCH_UC: 'current',
+      ARCH: 'done', ARCH_ATK: 'pending', ARCH_DEF: 'pending', ARCH_GATE: 'pending', ARCH_ENV: 'pending', ARCH_UC: 'current',
     })
     expect(derivePhaseSubNodeStates('coding', 'CODE_UC')).toEqual({
       CODE: 'done', CODE_ATK: 'pending', CODE_DEF: 'pending', CODE_UC: 'current',
@@ -682,5 +700,184 @@ describe('DSL 快照样例（W2 S3 展开/折叠）', () => {
       isDark: false,
     })
     expect(dsl).toMatchSnapshot()
+  })
+})
+
+// ===== W2c 回归边 + W7 ARCH_ENV 三态（v0.17.69） =====
+
+describe('buildGuideDsl 回归边（W2c：PROTO→REQ 数据边 + TEST 分流结构边 + 琥珀 linkStyle）', () => {
+  const baseProgress = {
+    stageStates: {
+      requirements: 'done', prototype: 'current', architecture: 'pending',
+      coding: 'pending', testing: 'pending', delivered: 'pending',
+    } as Record<string, 'done' | 'current' | 'pending'>,
+    subStage: 'PROTO_UC',
+  }
+
+  test('PROTO→REQ 回归事件 → 回指虚线边（label 带次数）；无回归事件时无边', () => {
+    const withReg = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE, progress: baseProgress, isDark: false,
+      regressions: [{ from: 'prototype', to: 'requirements', count: 2, active: true }],
+    })
+    expect(withReg).toContain('PROTO -.->|"新需求回改 PRD ×2"| REQ')
+    const noReg = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: baseProgress, isDark: false })
+    expect(noReg).not.toContain('新需求回改 PRD')
+  })
+
+  test('回归边 linkStyle：active 琥珀强调 / 收敛后浅琥珀留痕（active=false）', () => {
+    const active = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE, progress: baseProgress, isDark: false,
+      regressions: [{ from: 'prototype', to: 'requirements', count: 1, active: true }],
+    })
+    expect(active).toContain('stroke:#D97706,stroke-width:2.5px')
+    const traced = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE, progress: baseProgress, isDark: false,
+      regressions: [{ from: 'prototype', to: 'requirements', count: 3, active: false }],
+    })
+    expect(traced).toContain('stroke:#FBBF24,stroke-width:1.5px')
+    expect(traced).not.toContain('stroke:#D97706,stroke-width:2.5px')
+  })
+
+  test('TEST 分流结构边回归计数并入 label（testing→coding ×N）；testing→testing 自环计数', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE, progress: { stageStates: { requirements: 'done', prototype: 'done', architecture: 'done', coding: 'done', testing: 'current', delivered: 'pending' } }, isDark: false,
+      expandedPhases: ['testing'],
+      regressions: [
+        { from: 'testing', to: 'coding', count: 2, active: false },
+        { from: 'testing', to: 'testing', count: 1, active: false },
+      ],
+    })
+    expect(dsl).toContain('行为失败→回炉开发 ×2')
+    expect(dsl).toContain('映射失败→重测 ×1')
+    // 无回归事件时结构边仍在（结构忠实），无 ×N 徽标
+    const plain = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE, progress: { stageStates: { requirements: 'done', prototype: 'done', architecture: 'done', coding: 'done', testing: 'current', delivered: 'pending' } }, isDark: false,
+      expandedPhases: ['testing'],
+    })
+    expect(plain).toContain('行为失败→回炉开发"| CODE')
+    expect(plain).toContain('映射失败→重测"| TEST')
+  })
+
+  test('对照模式（progress=null）不渲染回归数据边（无项目上下文）', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE, progress: null, isDark: false,
+      regressions: [{ from: 'prototype', to: 'requirements', count: 1, active: true }],
+    })
+    expect(dsl).not.toContain('新需求回改 PRD')
+    // 结构边（TEST 分流）仍渲染——结构忠实
+    expect(dsl).toContain('行为失败→回炉开发"| CODE')
+  })
+})
+
+describe('buildGuideDsl ARCH_ENV 三态（W7 R9：envState 强制映射优先于 subStage 推导）', () => {
+  const archCurrent = {
+    stageStates: {
+      requirements: 'done', prototype: 'done', architecture: 'current',
+      planning: 'pending', coding: 'pending', testing: 'pending', delivered: 'pending',
+    } as Record<string, 'done' | 'current' | 'pending'>,
+  }
+
+  test('envState=blocked（env.setup.failed）→ ARCH_ENV 单独 st-blocked（S2 预留 class 启用）', () => {
+    const dsl = buildGuideDsl({
+      mode: 'iterative', route: ITERATIVE_ROUTE,
+      progress: { ...archCurrent, subStage: 'ARCH_UC', envState: 'blocked' },
+      expandedPhases: ALL_ITERATIVE, isDark: false,
+    })
+    expect(dsl).toContain('class ARCH_ENV st-blocked')
+    // blocked 不进三态分组（ARCH 分组行不含 ARCH_ENV）
+    expect(dsl).not.toMatch(/class [^§]*ARCH_ATK,ARCH_DEF,ARCH_GATE,ARCH_ENV st-/)
+  })
+
+  test('envState 二态（M5：current 已删）→ done 并入 sub-done 分组；无 envState 时无强制态', () => {
+    // 'current' 态已删（AC 审计 M5：无代码路径发出）——探测中着色由 subStage 序列推导兜底
+    const done = buildGuideDsl({
+      mode: 'iterative', route: ITERATIVE_ROUTE,
+      progress: { ...archCurrent, subStage: 'ARCH_UC', envState: 'done' },
+      expandedPhases: ALL_ITERATIVE, isDark: false,
+    })
+    // done 并入 sub-done 分组（UC 态特殊化下 ARCH_ENV 优先画已通过）
+    expect(done).toMatch(/class [^\n]*ARCH_ENV[^\n]*st-sub-done|st-sub-done[^\n]*ARCH_ENV/)
+  })
+
+  test('envState 覆盖优先于 UC 态特殊化（ARCH_UC 时 ARCH_ENV 不随中间节点画 pending）', () => {
+    // UC 态无 envState：ARCH_ENV 按 UC 特殊化 → pending（契约锁定见 nanju-guide-progress.test.ts）
+    const noEnv = buildGuideDsl({
+      mode: 'iterative', route: ITERATIVE_ROUTE,
+      progress: { ...archCurrent, subStage: 'ARCH_UC' },
+      expandedPhases: ALL_ITERATIVE, isDark: false,
+    })
+    expect(noEnv).not.toContain('class ARCH_ENV st-blocked')
+    expect(noEnv).not.toContain('class ARCH_ENV st-current')
+  })
+
+  test('quick 精简链：ARCH → ARCH_ENV → ARCH_UC（无 ATK/DEF/GATE，requiresAC=false）', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: { ...archCurrent, subStage: 'ARCH', envState: 'done' },
+      expandedPhases: ['architecture'], isDark: false,
+    })
+    const archSub = dsl.slice(dsl.indexOf('subgraph SG_ARCH'), dsl.indexOf('subgraph SG_ARCH') + 600)
+    expect(archSub).toContain('ARCH --> ARCH_ENV')
+    expect(archSub).toContain('ARCH_ENV -->|"环境就绪"| ARCH_UC')
+    expect(archSub).toContain('合并确认')
+    expect(dsl).not.toContain('ARCH_ATK')
+    expect(dsl).not.toContain('ARCH_GATE')
+    // envState=done（M5 二态）：ARCH_ENV 并入 sub-done 分组
+    expect(dsl).toMatch(/class [^\n]*ARCH_ENV[^\n]*st-sub-done|st-sub-done[^\n]*ARCH_ENV/)
+  })
+})
+
+// ===== M1（AC 审计 A1）：回归边 linkStyle 精确索引断言（防双计/越界回归） =====
+
+describe('M1 回归边 linkStyle 精确索引（testing 展开 + 三条回归事件场景）', () => {
+  /**
+   * 全展开 quick 场景的边索引基线（DSL 声明顺序，0 基）：
+   * 0 USER→MODE / 1 MODE→REQ / 2-6 REQ 链 / 7 REQ_UC→PROTO
+   * 8-17 PROTO 链 / 18 PROTO_UC→ARCH / 19-20 ARCH 精简链 / 21 ARCH_UC→CODE
+   * 22-26 CODE 链 / 27 CODE_UC→TEST / 28-31 TEST 链前四条
+   * 32 TEST_GWT -.-> TEST（映射回归边 = testing subgraph 内第 5 条，baseIndex 28+4）
+   * 33 TEST_GWT --> JUDGE / 34 TEST_GWT -.-> CODE（行为后置边）/ 35 JUDGE → DONE
+   * 36 PROTO -.-> REQ（回归数据边，DSL 末条）
+   */
+  const m1Dsl = () => buildGuideDsl({
+    mode: 'quick', route: QUICK_ROUTE, isDark: false,
+    progress: {
+      stageStates: { requirements: 'done', prototype: 'done', architecture: 'done', coding: 'done', testing: 'current', delivered: 'pending' },
+    },
+    regressions: [
+      { from: 'prototype', to: 'requirements', count: 2, active: true },
+      { from: 'testing', to: 'coding', count: 1, active: false },
+      { from: 'testing', to: 'testing', count: 1, active: false },
+    ],
+    expandedPhases: ['requirements', 'prototype', 'architecture', 'coding', 'testing'],
+  })
+
+  test('映射边/行为边 trace 与数据边 active 的精确索引（32/34 trace、36 active）', () => {
+    const dsl = m1Dsl()
+    expect(dsl).toContain('linkStyle 32,34 stroke:#FBBF24,stroke-width:1.5px')
+    expect(dsl).toContain('linkStyle 36 stroke:#D97706,stroke-width:2.5px')
+  })
+
+  test('DONE 边（索引 35）不被回归 linkStyle 染色（防越界整图降级模式）', () => {
+    const dsl = m1Dsl()
+    // passed 边集合不含 35；回归 trace/active 集合不含 35
+    expect(dsl).toContain('linkStyle 7,18,21,27 stroke:#059669,stroke-width:2.5px')
+    expect(dsl).not.toMatch(/linkStyle [^\n]*\b35\b[^\n]*(FBBF24|D97706)/)
+  })
+
+  test('数据边索引 = DSL 末条边（不越界：linkStyle 最大索引 < 总边数）', () => {
+    const dsl = m1Dsl()
+    const edgeCount = dsl.split('\n').filter((l) => /-->|-\.->/.test(l) && !/linkStyle|classDef|class |subgraph|direction/.test(l)).length
+    expect(edgeCount).toBe(37) // 0-36；原 edgeCount:7 双计缺陷下数据边索引 37 越界 → mermaid updateLink 抛错
+    // 最大回归索引 36 = edgeCount-1（末条）
+    expect(dsl).toContain('linkStyle 36 stroke:#D97706')
+  })
+
+  test('M1 修复本体：testing subgraph 内 6 条边（post 边由 postLines 单独计数）', () => {
+    const dsl = m1Dsl()
+    const testSub = dsl.slice(dsl.indexOf('subgraph SG_TEST'), dsl.indexOf('subgraph SG_TEST') + 500)
+    // subgraph 内恰好 6 条边声明（TEST→ATK/ATK→DEF/DEF→ATK/DEF→GWT/GWT-.->TEST/GWT→JUDGE）
+    const innerEdges = testSub.split('\n').filter((l) => /-->|-\.->/.test(l)).length
+    expect(innerEdges).toBe(6)
   })
 })

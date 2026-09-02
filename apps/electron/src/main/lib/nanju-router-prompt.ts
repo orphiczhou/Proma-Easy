@@ -212,6 +212,31 @@ export function buildL2TaskWithAC(
     parts.push('')
   }
 
+  // architecture 阶段（W7，v0.17.69）：环境配置子环节——探测并入架构师委派任务
+  // （R1 终裁：执行主体 = 架构师 L2 子会话，不新建第二个子会话）；缺失只报告不安装
+  // （U3：用户显式确认后安装，安装指令由 L1 确认后续接委派）；结尾 projectEnv 标记行
+  // 由主进程解析置位 envReady（write-then-gate，见 agent-orchestrator）。
+  if (phase.id === 'architecture') {
+    const isQuick = phase.taskWeight === 'light'
+    parts.push('## 环境配置（必须执行，产出验证的一部分）')
+    parts.push('按品类对本机工具链逐组件「版本探测 → 记录结果」：')
+    parts.push('- web 类：node / npm / bun（--version，秒级）')
+    parts.push('- 桌面类：rustc / cargo（Tauri）或 npx electron --version；CLI/后端类：bun / node / python3 及包管理器；移动类：node/bun 与平台工具（如 adb --version）')
+    parts.push('- 探测命令幂等（只读版本号，禁止安装/升级/修改任何系统配置）；工具不可用时如实记录「缺失」')
+    parts.push('')
+    parts.push('探测结果写入架构文档「## 环境配置」节的清单表（列：组件 | 版本 | 用途 | 探测结果 | 备注），')
+    parts.push('缺失组件在探测结果列标记「缺失」，并在备注列写建议的安装命令（只写建议，【不执行】）。')
+    parts.push('文档结尾必须单独一行输出状态标记（系统按此行拦截未就绪推进）：')
+    parts.push('- 全部就绪：`projectEnv: ready`')
+    parts.push('- 有缺失：`projectEnv: missing:<组件逗号清单>`（如 projectEnv: missing:rustc,cargo）')
+    if (isQuick) {
+      parts.push('')
+      parts.push('【快消型定位提醒】架构文档保持 30-60 行精简：品类终判 + 技术选型 + 组件清单 + 环境结论四块为主，')
+      parts.push('不展开目录树逐文件说明与接口定义（长期演进细节由工程模板承载）。')
+    }
+    parts.push('')
+  }
+
   // prototype 阶段：截图渲染自检循环（先于 AC 审计，确保视觉闭环）
   if (isPrototype) {
     parts.push('## 截图渲染自检循环（必须执行，先于 AC 审计）')
@@ -226,7 +251,11 @@ export function buildL2TaskWithAC(
     parts.push('')
   }
 
-  // AC 审计指令 — L2 内部驱动（P1 分级：显式 ac* 配置 > taskWeight 预设）
+  // AC 审计指令 — L2 内部驱动（P1 分级：显式 ac* 配置 > taskWeight 预设）。
+  // W7（v0.17.69）：quick architecture 免 inline AC 攻防（U1 方案 A：四层兑底替代
+  // ——L2 产出 + 用户合并确认 + envReady 门禁 + 规则校验层）；DSL 精简链同步不渲染
+  // ATK/DEF/GATE（结构忠实：不注入不渲染，图与行为一致）。
+  const skipInlineAC = phase.id === 'architecture' && !phase.requiresAC
   const actors = resolveACActors(phase)
   const attackerCh = actors.attacker.channel
   const attackerModel = actors.attacker.model
@@ -240,6 +269,7 @@ export function buildL2TaskWithAC(
     defenderChannel: defenderCh,
   })
 
+  if (!skipInlineAC) {
   // prototype 阶段 AC 维度追加「视觉还原度/交互可用性」
   const auditDimensions = isPrototype
     ? '完整性、正确性、一致性、可执行性、安全性、视觉还原度、交互可用性'
@@ -281,6 +311,15 @@ export function buildL2TaskWithAC(
     parts.push('- 视觉验证者是独立裁决者，只看 PRD 用户故事与最新截图，防止你自证通过。')
   }
   parts.push('- 修复循环由你驱动，不需要调度员或用户参与。')
+  } else {
+    // quick architecture（免 inline AC）：产出后自查清单 + projectEnv 标记行收口
+    parts.push('## 产出自查（代替 AC 攻防——快消型轻量兑底）')
+    parts.push('写完架构文档后逐项自查（不委派攻击者/防御者）：')
+    parts.push('1. 品类终判标记是否在文档显目位置且为六枚举合法值；')
+    parts.push('2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；')
+    parts.push('3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。')
+    parts.push('')
+  }
 
   return parts.join('\n')
 }
@@ -328,6 +367,51 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
 
   // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导）
   const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo)
+
+  // M7（AC 审计 A9-timing，v0.17.69）：主进程预校验——architecture 阶段构建 L1 指令时
+  // 现场对 architecture.md 环境清单跑 validateEnvChecklist（§九「清单执行前过确定性规则
+  // 校验」的落地：确认安装前拦截幻觉包名/typo，而非等到 PHASE_ADVANCE 门禁才发现）。
+  // 校验结论注入 4b：未通过 → L1 不得进入安装确认，先委派架构师修正清单；L2 幻觉包名
+  // 在执行安装前被拦下。architecture.md 不存在/无清单时无注入（首轮委派尚未产出）。
+  let envPrecheckLines: string[] = []
+  if (stage === 'architecture') {
+    try {
+      const { existsSync: archExists, readFileSync: archRead } = require('node:fs') as typeof import('node:fs')
+      const archPath = join(projectDir, '03_ARCHITECTURE', 'architecture.md')
+      if (archExists(archPath)) {
+        const archContent = archRead(archPath, 'utf-8')
+        const {
+          resolveProjectCategoryForCoding,
+          parseEnvChecklistFromDoc,
+          parseProjectEnvMarker,
+          validateEnvChecklist,
+        } = require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
+        const marker = parseProjectEnvMarker(archContent)
+        const checklist = parseEnvChecklistFromDoc(archContent)
+        if (marker && checklist.length > 0) {
+          const { getProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
+          const resolvedCat = (getProjectCategory(workspaceSlug, project.projectId)
+            ?? resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
+            ?? { category: 'web-fullstack' as const, source: 'default' as const }).category
+          // 校验全清单（不只 missing 组件）：typo/幻觉包名即使标记就绪也要在安装前拦下
+          //（与 gate 同一函数同一基准；门禁是第二道，此处是执行前的第一道）
+          const validation = validateEnvChecklist(resolvedCat, checklist)
+          if (!validation.ok) {
+            envPrecheckLines = [
+              '   ⛔ 主进程环境清单预校验【未通过】（确认安装前必看）：',
+              ...validation.problems.map((p) => `      - ${p}`),
+              '      【不得】向用户确认安装、不得委派任何安装命令；先 continue_delegation 委派架构师',
+              '      修正环境清单中的组件名（拼写照品类白名单/模板核对），产出修正后重新进入确认流程。',
+            ]
+          } else {
+            envPrecheckLines = [
+              '   ✅ 主进程环境清单预校验通过（组件名均合法）——可按 4b 流程向用户确认安装/确认架构。',
+            ]
+          }
+        }
+      }
+    } catch { /* 预校验失败不阻断 prompt 构建（门禁另有第二道） */ }
+  }
 
   const prompt = [
     '## 🔒 南大向导 — 当前阶段：' + phase.title + '（' + stage + '）',
@@ -383,6 +467,11 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   d. 【意见收集轮】（核心节奏：多轮沟通攒一批，再统一修改——【绝不】一条意见就立即改）：',
         '      - 每收到一条用户意见，先记录到你的意见清单（元素定位/意图），并回应确认你的理解；',
         '        涉及需求变更的先按 e 确认范围。',
+        '        【回归标记（W2c，v0.17.69）】若用户意见引入 PRD 未有的新需求（硬规则未覆盖的表述——',
+        '        如「再加一个导出功能」「支持多人协作」等超出既有 US-xx 清单范围的需求，但不删除既有需求），',
+        '        在回应该意见的同一条回复中输出一行标记：<!-- NANJU_REGRESSION: <一句话原因> -->',
+        '        （系统检测该标记后会在向导图记录一次「原型→需求」回归；标记只是建议，无需用户操作；',
+        '        修改 PRD 的既有条目、删除/撤销需求【不要】输出该标记）',
         '      - 回应后【必须追问】：「这条记下了。还有其他想调整的地方吗？可以继续提，',
         '        都提完我一起改」——除非用户明确说「就这些/开始改吧/没别的了」，否则【禁止】下发修改。',
         '      - 【硬性门禁】收到单条意见后，【不得】立即修改 prototype.html、【不得】立即更新',
@@ -426,6 +515,26 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   e. 用户表示满意后，AskUserQuestion 收口：header「应用验证」，multiSelect=true，',
         '      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。',
         '      全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。',
+      ]
+      : stage === 'architecture'
+      ? [
+        '4. 【架构确认 + 环境配置环节】（W7，v0.17.69：架构师环节两模式必经；环境缺失时先收口再确认）：',
+        '   a. 子会话完成后，用 Read 检查产出文件：' + projectDir + '/' + phase.outputPath,
+        '      确认三要素齐全：品类终判标记（projectCategory:）、「## 环境配置」清单表、结尾 projectEnv: 标记行。',
+        '   b. 若结尾标记为 projectEnv: missing:<组件清单>（环境有缺失）：',
+        ...envPrecheckLines,
+        '      - 先用 AskUserQuestion 向用户确认：「环境缺失 {组件清单}，安装约需 X 分钟（按组件估算，',
+        '        如 Rust 工具链约 5-15 分钟，node/bun 秒级），确认安装？」options：确认安装 / 换技术栈 / 暂停；',
+        '      - 用户确认安装 → 用 continue_delegation 向架构师子会话追加安装指令：',
+        '        【仅安装清单内缺失组件】，限用户级标准安装目录（~/.cargo、~/.local、项目内 node_modules 等，',
+        '        不改系统配置/shell rc），逐组件「安装 → 复测 --version」，全部就绪后把文档结尾标记行改为 projectEnv: ready；',
+        '      - 用户选换技术栈 → 重新委派架构师按新选型更新架构文档与环境探测；',
+        '      - ⚠️ 环境未就绪（仍为 missing）时【不要】输出推进标记——系统会拦截非 web 品类的未就绪推进。',
+        '   c. 标记为 ready（或安装后已改 ready）→ 【必须】先 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）',
+        '      展示架构文档，然后用【一条消息】向用户合并确认：架构摘要（品类终判 + 技术选型要点）',
+        '      + 环境清单（各组件就绪状态）；AskUserQuestion「确认架构与环境配置？」（quick 与 iterative 同构，',
+        '      quick 免 AC 攻防，本次合并确认即最终确认）。',
+        '   d. 用户确认通过 → 进入第 5 步；有修改意见 → continue_delegation 转架构师修改后重新确认。',
       ]
       : stage === 'testing'
       ? [

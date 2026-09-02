@@ -9,10 +9,10 @@ import { describe, expect, test } from 'bun:test'
 import { getGuideRoute, getRoute, AC_PRESETS } from './nanju-router'
 
 describe('getGuideRoute（nanju:get-route 数据面）', () => {
-  test('quick：5 个阶段（含 delivered 哨兵；Sprint B 起 testing 入路由），taskWeight=light，acActors=light 预设', () => {
+  test('quick：6 个阶段（含 delivered 哨兵；W7 v0.17.69 起必经 architecture 轻量变体），taskWeight=light，acActors=light 预设', () => {
     const route = getGuideRoute('quick')
-    expect(route.length).toBe(5)
-    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'coding', 'testing', 'delivered'])
+    expect(route.length).toBe(6)
+    expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'coding', 'testing', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('light')
@@ -45,9 +45,10 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(iterative.find((p) => p.id === 'coding')?.outputPath).toBe('08_APP/index.html')
   })
 
-  test('prototype next 指向：quick→coding，iterative→architecture（路由分叉点）；coding next=testing（Sprint B 改向）；testing next=delivered（两链共同裁判收口）', () => {
-    expect(getGuideRoute('quick').find((p) => p.id === 'prototype')?.next).toBe('coding')
+  test('prototype next 指向：两模式统一→architecture（W7 v0.17.69 断言反转）；quick architecture→coding / iterative planning→coding；coding next=testing；testing next=delivered', () => {
+    expect(getGuideRoute('quick').find((p) => p.id === 'prototype')?.next).toBe('architecture')
     expect(getGuideRoute('iterative').find((p) => p.id === 'prototype')?.next).toBe('architecture')
+    expect(getGuideRoute('quick').find((p) => p.id === 'architecture')?.next).toBe('coding')
     expect(getGuideRoute('iterative').find((p) => p.id === 'planning')?.next).toBe('coding')
     expect(getGuideRoute('quick').find((p) => p.id === 'coding')?.next).toBe('testing')
     expect(getGuideRoute('iterative').find((p) => p.id === 'coding')?.next).toBe('testing')
@@ -55,10 +56,11 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(getGuideRoute('iterative').find((p) => p.id === 'testing')?.next).toBe('delivered')
   })
 
-  test('requiresAC 硬门禁仅 architecture 为 true', () => {
+  test('requiresAC 硬门禁仅 iterative architecture 为 true（W7：quick architecture 免 AC，U1）', () => {
     const iterative = getGuideRoute('iterative')
     expect(iterative.find((p) => p.id === 'architecture')?.requiresAC).toBe(true)
     expect(iterative.filter((p) => p.id !== 'architecture').every((p) => !p.requiresAC)).toBe(true)
+    // quick 全阶段免 red 硬门禁（architecture 轻量变体同样免）
     expect(getGuideRoute('quick').every((p) => !p.requiresAC)).toBe(true)
   })
 

@@ -42,11 +42,16 @@ function htmlDoc(body: string): string {
  * project-p1/{08_APP|02_UX_DESIGN} 产出文件 + 可选同目录资源文件。
  * 返回可直接喂给 verifyPhaseOutput 的 workspaceSlug。
  */
-function setupFixture(opts: { stage: 'coding' | 'prototype' | 'testing'; html: string; files?: Record<string, string> }): string {
+function setupFixture(opts: {
+  stage: 'coding' | 'prototype' | 'testing' | 'architecture'
+  html: string
+  files?: Record<string, string>
+  mode?: 'quick' | 'iterative'
+}): string {
   const dir = mkdtempSync(join(tmpdir(), 'nanju-gate-'))
   fixtureRoot = dir
-  const outputDirName = opts.stage === 'coding' ? '08_APP' : opts.stage === 'testing' ? '06_TESTS/features' : '02_UX_DESIGN'
-  const outputFileName = opts.stage === 'coding' ? 'index.html' : opts.stage === 'testing' ? 'index.feature' : 'prototype.html'
+  const outputDirName = opts.stage === 'coding' ? '08_APP' : opts.stage === 'testing' ? '06_TESTS/features' : opts.stage === 'architecture' ? '03_ARCHITECTURE' : '02_UX_DESIGN'
+  const outputFileName = opts.stage === 'coding' ? 'index.html' : opts.stage === 'testing' ? 'index.feature' : opts.stage === 'architecture' ? 'architecture.md' : 'prototype.html'
   mkdirSync(join(dir, `project-${PROJECT_ID}`, outputDirName), { recursive: true })
   writeFileSync(join(dir, `project-${PROJECT_ID}`, outputDirName, outputFileName), opts.html)
   for (const [name, content] of Object.entries(opts.files ?? {})) {
@@ -55,7 +60,7 @@ function setupFixture(opts: { stage: 'coding' | 'prototype' | 'testing'; html: s
   writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
     projectId: PROJECT_ID,
     name: '门禁测试项目',
-    mode: 'quick',
+    mode: opts.mode ?? 'quick',
     status: 'active',
     currentStage: opts.stage,
     createdAt: new Date().toISOString(),
@@ -271,5 +276,103 @@ describe('verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口�
       currentStage: 'testing', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), sessionId: 'session-1',
     }]))
     expect(verifyPhaseOutput(WORKSPACE_SLUG, PROJECT_ID, 'testing')).toContain('产出文件不存在')
+  })
+})
+
+// ===== W7 环境门禁（v0.17.69）：verifyPhaseOutput architecture 分支扩展 =====
+
+describe('verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验）', () => {
+  /** 合法架构文档（desktop-app 品类 + 环境清单 + ready 标记行） */
+  const validArchDoc = (category: string, envLine: string, components: string): string =>
+    `# 架构文档\n\n## 技术选型\n\nTauri v2 桌面程序。\n\nprojectCategory: ${category}\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n${components}\n\n${envLine}\n`
+
+  const { setProjectCategory, setProjectEnvState } = require('./nanju-project') as typeof import('./nanju-project')
+
+  test('非 web 品类 + envReady=false → 拦截（消息含缺失组件清单）', () => {
+    const ws = setupFixture({
+      stage: 'architecture',
+      mode: 'iterative',
+      html: validArchDoc('desktop-app', 'projectEnv: missing:rustc,cargo', '| rustc | 缺失 | Rust 编译器 | 缺失 | curl 安装 |\n| cargo | 缺失 | 包管理 | 缺失 | rustup |'),
+    })
+    setProjectCategory(ws, PROJECT_ID, 'desktop-app', 'architecture')
+    setProjectEnvState(ws, PROJECT_ID, false, [
+      { component: 'rustc', ok: false, attemptedAt: new Date().toISOString() },
+      { component: 'cargo', ok: false, attemptedAt: new Date().toISOString() },
+    ])
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('环境未就绪')
+    expect(error).toContain('rustc')
+    expect(error).toContain('cargo')
+  })
+
+  test('非 web 品类 + envReady 缺失（存量豁免，R8 禁裸 !==true）→ 放行', () => {
+    const ws = setupFixture({
+      stage: 'architecture',
+      mode: 'iterative',
+      html: validArchDoc('desktop-app', '（无标记行场景——存量项目无 envReady 字段）', ''),
+    })
+    setProjectCategory(ws, PROJECT_ID, 'desktop-app', 'architecture')
+    // 不 setProjectEnvState：envReady 字段缺失 → 免检放行（S4 后续可改补探测）
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('非 web 品类 + envReady=true + 清单合法 → 放行', () => {
+    const ws = setupFixture({
+      stage: 'architecture',
+      mode: 'iterative',
+      html: validArchDoc('desktop-app', 'projectEnv: ready', '| rustc | 1.75 | 编译 | 就绪 | - |\n| cargo | 1.75 | 包管理 | 就绪 | - |\n| node | 20 | 前端 | 就绪 | - |'),
+    })
+    setProjectCategory(ws, PROJECT_ID, 'desktop-app', 'architecture')
+    setProjectEnvState(ws, PROJECT_ID, true, [{ component: 'rustc', ok: true, attemptedAt: '' }])
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('非 web 品类 + envReady=true + 清单 typo 组件 → 拦截（R2 第 4 层兜底）', () => {
+    const ws = setupFixture({
+      stage: 'architecture',
+      mode: 'iterative',
+      html: validArchDoc('desktop-app', 'projectEnv: ready', '| rustcc | 1.75 | 编译 | 就绪 | - |\n| nodee | 20 | 前端 | 就绪 | - |'),
+    })
+    setProjectCategory(ws, PROJECT_ID, 'desktop-app', 'architecture')
+    setProjectEnvState(ws, PROJECT_ID, true, [{ component: 'rustcc', ok: true, attemptedAt: '' }])
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('环境配置清单校验未通过')
+    expect(error).toContain('rustcc')
+    expect(error).toContain('nodee')
+  })
+
+  test('web-default 品类（无标记/无写入）→ 免环境门禁（envReady=false 也不拦）', () => {
+    const ws = setupFixture({
+      stage: 'architecture',
+      mode: 'quick',
+      html: '# 架构文档（web-default 免检用例，补足最低 100 字节）\n\n## 技术选型\n\n纯前端应用，无后端依赖，浏览器直接打开即可运行。\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档。\n\nprojectEnv: ready\n',
+    })
+    // 不写 projectCategory：resolved = web-default → 免 envReady 校验
+    // （即便此前置位 false 也不拦——web 品类按 W7 v3 §6.1 免环境门禁）
+    setProjectEnvState(ws, PROJECT_ID, false, [{ component: 'node', ok: false, attemptedAt: '' }])
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('品类标记非法值（R2 品类幻觉）→ 拦截（合法值六枚举提示）', () => {
+    const ws = setupFixture({
+      stage: 'architecture',
+      mode: 'quick',
+      html: '# 架构文档（品类幻觉拦截用例，补足最低 100 字节）\n\nprojectCategory: desktop\n\n## 技术选型\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档内容。\n\n桌面应用技术选型待定。\n',
+    })
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('品类标记非法')
+    expect(error).toContain('projectCategory: desktop')
+    expect(error).toContain('desktop-app')
+  })
+
+  test('合法品类标记 + quick 模式 → 品类幻觉检查不误拦（desktop-app 在六枚举内）', () => {
+    const ws = setupFixture({
+      stage: 'architecture',
+      mode: 'quick',
+      html: validArchDoc('desktop-app', 'projectEnv: ready', '| rustc | 1.75 | 编译 | 就绪 | - |\n| node | 20 | 前端 | 就绪 | - |'),
+    })
+    setProjectCategory(ws, PROJECT_ID, 'desktop-app', 'architecture')
+    setProjectEnvState(ws, PROJECT_ID, true, [{ component: 'rustc', ok: true, attemptedAt: '' }])
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
   })
 })

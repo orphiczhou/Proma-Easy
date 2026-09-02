@@ -211,9 +211,10 @@ describe('序列与 guide-dsl 节点对齐（跨进程契约锁定）', () => {
     expect(derivePhaseSubNodeStates('coding', 'CODE_UC')).toEqual({
       CODE: 'done', CODE_ATK: 'pending', CODE_DEF: 'pending', CODE_UC: 'current',
     })
-    // architecture：ARCH_UC → 序列内 ATK/DEF/GATE 均未接 AC 数据源，不画成已通过
+    // architecture：ARCH_UC → 序列内 ATK/DEF/GATE/ENV 均未接数据源，不画成已通过
+    //（ARCH_ENV 三态由 envState 载荷强制映射覆盖，优先于本推导——见 buildGuideDsl）
     expect(derivePhaseSubNodeStates('architecture', 'ARCH_UC')).toEqual({
-      ARCH: 'done', ARCH_ATK: 'pending', ARCH_DEF: 'pending', ARCH_GATE: 'pending', ARCH_UC: 'current',
+      ARCH: 'done', ARCH_ATK: 'pending', ARCH_DEF: 'pending', ARCH_GATE: 'pending', ARCH_ENV: 'pending', ARCH_UC: 'current',
     })
     // CODE 产出中（非 UC）：ATK/DEF/UC 均未开始（前驱 current 不继承脉冲，规则不变）
     expect(derivePhaseSubNodeStates('coding', 'CODE')).toEqual({
@@ -295,5 +296,59 @@ describe('getGuideProgressSnapshot（冷启动初值）', () => {
     expect(snapshot).toMatchObject({ currentStage: 'prototype', subStage: 'PROTO_UC' })
     expect(snapshot?.seq).toBeGreaterThanOrEqual(seqBefore)
     expect(getGuideProgressSnapshot(ws, 'no-such-project')).toBeNull()
+  })
+})
+
+// ===== M4（AC 审计 A5）：architecture result 侧先同步环境状态再判定 =====
+
+describe('syncNanjuGuideConfirmState · M4 环境状态先行（L2 报 missing 未推进窗口）', () => {
+  /** architecture 阶段 fixture：达标产出文档（含环境清单与标记行）+ 桌面品类 */
+  function setupArchFixture(envLine: string, category: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-m4-'))
+    fixtureRoot = dir
+    const projectDir = join(dir, `project-${PROJECT_ID}`)
+    mkdirSync(join(projectDir, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(projectDir, '03_ARCHITECTURE', 'architecture.md'),
+      `# 架构文档\n\nprojectCategory: ${category}\n\n## 技术选型\n\nTauri v2 桌面程序，两层架构。\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| node | 20 | 前端 |\n| rustc | 1.75 | 编译 |\n\n${envLine}\n`)
+    writeFileSync(join(projectDir, '_project-info.json'), JSON.stringify({
+      projectId: PROJECT_ID, subStage: 'ARCH', projectCategory: category, projectCategorySource: 'architecture',
+    }))
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: PROJECT_ID, name: 'M4 项目', mode: 'quick', status: 'active',
+      currentStage: 'architecture', createdAt: '', updatedAt: '', sessionId: 'session-1',
+    }]))
+    return 'test-ws'
+  }
+
+  afterEach(() => {
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('missing 标记行：envReady 先置位 false → 门禁拦截 → UC 不误亮 + ARCH_ENV blocked 广播', () => {
+    const ws = setupArchFixture('projectEnv: missing: rustc', 'desktop-app')
+    const before = sentEvents.length
+    // M4 修复前：envReady undefined → 门禁豁免 → verify 过 → UC 误亮（返回 true）
+    expect(syncNanjuGuideConfirmState(ws, 'session-1')).toBe(false)
+    const info = JSON.parse(readFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '_project-info.json'), 'utf-8')) as {
+      subStage?: string; envReady?: boolean
+    }
+    // 环境状态已先行落盘（missing → false）
+    expect(info.envReady).toBe(false)
+    // UC 未点亮（门禁正确拦截：环境未就绪不得画「可推进」）
+    expect(info.subStage).toBe('ARCH')
+    // ARCH_ENV blocked 态已广播（置位 emit——「环境卡住」上图可见）
+    const envEvent = sentEvents.slice(before).find((e) => e.payload.envState !== undefined)
+    expect(envEvent?.payload.envState).toBe('blocked')
+  })
+
+  test('ready 标记行：门禁过 → UC 正常点亮（M4 不误伤正常路径）', () => {
+    const ws = setupArchFixture('projectEnv: ready', 'desktop-app')
+    expect(syncNanjuGuideConfirmState(ws, 'session-1')).toBe(true)
+    const info = JSON.parse(readFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '_project-info.json'), 'utf-8')) as {
+      subStage?: string; envReady?: boolean
+    }
+    expect(info.envReady).toBe(true)
+    expect(info.subStage).toBe('ARCH_UC')
   })
 })

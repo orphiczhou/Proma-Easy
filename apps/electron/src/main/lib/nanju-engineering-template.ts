@@ -19,7 +19,7 @@
  * （electron-builder extraResources，与 nanju-roles 同模式）。测试可注入显式目录。
  */
 
-import { existsSync, mkdirSync, readFileSync, copyFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   isProjectCategory,
@@ -278,12 +278,17 @@ export function getProjectTemplateDir(workspaceSlug: string, projectId: string):
 /**
  * 把品类模板全文复制到项目目录 00_ENGINEERING_TEMPLATE/template.md。
  * 资源缺失/复制失败返回 null（降级：注入节退化为仅精简要点，不阻断 coding）。
+ *
+ * opts.annotateInitialGuess（W7 R3 前移契约，v0.17.69）：prototype→architecture 推进
+ * 钩子的前移落位传 true——模板头部注入一行「⏳ 初判参考，以架构师终判为准」标注；
+ * coding 推进钩子的权威落位不传（无标注）。已存在旧模板时覆盖重写（源相同幂等）。
  */
 export function materializeEngineeringTemplate(
   workspaceSlug: string,
   projectId: string,
   category: ProjectCategory,
   explicitBase?: string,
+  opts?: { annotateInitialGuess?: boolean },
 ): string | null {
   try {
     const src = join(resolveEngineeringTemplatesDir(explicitBase), `${category}.md`)
@@ -291,7 +296,17 @@ export function materializeEngineeringTemplate(
     const destDir = getProjectTemplateDir(workspaceSlug, projectId)
     if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
     const dest = join(destDir, 'template.md')
-    copyFileSync(src, dest)
+    if (opts?.annotateInitialGuess) {
+      // 标注行注入：首行标题后插入（保留原首行锚点，标注以注释形式紧跟其后）
+      const raw = readFileSync(src, 'utf-8')
+      const lines = raw.split('\n')
+      const firstTitle = lines.findIndex((l) => l.startsWith('# '))
+      const note = '> ⏳ 初判参考，以架构师终判为准（本模板由 PRD 初判品类落位；架构师可在架构阶段修正品类，coding 推进时按终判权威重落位）'
+      lines.splice(firstTitle + 1, 0, '', note)
+      writeFileSync(dest, lines.join('\n'))
+    } else {
+      copyFileSync(src, dest)
+    }
     return dest
   } catch {
     return null
@@ -381,3 +396,223 @@ export const CATEGORY_MARKER_GUIDE =
   + '品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一'
   + '（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，'
   + '以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）'
+
+// ===== R2 规则校验层（W7，v0.17.69：门禁前确定性校验——LLM 幻觉包名/typo 在执行前拦截） =====
+
+/**
+ * 各品类已知环境组件白名单（模板无「环境」节时的降级基准；模板有环境节时以模板为准）。
+ * 共享集（所有品类允许）+ 品类专属集；组件名一律小写（校验时归一）。
+ */
+const ENV_COMPONENT_SHARED = new Set([
+  'node', 'npm', 'bun', 'bunx', 'pnpm', 'yarn', 'deno', 'git',
+])
+const ENV_COMPONENTS_BY_CATEGORY: Record<ProjectCategory, Set<string>> = {
+  'web-fullstack': new Set([]),
+  'api-backend': new Set(['python3', 'pip', 'uv', 'poetry', 'go', 'rustc', 'cargo', 'docker', 'docker-compose']),
+  'mobile-app': new Set(['watchman', 'adb', 'xcodebuild', 'xcode-select', 'swift', 'pod', 'cocoapods', 'java', 'gradle']),
+  'desktop-app': new Set(['rustc', 'cargo', 'rustup', 'electron', 'pkg-config', 'cmake', 'clang', 'gcc', 'make', 'python3']),
+  'cli-tool': new Set(['python3', 'pip', 'uv', 'go', 'rustc', 'cargo']),
+  'ai-application': new Set(['python3', 'pip', 'uv', 'poetry', 'ollama', 'docker']),
+}
+
+/** 环境清单校验结果 */
+export interface EnvChecklistValidation {
+  ok: boolean
+  problems: string[]
+}
+
+/** 从品类模板文档内容提取「环境」节组件名（模板当前均无环境节，返回 null = 降级白名单模式） */
+function extractTemplateEnvComponents(templateContent: string): Set<string> | null {
+  const sectionMatch = templateContent.match(/^#{1,3}\s*环境(?:配置|要求|依赖)?\s*$/m)
+  if (!sectionMatch || sectionMatch.index === undefined) return null
+  const after = templateContent.slice(sectionMatch.index)
+  // 跳过当前节头行再找下一节（避免把节头自己当「下一节」截空）
+  const bodyStart = after.indexOf('\n') + 1
+  const nextSection = after.slice(bodyStart).search(/^#{1,3}\s/m)
+  const section = nextSection === -1 ? after : after.slice(0, bodyStart + nextSection)
+  const components = new Set<string>()
+  // 表格行第一列（| 组件 | ...）与列表项（- 组件：...）两种形态
+  for (const m of section.matchAll(/^\|\s*([^|\s][^|]*?)\s*\|/gm)) {
+    const name = (m[1] ?? '').trim().toLowerCase()
+    if (name && !/^[\-: ]+$/.test(name)) components.add(name)
+  }
+  for (const m of section.matchAll(/^\s*[-*]\s+([\w.+-]+)[:：\s]/gm)) {
+    components.add((m[1] ?? '').trim().toLowerCase())
+  }
+  return components.size > 0 ? components : null
+}
+
+/**
+ * 环境清单组件校验（R2 第 4 层兑底，v0.17.69）：
+ * 品类模板有「环境」节时按模板组件清单比对；无环境节（当前全部模板的现状）时按
+ * 白名单模式（共享集 + 品类专属集）。清单为空或含未知组件（typo/幻觉包名）即拦，
+ * problems 供 verifyPhaseOutput 注入 verifyError（门禁前调用）。
+ */
+export function validateEnvChecklist(
+  category: ProjectCategory,
+  checklist: string[],
+  templateContent?: string,
+): EnvChecklistValidation {
+  const problems: string[] = []
+  const known = templateContent !== undefined
+    ? extractTemplateEnvComponents(templateContent)
+    : null
+  const allowed = known ?? (() => {
+    const merged = new Set(ENV_COMPONENT_SHARED)
+    for (const c of ENV_COMPONENTS_BY_CATEGORY[category]) merged.add(c)
+    return merged
+  })()
+  const source = known ? `品类模板「环境」节` : `品类白名单（${category}）`
+  if (checklist.length === 0) {
+    return { ok: false, problems: ['环境配置清单为空：architecture.md 未解析到环境组件清单（## 环境配置 节缺失或表格为空）'] }
+  }
+  for (const raw of checklist) {
+    const name = raw.trim().toLowerCase()
+    if (!name) continue
+    if (!allowed.has(name)) {
+      problems.push(`环境组件「${raw}」不在${source}内：请核对拼写（常见组件如 node/npm/bun/rustc/cargo/python3），避免幻觉包名`) 
+    }
+  }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
+ * 从 architecture.md 解析环境清单组件名（validateEnvChecklist 的输入；无环境节返回空数组）。
+ * 表格行第一列（| 组件 | 版本 | ...）；表头/分隔行自动跳过。
+ */
+export function parseEnvChecklistFromDoc(content: string): string[] {
+  const sectionMatch = content.match(/^#{1,3}\s*环境(?:配置)?\s*$/m)
+  if (!sectionMatch || sectionMatch.index === undefined) return []
+  const after = content.slice(sectionMatch.index)
+  // 跳过当前节头行再找下一节（避免把节头自己当「下一节」截空）
+  const bodyStart = after.indexOf('\n') + 1
+  const nextSection = after.slice(bodyStart).search(/^#{1,3}\s/m)
+  const section = nextSection === -1 ? after : after.slice(0, bodyStart + nextSection)
+  const components: string[] = []
+  for (const m of section.matchAll(/^\|\s*([^|\s][^|]*?)\s*\|/gm)) {
+    const name = (m[1] ?? '').trim()
+    // 跳过表头分隔行（---）与表头首列常见标题词
+    if (!name || /^[\-: ]+$/.test(name) || ['组件', 'component', '组件名'].includes(name.toLowerCase())) continue
+    components.push(name)
+  }
+  return components
+}
+
+/**
+ * 宽松品类标记提取（R2 品类幻觉拦截，v0.17.69）：提取 projectCategory: 后的原始值
+ * （不限枚举——与 extractProjectCategoryFromDoc 的枚举限定正则互补：那个函数只会
+ * 匹配到合法值，检测「写了非法值」必须宽松提取再校验）。无标记返回 null（未标注
+ * 不是错误，走 web-default 降级）；有标记但值不在六枚举内 → 调用方按 problem 拦截。
+ */
+export function extractRawCategoryMarker(content: string): string | null {
+  const m = [...content.matchAll(/projectCategory\s*[:：]\s*[`"']?([\w.-]+)[`"']?/gi)]
+  const last = m[m.length - 1]?.[1]
+  return last ?? null
+}
+
+// ===== projectEnv 标记行解析与置位（W7 B3 + AC 审计 M3/M4，v0.17.69） =====
+
+/** 标记行解析结果（ready / missing+缺失组件清单） */
+export interface ProjectEnvMarker {
+  ready: boolean
+  missing: string[]
+}
+
+/**
+ * 解析 architecture.md 的 `projectEnv:` 标记行（纯函数，M3 正则放宽版）。
+ * 容忍：行首空白、projectEnv 与冒号间空白、半/全角冒号、冒号后空白、
+ * missing 清单的全角逗号/顿号/空白分隔。多次出现取最后一次（文档修订覆盖
+ * 正文，与品类标记一致）。返回 null = 无标记行（调用方 warn 告警，不置位——
+ * 门禁按存量豁免口径放行）。
+ */
+export function parseProjectEnvMarker(content: string): ProjectEnvMarker | null {
+  const matches = [...content.matchAll(
+    /^[ \t]*projectEnv[ \t]*[:\uFF1A][ \t]*(ready|missing[ \t]*[:\uFF1A]?[ \t]*[\w.,\u4e00-\u9fff\u3001\uFF0C\t-]*?)[ \t]*$/gim,
+  )]
+  const marker = matches[matches.length - 1]?.[1]
+  if (!marker) return null
+  if (marker.startsWith('ready')) return { ready: true, missing: [] }
+  const missing = marker
+    .slice('missing'.length)
+    .replace(/^[ \t]*[:\uFF1A]/, '')
+    .split(/[,\uFF0C\u3001\s]+/)
+    .filter((c) => c.length > 0)
+  return { ready: false, missing }
+}
+
+/**
+ * 从 architecture.md 同步环境就绪状态到 _project-info.json（M4 共用函数：
+ * PHASE_ADVANCE 置位块与 syncNanjuGuideConfirmState result 侧两处复用同一解析+置位）。
+ *
+ * 幂等（result 侧每轮调用）：目标 ready 值与当前 envReady 相同且已有检查明细 →
+ * 跳过（不重写不重发埋点/广播）；变化才置位（missing→ready 安装后复测改标记行
+ * 会被感知）。architecture.md 存在但无标记行 → console.warn（M3：告警不豁免；
+ * 门禁仍按 undefined 存量豁免口径放行，但 L2 未按指令输出的事实要可观测）。
+ * 失败不抛（观测面，不阻断主流程）。
+ */
+export function syncProjectEnvStateFromArchitectureDoc(
+  workspaceSlug: string,
+  projectId: string,
+  sessionId?: string,
+): void {
+  try {
+    const { readFileSync, existsSync } = require('node:fs') as typeof import('node:fs')
+    const { join } = require('node:path') as typeof import('node:path')
+    const {
+      getNanjuProjectDir, setProjectEnvState, getProjectEnvState,
+    } = require('./nanju-project') as typeof import('./nanju-project')
+    const archPath = join(getNanjuProjectDir(workspaceSlug, projectId), '03_ARCHITECTURE', 'architecture.md')
+    if (!existsSync(archPath)) return
+    const content = readFileSync(archPath, 'utf-8')
+    const marker = parseProjectEnvMarker(content)
+    if (!marker) {
+      console.warn(`[南大环境] architecture.md 存在但未解析到 projectEnv 标记行（projectId=${projectId}）：环境状态不置位，门禁按未检查豁免放行——请核实 L2 是否按指令输出结尾标记行`)
+      return
+    }
+    const current = getProjectEnvState(workspaceSlug, projectId)
+    if (current.envReady === marker.ready && current.envCheck.length > 0) return // 幂等：状态未变不重写
+
+    const attemptedAt = new Date().toISOString()
+    const components = parseEnvChecklistFromDoc(content)
+    const missingSet = new Set(marker.missing.map((c) => c.toLowerCase()))
+    // 清单为空时至少把 missing 标记里的组件记入（表格缺失但标记存在的兑底）
+    for (const c of marker.missing) {
+      if (!components.some((x) => x.toLowerCase() === c.toLowerCase())) components.push(c)
+    }
+    const envCheck = components.map((c) => ({
+      component: c,
+      ok: !missingSet.has(c.toLowerCase()),
+      attemptedAt,
+    }))
+    setProjectEnvState(workspaceSlug, projectId, marker.ready, envCheck)
+
+    try {
+      const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+      const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+      const mode = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)?.mode
+      recordTelemetry(workspaceSlug, 'env.check.executed', {
+        project_id: projectId, mode,
+        components: components.length, ready: marker.ready,
+      }, projectId)
+      recordTelemetry(workspaceSlug, marker.ready ? 'env.setup.verified' : 'env.setup.failed', {
+        project_id: projectId, mode,
+        missing: marker.missing,
+      }, projectId)
+    } catch { /* 埋点失败不影响置位 */ }
+
+    if (sessionId) {
+      try {
+        const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+        const { getProjectSubStage, listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+        const project = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)
+        if (project) {
+          emitGuideProgress(sessionId, projectId, project.currentStage,
+            getProjectSubStage(workspaceSlug, projectId) ?? '',
+            { envState: marker.ready ? 'done' : 'blocked' })
+        }
+      } catch { /* 广播失败不影响置位（快照兑底） */ }
+    }
+  } catch (e) {
+    console.warn('[南大环境] 环境状态同步失败（不阻断主流程）:', e instanceof Error ? e.message : String(e))
+  }
+}
