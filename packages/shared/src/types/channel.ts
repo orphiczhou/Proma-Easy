@@ -446,6 +446,28 @@ export interface ChannelPlanQuotaResult {
 }
 
 /**
+ * 渠道 API Key 解密失败问题（启动扫描 / 读取时发现）。
+ *
+ * 用于主进程向渲染层推送「存储态为密文但无法解密」的渠道清单，
+ * 提示用户重新输入 Key。绝不静默、不清空存储。
+ */
+export interface ChannelKeyDecryptIssue {
+  /** 渠道 ID */
+  channelId: string
+  /** 渠道名称（用于用户提示） */
+  channelName: string
+  /** 供应商类型 */
+  provider: ProviderType
+  /** 用户可读的失败原因 */
+  reason: string
+}
+
+/** 启动扫描发现渠道 Key 无法解密时推送给渲染层的事件。 */
+export interface ChannelKeyDecryptFailedEvent {
+  issues: ChannelKeyDecryptIssue[]
+}
+
+/**
  * 渠道相关 IPC 通道常量
  */
 export const CHANNEL_IPC_CHANNELS = {
@@ -467,6 +489,8 @@ export const CHANNEL_IPC_CHANNELS = {
   TEST_DIRECT: 'channel:test-direct',
   /** 查询订阅 Plan 额度 */
   GET_PLAN_QUOTA: 'channel:get-plan-quota',
+  /** 启动扫描发现密文态 Key 无法解密（主进程推送，提示用户重新输入） */
+  KEY_DECRYPT_FAILED: 'channel:key-decrypt-failed',
   /** 发起 ChatGPT (Codex) OAuth 登录，返回加密凭据与账号信息 */
   CODEX_OAUTH_LOGIN: 'channel:codex-oauth-login',
   /** 取消进行中的 ChatGPT OAuth 登录流程 */

@@ -223,14 +223,16 @@ export async function sendMessage(
     return
   }
 
-  // 2. 解密 API Key
+  // 2. 解密 API Key（失败/空 Key/密文形态都会拒绝发送）
   let apiKey: string
   try {
     apiKey = await resolveChannelRuntimeApiKey(channelId)
-  } catch {
+  } catch (error) {
     webContents.send(CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
-      error: '解密 API Key 失败',
+      error: error instanceof Error && error.message
+        ? error.message
+        : '解密 API Key 失败',
     })
     return
   }

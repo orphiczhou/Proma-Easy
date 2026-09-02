@@ -275,6 +275,41 @@ export function forceStopDelegation(parentSessionId: string, delegationId: strin
   }
 }
 
+// ===== 南大 R1（W1）：委派生命周期事件订阅（additive；nanju 等待 Toast 数据源） =====
+
+/** 委派生命周期事件（真值源：startDelegation / continue_delegation 重派 / markDelegationFinished） */
+export interface DelegationLifecycleEvent {
+  parentSessionId: string
+  childSessionId: string
+  delegationId: string
+  title: string
+  startedAt: number
+  /** settle 时刻（start 事件缺省） */
+  settledAt?: number
+  phase: 'start' | 'done' | 'fail'
+  /** fail 的原因摘要（completed 缺省） */
+  reason?: string
+}
+
+type DelegationLifecycleListener = (event: DelegationLifecycleEvent) => void
+
+const delegationLifecycleListeners = new Set<DelegationLifecycleListener>()
+
+/** 订阅委派生命周期（返回退订函数；orchestrator 接线用，订阅方异常不影响委派） */
+export function subscribeDelegationLifecycle(listener: DelegationLifecycleListener): () => void {
+  delegationLifecycleListeners.add(listener)
+  return () => { delegationLifecycleListeners.delete(listener) }
+}
+
+/** 通知生命周期监听者（additive 通知点；任一监听者抛错不影响其余与委派本身） */
+function notifyDelegationLifecycle(event: DelegationLifecycleEvent): void {
+  for (const listener of delegationLifecycleListeners) {
+    try {
+      listener(event)
+    } catch { /* 监听者异常不影响委派 */ }
+  }
+}
+
 interface DelegateAgentArgs {
   title?: string
   role?: AgentDelegationRole
@@ -401,6 +436,17 @@ function markDelegationFinished(
   record.resultSummary = fields.resultSummary
   updateAgentSessionMeta(record.childSessionId, { delegationStatus: status })
   record.resolveCompletion()
+  // 南大 R1（W1）：settle 通知（completed→done；failed/cancelled/interrupted→fail，cancelled 附原因）
+  notifyDelegationLifecycle({
+    parentSessionId: record.parentSessionId,
+    childSessionId: record.childSessionId,
+    delegationId: record.delegationId,
+    title: record.title,
+    startedAt: record.startedAt,
+    settledAt: record.completedAt,
+    phase: status === 'completed' ? 'done' : 'fail',
+    reason: fields.error ?? (status !== 'completed' ? `委派已${status === 'failed' ? '失败' : status === 'cancelled' ? '被停止' : '被中断'}` : undefined),
+  })
 }
 
 function getDelegationSummary(record: DelegationRecord): Record<string, unknown> {
@@ -759,6 +805,15 @@ function startDelegation(
   }
   delegations.set(delegationId, record)
   pruneFinishedDelegations()
+  // 南大 R1（W1）：委派启动通知（渲染端等待 Toast 5s/30s 阈值计时起点）
+  notifyDelegationLifecycle({
+    parentSessionId: ctx.sessionId,
+    childSessionId: child.id,
+    delegationId,
+    title,
+    startedAt: record.startedAt,
+    phase: 'start',
+  })
 
   const prompt = buildDelegationPrompt({
     parentSessionId: ctx.sessionId,
@@ -1119,6 +1174,15 @@ export function buildPiCollaborationTools(
         record.resolveCompletion = completionHandle.resolveCompletion
 
         updateAgentSessionMeta(record.childSessionId, { delegationStatus: 'running' })
+        // 南大 R1（W1）：重派视作新一轮等待（渲染端重新计时；delegationId 不变）
+        notifyDelegationLifecycle({
+          parentSessionId: ctx.sessionId,
+          childSessionId: record.childSessionId,
+          delegationId: record.delegationId,
+          title: record.title,
+          startedAt: Date.now(),
+          phase: 'start',
+        })
 
         runRegisteredHeadlessAgent(
           {

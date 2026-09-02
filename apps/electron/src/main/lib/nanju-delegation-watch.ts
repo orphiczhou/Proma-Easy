@@ -51,6 +51,31 @@ export interface NanjuDelegationWatchDeps {
   injectMessage: (parentSessionId: string, text: string) => void
   /** 向 L1 续接下发指令（催办/重派；orchestrator 侧处理忙碌重试） */
   sendContinuation: (parentSessionId: string, message: string) => void
+  /**
+   * 南大 R1（W1，可选）：软超时告警点转发（渲染端等待 Toast「仍在处理/可催办」数据源）。
+   * 只转发已发生事实，不影响催办动作；缺省 no-op。
+   */
+  onSoftTimeout?: (info: {
+    parentSessionId: string
+    delegationId: string
+    childSessionId: string
+    title: string
+    startedAt: number
+    elapsedMs: number
+  }) => void
+  /**
+   * 南大 R3（W1，可选）：硬超时导致的新触发熔断转发（GuardAlertCard 数据源）。
+   * 仅在 recordGuardError 返回 justOpened 时调用；缺省 no-op，不改状态机。
+   */
+  onCircuitJustOpened?: (info: {
+    parentSessionId: string
+    workspaceSlug: string
+    projectId: string
+    stage: NanjuGuardStage
+    failCount: number
+    errorCount: number
+    note: string
+  }) => void
   /** 日志（默认 console.log） */
   log?: (message: string) => void
 }
@@ -163,6 +188,17 @@ export class NanjuDelegationWatcher {
       sessionId,
       `系统提醒：你委派的子会话「${delegation.title}」已 ${softMin} 分钟无响应。请检查其状态（list_delegations 或打开子会话查看）：确认卡死 → stop_delegation 终止后重新 delegate_agent 重派；仍在推进 → 继续等待并告知用户；需要用户决策 → AskUserQuestion。`,
     )
+    // 南大 R1（W1）：软超时告警点转发（orchestrator 接线 → nanju:delegation-status；失败不影响催办）
+    try {
+      this.deps.onSoftTimeout?.({
+        parentSessionId: sessionId,
+        delegationId: delegation.delegationId,
+        childSessionId: delegation.childSessionId,
+        title: delegation.title,
+        startedAt: delegation.startedAt,
+        elapsedMs: this.now() - delegation.startedAt,
+      })
+    } catch { /* 转发失败不影响催办 */ }
   }
 
   /**
@@ -183,6 +219,21 @@ export class NanjuDelegationWatcher {
       guard = this.deps.recordGuardError(watch.workspaceSlug, watch.projectId, stage, `L2 委派硬超时（${delegation.title}）`)
     } catch (e) {
       this.log(`[南大护栏] 熔断计数更新失败（不影响强停结果）: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    // 南大 R3（W1）：新触发熔断转发（orchestrator 接线 → nanju:guard-alert；只转发 justOpened 事实）
+    if (guard?.justOpened) {
+      try {
+        this.deps.onCircuitJustOpened?.({
+          parentSessionId: sessionId,
+          workspaceSlug: watch.workspaceSlug,
+          projectId: watch.projectId,
+          stage,
+          failCount: guard.failCount,
+          errorCount: guard.errorCount,
+          note: `L2 委派硬超时（${delegation.title}）`,
+        })
+      } catch { /* 转发失败不影响强停与重派指令 */ }
     }
 
     const stopText = stopped

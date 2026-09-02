@@ -27,6 +27,8 @@ import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
+import { GuardAlertCard } from '@/components/nanju/GuardAlertCard'
+import { NanjuDelegationToastBridge } from '@/components/nanju/useNanjuDelegationToast'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
@@ -490,6 +492,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const setWorkspaces = useSetAtom(agentWorkspacesAtom)
+  // 南大 R1/R3（W1）：nanju 工作区会话门控（等待 Toast / 熔断卡片宿主；SidePanel 同源判定 workspaceType）
+  const isNanjuWorkspace = React.useMemo(
+    () => workspaces.find((w) => w.id === currentWorkspaceId)?.workspaceType === 'nanju',
+    [workspaces, currentWorkspaceId],
+  )
   const [restoreProjectRootDialogOpen, setRestoreProjectRootDialogOpen] = React.useState(false)
   const [restoringProjectRoot, setRestoringProjectRoot] = React.useState(false)
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
@@ -3080,9 +3087,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
+      {/* 南大 R1（W1）：委派等待 Toast（nanju 工作区会话；spec 交互2 底部固定） */}
+      {isNanjuWorkspace && <NanjuDelegationToastBridge sessionId={sessionId} />}
       <div className="flex h-full min-h-0 flex-1 min-w-0 max-w-[min(72rem,100%)] flex-col overflow-hidden mx-auto">
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
+
+        {/* 南大 R3（W1）：熔断感知卡片（nanju 工作区会话；置顶展示、手动关闭） */}
+        {isNanjuWorkspace && <GuardAlertCard sessionId={sessionId} />}
 
         {/* 消息区域 */}
         <AgentMessages

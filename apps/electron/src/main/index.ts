@@ -85,6 +85,7 @@ function registerProtocolsAndHandlers(): void {
 
 
 import { getSettings, updateSettings } from './lib/settings-service'
+import { scanChannelKeyHealth } from './lib/channel-manager'
 import { handlePromaFileRequest } from './lib/local-file-protocol'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
@@ -161,6 +162,7 @@ import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/glob
 import { setPromaVersion } from '@proma/core'
 import { canRecoverRenderer, RENDERER_RECOVERY_WINDOW_MS } from './lib/renderer-process-recovery'
 import { TRAY_IPC_CHANNELS, WINDOWS_AGENT_ISLAND_IPC_CHANNELS } from '../types'
+import { CHANNEL_IPC_CHANNELS } from '@proma/shared'
 
 /** macOS 26+ 使用 Swift/AppKit NSPanel；其他平台不创建 Agent Island surface。 */
 function startAgentIslandSurface(): void {
@@ -835,6 +837,20 @@ async function bootstrap(): Promise<void> {
 
   // Create main window (will be shown when ready)
   createWindow()
+
+  // W6：启动扫描渠道 API Key 形态健康度。发现「存储态为密文但解密失败」的渠道时
+  // 推送给 UI 醒目告警（不静默、不自动清空），提示用户重新输入 Key。
+  safeRun('scanChannelKeyHealth', () => {
+    const scan = scanChannelKeyHealth()
+    if (scan.migratedCount > 0) {
+      console.log(`[启动] 渠道 Key 形态扫描：${scan.migratedCount} 个存量密文已迁移为 enc:v1: 标记形态`)
+    }
+    if (scan.issues.length > 0) {
+      const names = scan.issues.map((issue) => issue.channelName).join('、')
+      console.error(`[启动] 渠道 Key 形态扫描：${scan.issues.length} 个渠道密钥无法解密（${names}），需用户重新输入`)
+      sendToMainWindow(CHANNEL_IPC_CHANNELS.KEY_DECRYPT_FAILED, { issues: scan.issues })
+    }
+  })
 
   // 为 Dock、任务栏右键菜单与首次启动参数提供任务/日程的直接入口。
   safeRun('configurePlanningQuickEntries', () => {

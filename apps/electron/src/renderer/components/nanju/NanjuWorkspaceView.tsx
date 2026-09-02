@@ -10,6 +10,9 @@ import { cn } from '@/lib/utils'
 import { AgentView } from '@/components/agent/AgentView'
 import { PreviewPanel } from '@/components/diff/PreviewPanel'
 import { GwtProgressCard } from '@/components/nanju/GwtProgressCard'
+import { GuardAlertCard } from '@/components/nanju/GuardAlertCard'
+import { NanjuToastHost } from '@/components/nanju/NanjuToast'
+import { useNanjuDelegationToast } from '@/components/nanju/useNanjuDelegationToast'
 import { useAtom, useAtomValue } from 'jotai'
 import { previewPanelOpenMapAtom, previewSplitRatioAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { PreviewFile } from '@/atoms/preview-atoms'
@@ -24,6 +27,8 @@ export function NanjuWorkspaceView({ sessionId }: NanjuWorkspaceViewProps): Reac
   const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
   const draggingRef = React.useRef(false)
   const openPreview = useOpenPreview()
+  // R1（W1）：委派等待 Toast（5s/30s 阈值，spec 交互2）
+  useNanjuDelegationToast(sessionId)
 
   // 监听 nanju HTML 预览事件，自动打开右侧分屏
   React.useEffect(() => {
@@ -79,14 +84,19 @@ export function NanjuWorkspaceView({ sessionId }: NanjuWorkspaceViewProps): Reac
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      {/* 左侧：Agent 对话（顶部叠加 GWT 验收测试进度卡片，Sprint B） */}
+      {/* 左侧：Agent 对话（顶部叠加熔断卡片（R3）与 GWT 验收测试进度卡片，Sprint B）；底部固定 Toast（R1，spec 交互2） */}
       <div
-        className="flex flex-col min-w-0 h-full"
+        className="relative flex flex-col min-w-0 h-full"
         style={previewOpen ? { flex: `0 0 calc(${splitRatio * 100}% - 4px)` } : { flex: '1 1 auto' }}
       >
+        <GuardAlertCard sessionId={sessionId} />
         <GwtProgressCard sessionId={sessionId} />
         <div className="flex-1 min-h-0">
           <AgentView sessionId={sessionId} />
+        </div>
+        {/* 底部固定 Toast 宿主（非对话流气泡；置底居中，pointer-events 仅 Toast 自身可交互） */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-40 flex justify-center px-4">
+          <NanjuToastHost />
         </div>
       </div>
 

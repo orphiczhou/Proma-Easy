@@ -44,7 +44,7 @@ import { friendlyErrorMessage, isPromptTooLongError, isThinkingSignatureError, m
 import { getActiveRunRejectionMessage, shouldPersistInitialUserMessage } from './agent-send-message-policy'
 import { isSessionNotFoundError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
-import { decryptApiKey, getChannelById, listChannels, persistCodexOAuthCredentials, persistXaiOAuthCredentials, resolveChannelRuntimeApiKey, resolveCodexOAuthCredentials, resolveXaiOAuthCredentials } from './channel-manager'
+import { ApiKeyDecryptError, getChannelById, listChannels, persistCodexOAuthCredentials, persistXaiOAuthCredentials, resolveChannelRuntimeApiKey, resolveCodexOAuthCredentials, resolveXaiOAuthCredentials } from './channel-manager'
 import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
@@ -229,6 +229,9 @@ function resolveLocalProjectRootForRewind(projectRootPath: string): string {
 
 // ===== AgentOrchestrator =====
 
+/** 南大 R1（W1）：委派状态事件接线幂等标记（orchestrator 重建不重复订阅） */
+let nanjuDelegationStatusWired = false
+
 export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
   private eventBus: AgentEventBus
@@ -260,6 +263,35 @@ export class AgentOrchestrator {
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
     this.eventBus = eventBus
+    // 南大 R1（W1）：委派生命周期 → nanju:delegation-status IPC（渲染端等待 Toast 数据源；只加 emit 接线）
+    this.wireNanjuDelegationStatusEvents()
+  }
+
+  /**
+   * 南大 R1（W1）：订阅 agent-collaboration-tools 委派生命周期，转发主窗广播。
+   * 只做转发不改既有逻辑；模块级幂等（多实例/重建不重复订阅）。
+   */
+  private wireNanjuDelegationStatusEvents(): void {
+    if (nanjuDelegationStatusWired) return
+    try {
+      const { subscribeDelegationLifecycle } = require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
+      const { emitDelegationStatus } = require('./nanju-delegation-status') as typeof import('./nanju-delegation-status')
+      nanjuDelegationStatusWired = true
+      subscribeDelegationLifecycle((event) => {
+        emitDelegationStatus({
+          sessionId: event.parentSessionId,
+          delegationId: event.delegationId,
+          childSessionId: event.childSessionId,
+          phase: event.phase,
+          label: event.title,
+          startedAt: event.startedAt,
+          elapsedMs: event.settledAt != null ? event.settledAt - event.startedAt : 0,
+          reason: event.reason,
+        })
+      })
+    } catch (e) {
+      console.warn('[南大护栏] 委派状态事件接线失败（不影响委派）:', e instanceof Error ? e.message : String(e))
+    }
   }
 
   /**
@@ -623,6 +655,11 @@ export class AgentOrchestrator {
                 error_round: outcome.errorCount,
               }, projectId)
             } catch { /* 埋点失败不影响主流程 */ }
+            // 南大 R3（W1）：新触发熔断 → nanju:guard-alert（GuardAlertCard 数据源；只加 emit 不改状态机）
+            try {
+              const { emitGuardAlert, NANJU_GUARD_ALERT_MESSAGE } = require('./nanju-guard-alert') as typeof import('./nanju-guard-alert')
+              emitGuardAlert({ sessionId, projectId, stage: 'testing', message: NANJU_GUARD_ALERT_MESSAGE })
+            } catch { /* IPC 失败不影响结果处理 */ }
           }
         } catch (guardErr) {
           console.warn('[南大护栏] GWT 熔断计数更新失败（不影响结果处理）:', guardErr instanceof Error ? guardErr.message : String(guardErr))
@@ -847,6 +884,30 @@ export class AgentOrchestrator {
       },
       injectMessage: (sessionId: string, text: string) => this.injectNanjuAssistantMessage(sessionId, text),
       sendContinuation: (sessionId: string, message: string) => this.runNanjuGuardContinuation(sessionId, message),
+      // 南大 R1（W1）：软超时告警点 → nanju:delegation-status timeout 相位（转发，不影响催办）
+      onSoftTimeout: (info) => {
+        const { emitDelegationStatus } = require('./nanju-delegation-status') as typeof import('./nanju-delegation-status')
+        emitDelegationStatus({
+          sessionId: info.parentSessionId,
+          delegationId: info.delegationId,
+          childSessionId: info.childSessionId,
+          phase: 'timeout',
+          label: info.title,
+          startedAt: info.startedAt,
+          elapsedMs: info.elapsedMs,
+          reason: `子会话「${info.title}」软超时告警点转发（仍在处理，可催办）`,
+        })
+      },
+      // 南大 R3（W1）：硬超时新触发熔断 → nanju:guard-alert（GuardAlertCard 数据源；只加 emit 不改状态机）
+      onCircuitJustOpened: (info) => {
+        const { emitGuardAlert, NANJU_GUARD_ALERT_MESSAGE } = require('./nanju-guard-alert') as typeof import('./nanju-guard-alert')
+        emitGuardAlert({
+          sessionId: info.parentSessionId,
+          projectId: info.projectId,
+          stage: info.stage,
+          message: NANJU_GUARD_ALERT_MESSAGE,
+        })
+      },
     })
     return this.nanjuDelegationWatcher
   }
@@ -1305,9 +1366,24 @@ export class AgentOrchestrator {
         xaiOAuthCredentials = await resolveXaiOAuthCredentials(channelId)
         apiKey = xaiOAuthCredentials.access
       } else {
-        apiKey = decryptApiKey(channelId)
+        // 统一走发送链入口：解密失败/Key 为空/密文形态均会抛 ApiKeyDecryptError，
+        // 绝不把密文当 API Key 发给服务端（W6 根因修复）。
+        apiKey = await resolveChannelRuntimeApiKey(channelId)
       }
     } catch (err) {
+      if (err instanceof ApiKeyDecryptError && (channel.provider === 'openai-codex' || channel.provider === 'xai')) {
+        // 订阅渠道存储的凭据密文无法解密：与 OAuth 过期是两类问题，分开提示。
+        reportPreflightError({
+          code: 'api_key_decrypt_failed',
+          title: 'API Key 解密失败',
+          message: `无法解密此渠道存储的登录凭据（${err.message}）。请到设置中重新登录。`,
+          actions: [
+            { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
+          ],
+          canRetry: false,
+        })
+        return
+      }
       if (channel.provider === 'openai-codex' || channel.provider === 'xai') {
         const isXai = channel.provider === 'xai'
         reportPreflightError({
@@ -1326,7 +1402,9 @@ export class AgentOrchestrator {
       reportPreflightError({
         code: 'api_key_decrypt_failed',
         title: 'API Key 解密失败',
-        message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
+        message: err instanceof ApiKeyDecryptError
+          ? `${err.message}。请到设置中重新填写。`
+          : '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
         actions: [
           { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
         ],

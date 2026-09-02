@@ -13,6 +13,7 @@ import { getChannelsPath } from './config-paths'
 import type {
   Channel,
   ChannelCreateInput,
+  ChannelKeyDecryptIssue,
   ChannelUpdateInput,
   ChannelsConfig,
   ChannelTestResult,
@@ -318,6 +319,59 @@ function writeConfig(config: ChannelsConfig): void {
 }
 
 /**
+ * 渠道 API Key 解密失败错误。
+ *
+ * 抛出时机：存储态为密文（`enc:v1:` 标记或存量无标记密文）但无法解密。
+ * 语义：密钥不可用，调用方绝不能把存储原串当 API Key 发出去。
+ */
+export class ApiKeyDecryptError extends Error {
+  readonly channelId?: string
+  readonly channelName?: string
+
+  constructor(message: string, info?: { channelId?: string; channelName?: string }) {
+    super(message)
+    this.name = 'ApiKeyDecryptError'
+    this.channelId = info?.channelId
+    this.channelName = info?.channelName
+  }
+}
+
+/**
+ * 新写入密文的统一形态标记前缀。
+ *
+ * 存储形态：`enc:v1:<base64(safeStorage blob)>`。
+ * 旧版本写入的密文无此前缀，读取时靠 `looksLikeLegacyCiphertext` 启发式识别，
+ * 并在启动扫描/下一次成功解密时机会性迁移到带标记形态。
+ */
+const ENCRYPTED_KEY_PREFIX = 'enc:v1:'
+
+/** Chromium os_crypt 加密 blob 的 base64 解码后至少包含版本前缀 + 密文块。 */
+const LEGACY_CIPHERTEXT_MIN_BYTES = 16
+
+/**
+ * 判断存量无标记的存储值是否「像 safeStorage 密文」。
+ *
+ * 特征：标准 base64 字符集，解码后 ≥16 字节且以 `v1` 开头（覆盖 v1/v10/v11
+ * 三种 Chromium os_crypt 版本前缀；Linux libsecret 为 v11，Windows DPAPI 为
+ * v10，macOS Keychain 为 v1）。取证实证：MiniMax 密文 len=176、`djE`开头、
+ * `=`结尾，解码后以 v1 开头。
+ *
+ * 仅在「解密已失败」或「加密不可用」分支使用：命中即拒绝把该串当明文 Key
+ * 发出。极小概率误伤恰好满足全部特征的明文 Key（此时提示重输，安全方向正确）。
+ */
+function looksLikeLegacyCiphertext(value: string): boolean {
+  if (value.length < 8 || value.length % 4 === 1) return false
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false
+  try {
+    const decoded = Buffer.from(value, 'base64')
+    if (decoded.length < LEGACY_CIPHERTEXT_MIN_BYTES) return false
+    return decoded[0] === 0x76 && decoded[1] === 0x31 // 'v' '1'
+  } catch {
+    return false
+  }
+}
+
+/**
  * 加密 API Key
  *
  * 使用 Electron safeStorage 加密，底层使用：
@@ -325,7 +379,10 @@ function writeConfig(config: ChannelsConfig): void {
  * - Windows: DPAPI
  * - Linux: Secret Service API
  *
- * @returns base64 编码的加密字符串
+ * 加密可用时写入 `enc:v1:` 前缀标记，读取端可无歧义区分密文/明文；
+ * 不可用时按既有设计明文存储（不加标记）。
+ *
+ * @returns enc:v1: 前缀 + base64 编码的加密字符串；加密不可用时为明文原串
  */
 function encryptApiKey(plainKey: string): string {
   if (!safeStorage.isEncryptionAvailable()) {
@@ -334,29 +391,87 @@ function encryptApiKey(plainKey: string): string {
   }
 
   const encrypted = safeStorage.encryptString(plainKey)
-  return encrypted.toString('base64')
+  return ENCRYPTED_KEY_PREFIX + encrypted.toString('base64')
 }
 
 /**
- * 解密 API Key
+ * 解密 API Key（三态：明文透传 / 解密成功 / 解密失败抛错）
  *
- * @param encryptedKey base64 编码的加密字符串
- * @returns 明文 API Key
+ * 解密失败时抛出 ApiKeyDecryptError，绝不把密文原串当明文返回——
+ * 密文一旦被当 API Key 发给服务端，渠道会静默 401 报废（W6 根因）。
+ *
+ * 三类存储形态的处理：
+ * 1. `enc:v1:` 标记密文：必须解密成功；加密不可用或解密失败 → 抛错。
+ * 2. 存量无标记密文（启发式命中）：同上，失败 → 抛错。
+ * 3. 存量无标记明文（含加密不可用环境写入的明文）：透传返回。
+ *    「写入时加密可用、读取时不可用」的漂移窗口中，旧密文会被启发式
+ *    识别并拒绝，而不会静默发出。
+ *
+ * @param encryptedKey 存储态 Key（可能是 enc:v1: 密文 / 存量密文 / 明文）
+ * @returns 明文 API Key；未配置（空串）返回空串
  */
 function decryptKey(encryptedKey: string): string {
+  if (!encryptedKey) return ''
+
+  if (encryptedKey.startsWith(ENCRYPTED_KEY_PREFIX)) {
+    const payload = encryptedKey.slice(ENCRYPTED_KEY_PREFIX.length)
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new ApiKeyDecryptError('系统密钥环不可用，无法解密已加密存储的 API Key，请重新输入')
+    }
+    try {
+      return safeStorage.decryptString(Buffer.from(payload, 'base64'))
+    } catch (error) {
+      console.warn('[渠道管理] 解密 API Key 失败（enc:v1: 标记形态）:', error)
+      throw new ApiKeyDecryptError('解密 API Key 失败（系统密钥环状态可能已变化），请重新输入')
+    }
+  }
+
+  // 存量无标记形态：可能是旧版密文（写入时加密可用）或明文（写入时不可用）
   if (!safeStorage.isEncryptionAvailable()) {
-    // 如果加密不可用，假设存储的是明文
+    // 加密不可用时只能正确处理明文；识别到密文形态（漂移窗口）必须拒绝。
+    if (looksLikeLegacyCiphertext(encryptedKey)) {
+      throw new ApiKeyDecryptError('检测到加密存储的 API Key，但当前系统密钥环不可用，无法解密，请重新输入')
+    }
     return encryptedKey
   }
 
   try {
     const buffer = Buffer.from(encryptedKey, 'base64')
-    return safeStorage.decryptString(buffer)
-  } catch {
-    // 解密失败：可能是 safeStorage 密钥变更（如跨应用实例迁移），
-    // 兼容明文存储的场景，直接返回原始值
-    console.warn('[渠道管理] 解密 API Key 失败，尝试明文回退')
+    const decrypted = safeStorage.decryptString(buffer)
+    if (decrypted) return decrypted
+    // 部分平台解密失败不抛错而是返回空串；此时无法与合法空明文区分，
+    // 统一按失败处理，交由调用方提示重输。
+    throw new Error('decryptString 返回空结果')
+  } catch (error) {
+    // 解密失败：可能是存量明文（写入时加密不可用，本就解不开），也可能是
+    // 密文损坏/密钥环变更。密文形态 → 拒绝；其余按明文透传（保持既有设计）。
+    if (looksLikeLegacyCiphertext(encryptedKey)) {
+      console.warn('[渠道管理] 解密 API Key 失败，且存储值呈密文形态，拒绝透传:', error)
+      throw new ApiKeyDecryptError('解密 API Key 失败（系统密钥环状态可能已变化），请重新输入')
+    }
     return encryptedKey
+  }
+}
+
+/**
+ * 请求发送链防线：校验解析出的运行时 Key 可用。
+ *
+ * 不合格情形（均拒绝发出，抛 ApiKeyDecryptError）：
+ * - 空：渠道未配置 Key；
+ * - 密文形态：解密链漏网的双重保险（含误注入的 enc:v1: 标记串或存量密文特征串）。
+ */
+function assertUsableRuntimeApiKey(channel: Pick<Channel, 'id' | 'name'>, apiKey: string): void {
+  if (!apiKey) {
+    throw new ApiKeyDecryptError(
+      `渠道「${channel.name}」未配置 API Key，请到设置中填写`,
+      { channelId: channel.id, channelName: channel.name },
+    )
+  }
+  if (apiKey.startsWith(ENCRYPTED_KEY_PREFIX) || looksLikeLegacyCiphertext(apiKey)) {
+    throw new ApiKeyDecryptError(
+      `渠道「${channel.name}」密钥解密失败，密文形态的值不会被发送，请重新输入 API Key`,
+      { channelId: channel.id, channelName: channel.name },
+    )
   }
 }
 
@@ -489,7 +604,8 @@ export function deleteChannel(id: string): void {
 /**
  * 解密渠道的 API Key
  *
- * 仅在用户需要查看时调用。
+ * 仅在用户需要查看时调用。解密失败（密文无法还原）时抛出 ApiKeyDecryptError，
+ * 绝不返回密文原串；未配置 Key（空串）返回空串。
  */
 export function decryptApiKey(channelId: string): string {
   const config = readConfig()
@@ -499,7 +615,94 @@ export function decryptApiKey(channelId: string): string {
     throw new Error(`渠道不存在: ${channelId}`)
   }
 
-  return decryptKey(channel.apiKey)
+  try {
+    return decryptKey(channel.apiKey)
+  } catch (error) {
+    if (error instanceof ApiKeyDecryptError) {
+      throw new ApiKeyDecryptError(
+        `渠道「${channel.name}」${error.message}`,
+        { channelId: channel.id, channelName: channel.name },
+      )
+    }
+    throw error
+  }
+}
+
+/**
+ * 启动扫描结果：无法解密的渠道清单 + 机会性迁移统计。
+ */
+export interface ChannelKeyScanResult {
+  /** 存储态为密文但无法解密、需要用户重新输入 Key 的渠道 */
+  issues: ChannelKeyDecryptIssue[]
+  /** 存量无标记密文已验证可解密并迁移到 enc:v1: 标记形态的渠道数 */
+  migratedCount: number
+}
+
+/**
+ * 启动扫描：检查全部渠道的 API Key 形态健康度。
+ *
+ * - 发现「存储态为密文但解密失败」→ 收集为 issue（不静默、不自动清空，
+ *   由启动接线推送给 UI 提示用户重新输入）；
+ * - 存量无标记密文在当前环境可解密 → 机会性迁移为 enc:v1: 标记形态，
+ *   永久消除「密文/明文不可区分」的歧义（语义不变的纯重标记）；
+ * - 明文存储的渠道保持明文，不做加密迁移（避免把可用的明文变成
+ *   密钥环漂移后不可解的密文，扩大故障面）。
+ */
+export function scanChannelKeyHealth(): ChannelKeyScanResult {
+  const config = readConfig()
+  const issues: ChannelKeyDecryptIssue[] = []
+  let migratedCount = 0
+  let configChanged = false
+
+  const channels = config.channels.map((channel) => {
+    const stored = channel.apiKey
+    if (!stored) return channel // 空 Key 是合法的未配置状态
+
+    const pushIssue = (reason: string): void => {
+      issues.push({
+        channelId: channel.id,
+        channelName: channel.name,
+        provider: channel.provider,
+        reason,
+      })
+    }
+
+    try {
+      if (stored.startsWith(ENCRYPTED_KEY_PREFIX)) {
+        decryptKey(stored) // 仅验证可解密；失败会抛 ApiKeyDecryptError
+        return channel
+      }
+      if (!safeStorage.isEncryptionAvailable()) {
+        // 密文形态但无法解密（漂移窗口）→ 报 issue；明文 → 正常。
+        if (looksLikeLegacyCiphertext(stored)) {
+          pushIssue('系统密钥环不可用，无法解密已加密存储的 API Key，请重新输入')
+        }
+        return channel
+      }
+      if (!looksLikeLegacyCiphertext(stored)) return channel // 明文，保持
+      const plain = decryptKey(stored) // 解密失败 → 抛 ApiKeyDecryptError
+      migratedCount += 1
+      configChanged = true
+      console.log(`[渠道管理] 启动扫描：渠道「${channel.name}」的存量密文已验证可解密，迁移为 enc:v1: 标记形态`)
+      return { ...channel, apiKey: encryptApiKey(plain) }
+    } catch (error) {
+      const reason = error instanceof ApiKeyDecryptError
+        ? error.message
+        : '解密 API Key 失败（系统密钥环状态可能已变化），请重新输入'
+      pushIssue(reason)
+      return channel
+    }
+  })
+
+  if (configChanged) {
+    try {
+      writeConfig({ ...config, channels })
+    } catch (error) {
+      console.error('[渠道管理] 启动扫描：标记迁移回写失败（不影响本次读取，下次启动重试）:', error)
+    }
+  }
+
+  return { issues, migratedCount }
 }
 
 /**
@@ -610,10 +813,13 @@ export async function resolveXaiAccessToken(channelId: string): Promise<string> 
 }
 
 /**
- * 解析渠道运行时实际使用的认证 token。
+ * 解析渠道运行时实际使用的认证 token（请求发送链统一入口）。
  *
  * 普通渠道直接解密 API Key；ChatGPT (Codex) OAuth 渠道的 apiKey 字段存储的是
  * OAuth 凭据 JSON，运行时必须取出 access token 并按需刷新。
+ *
+ * 发送防线：解析出的 Key 为空或呈密文形态时抛 ApiKeyDecryptError，
+ * 调用方（chat/agent/vision）捕获后跳过请求并提示用户重输，绝不发密文。
  */
 export async function resolveChannelRuntimeApiKey(channelId: string): Promise<string> {
   const channel = getChannelById(channelId)
@@ -621,9 +827,19 @@ export async function resolveChannelRuntimeApiKey(channelId: string): Promise<st
     throw new Error(`渠道不存在: ${channelId}`)
   }
 
-  if (channel.provider === 'openai-codex') return resolveCodexAccessToken(channelId)
-  if (channel.provider === 'xai') return resolveXaiAccessToken(channelId)
-  return decryptApiKey(channelId)
+  if (channel.provider === 'openai-codex') {
+    const accessToken = await resolveCodexAccessToken(channelId)
+    assertUsableRuntimeApiKey(channel, accessToken)
+    return accessToken
+  }
+  if (channel.provider === 'xai') {
+    const accessToken = await resolveXaiAccessToken(channelId)
+    assertUsableRuntimeApiKey(channel, accessToken)
+    return accessToken
+  }
+  const apiKey = decryptApiKey(channelId)
+  assertUsableRuntimeApiKey(channel, apiKey)
+  return apiKey
 }
 
 /**
@@ -639,7 +855,20 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
     return { success: false, message: '渠道不存在' }
   }
 
-  const apiKey = decryptKey(channel.apiKey)
+  let apiKey: string
+  try {
+    apiKey = decryptKey(channel.apiKey)
+  } catch (error) {
+    // 解密失败绝不发密文：直接返回本地失败结果，不发起网络请求。
+    const reason = error instanceof ApiKeyDecryptError
+      ? `渠道「${channel.name}」${error.message}`
+      : `无法读取渠道「${channel.name}」的 API Key`
+    console.warn('[渠道管理] 连接测试前解密失败，已拒绝发请求:', reason)
+    return { success: false, message: reason }
+  }
+  if (!apiKey) {
+    return { success: false, message: `渠道「${channel.name}」尚未配置 API Key，请先填写后再测试` }
+  }
   const proxyUrl = await getEffectiveProxyUrl()
   const provider = inferProviderFromBaseUrl(channel.provider, channel.baseUrl)
 
@@ -1579,8 +1808,15 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
   let apiKey: string
   try {
     apiKey = decryptKey(channel.apiKey)
-  } catch {
-    return createUnsupportedPlanQuota(provider, '无法读取渠道 API Key')
+  } catch (error) {
+    // 解密失败绝不把密文当 Key 发给供应商额度接口。
+    const reason = error instanceof ApiKeyDecryptError
+      ? `渠道「${channel.name}」${error.message}`
+      : `无法读取渠道「${channel.name}」的 API Key`
+    return createUnsupportedPlanQuota(provider, reason)
+  }
+  if (!apiKey) {
+    return createUnsupportedPlanQuota(provider, `渠道「${channel.name}」尚未配置 API Key`)
   }
 
   try {

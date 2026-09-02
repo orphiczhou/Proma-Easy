@@ -23,6 +23,31 @@ interface GuidePanelProps {
   sessionId: string
 }
 
+/**
+ * Y1（W1，spec 交互4「角色切换过渡」最小版）：阶段角色一句话职责映射表。
+ * key = GuideRoutePhase.role（nanju-router 角色 id）；未知角色降级通用文案。
+ * 只读映射，状态随 stageStates 派生，不动 DSL。
+ */
+const ROLE_DUTY_LINES: Record<string, string> = {
+  'requirement-analyst': '把你的想法逐条整理成清晰的需求清单',
+  'ux-advisor': '设计你能直接点开的界面原型',
+  'architect': '为项目搭好合适的技术骨架',
+  'engineering-manager': '排出靠谱的开发计划与优先级',
+  'fullstack-developer': '把设计变成能跑起来的应用',
+  'test-engineer': '替你逐条验收功能是否好用',
+}
+
+/** Y1：当前阶段角色状态栏文案「当前阶段：{阶段名} · {角色}（{模型}）——{一句话职责}」 */
+function buildStageRoleNotice(
+  phases: GuideRoutePhase[],
+  stageStates: Partial<Record<string, string>>,
+): string | null {
+  const current = phases.find((p) => stageStates[p.id] === 'current')
+  if (!current) return null
+  const duty = ROLE_DUTY_LINES[current.role] ?? '正在推进这个阶段'
+  return `当前阶段：${current.title} · ${current.role}（${current.model}）——${duty}`
+}
+
 /** 对照查看的目标阶段状态文案（含终点） */
 function describeStageStatus(
   stageStates: Partial<Record<string, string>>,
@@ -218,6 +243,11 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
 
   const statusSummary = describeStageStatus(data.stageStates, data.phases)
   const progressPercent = statusSummary.total > 0 ? Math.round((statusSummary.doneCount / statusSummary.total) * 100) : 0
+  // Y1（W1）：当前阶段角色状态栏文案（无 current 阶段 → 不显示）
+  const stageRoleNotice = React.useMemo(
+    () => buildStageRoleNotice(data.phases, data.stageStates),
+    [data.phases, data.stageStates],
+  )
 
   // ===== 空态 / 骨架 / 错误切换（PRD §九） =====
   let body: React.ReactElement
@@ -256,6 +286,11 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
     body = (
       <>
         {data.notice && <NoticeBar text={data.notice} tone="info" />}
+        {/* Y1（W1）：项目进行中的角色状态栏（与 data.notice 互斥——abandoned/未知阶段等
+            异常态优先；文案随 stageStates 派生，spec 交互4 最小版） */}
+        {!data.notice && viewMode === 'project' && stageRoleNotice && (
+          <NoticeBar text={stageRoleNotice} tone="info" />
+        )}
         {modeBubble && (
           <NoticeBar
             text={`两种模式：快消型 4 步（需求→原型→开发→测试）；长期迭代型 6 步（+架构+规划，AC 审计更强）。点右上「对照」查看另一种模式。`}

@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { useAtom, useStore } from 'jotai'
+import { toast } from 'sonner'
 import { AppShell } from './components/app-shell/AppShell'
 import { OnboardingView } from './components/onboarding/OnboardingView'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
@@ -50,6 +51,26 @@ export default function App(): React.ReactElement {
 
     initialize()
   }, [])
+
+  // W6：启动扫描发现渠道密钥无法解密时，主进程会推送 KEY_DECRYPT_FAILED。
+  // 在 UI 醒目告警并引导用户到渠道设置重新输入（不静默、不清空存储）。
+  React.useEffect(() => {
+    return window.electronAPI.onChannelKeyDecryptFailed((event) => {
+      const names = event.issues.map((issue) => `「${issue.channelName}」`).join('、')
+      console.error('[App] 渠道密钥解密失败，需重新输入:', event.issues)
+      toast.error(`渠道 ${names} 密钥解密失败`, {
+        description: '系统密钥环状态变化导致已保存的 API Key 无法解密，密文不会被发送。请到设置 → 模型与渠道重新输入受影响渠道的 API Key。',
+        duration: 30_000,
+        action: {
+          label: '打开渠道设置',
+          onClick: () => {
+            store.set(settingsTabAtom, 'channels')
+            store.set(settingsOpenAtom, true)
+          },
+        },
+      })
+    })
+  }, [store])
 
   // 设置页请求重放时跳过欢迎页，但保留完整的后续 Onboarding 流程。
   React.useEffect(() => {

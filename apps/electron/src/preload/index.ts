@@ -275,8 +275,11 @@ export interface ElectronAPI {
   /** 删除渠道 */
   deleteChannel: (id: string) => Promise<void>
 
-  /** 解密获取明文 API Key（仅在用户查看时调用） */
+  /** 解密获取明文 API Key（仅在用户查看时调用；无法解密时 reject） */
   decryptApiKey: (channelId: string) => Promise<string>
+
+  /** 订阅启动扫描发现的渠道 Key 解密失败事件。返回取消订阅函数。 */
+  onChannelKeyDecryptFailed: (callback: (event: import('@proma/shared').ChannelKeyDecryptFailedEvent) => void) => () => void
 
   /** 测试渠道连接 */
   testChannel: (channelId: string) => Promise<ChannelTestResult>
@@ -1354,6 +1357,42 @@ export interface ElectronAPI {
     skipped: number
   }) => void) => void
 
+  /** 南大 R1（W1）：L2 委派生命周期状态事件（等待/进度 Toast 数据源；5s/30s 阈值在渲染端） */
+  onNanjuDelegationStatus: (callback: (event: unknown, data: {
+    sessionId: string
+    delegationId: string
+    childSessionId: string
+    phase: 'start' | 'done' | 'fail' | 'timeout'
+    label: string
+    startedAt: number
+    elapsedMs: number
+    reason?: string
+  }) => void) => void
+  offNanjuDelegationStatus: (callback: (event: unknown, data: {
+    sessionId: string
+    delegationId: string
+    childSessionId: string
+    phase: 'start' | 'done' | 'fail' | 'timeout'
+    label: string
+    startedAt: number
+    elapsedMs: number
+    reason?: string
+  }) => void) => void
+
+  /** 南大 R3（W1）：阶段熔断告警事件（GuardAlertCard 数据源） */
+  onNanjuGuardAlert: (callback: (event: unknown, data: {
+    sessionId: string
+    projectId: string
+    stage: string
+    message: string
+  }) => void) => void
+  offNanjuGuardAlert: (callback: (event: unknown, data: {
+    sessionId: string
+    projectId: string
+    stage: string
+    message: string
+  }) => void) => void
+
   /** Agent 会话工具 open_preview 触发的预览请求事件 */
   onAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
   offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
@@ -1508,6 +1547,12 @@ const electronAPI: ElectronAPI = {
 
   decryptApiKey: (channelId: string) => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.DECRYPT_KEY, channelId)
+  },
+
+  onChannelKeyDecryptFailed: (callback: (event: import('@proma/shared').ChannelKeyDecryptFailedEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: import('@proma/shared').ChannelKeyDecryptFailedEvent) => callback(payload)
+    ipcRenderer.on(CHANNEL_IPC_CHANNELS.KEY_DECRYPT_FAILED, listener)
+    return () => ipcRenderer.removeListener(CHANNEL_IPC_CHANNELS.KEY_DECRYPT_FAILED, listener)
   },
 
   testChannel: (channelId: string) => {
@@ -3046,6 +3091,20 @@ const electronAPI: ElectronAPI = {
   },
   offNanjuGwtProgress: (callback) => {
     ipcRenderer.removeListener('nanju:gwt-progress', callback)
+  },
+
+  onNanjuDelegationStatus: (callback) => {
+    ipcRenderer.on('nanju:delegation-status', callback)
+  },
+  offNanjuDelegationStatus: (callback) => {
+    ipcRenderer.removeListener('nanju:delegation-status', callback)
+  },
+
+  onNanjuGuardAlert: (callback) => {
+    ipcRenderer.on('nanju:guard-alert', callback)
+  },
+  offNanjuGuardAlert: (callback) => {
+    ipcRenderer.removeListener('nanju:guard-alert', callback)
   },
 
   onAgentOpenPreview: (callback) => {
