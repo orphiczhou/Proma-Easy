@@ -287,3 +287,23 @@ describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', ()
     }
   })
 })
+
+describe('工程品类上游标注门禁（W3，v0.17.66）', () => {
+  test('requirements 约束含品类初判要求（PRD 标注格式 + 六品类枚举说明）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const constraints = getPhaseNode(mode, 'requirements')!.constraints.join('\n')
+      expect(constraints).toContain('工程品类初判')
+      expect(constraints).toContain('projectCategory')
+      expect(constraints).toContain('desktop-app')
+      expect(constraints).toContain('web-fullstack')
+    }
+  })
+
+  test('architecture 约束含品类终判要求（可修正 PRD 初判）', () => {
+    const constraints = getPhaseNode('iterative', 'architecture')!.constraints.join('\n')
+    expect(constraints).toContain('工程品类终判')
+    expect(constraints).toContain('可修正 PRD 初判')
+    // quick 模式无 architecture 阶段
+    expect(getPhaseNode('quick', 'architecture')).toBeUndefined()
+  })
+})

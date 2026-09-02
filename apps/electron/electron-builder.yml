@@ -84,6 +84,13 @@ extraResources:
     to: startup-splash
     filter:
       - "**/*"
+  # 南大向导工程样板模板（W3，v0.17.66）：按品类 materialize 到项目目录
+  # 00_ENGINEERING_TEMPLATE/，供 coding 阶段 L2 Read 全文（加载逻辑见
+  # src/main/lib/nanju-engineering-template.ts）
+  - from: resources/nanju-engineering-templates
+    to: nanju-engineering-templates
+    filter:
+      - "**/*"
 
 # ============================================
 # macOS 配置

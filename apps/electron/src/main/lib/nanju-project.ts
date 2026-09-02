@@ -15,6 +15,32 @@ import { getWorkspaceFilesDir, getAgentWorkspacePath } from './config-paths'
 
 export type ProjectMode = 'quick' | 'iterative'
 export type ProjectStatus = 'active' | 'completed' | 'abandoned'
+
+/**
+ * 工程品类（W3，v0.17.66）：coding 阶段工程样板前置——按项目形态选择工程模板。
+ * 枚举与 resources/nanju-engineering-templates/ 下的模板文件一一对应。
+ */
+export type ProjectCategory =
+  | 'web-fullstack'
+  | 'api-backend'
+  | 'mobile-app'
+  | 'desktop-app'
+  | 'cli-tool'
+  | 'ai-application'
+
+/** 品类枚举清单（判定提取的合法值域；提取值不在枚举内视为无效标记） */
+export const PROJECT_CATEGORIES: readonly ProjectCategory[] = [
+  'web-fullstack', 'api-backend', 'mobile-app', 'desktop-app', 'cli-tool', 'ai-application',
+] as const
+
+/** 品类值合法性检查 */
+export function isProjectCategory(value: string): value is ProjectCategory {
+  return (PROJECT_CATEGORIES as readonly string[]).includes(value)
+}
+
+/** 品类判定来源（审计用：标记从哪个文档提取，还是降级默认值） */
+export type ProjectCategorySource = 'architecture' | 'prd' | 'default'
+
 export type ProjectStage =
   | 'mode-select' | 'requirements' | 'prototype'
   | 'architecture' | 'planning' | 'coding' | 'testing' | 'delivered'
@@ -60,6 +86,10 @@ export interface NanjuProjectInfoFile {
   docDirs: string[]
   /** 熔断状态机（v0.17.64 Sprint C1）：按阶段累计 fail/error，阈值见 NANJU_GUARDS */
   phaseGuards?: Partial<Record<NanjuGuardStage, PhaseGuardState>>
+  /** 工程品类（W3，v0.17.66）：推进到 coding 时从 architecture/prd 标记提取后写入；缺失表示尚未判定 */
+  projectCategory?: ProjectCategory
+  /** 品类判定来源：architecture 文档标记 / prd 标记 / 降级默认（web-fullstack） */
+  projectCategorySource?: ProjectCategorySource
 }
 
 /**
@@ -322,4 +352,46 @@ export function updatePhaseGuard(
     console.log(`[南大护栏] phaseGuard 更新 ${projectId}/${stage}: ${update.kind}（${update.note}）→ fail=${current.failCount} error=${current.errorCount}`)
   }
   return { previous, current }
+}
+
+// ===== 工程品类读写（W3，v0.17.66：coding 阶段工程样板前置） =====
+
+/**
+ * 写入品类判定结果（保留未知字段向后兼容；老项目无该字段时自动补齐骨架）。
+ * 唯一写入点：coding 推进钩子（agent-orchestrator）调用，避免多写入点漂移。
+ */
+export function setProjectCategory(
+  workspaceSlug: string,
+  projectId: string,
+  category: ProjectCategory,
+  source: ProjectCategorySource,
+): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  base.projectCategory = category
+  base.projectCategorySource = source
+  writeProjectInfo(workspaceSlug, projectId, base)
+}
+
+/**
+ * 读取品类判定结果。无文件/无字段时返回 null（调用方自行降级，不在读取层纠错）。
+ */
+export function getProjectCategory(
+  workspaceSlug: string,
+  projectId: string,
+): { category: ProjectCategory; source: ProjectCategorySource } | null {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  if (!info?.projectCategory || !isProjectCategory(info.projectCategory)) return null
+  return {
+    category: info.projectCategory,
+    source: info.projectCategorySource ?? 'default',
+  }
 }

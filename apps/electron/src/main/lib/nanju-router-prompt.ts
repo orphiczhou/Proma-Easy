@@ -12,6 +12,12 @@
 
 import { findNanjuProjectBySession } from './nanju-router-gate'
 import { assertACFamilyDiversity, getPhaseNode, resolveACActors, type PhaseId, type PhaseNode } from './nanju-router'
+import {
+  buildCategoryGuideLines,
+  resolveProjectCategoryForCoding,
+  materializeEngineeringTemplate,
+} from './nanju-engineering-template'
+import type { ProjectCategory, ProjectCategorySource } from './nanju-project'
 import { PHASE_TODO_PREFIX } from '@proma/shared'
 import { getNanjuProjectDir } from './nanju-project'
 import type { Channel } from '@proma/shared'
@@ -105,6 +111,8 @@ function getPrdSummary(workspaceSlug: string, projectId: string): string {
  * 为 L2 角色生成包含 AC 审计指令的完整任务描述。
  *
  * @param author 作者实际委派渠道/模型（prototype 阶段为运行时解析的 minimax 渠道，其余阶段为节点字面值）
+ * @param categoryInfo 工程品类判定（W3，v0.17.66，仅 coding 阶段消费）：undefined 表示
+ *   未传入（测试兼容旧签名）——与 source=default 同样按降级 web-fullstack 处理并注入自检
  */
 export function buildL2TaskWithAC(
   phase: PhaseNode,
@@ -112,6 +120,7 @@ export function buildL2TaskWithAC(
   prdSummary: string,
   priorArtifacts: string[],
   projectDir: string,
+  categoryInfo?: { category: ProjectCategory; source: ProjectCategorySource } | null,
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
@@ -148,6 +157,22 @@ export function buildL2TaskWithAC(
       parts.push('前序文件 02_UX_DESIGN/prototype.html 可能较大：允许只读其结构与关键交互段（导航、核心表单、状态流转），以其为视觉与交互基准即可，不必逐行读完。')
     }
     parts.push('')
+  }
+
+  // 工程品类注入（W3，v0.17.66）：仅 coding 阶段——纠正项目形态认知（实证：桌面程序被
+  // 误套 HTML 框架）+ 按品类给出工程骨架组织要点 + 验收载体对齐。未判定/未传入时降级
+  // web-fullstack 并注入品类自检（第二道防线）。
+  if (isCoding) {
+    const resolvedCategory = categoryInfo ?? { category: 'web-fullstack' as ProjectCategory, source: 'default' as ProjectCategorySource }
+    // 模板已落位（推进钩子复制到 00_ENGINEERING_TEMPLATE/）则引用全文；
+    // 未落位（异常/老项目）退化为仅精简要点，不阻断
+    const templatePath = join(projectDir, '00_ENGINEERING_TEMPLATE', 'template.md')
+    parts.push(...buildCategoryGuideLines({
+      category: resolvedCategory.category,
+      source: resolvedCategory.source,
+      projectDir,
+      templatePath: existsSync(templatePath) ? templatePath : null,
+    }))
   }
 
   // 约束
@@ -284,8 +309,25 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   const authorChannel = authorOverride?.channelId ?? phase.channel
   const authorModel = authorOverride?.modelId ?? phase.model
 
-  // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言）
-  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir)
+  // 工程品类（W3，v0.17.66，仅 coding 消费）：优先读推进钩子写入的判定结果；
+  // 读不到（老项目/钩子未触发）时现场从文档提取降级判定，并顺手补写元信息与模板落位
+  // （幂等：钩子已处理时此处零开销）
+  let categoryInfo: { category: ProjectCategory; source: ProjectCategorySource } | null = null
+  if (stage === 'coding') {
+    const { getProjectCategory, setProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
+    categoryInfo = getProjectCategory(workspaceSlug, project.projectId)
+    if (!categoryInfo) {
+      const resolved = resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
+      categoryInfo = resolved ?? { category: 'web-fullstack', source: 'default' }
+      try {
+        setProjectCategory(workspaceSlug, project.projectId, categoryInfo.category, categoryInfo.source)
+        materializeEngineeringTemplate(workspaceSlug, project.projectId, categoryInfo.category)
+      } catch { /* 补写失败不阻断：注入节已有降级自检兑底 */ }
+    }
+  }
+
+  // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导）
+  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo)
 
   const prompt = [
     '## 🔒 南大向导 — 当前阶段：' + phase.title + '（' + stage + '）',

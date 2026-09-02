@@ -2454,6 +2454,28 @@ export class AgentOrchestrator {
                             }
                           } catch { /* 检查失败不阻断推进 */ }
                         }
+                        // 工程品类判定与模板落位（W3，v0.17.66）：即将进入 coding——从
+                        // architecture/prd 提取 projectCategory 写入 _project-info.json，并把
+                        // 对应品类工程模板复制到 00_ENGINEERING_TEMPLATE/（coding 委派任务
+                        // 注入精简要点 + 全文路径引用）。失败不阻断推进（coding 侧另有
+                        // 现场降级兑底，见 getNanjuRouterPrompt）。
+                        if (newStage === 'coding') {
+                          try {
+                            const {
+                              resolveProjectCategoryForCoding,
+                              materializeEngineeringTemplate,
+                            } = require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
+                            const { setProjectCategory, getProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
+                            const existing = getProjectCategory(workspaceSlug, project.projectId)
+                            const resolved = existing ?? resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
+                              ?? { category: 'web-fullstack' as const, source: 'default' as const }
+                            setProjectCategory(workspaceSlug, project.projectId, resolved.category, resolved.source)
+                            const templatePath = materializeEngineeringTemplate(workspaceSlug, project.projectId, resolved.category)
+                            console.log(`[南大路由] 工程品类判定: ${project.name} → ${resolved.category}（${resolved.source}）${templatePath ? '' : '，模板落位失败（coding 侧降级仅要点）'}`)
+                          } catch (e) {
+                            console.warn('[南大路由] 工程品类判定异常（不阻断推进）:', e instanceof Error ? e.message : String(e))
+                          }
+                        }
                         updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                         console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
                         nanjuPhaseAdvanced = newStage ?? null

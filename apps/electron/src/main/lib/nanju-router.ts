@@ -12,6 +12,7 @@
  */
 
 import type { ProjectMode } from './nanju-project'
+import { CATEGORY_MARKER_GUIDE } from './nanju-engineering-template'
 import type { GuideRoutePhase } from '@proma/shared'
 
 // ===== 类型定义 =====
@@ -179,6 +180,9 @@ const REQUIREMENTS_BASE: Omit<PhaseNode, 'taskWeight'> = {
     // 上游软门禁（v0.17.63，AC F-002）：不阻断但明确要求——测试阶段按 US-xx 提取覆盖基准，
     // 缺失时 GWT 直接 fail-fast（PRD 未提取到用户故事清单）
     'PRD 应含「US-xx」编号的用户故事清单（如「## US-01 添加笔记」），每条故事一段含验收标准；后续验收测试按 US-xx 编号判定覆盖性，无编号清单会导致验收无法收口',
+    // 工程品类初判（W3，v0.17.66）：coding 阶段按品类加载工程模板；PRD 标注是 quick 模式的
+    // 唯一判定源（iterative 模式架构师可终判修正）。缺失时 coding 降级 web-fullstack + 自检。
+    '工程品类初判（强烈建议）：' + CATEGORY_MARKER_GUIDE + '；放在 PRD 靠前位置（如「## 工程品类」一节）',
   ],
   requiresUserConfirmation: true,
   requiresAC: false,
@@ -296,7 +300,14 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     model: 'deepseek-v4-pro',
     task: '你是架构设计师。根据 PRD 和原型，产出架构文档。',
     outputPath: '03_ARCHITECTURE/architecture.md',
-    constraints: ['技术选型 + 目录结构', 'API 规范设计'],
+    constraints: [
+      '技术选型 + 目录结构',
+      'API 规范设计',
+      // 工程品类终判（W3，v0.17.66）：架构师对项目形态的判断优先于 PRD 初判
+      // （resolveProjectCategoryForCoding 按 architecture > prd 顺序提取）；
+      // 未标注时 coding 降级 web-fullstack（对本地程序/CLI 等形态会误配工程模板）。
+      '工程品类终判（必须）：' + CATEGORY_MARKER_GUIDE + '；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在架构文档显目位置',
+    ],
     requiresUserConfirmation: true,
     requiresAC: true,
     retryLimit: 2,

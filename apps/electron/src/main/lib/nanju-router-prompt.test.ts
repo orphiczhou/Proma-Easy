@@ -200,6 +200,61 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
   })
 })
 
+describe('coding 工程品类注入（W3，v0.17.66）', () => {
+  const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
+
+  test('未传品类时降级 web-fullstack 并注入品类自检（旧签名兼容 + 第二道防线）', () => {
+    const phase = getPhaseNode('quick', 'coding')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+
+    expect(task).toContain('工程品类判定：web-fullstack（Web 全栈应用）')
+    expect(task).toContain('降级默认值')
+    expect(task).toContain('品类自检')
+  })
+
+  test('传入 desktop-app 时注入品类声明 + 验收载体对齐（实证问题直接对策）', () => {
+    const phase = getPhaseNode('iterative', 'coding')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project', {
+      category: 'desktop-app',
+      source: 'architecture',
+    })
+
+    expect(task).toContain('工程品类判定：desktop-app（桌面应用）')
+    expect(task).toContain('不是网站')
+    expect(task).toContain('架构文档（architecture.md）标记')
+    expect(task).toContain('验收载体对齐')
+    expect(task).toContain('data-ai-id')
+    // 非默认判定不注入自检
+    expect(task).not.toContain('品类自检')
+  })
+
+  test('模板已落位时注入全文路径引用；未落位时省略（降级仅要点）', () => {
+    const phase = getPhaseNode('quick', 'coding')!
+    const taskWithTemplate = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project-with-tpl', {
+      category: 'desktop-app',
+      source: 'prd',
+    })
+    // /tmp/project-with-tpl 下无模板文件 → templatePath=null
+    expect(taskWithTemplate).not.toContain('/tmp/project-with-tpl/00_ENGINEERING_TEMPLATE/template.md')
+    expect(taskWithTemplate).toContain('验收载体对齐')
+
+    const plain = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project', null)
+    expect(plain).toContain('工程品类判定：web-fullstack')
+    expect(plain).toContain('品类自检')
+  })
+
+  test('非 coding 阶段不注入品类节（requirements/prototype/architecture/testing 均无）', () => {
+    for (const stage of ['requirements', 'architecture', 'testing'] as const) {
+      const phase = getPhaseNode('iterative', stage)!
+      const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project', {
+        category: 'desktop-app',
+        source: 'architecture',
+      })
+      expect(task).not.toContain('工程品类判定')
+    }
+  })
+})
+
 describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；v0.17.63 作者回 deepseek）', () => {
   const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
 
