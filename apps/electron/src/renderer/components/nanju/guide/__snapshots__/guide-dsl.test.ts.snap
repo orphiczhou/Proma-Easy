@@ -10,7 +10,7 @@ config:
 ---
 flowchart TD
     USER(["用户描述想法"]) --> MODE{"模式路由"}
-    MODE -->|"快消型 · AC light<br/>攻 deepseek-v4-flash / 防 glm-5-turbo"| REQ
+    MODE -->|"快消型 · AC light<br/>攻 deepseek-v4-flash / 防 glm-5.3-flash"| REQ
 
     REQ["① 需求分析师 requirement-analyst · deepseek-v4-pro<br/>产出 PRD<br/>✓ 已完成"]
 

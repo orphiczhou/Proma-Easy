@@ -61,13 +61,25 @@ export interface ACActorConfig {
 export const AC_PRESETS: Record<TaskWeight, { attacker: ACActorConfig; defender: ACActorConfig }> = {
   light: {
     attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' },
-    defender: { channel: 'glm-zhipu', model: 'glm-5-turbo' },
+    // W4：glm-5-turbo 已在 glm-zhipu 渠道下线（悬空引用），快模型档位由 glm-5.3-flash 顶替
+    defender: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
   },
   medium: {
     attacker: { channel: 'deepseek', model: 'deepseek-v4-pro' },
     defender: { channel: 'glm-zhipu', model: 'GLM-5.3' },
   },
 }
+
+/**
+ * AC 攻/防可选池（W4）：预设之外的可选角色配置，供 PhaseNode 的 acAttacker / acDefender
+ * 系列显式覆盖字段选用（resolveACActors 中显式字段优先于预设）。不改变默认攻防配置。
+ * - deepseek-v4-flash-vision-exp（deepseek 渠道，视觉）：供 W7 环境视觉校验等需读图的审计环节选用
+ * - glm-5.3-flash（glm-zhipu 渠道）：light 防御者现役快模型，亦可作显式覆盖备选
+ */
+export const AC_OPTIONAL_ACTORS: ACActorConfig[] = [
+  { channel: 'deepseek', model: 'deepseek-v4-flash-vision-exp' },
+  { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
+]
 
 /**
  * 渠道家族判定：按渠道 ID 前缀归类（deepseek=ds系、glm-zhipu=智谱系、minimax=M3系）。

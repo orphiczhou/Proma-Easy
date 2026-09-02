@@ -122,12 +122,12 @@ describe('L2 委派指令构建（视觉闭环）', () => {
     expect(task).toContain('回到「截图渲染自检循环」')
   })
 
-  test('prototype 阶段按模式取预设攻防：quick=light（flash 攻/turbo 防）', () => {
+  test('prototype 阶段按模式取预设攻防：quick=light（flash 攻/5.3-flash 防）', () => {
     const phase = getPhaseNode('quick', 'prototype')!
     const task = buildL2TaskWithAC(phase, minimaxAuthor, '无（这是需求阶段）', [], '/tmp/project')
 
     expect(task).toContain('channel=deepseek, model=deepseek-v4-flash')
-    expect(task).toContain('channel=glm-zhipu, model=glm-5-turbo')
+    expect(task).toContain('channel=glm-zhipu, model=glm-5.3-flash')
   })
 
   test('prototype 阶段按模式取预设攻防：iterative=medium（pro 攻/GLM-5.3 防）', () => {

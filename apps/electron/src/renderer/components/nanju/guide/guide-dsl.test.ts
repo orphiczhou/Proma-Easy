@@ -21,7 +21,7 @@ import {
 
 // ===== fixture（字段值与 nanju-router.ts makeRoute 一致；acActors = resolveACActors 解析结果） =====
 
-const LIGHT_ACTORS = { attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' }, defender: { channel: 'glm-zhipu', model: 'glm-5-turbo' } }
+const LIGHT_ACTORS = { attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' }, defender: { channel: 'glm-zhipu', model: 'glm-5.3-flash' } }
 const MEDIUM_ACTORS = { attacker: { channel: 'deepseek', model: 'deepseek-v4-pro' }, defender: { channel: 'glm-zhipu', model: 'GLM-5.3' } }
 
 function makePhase(overrides: Partial<GuideRoutePhase>): GuideRoutePhase {
@@ -149,7 +149,7 @@ describe('buildGuideDsl 结构（AC-02）', () => {
   test('quick 边标签含 light、iterative 含 medium（AC 强度按模式整体分级）', () => {
     const quick = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(quick).toContain('AC light')
-    expect(quick).toContain('攻 deepseek-v4-flash / 防 glm-5-turbo')
+    expect(quick).toContain('攻 deepseek-v4-flash / 防 glm-5.3-flash')
     const iterative = buildGuideDsl({ mode: 'iterative', route: ITERATIVE_ROUTE, progress: NO_PROGRESS, isDark: false })
     expect(iterative).toContain('AC medium')
     expect(iterative).toContain('攻 deepseek-v4-pro / 防 GLM-5.3')

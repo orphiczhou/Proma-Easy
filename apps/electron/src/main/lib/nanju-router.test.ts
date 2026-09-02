@@ -30,9 +30,9 @@ function makeNode(overrides: Partial<PhaseNode> = {}): PhaseNode {
 }
 
 describe('AC 审计分级预设', () => {
-  test('light 预设：攻击 deepseek-v4-flash，防御 glm-5-turbo', () => {
+  test('light 预设：攻击 deepseek-v4-flash，防御 glm-5.3-flash', () => {
     expect(AC_PRESETS.light.attacker).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
-    expect(AC_PRESETS.light.defender).toEqual({ channel: 'glm-zhipu', model: 'glm-5-turbo' })
+    expect(AC_PRESETS.light.defender).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
   })
 
   test('medium 预设：攻击 deepseek-v4-pro，防御 GLM-5.3', () => {
@@ -43,7 +43,7 @@ describe('AC 审计分级预设', () => {
   test('resolveACActors 按 taskWeight 选择预设', () => {
     const light = resolveACActors(makeNode({ taskWeight: 'light' }))
     expect(light.attacker.model).toBe('deepseek-v4-flash')
-    expect(light.defender.model).toBe('glm-5-turbo')
+    expect(light.defender.model).toBe('glm-5.3-flash')
 
     const medium = resolveACActors(makeNode({ taskWeight: 'medium' }))
     expect(medium.attacker.model).toBe('deepseek-v4-pro')
@@ -65,7 +65,7 @@ describe('AC 审计分级预设', () => {
     // 显式攻击者生效
     expect(actors.attacker).toEqual({ channel: 'glm-zhipu', model: 'glm-5.2' })
     // 未显式指定的防御者仍取 light 预设
-    expect(actors.defender).toEqual({ channel: 'glm-zhipu', model: 'glm-5-turbo' })
+    expect(actors.defender).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
   })
 
   test('防御者显式覆盖 + 攻击者走预设', () => {

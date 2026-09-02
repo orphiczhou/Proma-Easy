@@ -146,7 +146,8 @@ const DEFAULT_AUDIT_META = {
   sweet_spot_limits: {
     'claude-sonnet-4-6': { min: 100000, max: 200000, hard: 300000 },
     'deepseek-v4-pro': { min: 150000, max: 250000, hard: 400000 },
-    'glm-5-turbo': { min: 50000, max: 80000, hard: 100000 }
+    // W4：glm-5-turbo 已在 glm-zhipu 渠道下线，快模型档位键名由 glm-5.3-flash 顶替（阈值沿用原快模型档）
+    'glm-5.3-flash': { min: 50000, max: 80000, hard: 100000 }
   }
 };
 
