@@ -11,7 +11,10 @@ import {
   buildGuideDsl,
   computeStageStates,
   computeTodoStats,
+  derivePhaseSubNodeStates,
+  deriveSubStageStates,
   parseTodoPhase,
+  resolveExpandedPhases,
   resolveGuideNodeTarget,
   type GuidePhaseId,
 } from './guide-dsl'
@@ -91,6 +94,10 @@ const ITERATIVE_ROUTE: GuideRoutePhase[] = [
 
 /** 无进度叠加输入（结构快照用） */
 const NO_PROGRESS = null
+
+/** 全展开集合（W2 S3：进度模式默认只展开 current 阶段，着色类用例显式全展开保持原测试语义） */
+const ALL_QUICK: GuidePhaseId[] = ['requirements', 'prototype', 'coding', 'testing']
+const ALL_ITERATIVE: GuidePhaseId[] = ['requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing']
 
 // ===== AC-02：DSL 结构正确性 =====
 
@@ -198,6 +205,7 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
       mode: 'quick',
       route: QUICK_ROUTE,
       progress: { stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' } },
+      expandedPhases: ALL_QUICK,
       isDark: false,
     })
     expect(dsl).toContain('class REQ st-done')
@@ -220,6 +228,7 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
       mode: 'iterative',
       route: ITERATIVE_ROUTE,
       progress: { stageStates: { requirements: 'done', prototype: 'current', architecture: 'pending', planning: 'pending', coding: 'pending', delivered: 'pending' } },
+      expandedPhases: ALL_ITERATIVE,
       isDark: false,
     })
     expect(dsl).toContain('class ARCH_ATK,ARCH_DEF,ARCH_GATE,ARCH_UC st-pending')
@@ -232,6 +241,7 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
       mode: 'quick',
       route: QUICK_ROUTE,
       progress: { stageStates: { requirements: 'done', prototype: 'done', coding: 'done', delivered: 'done' } },
+      expandedPhases: ALL_QUICK,
       isDark: false,
     })
     expect(dsl).toContain('class DONE st-done')
@@ -246,6 +256,7 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
     const dark = buildGuideDsl({
       mode: 'quick', route: QUICK_ROUTE,
       progress: { stageStates: { requirements: 'done' } },
+      expandedPhases: ALL_QUICK,
       isDark: true,
     })
     expect(dark).toContain('classDef st-done fill:#047857,stroke:#34D399')
@@ -257,6 +268,7 @@ describe('buildGuideDsl 三态注入（AC-03）', () => {
       mode: 'iterative',
       route: ITERATIVE_ROUTE,
       progress: { stageStates: { requirements: 'done', prototype: 'current' }, abandoned: true },
+      expandedPhases: ALL_ITERATIVE,
       isDark: false,
     })
     expect(dsl.includes('st-current')).toBe(true) // classDef 定义仍在（静态定义行）
@@ -452,6 +464,221 @@ describe('DSL 快照样例（两版 × 代表性进度态）', () => {
         stageStates: { requirements: 'done', prototype: 'done', architecture: 'current', planning: 'pending', delivered: 'pending' },
         todoStats: { architecture: { done: 1, total: 3 } },
       },
+      isDark: false,
+    })
+    expect(dsl).toMatchSnapshot()
+  })
+})
+
+// ===== W2 S2：subStage 细分着色（current 阶段子节点三态） =====
+
+describe('buildGuideDsl subStage 着色（W2 S2）', () => {
+  test('current 阶段 subStage=REQ_UC：REQ 主节点 st-done、ATK/DEF pending（A2 修订：未接 AC 数据源不画成已通过）、UC current', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: {
+        stageStates: { requirements: 'current', prototype: 'pending', coding: 'pending', delivered: 'pending' },
+        subStage: 'REQ_UC',
+      },
+      expandedPhases: ALL_QUICK,
+      isDark: false,
+    })
+    expect(dsl).toContain('class REQ st-done') // 产出完成：主节点转 done，脉冲移到 UC
+    expect(dsl).toContain('class REQ_ATK,REQ_DEF st-pending') // 中间节点保持未开始（A2 修订）
+    expect(dsl).toContain('class REQ_UC st-current')
+  })
+
+  test('current 阶段 subStage=REQ（作者产出中）：主节点 current、子节点全 pending', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: {
+        stageStates: { requirements: 'current', prototype: 'pending', coding: 'pending', delivered: 'pending' },
+        subStage: 'REQ',
+      },
+      expandedPhases: ALL_QUICK,
+      isDark: false,
+    })
+    expect(dsl).toContain('class REQ st-current')
+    expect(dsl).toContain('class REQ_ATK,REQ_DEF,REQ_UC st-pending')
+  })
+
+  test('subStage 缺失/不属于该阶段序列 → 降级为现状（current 阶段子节点无 class 行）', () => {
+    const build = (subStage?: string): string => buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: {
+        stageStates: { requirements: 'current', prototype: 'pending', coding: 'pending', delivered: 'pending' },
+        ...(subStage !== undefined ? { subStage } : {}),
+      },
+      expandedPhases: ALL_QUICK,
+      isDark: false,
+    })
+    for (const dsl of [build(), build('PROTO'), build('REQ_XX')]) {
+      expect(dsl).toContain('class REQ st-current') // 主节点阶段三态不变
+      expect(dsl.includes('class REQ_ATK')).toBe(false) // 子节点不注入细分 class（现状降级）
+      expect(dsl.includes('class REQ_UC')).toBe(false)
+    }
+  })
+
+  test('st-blocked classDef 预留（明暗两套；W2 S2 仅类型与样式先行，无数据源不接线）', () => {
+    const light = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: { stageStates: { requirements: 'current' }, subStage: 'REQ' }, isDark: false })
+    const dark = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: { stageStates: { requirements: 'current' }, subStage: 'REQ' }, isDark: true })
+    expect(light).toContain('classDef st-blocked fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#92400E')
+    expect(dark).toContain('classDef st-blocked fill:#78350F,stroke:#F59E0B,stroke-width:2px,color:#FEF3C7')
+  })
+
+  test('done/pending 阶段不受 subStage 影响（仅 current 阶段细分）', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: {
+        stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' },
+        subStage: 'PROTO_UC',
+      },
+      expandedPhases: ALL_QUICK,
+      isDark: false,
+    })
+    // done 阶段 REQ 子节点仍全 sub-done；pending 阶段 CODE 子节点仍全 pending
+    expect(dsl).toContain('class REQ_ATK,REQ_DEF,REQ_UC st-sub-done')
+    expect(dsl).toContain('class CODE_ATK,CODE_DEF,CODE_UC st-pending')
+    // current 阶段 PROTO 按 subStage=PROTO_UC 细分：主节点 done + UC current
+    expect(dsl).toContain('class PROTO st-done')
+    expect(dsl).toContain('class PROTO_UC st-current')
+  })
+})
+
+// ===== W2 S3：展开/折叠 =====
+
+describe('buildGuideDsl 展开/折叠（W2 S3）', () => {
+  test('默认展开 = current 阶段：其余折叠为单代表框（无 subgraph），跨阶段边直连代表框', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: { stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' } },
+      isDark: false,
+    })
+    // 只有 current 阶段 PROTO 输出 subgraph
+    expect(dsl.match(/subgraph SG_/g)?.length).toBe(1)
+    expect(dsl).toContain('subgraph SG_PROTO')
+    // 折叠框：id=主节点（锚点兼容）+ 标题/产出/状态行摘要
+    expect(dsl).toContain('REQ["① 需求分析师 requirement-analyst · deepseek-v4-pro<br/>产出 PRD<br/>✓ 已完成"]')
+    expect(dsl).toContain('CODE["③ 全栈开发 fullstack-developer · deepseek-v4-pro<br/>可运行应用代码<br/>未开始"]')
+    // 折叠阶段不输出内部边/子节点
+    expect(dsl.includes('REQ_ATK')).toBe(false)
+    expect(dsl.includes('CODE_UC')).toBe(false)
+    // 跨阶段边：REQ 代表框 → PROTO 主节点（前阶段出口=折叠框自身）
+    expect(dsl).toContain('REQ -->|"确认"| PROTO')
+    expect(dsl).toContain('PROTO_UC -->|"全部用户故事通过"| CODE')
+  })
+
+  test('折叠框状态行三态 + Todo 徽标（行内拼接）', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: {
+        stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' },
+        todoStats: { requirements: { done: 3, total: 3 }, coding: { done: 0, total: 2 } },
+      },
+      isDark: false,
+    })
+    expect(dsl).toContain('✓ 已完成 Todo 3/3')
+    expect(dsl).toContain('未开始 Todo 0/2')
+    // current 阶段展开：主节点 label 徽标仍为 <br/> 拼接（现状不变）
+    expect(dsl.includes('▶ 进行中<br/>')).toBe(false)
+  })
+
+  test('显式展开集合可临时多开（expandedPhases 覆盖默认派生）', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: { stageStates: { requirements: 'done', prototype: 'current', coding: 'pending', delivered: 'pending' } },
+      expandedPhases: ['prototype', 'coding'],
+      isDark: false,
+    })
+    expect(dsl.match(/subgraph SG_/g)?.length).toBe(2)
+    expect(dsl).toContain('subgraph SG_PROTO')
+    expect(dsl).toContain('subgraph SG_CODE')
+    expect(dsl.includes('REQ_ATK')).toBe(false)
+    // 非法 id 被过滤（不报错）
+    const withInvalid = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: { stageStates: { requirements: 'current', delivered: 'pending' } },
+      expandedPhases: ['requirements', 'no-such-phase' as GuidePhaseId],
+      isDark: false,
+    })
+    expect(withInvalid).toContain('subgraph SG_REQ')
+    expect(withInvalid.match(/subgraph SG_/g)?.length).toBe(1)
+  })
+
+  test('对照模式（progress=null）全展开：expandedPhases 不生效，结构快照不变', () => {
+    const all = buildGuideDsl({ mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS, isDark: false })
+    const withPhases = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE, progress: NO_PROGRESS,
+      expandedPhases: ['requirements'], // 对照模式下被忽略
+      isDark: false,
+    })
+    expect(all).toBe(withPhases)
+    expect(all.match(/subgraph SG_/g)?.length).toBe(4)
+  })
+
+  test('无 current 阶段（已交付）默认全折叠：紧凑摘要视图 + 折叠框可正常着色', () => {
+    const dsl = buildGuideDsl({
+      mode: 'quick', route: QUICK_ROUTE,
+      progress: { stageStates: { requirements: 'done', prototype: 'done', coding: 'done', testing: 'done', delivered: 'done' } },
+      isDark: false,
+    })
+    expect((dsl.match(/subgraph SG_/g) ?? []).length).toBe(0)
+    expect(dsl).toContain('class REQ st-done')
+    expect(dsl).toContain('class DONE st-done')
+    expect(dsl).toContain('✓ 已完成')
+  })
+
+  test('resolveExpandedPhases 默认派生规则单元', () => {
+    const doneCur = { stageStates: { requirements: 'done', prototype: 'current' } as Partial<Record<GuidePhaseId | 'delivered', 'done' | 'current' | 'pending'>> }
+    expect(resolveExpandedPhases(QUICK_ROUTE, doneCur)).toEqual(new Set(['prototype']))
+    const noCurrent = { stageStates: { requirements: 'done', delivered: 'done' } as Partial<Record<GuidePhaseId | 'delivered', 'done' | 'current' | 'pending'>> }
+    expect(resolveExpandedPhases(QUICK_ROUTE, noCurrent)).toEqual(new Set())
+    expect(resolveExpandedPhases(QUICK_ROUTE, null)).toEqual(new Set(['requirements', 'prototype', 'coding', 'testing']))
+  })
+
+  test('deriveSubStageStates / derivePhaseSubNodeStates（渲染端纯函数，契约详见 nanju-guide-progress.test.ts 交叉锁定）', () => {
+    expect(deriveSubStageStates('requirements', 'REQ_DEF')).toEqual({
+      REQ: 'done', REQ_ATK: 'done', REQ_DEF: 'current', REQ_UC: 'pending',
+    })
+    // 非 UC 中间态维持现规则（前驱 done；S4 事件点接入后的语义）
+    expect(derivePhaseSubNodeStates('prototype', 'PROTO_VIS')).toEqual({
+      PROTO: 'done', PROTO_SS: 'done', PROTO_ATK: 'done', PROTO_DEF: 'done', PROTO_VIS: 'current', PROTO_UC: 'pending',
+    })
+    // UC 态（A2 必修-3/4 修订）：中间节点一律 pending，序列外结构节点继承基线 pending
+    expect(derivePhaseSubNodeStates('architecture', 'ARCH_UC')).toEqual({
+      ARCH: 'done', ARCH_ATK: 'pending', ARCH_DEF: 'pending', ARCH_GATE: 'pending', ARCH_UC: 'current',
+    })
+    expect(derivePhaseSubNodeStates('coding', 'CODE_UC')).toEqual({
+      CODE: 'done', CODE_ATK: 'pending', CODE_DEF: 'pending', CODE_UC: 'current',
+    })
+  })
+})
+
+// ===== W2 S3 快照样例（折叠/展开两态 + 默认展开=currentStage） =====
+
+describe('DSL 快照样例（W2 S3 展开/折叠）', () => {
+  test('iterative · architecture 进行中 · 默认折叠（仅 ARCH 展开）', () => {
+    const dsl = buildGuideDsl({
+      mode: 'iterative', route: ITERATIVE_ROUTE,
+      progress: {
+        stageStates: { requirements: 'done', prototype: 'done', architecture: 'current', planning: 'pending', coding: 'pending', testing: 'pending', delivered: 'pending' },
+        subStage: 'ARCH_UC',
+        todoStats: { architecture: { done: 1, total: 3 } },
+      },
+      isDark: false,
+    })
+    expect(dsl).toMatchSnapshot()
+  })
+
+  test('iterative · 全展开（显式 expandedPhases）· subStage=ARCH_UC 细分着色', () => {
+    const dsl = buildGuideDsl({
+      mode: 'iterative', route: ITERATIVE_ROUTE,
+      progress: {
+        stageStates: { requirements: 'done', prototype: 'done', architecture: 'current', planning: 'pending', coding: 'pending', testing: 'pending', delivered: 'pending' },
+        subStage: 'ARCH_UC',
+        todoStats: { architecture: { done: 1, total: 3 } },
+      },
+      expandedPhases: ALL_ITERATIVE,
       isDark: false,
     })
     expect(dsl).toMatchSnapshot()

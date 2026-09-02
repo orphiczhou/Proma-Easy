@@ -32,6 +32,94 @@ export const GUIDE_MAIN_NODE_ID: Record<GuidePhaseId, string> = {
   testing: 'TEST',
 }
 
+/**
+ * 各阶段子步骤推进序列（W2 S1/S2，跨进程契约）：与主进程 main/lib/nanju-guide-progress.ts
+ * 的 GUIDE_SUBSTAGE_SEQUENCE 一一对应（首元素=主节点）。两侧一致性由 nanju-guide-progress.test.ts
+ * 锁定（JSON 相等断言）；改任何一侧必须同步另一侧并过测试。
+ * S1 诚实两态起步：主进程只写 {主节点}/{主节点}_UC，中间节点由 derive 推导（细分留 S4）。
+ */
+export const GUIDE_SUBSTAGE_SEQUENCE: Record<GuidePhaseId, readonly string[]> = {
+  requirements: ['REQ', 'REQ_ATK', 'REQ_DEF', 'REQ_UC'],
+  prototype: ['PROTO', 'PROTO_SS', 'PROTO_ATK', 'PROTO_DEF', 'PROTO_VIS', 'PROTO_UC'],
+  architecture: ['ARCH', 'ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_UC'],
+  planning: ['PLAN', 'PLAN_ATK', 'PLAN_DEF', 'PLAN_UC'],
+  coding: ['CODE', 'CODE_UC'],
+  testing: ['TEST', 'TEST_ATK', 'TEST_DEF', 'TEST_GWT', 'TEST_JUDGE'],
+}
+
+/**
+ * 按 subStage 推导当前阶段序列内三态（规则与主进程 deriveGuideSubStates 同一契约，
+ * 含 AC 审计 Round 1 必修-3 的 UC 态特殊化）：
+ * - subStage 在序列内：其前 done、本身 current、后 pending；
+ * - subStage 不在序列内 → 首节点（主节点）current、其余 pending（= 阶段刚开始，作者产出中）；
+ * - **UC 态特殊化**：subStage === {主节点}_UC 时中间节点输出 pending 而非 done
+ *   （主节点 done、UC current）——UC 仅证明产出就绪，AC 攻防等中间环节未接数据源
+ *   （S4），不得画成「已通过」。
+ * - 未知阶段（防御，A8 字面对齐：当前类型面/调用面不可达）返回空对象，与主端一致。
+ */
+export function deriveSubStageStates(
+  phaseId: GuidePhaseId,
+  subStage: string,
+): Record<string, StageViewStatus> {
+  const seq = GUIDE_SUBSTAGE_SEQUENCE[phaseId]
+  if (!seq) return {}
+  const hitIndex = subStage ? seq.indexOf(subStage) : -1
+  const currentIdx = hitIndex === -1 ? 0 : hitIndex
+  const isUcState = subStage === `${seq[0]}_UC`
+  const result: Record<string, StageViewStatus> = {}
+  seq.forEach((id, i) => {
+    if (i === currentIdx) {
+      result[id] = 'current'
+    } else if (i < currentIdx) {
+      result[id] = isUcState ? (i === 0 ? 'done' : 'pending') : 'done'
+    } else {
+      result[id] = 'pending'
+    }
+  })
+  return result
+}
+
+/**
+ * 各阶段 DSL 子节点的结构流顺序（buildPhaseSubgraph 的实际流程序，含不在推进序列内的
+ * 结构节点——如 coding 的 ATK/DEF：S1 两态下未细分，按前驱继承规则着色）。
+ */
+const PHASE_SUB_NODE_FLOW: Record<GuidePhaseId, readonly string[]> = {
+  requirements: ['REQ_ATK', 'REQ_DEF', 'REQ_UC'],
+  prototype: ['PROTO_SS', 'PROTO_ATK', 'PROTO_DEF', 'PROTO_VIS', 'PROTO_UC'],
+  architecture: ['ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_UC'],
+  planning: ['PLAN_ATK', 'PLAN_DEF', 'PLAN_UC'],
+  coding: ['CODE_ATK', 'CODE_DEF', 'CODE_UC'],
+  testing: ['TEST_ATK', 'TEST_DEF', 'TEST_GWT', 'TEST_JUDGE'],
+}
+
+/**
+ * 当前阶段全部 DSL 子节点三态（W2 S2）：序列内节点取 derive 结果；序列外结构节点按
+ * 结构流前驱继承（AC 审计 Round 1 必修-4 修订：**UC 态时继承基线为 pending**——产出
+ * 就绪但 AC 攻防/门禁等环节未接数据源，序列外结构节点不得继承主节点的 done；
+ * 非 UC 场景前驱 done → done、前驱 current/pending → pending——「正在产出」时下游
+ * 未开始，不继承脉冲）。
+ */
+export function derivePhaseSubNodeStates(
+  phaseId: GuidePhaseId,
+  subStage: string,
+): Record<string, StageViewStatus> {
+  const seqStates = deriveSubStageStates(phaseId, subStage)
+  const main = GUIDE_MAIN_NODE_ID[phaseId]
+  // 前驱继承基线：UC 态一律 pending；主节点已过（done）且非 UC → 未入序列节点视为已随产出通过；否则未开始
+  const isUcState = subStage === `${main}_UC`
+  let lastStatus: StageViewStatus = seqStates[main] === 'done' && !isUcState ? 'done' : 'pending'
+  const result: Record<string, StageViewStatus> = { ...seqStates }
+  for (const id of PHASE_SUB_NODE_FLOW[phaseId]) {
+    const seqState = seqStates[id]
+    if (seqState) {
+      lastStatus = seqState === 'done' ? 'done' : 'pending'
+      continue
+    }
+    result[id] = lastStatus
+  }
+  return result
+}
+
 /** Todo 完成度徽标数据 */
 export interface GuideTodoStat {
   done: number
@@ -44,6 +132,12 @@ export interface GuideProgress {
   todoStats?: Partial<Record<GuidePhaseId, GuideTodoStat>>
   /** 项目已放弃：整图灰态、无动画（修订 Y6） */
   abandoned?: boolean
+  /**
+   * 当前阶段内子步骤（W2 S1，主进程 setProjectSubStage 写入）：主节点 id（作者产出中）
+   * 或 {主节点}_UC（等待用户确认）。仅对 current 阶段生效；缺失/不属于该阶段序列 →
+   * 降级为现状（子节点无细分着色），安全。
+   */
+  subStage?: string
 }
 
 export interface BuildGuideDslInput {
@@ -53,6 +147,32 @@ export interface BuildGuideDslInput {
   /** null 时输出无进度叠加的静态结构（模式对照查看用，PRD §5.5） */
   progress: GuideProgress | null
   isDark: boolean
+  /**
+   * 展开集合（W2 S3）：展开阶段输出完整 subgraph 细部；折叠阶段只输出单代表节点
+   * （id=主节点，锚点/GuideNodeTarget 解析兼容）。缺省 → 默认派生（progress 存在时
+   * =[currentStage 所在阶段，无 current 阶段则全折叠]）；progress=null 对照模式强制全
+   * 展开（折叠仅进度模式生效）。
+   */
+  expandedPhases?: GuidePhaseId[]
+}
+
+/**
+ * 解析有效展开集合（W2 S3，GuidePanel 与 buildGuideDsl 共用默认派生规则）：
+ * 对照模式全展开；进度模式取调用方集合（过滤非法 id），未传则默认 [current 阶段]
+ * （无 current——已交付/已放弃/未选模式——则全折叠，紧凑摘要视图）。
+ */
+export function resolveExpandedPhases(
+  route: GuideRoutePhase[],
+  progress: GuideProgress | null,
+  expandedPhases?: GuidePhaseId[],
+): Set<GuidePhaseId> {
+  const ids = route
+    .filter((p) => p.id !== 'delivered' && p.id !== 'mode-select')
+    .map((p) => p.id as GuidePhaseId)
+  if (!progress) return new Set(ids)
+  if (expandedPhases) return new Set(expandedPhases.filter((id) => ids.includes(id)))
+  const current = ids.find((id) => progress.stageStates[id] === 'current')
+  return new Set(current ? [current] : [])
 }
 
 /** SVG 节点 id → 阶段归属或特殊节点 */
@@ -218,12 +338,15 @@ const CLASS_DEFS: Record<'light' | 'dark', string[]> = {
     'classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46',
     'classDef st-current fill:#C7D2FE,stroke:#4F46E5,stroke-width:3px,color:#312E81',
     'classDef st-pending fill:#FFFFFF,stroke:#9CA3AF,color:#4B5563',
+    // st-blocked（W2 S2 预留，类型与样式先行）：等待修复/重试的琥珀色态（S4 接 GWT 失败/AC red 数据源）
+    'classDef st-blocked fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#92400E',
   ],
   dark: [
     'classDef st-done fill:#047857,stroke:#34D399,stroke-width:2px,color:#ECFDF5',
     'classDef st-sub-done fill:#065F46,stroke:#10B981,color:#D1FAE5',
     'classDef st-current fill:#312E81,stroke:#818CF8,stroke-width:3px,color:#F8FAFF',
     'classDef st-pending fill:#334155,stroke:#94A3B8,color:#CBD5E1',
+    'classDef st-blocked fill:#78350F,stroke:#F59E0B,stroke-width:2px,color:#FEF3C7',
   ],
 }
 
@@ -348,6 +471,9 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
   lines.push(`    MODE -->|"${modeLabel} · ${acWeightLabel}<br/>${acActorLabel}"| ${GUIDE_MAIN_NODE_ID[phases[0]?.id as GuidePhaseId]}`)
   edgeIndex += 1 // MODE --> 第一阶段
 
+  // W2 S3 展开/折叠：解析有效展开集合（默认派生与对照模式全展开规则见 resolveExpandedPhases）
+  const expandedSet = resolveExpandedPhases(route, progress, input.expandedPhases)
+
   // 各阶段 subgraph + 跨阶段推进边
   const classAssignments: string[] = []
   const subDoneGroups: string[] = []
@@ -356,13 +482,16 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
   let prevExit: string | null = null
   phases.forEach((phase, i) => {
     const phaseId = phase.id as GuidePhaseId
+    const main = GUIDE_MAIN_NODE_ID[phaseId]
     const stat = progress?.todoStats?.[phaseId]
-    // Todo 完成度徽标：无匹配不显示（降级，PRD §4.2）
-    const todoLabel = stat && stat.total > 0 && !abandoned ? `<br/>Todo ${stat.done}/${stat.total}` : ''
-    const { lines: subLines, mainNode, exitNode, edgeCount } = buildPhaseSubgraph(phase, i, todoLabel)
+    // Todo 完成度徽标文本：无匹配不显示（降级，PRD §4.2）；展开主节点前缀 <br/>，折叠框行内拼接
+    const todoText = stat && stat.total > 0 && !abandoned ? `Todo ${stat.done}/${stat.total}` : ''
+    const todoLabel = todoText ? `<br/>${todoText}` : ''
+    const collapsed = !expandedSet.has(phaseId)
+    const status: StageViewStatus = abandoned ? 'pending' : statusOf(phaseId)
 
+    // 跨阶段推进边：前阶段出口（折叠框=代表节点 / 展开框=subgraph 出口）→ 本阶段主节点
     if (prevExit) {
-      // 跨阶段推进边：前阶段出口 → 本阶段主节点
       const fromId = phases[i - 1]?.id as GuidePhaseId
       const edgeLabel = i === 1
         ? '确认'
@@ -372,35 +501,61 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
             ? '应用验证通过'
             : '确认'
       lines.push('')
-      lines.push(`    ${prevExit} -->|"${edgeLabel}"| ${mainNode}`)
+      lines.push(`    ${prevExit} -->|"${edgeLabel}"| ${main}`)
       // 已通过边判定：前阶段 done 且非 abandoned（推进已实际发生）
       if (progress && !abandoned && statusOf(fromId) === 'done') passedEdgeIndexes.push(edgeIndex)
       edgeIndex += 1
     }
 
-    lines.push('')
-    lines.push(...subLines)
-    edgeIndex += edgeCount
-    prevExit = exitNode
-
-    // 全量节点收集（对照模式中性着色用）
-    allNodeIds.push(mainNode)
-    const subs = [`${mainNode}_ATK`, `${mainNode}_DEF`, exitNode]
-    if (phaseId === 'prototype') subs.unshift(`${mainNode}_SS`, `${mainNode}_VIS`)
-    if (phaseId === 'architecture') subs.splice(2, 0, `${mainNode}_GATE`)
-    if (phaseId === 'testing') subs.splice(2, 0, `${mainNode}_GWT`)
-    allNodeIds.push(...subs)
+    const subs: string[] = []
+    if (collapsed) {
+      // W2 S3 折叠阶段：只输出单代表节点（id=主节点不变，锚点/GuideNodeTarget 解析兼容），
+      // label 承载 subgraph 标题 + 产出物 + 三态状态行 + Todo 徽标摘要；无内部边
+      const statusLine = status === 'done' ? '✓ 已完成' : status === 'current' ? '▶ 进行中' : '未开始'
+      lines.push('')
+      lines.push(`    ${main}["${CIRCLED_NUMBERS[i]} ${phase.title} ${phase.role} · ${phase.model}<br/>${PHASE_OUTPUT_LABEL[phaseId]}<br/>${statusLine}${todoText ? ` ${todoText}` : ''}"]`)
+      allNodeIds.push(main)
+      prevExit = main
+    } else {
+      const { lines: subLines, exitNode, edgeCount } = buildPhaseSubgraph(phase, i, todoLabel)
+      lines.push('')
+      lines.push(...subLines)
+      edgeIndex += edgeCount
+      prevExit = exitNode
+      // 全量节点收集（对照模式中性着色用）
+      allNodeIds.push(main)
+      const subNodes = [`${main}_ATK`, `${main}_DEF`, exitNode]
+      if (phaseId === 'prototype') subNodes.unshift(`${main}_SS`, `${main}_VIS`)
+      if (phaseId === 'architecture') subNodes.splice(2, 0, `${main}_GATE`)
+      if (phaseId === 'testing') subNodes.splice(2, 0, `${main}_GWT`)
+      allNodeIds.push(...subNodes)
+      subs.push(...subNodes)
+    }
 
     // 进度 class 注入（对照模式 progress=null 时不注入任何状态 class）
     if (progress) {
-      const status = abandoned ? 'pending' : statusOf(phaseId)
-      classAssignments.push(`class ${mainNode} st-${status}`)
-      if (status === 'done') {
-        // 子节点跟随阶段 done 着色（st-sub-done 弱一档，不做子级独立追踪，PRD §4.1.4）
-        subDoneGroups.push(subs.join(','))
+      // W2 S2：current 阶段且有有效 subStage → 主节点按序列位置着色（产出完成等确认时
+      // 主节点转 done、脉冲移到 UC 节点）；折叠框聚合阶段态不用细分；其余维持阶段三态
+      const subStageStates = status === 'current' && !collapsed && progress.subStage
+        && GUIDE_SUBSTAGE_SEQUENCE[phaseId].includes(progress.subStage)
+        ? derivePhaseSubNodeStates(phaseId, progress.subStage)
+        : null
+      classAssignments.push(`class ${main} st-${subStageStates?.[main] ?? status}`)
+      if (subStageStates && subs.length > 0) {
+        // 子节点按推导三态分组（st-sub-done 弱绿 / st-current 脉冲 / st-pending 灰），
+        // 替代现状「current 阶段子节点全灰」；分组顺序按结构流（首现顺序稳定可测）
+        const groups: Record<StageViewStatus, string[]> = { done: [], current: [], pending: [] }
+        for (const id of subs) groups[subStageStates[id] ?? 'pending'].push(id)
+        if (groups.done.length > 0) subDoneGroups.push(groups.done.join(','))
+        if (groups.current.length > 0) classAssignments.push(`class ${groups.current.join(',')} st-current`)
+        if (groups.pending.length > 0) classAssignments.push(`class ${groups.pending.join(',')} st-pending`)
+      } else if (status === 'done') {
+        // 子节点跟随阶段 done 着色（st-sub-done 弱一档，PRD §4.1.4）
+        if (subs.length > 0) subDoneGroups.push(subs.join(','))
       } else if (status === 'pending' || abandoned) {
-        classAssignments.push(`class ${subs.join(',')} st-pending`)
+        if (subs.length > 0) classAssignments.push(`class ${subs.join(',')} st-pending`)
       }
+      // else：current 阶段无/未知 subStage → 子节点不注入 class（现状降级，mermaid 默认灰）
     }
   })
 

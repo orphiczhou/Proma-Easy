@@ -1,0 +1,148 @@
+/**
+ * 南大向导「向导图」阶段内进度（W2 S1）
+ *
+ * 三件事：
+ * 1. 子步骤序列常量 GUIDE_SUBSTAGE_SEQUENCE —— 与渲染端 guide-dsl.ts buildPhaseSubgraph
+ *    的节点 id 一一对应（跨进程契约，两侧一致性由 nanju-guide-progress.test.ts 锁定：
+ *    序列对齐断言 + JSON 相等断言）。改任何一侧必须同步另一侧并过测试。
+ * 2. 纯函数 deriveGuideSubStates —— 按 currentStage+subStage 推导阶段内三态。
+ * 3. 事件广播 emitGuideProgress + 冷启动快照 getGuideProgressSnapshot。
+ *
+ * 纪律：
+ * - 本文件顶部零 import（纯常量/纯函数），IPC 与文件 IO 全部惰性 require
+ *   （agent-orchestrator 钩子同型惯例），保证可被任何测试环境直接 import。
+ * - write-then-emit：调用方必须先 setProjectSubStage 落盘、再 emitGuideProgress 广播，
+ *   保证渲染端冷启动 snapshot 读到的数据不旧于已发事件（seq 高者胜语义）。
+ */
+
+/** 向导图可执行阶段（六阶段，与渲染端 GuidePhaseId 对应；mode-select/delivered 无子步骤） */
+export type GuideProgressStage =
+  | 'requirements' | 'prototype' | 'architecture' | 'planning' | 'coding' | 'testing'
+
+/**
+ * 各阶段子步骤推进序列（首元素 = 主节点 id = 阶段开始即「作者产出中」）。
+ * S1 诚实两态起步：主进程只写 {主节点} 与 {主节点}_UC 两个值（产出中/等用户确认）；
+ * ATK/DEF/GATE/VIS/GWT/JUDGE 等中间节点由 derive 推导（AC 攻防/GWT/env 细分留 S4 接数据源）。
+ */
+export const GUIDE_SUBSTAGE_SEQUENCE: Record<GuideProgressStage, readonly string[]> = {
+  requirements: ['REQ', 'REQ_ATK', 'REQ_DEF', 'REQ_UC'],
+  prototype: ['PROTO', 'PROTO_SS', 'PROTO_ATK', 'PROTO_DEF', 'PROTO_VIS', 'PROTO_UC'],
+  architecture: ['ARCH', 'ARCH_ATK', 'ARCH_DEF', 'ARCH_GATE', 'ARCH_UC'],
+  planning: ['PLAN', 'PLAN_ATK', 'PLAN_DEF', 'PLAN_UC'],
+  coding: ['CODE', 'CODE_UC'],
+  testing: ['TEST', 'TEST_ATK', 'TEST_DEF', 'TEST_GWT', 'TEST_JUDGE'],
+}
+
+/** 子步骤三态（与渲染端 StageViewStatus 同名同义） */
+export type GuideSubStageState = 'done' | 'current' | 'pending'
+
+/** 阶段 → 主节点 id（序列首元素；未知/无子步骤阶段返回 undefined）——阶段推进点写 subStage 用 */
+export function getGuideStageMainNodeId(stage: string): string | undefined {
+  return GUIDE_SUBSTAGE_SEQUENCE[stage as GuideProgressStage]?.[0]
+}
+
+/**
+ * 推导当前阶段的子步骤三态（纯函数，无 IO）。
+ *
+ * 规则（工单 W2 S1 §2.2 + AC 审计 Round 1 必修-3 修订）：
+ * - 仅返回 currentStage 阶段序列内的映射；未知阶段返回空对象；
+ * - subStage 在序列内：其前全部 done、本身 current、其后全部 pending；
+ * - subStage 为空/未知：首节点（主节点）current、其余 pending（= 阶段刚开始，作者产出中）；
+ * - **UC 态特殊化（A2 修订）**：subStage === {主节点}_UC 时，序列内中间节点输出 pending
+ *   而非 done（主节点 done、{主节点}_UC current）——UC 点亮仅证明产出文件就绪
+ *   （verifyPhaseOutput 门槛），AC 攻防/门禁等中间环节尚未接入数据源（S4），
+ *   不得画成「已通过」。
+ *
+ * 注意：返回值只含序列内节点；序列外结构节点（如 CODE_ATK/CODE_DEF 不在 coding 序列内）
+ * 由渲染端 guide-dsl 按结构流前驱继承规则补齐（两侧规则见各自测试）。
+ */
+export function deriveGuideSubStates(
+  currentStage: string,
+  subStage: string | null | undefined,
+): Record<string, GuideSubStageState> {
+  const seq = GUIDE_SUBSTAGE_SEQUENCE[currentStage as GuideProgressStage]
+  if (!seq) return {}
+  const result: Record<string, GuideSubStageState> = {}
+  const hitIndex = subStage ? seq.indexOf(subStage) : -1
+  // 空/未知 subStage → 视为首节点（主节点）current：阶段刚开始，作者产出中
+  const currentIdx = hitIndex === -1 ? 0 : hitIndex
+  // UC 态（等待用户确认）：仅主节点 done，中间节点不继承 done（A2 修订）
+  const isUcState = subStage === `${seq[0]}_UC`
+  seq.forEach((id, i) => {
+    if (i === currentIdx) {
+      result[id] = 'current'
+    } else if (i < currentIdx) {
+      result[id] = isUcState ? (i === 0 ? 'done' : 'pending') : 'done'
+    } else {
+      result[id] = 'pending'
+    }
+  })
+  return result
+}
+
+// ===== 事件广播（渲染端 seq 高者胜协议的 main 侧） =====
+
+/** 模块级事件序号：单调递增，渲染端用于丢弃过期事件 / 与冷启动 snapshot 合流 */
+let guideProgressSeq = 0
+
+/** 向导图进度事件载荷（nanju:guide-progress IPC 通道） */
+export interface GuideProgressEvent {
+  sessionId: string
+  projectId: string
+  currentStage: string
+  subStage: string
+  seq: number
+}
+
+/** 冷启动快照（nanju:get-guide-progress 返回值） */
+export interface GuideProgressSnapshot {
+  currentStage: string
+  subStage: string
+  seq: number
+}
+
+/**
+ * 广播向导图进度到主窗（nanju:gwt-progress 同型模式；失败不抛——IPC 不可用不影响主流程）。
+ * 返回本次事件 seq（无窗口/异常时 seq 已自增，保证后续事件仍严格递增；-1 仅作防御兜底）。
+ *
+ * 调用纪律：先 setProjectSubStage 落盘再调本函数（write-then-emit，见文件头注释）。
+ */
+export function emitGuideProgress(
+  sessionId: string,
+  projectId: string,
+  currentStage: string,
+  subStage: string,
+): number {
+  guideProgressSeq += 1
+  const seq = guideProgressSeq
+  try {
+    const { getMainWindow } = require('./main-window-store') as typeof import('./main-window-store')
+    const win = getMainWindow()
+    win?.webContents.send('nanju:guide-progress', { sessionId, projectId, currentStage, subStage, seq } satisfies GuideProgressEvent)
+  } catch { /* 主窗口不可用不影响主流程；seq 已计入，渲染端冷启动 snapshot 仍可取到最新数据 */ }
+  return seq
+}
+
+/**
+ * 冷启动快照：读 _project-info.json 的 subStage + _nanju-projects.json 的 currentStage，
+ * 连同当前 seq 一并返回（渲染端挂载时先拉 snapshot 作初值再监听事件，消除空窗）。
+ * 项目不存在返回 null（渲染端降级为无子步骤态）。
+ */
+export function getGuideProgressSnapshot(
+  workspaceSlug: string,
+  projectId: string,
+): GuideProgressSnapshot | null {
+  try {
+    const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+    const project = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)
+    if (!project) return null
+    const { getProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+    return {
+      currentStage: project.currentStage,
+      subStage: getProjectSubStage(workspaceSlug, projectId) ?? '',
+      seq: guideProgressSeq,
+    }
+  } catch {
+    return null
+  }
+}

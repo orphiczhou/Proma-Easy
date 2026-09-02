@@ -41,6 +41,12 @@ export interface NanjuGuideData {
   /** 过滤哨兵后的路由阶段（id='delivered' 已剔除，修订 Y3） */
   phases: GuideRoutePhase[]
   stageStates: Partial<Record<GuidePhaseId | 'delivered', StageViewStatus>>
+  /**
+   * 当前阶段内子步骤（W2 S1，事件优先/轮询兑底/seq 高者胜）：主进程写入的 subStage
+   * （主节点 id 或 {主节点}_UC）；仅当与 project.currentStage 同拍时非 null（防跨阶段
+   * 错配着色）；null = 无子步骤数据（渲染端降级为现状全灰，安全）。
+   */
+  subStage: string | null
   abandoned: boolean
   /** Header 追加提示条文案 */
   notice: string | null
@@ -60,6 +66,13 @@ export interface UseNanjuGuideDataOptions {
   workspaceSlug: string | null
 }
 
+/** 向导图阶段内子步骤进度的最小字段面（主进程 GuideProgressSnapshot/Event 同构） */
+interface GuideSubProgress {
+  currentStage: string
+  subStage: string
+  seq: number
+}
+
 export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDataOptions): NanjuGuideData {
   const [project, setProject] = React.useState<NanjuGuideProject | null>(null)
   const [phases, setPhases] = React.useState<GuideRoutePhase[]>([])
@@ -68,6 +81,10 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [projectDeleted, setProjectDeleted] = React.useState(false)
+  /** 阶段内子步骤进度（W2 S1）：事件与冷启动快照统一写入，seq 高者胜 */
+  const [guideProgress, setGuideProgress] = React.useState<GuideSubProgress | null>(null)
+  /** 已采纳的最新子步骤 seq：丢弃过期事件/滞后快照（防状态回退） */
+  const guideSeqRef = React.useRef(0)
   /** 请求序号：防止轮询竞态（慢响应覆盖新响应） */
   const fetchSeqRef = React.useRef(0)
   /** 已锁定的 projectId：项目消失后不 fallback 到其他项目（修订 Y7） */
@@ -85,6 +102,9 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
     if (lockedSessionIdRef.current !== null && lockedSessionIdRef.current !== sessionId) {
       lockedProjectIdRef.current = null
       lockedSessionIdRef.current = null
+      // 子步骤进度随会话重置：新会话的快照/事件 seq 重新采纳（全局单调，旧会话事件被 sessionId 过滤）
+      guideSeqRef.current = 0
+      setGuideProgress(null)
     }
     setLoading(true)
     try {
@@ -115,6 +135,19 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
       }
       setProject(matched)
       setError(null)
+
+      // 1.5 阶段内子步骤快照（W2 S1 冷启动初值 + 轮询协同）：与事件统一 seq 高者胜
+      // （主进程 write-then-emit 保证快照不旧于已发事件；失败降级为无子步骤态，不影响主数据）
+      if (matched) {
+        try {
+          const guideSnapshot = await window.electronAPI.nanjuGetGuideProgress(workspaceSlug, matched.projectId)
+          if (seq !== fetchSeqRef.current) return
+          if (guideSnapshot && guideSnapshot.seq > guideSeqRef.current) {
+            guideSeqRef.current = guideSnapshot.seq
+            setGuideProgress(guideSnapshot)
+          }
+        } catch { /* 子步骤快照失败：降级为无子步骤态 */ }
+      }
 
       // 2. Todo 完成度（同轮询周期）：sessionLinks 含调度员 sessionId 过滤 + 标题前缀归类
       const todos = await window.electronAPI.listTodos()
@@ -165,6 +198,25 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
     return () => window.clearInterval(timer)
   }, [fetchOnce, workspaceSlug])
 
+  // 事件接入（W2 S1）：nanju:guide-progress 推送优先、10s 轮询快照兑底；seq 高者胜
+  // （seq <= 已采纳值的事件丢弃，防乱序/重复导致状态回退）。React effect on/off 配对即
+  // 重订机制（GwtProgressCard.tsx 同型）。
+  // stale UI 提示明确不做（取舍，AC plan-audit A6 条款④的工程落地）：子步骤为低频状态
+  // 数据 + 10s 轮询兑底，stale 窗口≤轮询周期、期间无增量信息可提示（事件通道恢复即自愈）；
+  // S4 复审时若 GWT/env 细分接入导致高频化再评估。
+  React.useEffect(() => {
+    const handler = (event: unknown, payload: GuideSubProgress & { sessionId: string }): void => {
+      if (!payload || payload.sessionId !== sessionId) return
+      if (payload.seq <= guideSeqRef.current) return
+      guideSeqRef.current = payload.seq
+      setGuideProgress({ currentStage: payload.currentStage, subStage: payload.subStage, seq: payload.seq })
+    }
+    window.electronAPI.onNanjuGuideProgress?.(handler)
+    return () => {
+      window.electronAPI.offNanjuGuideProgress?.(handler)
+    }
+  }, [sessionId])
+
   // 派生：三态 + 提示（纯函数，guide-dsl.test.ts 覆盖）
   const stageDerived = React.useMemo(() => {
     if (!project || phases.length === 0) {
@@ -173,10 +225,17 @@ export function useNanjuGuideData({ sessionId, workspaceSlug }: UseNanjuGuideDat
     return computeStageStates(project, phases)
   }, [project, phases])
 
+  // 子步骤仅在与 project.currentStage 同拍时暴露（事件/快照先于轮询 project 刷新到达时
+  // 丢弃一个周期，guide-dsl 前缀匹配亦双重兑底——错拍不会着色，安全）
+  const subStage = guideProgress && project && guideProgress.currentStage === project.currentStage
+    ? (guideProgress.subStage || null)
+    : null
+
   return {
     project,
     phases,
     stageStates: stageDerived.stageStates,
+    subStage,
     abandoned: stageDerived.abandoned,
     notice: stageDerived.notice,
     todoStats,

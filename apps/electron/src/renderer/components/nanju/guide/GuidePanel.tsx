@@ -16,7 +16,7 @@ import { currentAgentWorkspaceIdAtom, agentWorkspacesAtom, agentSessionsAtom } f
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { GuideFlow } from './GuideFlow'
 import { StageNodeDetail, type GuideSnapshot } from './StageNodeDetail'
-import { buildGuideDsl, type GuideNodeTarget, type GuidePhaseId } from './guide-dsl'
+import { buildGuideDsl, resolveExpandedPhases, type GuideNodeTarget, type GuidePhaseId } from './guide-dsl'
 import { useNanjuGuideData } from './useNanjuGuideData'
 
 interface GuidePanelProps {
@@ -64,6 +64,12 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
   /** 对照模式（AC-11）：渲染另一 mode 的静态 DSL（无进度叠加） */
   const [viewMode, setViewMode] = React.useState<'project' | 'compare'>('project')
   const [comparePhases, setComparePhases] = React.useState<GuideRoutePhase[]>([])
+  /**
+   * W2 S3 展开集合覆写：null = 默认派生（跟随 current 阶段，无 current 则全折叠，
+   * 见 resolveExpandedPhases）；用户点折叠代表框 → 临时多开；阶段推进/切换项目时收敛回默认
+   * （用户手动展开的额外集合在推进时刻收敛，不持久化）。
+   */
+  const [expandedOverride, setExpandedOverride] = React.useState<GuidePhaseId[] | null>(null)
   /** MODE 节点点击的模式说明提示条 */
   const [modeBubble, setModeBubble] = React.useState(false)
   /** DONE 节点点击的交付摘要提示条 */
@@ -104,6 +110,34 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
       .catch((e: unknown) => console.warn('[向导图] 对照模式路由拉取失败:', e))
   }, [viewMode, compareMode, comparePhases.length, data.project])
 
+  // W2 S1/S3：进度输入（含 subStage）+ 有效展开集合（默认派生随 current 阶段）
+  const guideProgress = React.useMemo(() => ({
+    stageStates: data.stageStates,
+    todoStats: data.todoStats,
+    abandoned: data.abandoned,
+    subStage: data.subStage ?? undefined,
+  }), [data.stageStates, data.todoStats, data.abandoned, data.subStage])
+
+  /** 当前 current 阶段（推进检测用；无 current = 已交付/放弃/未选模式） */
+  const currentPhaseId = React.useMemo(() => {
+    for (const p of data.phases) {
+      if (data.stageStates[p.id as GuidePhaseId] === 'current') return p.id as GuidePhaseId
+    }
+    return null
+  }, [data.phases, data.stageStates])
+
+  const expandedPhases = React.useMemo(() => {
+    // A5 加固（AC 审计 Round 1 随批）：override 仅在包含 current 阶段（或已无 current——
+    // 已交付/已放弃的浏览态）时生效——阶段推进瞬间旧 override 不含新 current → 纯派生层
+    // 即回落默认展开，消除「effect 异步收敛前一帧展开旧阶段」的错配；用户手动展开集合
+    // 含 current 时照常尊重（多开不变）。effect 重置保留作 state 卫生。
+    const honorOverride = expandedOverride && (!currentPhaseId || expandedOverride.includes(currentPhaseId))
+    return Array.from(resolveExpandedPhases(data.phases, data.project ? guideProgress : null, honorOverride ? expandedOverride : undefined))
+  }, [data.phases, data.project, guideProgress, expandedOverride, currentPhaseId])
+
+  // 阶段推进/切换项目：展开集合收敛回默认（跟随新 current；手动多开不跨推进保留）
+  React.useEffect(() => { setExpandedOverride(null) }, [currentPhaseId, data.project?.projectId])
+
   // DSL memo 化（硬约束：字符串 memo 防抖；依赖不变 → 引用相等 → GuideFlow 零重渲染，AC-09）
   const dsl = React.useMemo(() => {
     if (!data.project || data.phases.length === 0) return null
@@ -114,14 +148,11 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
     return buildGuideDsl({
       mode: data.project.mode,
       route: data.phases,
-      progress: {
-        stageStates: data.stageStates,
-        todoStats: data.todoStats,
-        abandoned: data.abandoned,
-      },
+      progress: guideProgress,
+      expandedPhases,
       isDark,
     })
-  }, [data.project, data.phases, data.stageStates, data.todoStats, data.abandoned, viewMode, comparePhases, compareMode, isDark])
+  }, [data.project, data.phases, guideProgress, expandedPhases, viewMode, comparePhases, compareMode, isDark])
 
   const selectedPhase = selectedPhaseId ? data.phases.find((p) => p.id === selectedPhaseId) ?? null : null
 
@@ -151,9 +182,15 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
       if (data.stageStates.delivered === 'done') setDoneBubble(true)
       return
     }
+    // W2 S3：点折叠代表框（阶段 target 且当前折叠）→ 展开该阶段，不打开详情浮层；
+    // 已展开（或对照模式全展开）→ 维持现行为打开阶段详情浮层
+    if (viewMode === 'project' && !expandedPhases.includes(target)) {
+      setExpandedOverride([...expandedPhases, target])
+      return
+    }
     // 阶段主节点 / AC 子节点：打开阶段详情（子节点定位到所属阶段）
     setSelectedPhaseId(target)
-  }, [data.stageStates.delivered])
+  }, [data.stageStates.delivered, expandedPhases, viewMode])
 
   // 产出文件 → 右侧分屏预览（与 SidePanel handleFilePreview 同链路）
   const handleOpenPreview = React.useCallback((outputPath: string) => {

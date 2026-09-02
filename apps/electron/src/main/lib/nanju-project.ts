@@ -90,6 +90,13 @@ export interface NanjuProjectInfoFile {
   projectCategory?: ProjectCategory
   /** 品类判定来源：architecture 文档标记 / prd 标记 / 降级默认（web-fullstack） */
   projectCategorySource?: ProjectCategorySource
+  /**
+   * 向导图阶段内子步骤（W2 S1）：当前阶段的推进位置（主节点 id 或 {主节点}_UC，
+   * 见 nanju-guide-progress.ts 的 GUIDE_SUBSTAGE_SEQUENCE 契约）。
+   * 空串 = 已交付等无子步骤态；缺失 = 存量项目（渲染端降级为现状全灰，安全）。
+   * 唯一写入点 setProjectSubStage（阶段推进/产出确认钩子），避免多写入点漂移。
+   */
+  subStage?: string
 }
 
 /**
@@ -394,4 +401,41 @@ export function getProjectCategory(
     category: info.projectCategory,
     source: info.projectCategorySource ?? 'default',
   }
+}
+
+// ===== 向导图子步骤读写（W2 S1，v0.17.68：阶段内两态推进——产出中/等确认） =====
+
+/**
+ * 写入当前阶段子步骤（唯一写入点，setProjectCategory 同型 read-construct-write 纪律：
+ * readProjectInfo 现有对象直接挂字段再 writeProjectInfo，保留 projectCategory 等未知字段；
+ * 老项目无文件时自动补齐骨架）。
+ *
+ * 写入必须先于 emitGuideProgress 广播（write-then-emit）：渲染端冷启动 snapshot
+ * 与事件统一按 seq 高者胜，先写后发保证 snapshot 读到的数据不旧于已发事件。
+ */
+export function setProjectSubStage(
+  workspaceSlug: string,
+  projectId: string,
+  subStage: string,
+): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  base.subStage = subStage
+  writeProjectInfo(workspaceSlug, projectId, base)
+}
+
+/** 读取当前阶段子步骤。无文件/无字段返回 null（渲染端降级为现状全灰着色，不纠错）。 */
+export function getProjectSubStage(
+  workspaceSlug: string,
+  projectId: string,
+): string | null {
+  return readProjectInfo(workspaceSlug, projectId)?.subStage ?? null
 }

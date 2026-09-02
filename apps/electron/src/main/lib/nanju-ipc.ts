@@ -18,6 +18,7 @@ import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
 import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
 import { findNanjuProjectBySession, advanceNanjuStage, getNanjuPhaseGatePrompt } from './nanju-phase-gate'
+import { getGuideProgressSnapshot } from './nanju-guide-progress'
 
 /** 点选纠错批量提交清单的单条项（宿主 ClickToFixPanel reportItems 的 JSON 形状） */
 export interface CtfCommitItem {
@@ -217,6 +218,12 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
   // 返回数组含 id='delivered' 哨兵空节点，渲染端负责过滤（PRD 修订 R2/Y3）。
   ipcMain.handle('nanju:get-route', async (_event, mode: ProjectMode) => {
     return getGuideRoute(mode)
+  })
+
+  // 向导图阶段内子步骤冷启动快照（W2 S1）：渲染端挂载时拉取作初值再监听事件（seq 合流）；
+  // 项目不存在返回 null（渲染端降级为无子步骤态）。
+  ipcMain.handle('nanju:get-guide-progress', async (_event, input: { workspaceSlug: string; projectId: string }) => {
+    return getGuideProgressSnapshot(input.workspaceSlug, input.projectId)
   })
 
   ipcMain.handle('nanju:create-role-session', async (_event, input: {

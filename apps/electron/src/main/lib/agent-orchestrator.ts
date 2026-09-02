@@ -638,6 +638,14 @@ export class AgentOrchestrator {
           const { updateNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
           updateNanjuProject(workspaceSlug, projectId, { currentStage: 'delivered' })
           console.log(`[南大路由] ✅ GWT 验收通过，项目交付: ${projectName}`)
+          // W2 S1：机器裁判交付是推进点 A/B 之外的第三条 delivered 路径，同步清空子步骤
+          // 并广播（同 A 语义；工单未列此路径，按「交付=清空子步骤」纪律补齐，报告记录）
+          try {
+            const { setProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+            const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+            setProjectSubStage(workspaceSlug, projectId, '')
+            emitGuideProgress(sessionId, projectId, 'delivered', '')
+          } catch { /* 向导图子步骤广播失败不影响交付 */ }
           this.finalizeNanjuPhaseTodos(sessionId)
           this.injectNanjuAssistantMessage(
             sessionId,
@@ -1925,6 +1933,15 @@ export class AgentOrchestrator {
         ? getNanjuRouterPrompt(workspaceSlug, sessionId)
         : undefined
       const nanjuPrompt = nanjuRouterPrompt ?? ''
+      // W2 S1 确认点 C（run 开始侧）：产出达标且尚未同步 → 点亮「等待用户确认」。
+      // 幂等（详见 nanju-phase-gate.syncNanjuGuideConfirmState）；result 侧兜底同函数，
+      // 两处覆盖冷启动首轮空窗与每轮产出落盘后的即时点亮。失败不影响运行。
+      if (nanjuRouterPrompt && workspaceSlug) {
+        try {
+          const { syncNanjuGuideConfirmState } = require('./nanju-phase-gate') as typeof import('./nanju-phase-gate')
+          syncNanjuGuideConfirmState(workspaceSlug, sessionId)
+        } catch { /* 向导图子状态同步失败不影响运行 */ }
+      }
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return
         titleGenerationStarted = true
@@ -2414,6 +2431,14 @@ export class AgentOrchestrator {
                           console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
                           nanjuPhaseAdvanced = newStage ?? null
                           this.finalizeNanjuPhaseTodos(sessionId)
+                          // W2 S1 推进点 A：交付清空子步骤（delivered 无子步骤态）并广播。
+                          // write-then-emit；失败不阻断交付（渲染端 10s 轮询兑底）。
+                          try {
+                            const { setProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+                            const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+                            setProjectSubStage(workspaceSlug, project.projectId, '')
+                            emitGuideProgress(sessionId, project.projectId, newStage ?? 'delivered', '')
+                          } catch { /* 向导图子步骤广播失败不影响交付 */ }
                         }
                       } else {
                         // 阶段熔断复位 + phase.elapsed 埋点 + US-xx 上游提示（v0.17.64 Sprint C1）。
@@ -2483,6 +2508,17 @@ export class AgentOrchestrator {
                         // 程序化把该会话关联的 open Todo 标记完成（nativeOrigin 外部来源不动，
                         // 避免同步到系统提醒事项的副作用；只处理本会话通过 TaskCreate 建的）。
                         this.finalizeNanjuPhaseTodos(sessionId)
+                        // W2 S1 推进点 B：新阶段子步骤 = 主节点（作者产出中）并广播；推进到
+                        // 无主节点阶段（delivered，防御兑底——实际 delivered 推进走 A 点/GWT-pass
+                        // 路径，A7 笔误修正：quick 路由 prototype.next=coding 无直连交付边）→ 清空
+                        // 子步骤。失败不阻断推进。
+                        try {
+                          const { setProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+                          const { getGuideStageMainNodeId, emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+                          const subStage = (newStage ? getGuideStageMainNodeId(newStage) : undefined) ?? ''
+                          setProjectSubStage(workspaceSlug, project.projectId, subStage)
+                          emitGuideProgress(sessionId, project.projectId, newStage ?? 'delivered', subStage)
+                        } catch { /* 向导图子步骤广播失败不影响推进 */ }
                       }
                     }
                   } else {
@@ -2544,6 +2580,14 @@ export class AgentOrchestrator {
                   }
                 }
               } catch { /* 对账失败不影响主流程 */ }
+              // W2 S1 确认点 C（result 侧）：本轮产出落盘后即点亮「等待用户确认」——
+              // 「产出完成=等待用户确认」的诚实两态即时可见（幂等；失败不影响主流程）。
+              try {
+                if (workspaceSlug) {
+                  const { syncNanjuGuideConfirmState } = require('./nanju-phase-gate') as typeof import('./nanju-phase-gate')
+                  syncNanjuGuideConfirmState(workspaceSlug, sessionId)
+                }
+              } catch { /* 向导图子状态同步失败不影响主流程 */ }
               // Pi 也可能在 result 中报告失效的 resume artifact；仅回退本轮实际 resume 的请求。
               const resultErrorText = capturedResultErrors?.join('\n')
               if (resultErrorText && wasResuming) {

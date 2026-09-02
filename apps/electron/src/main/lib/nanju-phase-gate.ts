@@ -152,6 +152,60 @@ export function advanceNanjuStage(
   }
 }
 
+// ===== 向导图确认态同步（W2 S1 确认点 C，v0.17.68） =====
+
+/**
+ * 产出完成 → 向导图「等待用户确认」态同步（幂等）。
+ *
+ * 语义：阶段产出已达标（verifyPhaseOutput 判定通过，与阶段推进门禁同一标准）且
+ * subStage 尚未处于 {主节点}_UC 时，写入并广播（write-then-emit）；否则不动。
+ * 只前移不回退：MAIN→MAIN_UC 单向，状态复位仅由阶段推进点（agent-orchestrator）负责。
+ *
+ * 接线说明：原工单指定挂接 getNanjuPhaseGatePrompt（:24），但该函数全仓库零调用点
+ * （v0.16.48 遗留死代码，现行 per-turn 注入路径为 nanju-router-prompt）。本函数由
+ * agent-orchestrator 在等价 per-turn 点位调用（每轮 run 开始 + result 结束各一次，
+ * 满足「每 turn 可能调用」的幂等设计前提）。产出达标的 turn 结束即点亮 UC 态，
+ * 比无条件入口检查更诚实（避免产出未开始就跳等确认态），且确认消息本身会触发
+ * 调用，确认时点亮不遗漏（W1-R2a 不回归）。
+ *
+ * 懒 require（本文件 advanceNanjuStage 同型惯例）避免循环依赖：nanju-router-gate →
+ * nanju-project 与本文件无环，但保持文件顶层依赖而最小化。
+ *
+ * @returns 是否发生了写入+广播（false = 未命中/已同步/未达标，无副作用）
+ */
+export function syncNanjuGuideConfirmState(workspaceSlug: string, sessionId: string): boolean {
+  try {
+    const project = findNanjuProjectBySession(workspaceSlug, sessionId)
+    if (!project || project.status !== 'active') return false
+
+    const { GUIDE_SUBSTAGE_SEQUENCE } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+    const stage = project.currentStage
+    const sequence = (GUIDE_SUBSTAGE_SEQUENCE as Record<string, readonly string[] | undefined>)[stage]
+    if (!sequence) return false // mode-select/delivered 等无子步骤阶段（同时证明 stage ∈ 六阶段）
+
+    const mainNodeId = sequence[0] as string
+    const ucNodeId = `${mainNodeId}_UC`
+    // A1 必修-1（AC 审计 Round 1）：序列不含 UC 节点（如 testing 机器裁判收口，
+    // requiresUserConfirmation=false、序列止于 TEST_JUDGE）时不点亮——避免写入序列外
+    // 值（TEST_UC）污染持久化数据与广播事件
+    if (!sequence.includes(ucNodeId)) return false
+    const { getProjectSubStage, setProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+    if (getProjectSubStage(workspaceSlug, project.projectId) === ucNodeId) return false // 幂等：已同步则不重写不重发
+
+    // 产出达标判定与阶段推进门禁同一标准：UC 态 = 「可推进，等你确认」（sequence 存在性
+    // 已收窄 stage 到六阶段，与 verifyPhaseOutput 的 PhaseId 参数面兼容）
+    const { verifyPhaseOutput } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
+    if (verifyPhaseOutput(workspaceSlug, project.projectId, stage as Parameters<typeof verifyPhaseOutput>[2]) !== null) return false // 产出未达标，维持产出中态
+
+    setProjectSubStage(workspaceSlug, project.projectId, ucNodeId)
+    const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+    emitGuideProgress(sessionId, project.projectId, stage, ucNodeId)
+    return true
+  } catch {
+    return false // 同步失败不影响主流程（渲染端 10s 轮询兑底）
+  }
+}
+
 // ===== 硬门禁：canUseTool 阶段工具过滤 =====
 
 /** 只读工具白名单（所有阶段都允许） */
