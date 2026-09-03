@@ -27,7 +27,7 @@ mock.module('./config-paths', () => ({
   getAgentWorkspacePath: () => fixtureRoot,
 }))
 
-const { verifyPhaseOutput } = await import('./nanju-router-gate')
+const { verifyPhaseOutput, validateAdvanceTarget } = await import('./nanju-router-gate')
 
 const WORKSPACE_SLUG = 'test-ws'
 const PROJECT_ID = 'p1'
@@ -374,5 +374,78 @@ describe('verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规�
     setProjectCategory(ws, PROJECT_ID, 'desktop-app', 'architecture')
     setProjectEnvState(ws, PROJECT_ID, true, [{ component: 'rustc', ok: true, attemptedAt: '' }])
     expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+})
+
+// ===== W11（v0.17.73）：PHASE_ADVANCE 推进目标校验 validateAdvanceTarget =====
+// 矩阵：六活跃阶段 × 合法/跳级/回退 + testing 特判豁免 + 异常兜底放行。
+// 背景：终测 E2E 实锤——L1 在 prototype 阶段输出 `PHASE_ADVANCE: coding` 跳过
+// architecture（jsonl 行 81）；接线见 agent-orchestrator.ts 通用推进分支
+//（isTestingSelfAdvance / isDeliverFromTesting 两特殊分支在校验前分流）。
+
+describe('validateAdvanceTarget（W11 推进目标校验）', () => {
+  test('iterative 六阶段合法推进全放行（route.next 同源）', () => {
+    expect(validateAdvanceTarget('iterative', 'requirements', 'prototype')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('iterative', 'prototype', 'architecture')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('iterative', 'architecture', 'planning')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('iterative', 'planning', 'coding')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('iterative', 'coding', 'testing')).toEqual({ ok: true })
+  })
+
+  test('iterative 跳级拒绝（expected 给出唯一合法目标）', () => {
+    // 终测 E2E 实锤场景：prototype 输出 PHASE_ADVANCE: coding 跳过 architecture
+    expect(validateAdvanceTarget('iterative', 'prototype', 'coding')).toEqual({ ok: false, expected: 'architecture' })
+    expect(validateAdvanceTarget('iterative', 'requirements', 'architecture')).toEqual({ ok: false, expected: 'prototype' })
+    expect(validateAdvanceTarget('iterative', 'requirements', 'delivered')).toEqual({ ok: false, expected: 'prototype' })
+    expect(validateAdvanceTarget('iterative', 'architecture', 'coding')).toEqual({ ok: false, expected: 'planning' })
+    expect(validateAdvanceTarget('iterative', 'coding', 'delivered')).toEqual({ ok: false, expected: 'testing' })
+  })
+
+  test('iterative 回退拒绝（含原地自推——推进必须有位移）', () => {
+    expect(validateAdvanceTarget('iterative', 'prototype', 'requirements')).toEqual({ ok: false, expected: 'architecture' })
+    expect(validateAdvanceTarget('iterative', 'planning', 'prototype')).toEqual({ ok: false, expected: 'coding' })
+    expect(validateAdvanceTarget('iterative', 'coding', 'architecture')).toEqual({ ok: false, expected: 'testing' })
+    expect(validateAdvanceTarget('iterative', 'requirements', 'requirements')).toEqual({ ok: false, expected: 'prototype' })
+  })
+
+  test('testing 特判豁免：GWT 重入（testing→testing）与交付（testing→delivered）放行', () => {
+    expect(validateAdvanceTarget('iterative', 'testing', 'testing')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('quick', 'testing', 'delivered')).toEqual({ ok: true })
+  })
+
+  test('testing 非豁免目标仍拒绝（回炉 coding 走 GWT fail 路径，不是标记推进）', () => {
+    expect(validateAdvanceTarget('iterative', 'testing', 'coding')).toEqual({ ok: false, expected: 'delivered' })
+  })
+
+  test('quick 链（无 planning）合法推进全放行', () => {
+    expect(validateAdvanceTarget('quick', 'requirements', 'prototype')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('quick', 'prototype', 'architecture')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('quick', 'architecture', 'coding')).toEqual({ ok: true })
+    expect(validateAdvanceTarget('quick', 'coding', 'testing')).toEqual({ ok: true })
+  })
+
+  test('quick 跳级/回退拒绝（quick 链 architecture.next=coding，无 planning 边）', () => {
+    expect(validateAdvanceTarget('quick', 'prototype', 'coding')).toEqual({ ok: false, expected: 'architecture' })
+    expect(validateAdvanceTarget('quick', 'architecture', 'planning')).toEqual({ ok: false, expected: 'coding' })
+    expect(validateAdvanceTarget('quick', 'coding', 'prototype')).toEqual({ ok: false, expected: 'testing' })
+  })
+
+  test('防御性放行：异常 mode / route 缺失节点维持现状（工单 §1 不新增拦截）', () => {
+    // mode 数据损坏（非 quick/iterative）
+    expect(validateAdvanceTarget('broken', 'requirements', 'delivered')).toEqual({ ok: true })
+    // mode-select（模式未定，不在路由中）
+    expect(validateAdvanceTarget('iterative', 'mode-select', 'requirements')).toEqual({ ok: true })
+    // planning 不在 quick 路由（数据不一致防御场景）
+    expect(validateAdvanceTarget('quick', 'planning', 'coding')).toEqual({ ok: true })
+  })
+
+  test('垃圾标记目标拒绝（拼写错误不放行，expected 引导正确标记）', () => {
+    expect(validateAdvanceTarget('iterative', 'prototype', 'codin')).toEqual({ ok: false, expected: 'architecture' })
+    expect(validateAdvanceTarget('quick', 'requirements', 'proto')).toEqual({ ok: false, expected: 'prototype' })
+  })
+
+  test('终态 delivered：无合法下一阶段，任何目标拒绝（expected=null）', () => {
+    expect(validateAdvanceTarget('iterative', 'delivered', 'requirements')).toEqual({ ok: false, expected: null })
+    expect(validateAdvanceTarget('quick', 'delivered', 'delivered')).toEqual({ ok: false, expected: null })
   })
 })

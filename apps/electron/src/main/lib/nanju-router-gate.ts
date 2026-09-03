@@ -7,8 +7,8 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, dirname, resolve, sep } from 'node:path'
-import { listNanjuProjects, getProjectCategory, getProjectEnvState, type NanjuProject } from './nanju-project'
-import { getPhaseNode, type PhaseId, checkOutputFormat } from './nanju-router'
+import { listNanjuProjects, getProjectCategory, getProjectEnvState, type NanjuProject, type ProjectStage } from './nanju-project'
+import { getPhaseNode, getNextPhase, type PhaseId, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
 import {
   STAGE_ROLE_KEYWORDS,
@@ -122,6 +122,47 @@ export function checkNanjuRouterGate(
 export function findNanjuProjectBySession(workspaceSlug: string, sessionId: string): NanjuProject | undefined {
   const projects = listNanjuProjects(workspaceSlug)
   return projects.find((p) => p.sessionId === sessionId)
+}
+
+/**
+ * W11（v0.17.73）：PHASE_ADVANCE 推进目标校验（纯函数，供检测块通用分支消费标记前调用）。
+ *
+ * 背景：终测 E2E 实锤——L1 在 prototype 阶段输出 `PHASE_ADVANCE: coding` 跳过
+ * architecture（jsonl 行 81），检测块按标记目标推进、无校验（继 W8 拦委派角色 /
+ * W10 提示推进纪律之后的第三个强制力缺口）。
+ *
+ * 判定矩阵（六活跃阶段 × 合法/跳级/回退）：
+ * - 合法：newStage === getNextPhase(mode, currentStage)（route.next 同源）→ 放行；
+ * - 跳级（跨阶段前跳）/ 回退（回到已过阶段）→ 一律拒绝，expected 给出唯一合法目标
+ *   （供调用方生成教育消息；null = 终态无下一阶段）。
+ *
+ * 特判豁免（与 agent-orchestrator 检测块分流同构，防两处口径漂移）：
+ * - testing → testing：GWT 重入（触发验收测试重跑，不改阶段），由 isTestingSelfAdvance
+ *   分支在校验之前分流；
+ * - testing → delivered：GWT 交付（另经 checkNanjuGwtDeliveryGate 门禁），由
+ *   isDeliverFromTesting 分支分流。
+ *
+ * 防御性放行（工单 §1：宁可放行不可卡死）：mode 非 quick/iterative（数据异常）或
+ * currentStage 不在该模式路由中（mode-select / quick 无 planning 等，找不到 route
+ * 节点）→ 维持现状放行，不新增拦截。delivered 在路由中（哨兵 next=null）：任何
+ * newStage 都拒绝——终态无合法推进，口径一致不搞特例。
+ */
+export function validateAdvanceTarget(
+  mode: string,
+  currentStage: ProjectStage,
+  newStage: string,
+): { ok: boolean; expected?: PhaseId | null } {
+  // 异常 mode 兜底：非 quick/iterative（历史数据损坏等）→ 防御性放行
+  if (mode !== 'quick' && mode !== 'iterative') return { ok: true }
+  // 找不到 route 节点（mode-select 未定模式 / 该模式无此阶段）→ 防御性放行
+  if (!getPhaseNode(mode, currentStage as PhaseId)) return { ok: true }
+  // testing 特判豁免：两特殊分支（GWT 重入 / GWT 交付）在校验之前分流，此处同口径豁免
+  if (currentStage === 'testing' && (newStage === 'testing' || newStage === 'delivered')) {
+    return { ok: true }
+  }
+  const expected = getNextPhase(mode, currentStage as PhaseId)
+  if (newStage === expected) return { ok: true }
+  return { ok: false, expected }
 }
 
 /** 判定对象型值（mutate 目标防御） */
