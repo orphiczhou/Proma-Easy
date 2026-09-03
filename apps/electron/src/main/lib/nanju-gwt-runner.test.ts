@@ -37,6 +37,8 @@ const {
   judgeGwtResult,
   buildReportMarkdown,
   buildSummaryText,
+  buildGwtDeliveryAcceptanceMessage,
+  GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE,
   runGwtSuite,
   runNanjuGwtAcceptance,
   GWT_RETRY_LIMIT,
@@ -802,5 +804,45 @@ describe('runNanjuGwtAcceptance', () => {
     expect(existsSync(outcome.reportMdPath)).toBe(true)
     expect(outcome.reportMdPath).toMatch(/06_TESTS\/report-\d{8}-\d{6}\.md$/)
     expect(readFileSync(outcome.reportMdPath, 'utf-8')).toContain('# 验收测试报告')
+  })
+})
+
+// ═══════════════ W12：GWT-pass 后两段交付验收（用户 2026-09-03 23:39 裁决） ═══════════════
+
+describe('W12：GWT-pass 交付验收两段化（不直接 delivered）', () => {
+  test('注入消息 = 测试摘要 + 交付验收邀请（满意交付/需要调整两选项语义），不含交付完成富语', () => {
+    const msg = buildGwtDeliveryAcceptanceMessage('✅ 我们测试了 6 个场景，全部通过（覆盖 3 条用户故事）。测试报告：/tmp/report.md')
+    // 测试摘要原文保留（机器裁判结论完整可见）
+    expect(msg).toContain('✅ 我们测试了 6 个场景，全部通过（覆盖 3 条用户故事）')
+    expect(msg).toContain('/tmp/report.md')
+    // 交付验收语义（工单 §1 话术）
+    expect(msg).toContain('应用已完成并通过自动测试')
+    expect(msg).toContain('可以交付使用。你用过了吗？')
+    expect(msg).toContain('满意交付')
+    expect(msg).toContain('需要调整')
+    expect(msg).toContain('回炉修复后重新测试')
+    // 旧「直接交付」富语不再出现在 pass 消息（交付改由用户确认后的标准路径承载）
+    expect(msg).not.toContain('项目已全部完成交付')
+  })
+
+  test('续接指令：弹 AskUserQuestion 两选项 + 满意交付→PHASE_ADVANCE: delivered + 需要调整→回炉重跑 testing', () => {
+    const instruction = GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE
+    expect(instruction).toContain('AskUserQuestion')
+    expect(instruction).toContain('应用已完成并通过自动测试，可以交付使用。你用过了吗？')
+    expect(instruction).toContain('满意交付')
+    expect(instruction).toContain('需要调整')
+    // 满意交付 → 既有 isDeliverFromTesting 路径（交付门禁 verdict=pass 已满足）
+    expect(instruction).toContain('<!-- PHASE_ADVANCE: delivered -->')
+    expect(instruction).toContain('交付门禁校验 verdict=pass 已满足')
+    // 需要调整 → 意见收集 → 修复 08_APP/ → testing 重跑（不动测试与需求产物）
+    expect(instruction).toContain('<!-- PHASE_ADVANCE: testing -->')
+    expect(instruction).toContain('修复 08_APP/ 下的代码')
+    expect(instruction).toContain('不动 06_TESTS/ 与 01_PRD/')
+    // 回炉预算 ≤2 既有约束交代（系统计数，L1 不自作主张超限）
+    expect(instruction).toContain('回炉预算 ≤2 次')
+  })
+
+  test('回炉预算未动：GWT_RETRY_LIMIT 仍为 2（交付验收不烧回炉次数）', () => {
+    expect(GWT_RETRY_LIMIT).toBe(2)
   })
 })

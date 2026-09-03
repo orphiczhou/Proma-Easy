@@ -43,7 +43,7 @@ flowchart TD
 
     TEST["⑤ 测试工程师 test-engineer · deepseek-v4-pro<br/>GWT 验收测试<br/>未开始"]
 
-    TEST -->|"全场景通过 · 裁判判定"| DONE(["交付 delivered<br/>项目可用 · 验收通过"])
+    TEST -->|"GWT 通过 · 用户验收"| DONE(["交付 delivered<br/>项目可用 · 验收通过"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
@@ -106,7 +106,7 @@ flowchart TD
 
     TEST["⑥ 测试工程师 test-engineer · deepseek-v4-pro<br/>GWT 验收测试<br/>未开始"]
 
-    TEST -->|"全场景通过 · 裁判判定"| DONE(["交付 delivered<br/>项目可用 · 验收交付完成"])
+    TEST -->|"GWT 通过 · 用户验收"| DONE(["交付 delivered<br/>项目可用 · 验收交付完成"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
@@ -170,7 +170,7 @@ flowchart TD
 
     TEST["⑥ 测试工程师 test-engineer · deepseek-v4-pro<br/>GWT 验收测试<br/>未开始"]
 
-    TEST -->|"全场景通过 · 裁判判定"| DONE(["交付 delivered<br/>项目可用 · 验收交付完成"])
+    TEST -->|"GWT 通过 · 用户验收"| DONE(["交付 delivered<br/>项目可用 · 验收交付完成"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46
@@ -284,7 +284,7 @@ flowchart TD
 
     TEST_GWT -.->|"行为失败→回炉开发"| CODE
 
-    TEST_JUDGE -->|"全场景通过 · 裁判判定"| DONE(["交付 delivered<br/>项目可用 · 验收交付完成"])
+    TEST_JUDGE -->|"GWT 通过 · 用户验收"| DONE(["交付 delivered<br/>项目可用 · 验收交付完成"])
 
     classDef st-done fill:#A7F3D0,stroke:#059669,stroke-width:2px,color:#064E3B
     classDef st-sub-done fill:#D1FAE5,stroke:#059669,color:#065F46

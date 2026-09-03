@@ -512,7 +512,7 @@ export class AgentOrchestrator {
       const { join } = require('node:path')
       const reportPath = join(getNanjuProjectDir(workspaceSlug, projectId), '06_TESTS', 'report.json')
       if (!existsSync(reportPath)) {
-        return '测试尚未执行（06_TESTS/report.json 不存在）。请先声明 <!-- PHASE_ADVANCE: testing --> 触发自动验收测试，全部通过后系统会自动交付。'
+        return '测试尚未执行（06_TESTS/report.json 不存在）。请先声明 <!-- PHASE_ADVANCE: testing --> 触发自动验收测试，全部通过后进入交付验收（用户确认满意交付后才交付）。'
       }
       const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as { verdict?: string; passed?: number; scenariosTotal?: number; errorReason?: string | null }
       // error 报告（v0.17.63，AC Z-005/L-003）：给「重跑测试」指引而非裸拦截
@@ -552,7 +552,10 @@ export class AgentOrchestrator {
    *
    * 触发时机：PHASE_ADVANCE: testing 重入（currentStage 已是 testing）——
    * 首次 = 场景已生成；重跑 = coding 缺陷已修复。完成后按规则裁判结果处理：
-   * - pass → updateNanjuProject(delivered) + Todo 收尾 + 交付完成富语（机器裁判收口）
+   * - pass → 【W12 交付验收两段化】不直接 delivered：注入测试摘要 + 验收邀请，续接 L1 弹
+   *   交付验收询问（AskUserQuestion：满意交付/需要调整）；保持 testing。用户满意交付 →
+   *   L1 输出 PHASE_ADVANCE: delivered（既有 isDeliverFromTesting + GWT 交付门禁路径）；
+   *   需要调整 → 意见收集 → 回炉修复 → PHASE_ADVANCE: testing 重跑（回炉 ≤2 次既有约束）
    * - error（执行异常）→ errorCount 独立计数（v0.17.64 #6）：errorCount≥1 即熔断，转人工介入
    *   （不自动烧回炉；排查环境后重跑属用户指示的复位路径）
    * - fail 未超限（<3 次，回炉预算未耗尽）且未熔断（v0.17.65 AC Z-1：failCount≥3 或 errorCount≥1 即熔断，熔断后拒绝自动续接）
@@ -671,25 +674,43 @@ export class AgentOrchestrator {
           ? `\n\n⛔ 该阶段已触发熔断（${gwtCircuitNarrative}），系统不再自动续接回炉。${humanDecisionLine}`
           : ''
         if (outcome.verdict === 'pass') {
-          // 机器裁判收口：全场景通过 + US 全覆盖 → 直接交付（推进即事实）
-          const { updateNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
-          updateNanjuProject(workspaceSlug, projectId, { currentStage: 'delivered' })
-          console.log(`[南大路由] ✅ GWT 验收通过，项目交付: ${projectName}`)
-          // W2 S1：机器裁判交付是推进点 A/B 之外的第三条 delivered 路径，同步清空子步骤
-          // 并广播（同 A 语义；工单未列此路径，按「交付=清空子步骤」纪律补齐，报告记录）；
-          // W10：同路径消费清除确认待推进（confirmPending=testing 时确认提示已引导过推进）
-          try {
-            const { setProjectSubStage, clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
-            const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
-            setProjectSubStage(workspaceSlug, projectId, '')
-            clearProjectConfirmPending(workspaceSlug, projectId)
-            emitGuideProgress(sessionId, projectId, 'delivered', '')
-          } catch { /* 向导图子步骤广播失败不影响交付 */ }
-          this.finalizeNanjuPhaseTodos(sessionId)
-          this.injectNanjuAssistantMessage(
-            sessionId,
-            outcome.summaryText + '\n\n🎉 项目已全部完成交付！\n\n向导流程到此结束。产出物在项目目录（01_PRD / 02_UX_DESIGN / 08_APP），可运行应用入口 08_APP/index.html，可随时回看。想继续做新东西？在南大向导首页点「快速做一个工具」开始新项目。',
-          )
+          // W12 交付验收两段化（用户 2026-09-03 23:39 裁决）：GWT-pass 不再直接 delivered。
+          // 责任分工：故事覆盖与场景通过性由机器裁判背书（报告已落盘 verdict=pass），
+          // 交付决定权交还用户（真正的交付验收环节后置到 GWT 后）：
+          // a. pass → 注入测试摘要 + 验收邀请（保持 testing，不推进——交付验收是新交互点，
+          //    不经 requiresUserConfirmation 机制，取舍见 w12-report）；
+          // b. 续接 L1 弹交付验收询问（AskUserQuestion：满意交付/需要调整，话术单一来源于
+          //    nanju-gwt-runner 的 GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE）：
+          //    · 满意交付 → L1 输出 PHASE_ADVANCE: delivered（既有 isDeliverFromTesting 分支 +
+          //      checkNanjuGwtDeliveryGate，verdict=pass 已满足）——交付钩子（updateNanjuProject/
+          //      confirmPending 清除/Todo 收尾/子步骤清空/完成富语）全部由该标准路径承载；
+          //    · 需要调整 → 意见收集 → 回炉修复 08_APP/ → PHASE_ADVANCE: testing 重跑 GWT
+          //      （回炉预算 ≤2 次既有约束不变，GWT_RETRY_LIMIT 未动）。
+          const { buildGwtDeliveryAcceptanceMessage, GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE } =
+            require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
+          console.log(`[南大路由] ✅ GWT 验收通过，进入交付验收（等待用户确认交付）: ${projectName}`)
+          this.injectNanjuAssistantMessage(sessionId, buildGwtDeliveryAcceptanceMessage(outcome.summaryText))
+          setTimeout(() => {
+            runRegisteredHeadlessAgent(
+              {
+                sessionId,
+                userMessage: GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE,
+                channelId: resume.channelId,
+                modelId: resume.modelId,
+                workspaceId: resume.workspaceId,
+                permissionModeOverride: resume.permissionModeOverride,
+                startedAt: Date.now(),
+              },
+              {
+                source: 'delegation',
+                onError: (error: string) => console.warn('[南大路由] GWT 交付验收续接错误:', error),
+                onComplete: () => {},
+                onTitleUpdated: () => {},
+              },
+            ).catch((e: unknown) => {
+              console.warn('[南大路由] GWT 交付验收续接失败:', e instanceof Error ? e.message : String(e))
+            })
+          }, 1500)
         } else if (outcome.verdict === 'error') {
           // 执行异常（v0.17.63，AC Z-005/L-003）：报告已落盘（verdict=error）+ retryCount 已计数；
           // v0.17.64：errorCount 独立计数后 errorCount≥1 即熔断——不再自动烧回炉续接，转人工介入

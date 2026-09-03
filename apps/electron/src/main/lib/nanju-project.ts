@@ -558,6 +558,9 @@ export function getProjectEnvState(
  */
 export const CONFIRM_ADVANCE_KEYWORDS: readonly string[] = [
   '确认', '通过', '没问题', '好的', '可以', '继续', '推进', 'ok', 'approve',
+  // W12（交付验收后置）：GWT-pass 后验收询问的确认选项词。「满意交付」整词入表而非裸「满意」
+  // ——否定形「不太满意」含「满意」子串会误置位，整词形态天然避开（取舍见 w12-report §4）
+  '满意交付',
 ]
 
 /**
@@ -570,6 +573,9 @@ export const CONFIRM_ADVANCE_KEYWORDS: readonly string[] = [
 export const CONFIRM_REJECT_KEYWORDS: readonly string[] = [
   '不通过', '没通过', '需要修复', '重做', '不行',
   '改主意', '先别', '暂缓', '再想想', '等等', '先停', '不急', '取消',
+  // W12（交付验收后置）：验收询问的调整选项词 + 「满意」否定形——交付验收轮里用户明确要改
+  // （或不满）时撤下待推进提示；与「满意交付」确认词配对，反义仍先于确认判定
+  '需要调整', '不满意',
 ]
 
 /** 词匹配（中文 includes / 纯英文 \b 词边界，大小写不敏感——同 nanju-delegate-guard 惯例；

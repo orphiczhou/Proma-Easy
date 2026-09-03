@@ -275,7 +275,9 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
   // spec 生成任务（Gherkin + steps.json），不绑视觉模型；与 coding 作者同渠道不构成构建期
   // 约束（assertACFamilyDiversity 只要求 defender≠author / attacker≠defender，coding 阶段
   // deepseek 作者 + deepseek 攻击者已是生产先例），不再自设「testing≠coding 家族」断言。
-  // 机器判定收口（requiresUserConfirmation=false）：全场景通过 + 用户故事全覆盖 = 自动交付。
+  // 机器判定推进（requiresUserConfirmation=false）：场景产出后推进即触发 GWT 机器裁判
+  // （全场景通过 + 用户故事全覆盖）。W12 交付验收后置：GWT-pass 后的交付确认由 GWT 结果
+  // 处理直接注入（不经本节点的 requiresUserConfirmation 机制，避免改 PhaseNode 语义引发连锁）。
   const testing: PhaseNode = {
     id: 'testing',
     role: 'test-engineer',

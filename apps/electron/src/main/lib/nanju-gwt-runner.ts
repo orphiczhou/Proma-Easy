@@ -726,6 +726,37 @@ export interface NanjuGwtOutcome {
   results: GwtScenarioResult[]
 }
 
+// ===== W12 交付验收（GWT-pass 后两段，用户 2026-09-03 23:39 裁决） =====
+
+/**
+ * GWT-pass 后注入的交付验收消息（可见化 assistant 消息）。
+ *
+ * 语义边界（与工单 §1 流程一致）：故事覆盖与场景通过性由机器裁判背书（上文 summaryText），
+ * 交付决定权交还用户——「应用是否可以交付使用」是人责判断，不再由机器直接 delivered。
+ */
+export function buildGwtDeliveryAcceptanceMessage(summaryText: string): string {
+  return summaryText
+    + '\n\n📦 应用已完成并通过自动测试（全部场景通过 + 用户故事全覆盖），可以交付使用。你用过了吗？\n'
+    + '即将请你确认交付：满意交付 / 需要调整（说明问题，回炉修复后重新测试）。'
+}
+
+/**
+ * GWT-pass 后续接 L1 的交付验收指令（runRegisteredHeadlessAgent 的 userMessage）。
+ *
+ * 分流：满意交付 → PHASE_ADVANCE: delivered（既有 isDeliverFromTesting + GWT 交付门禁，
+ * verdict=pass 已满足）；需要调整 → 意见收集 → 回炉修复 08_APP/ → PHASE_ADVANCE: testing
+ * 重跑 GWT（回炉预算 ≤2 次既有约束不变，GWT_RETRY_LIMIT 未动）。
+ */
+export const GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE =
+  '自动验收测试全部通过（GWT-pass：全场景通过 + 用户故事全覆盖，测试报告 verdict=pass）。'
+  + '请向用户发起【交付验收】询问：用 AskUserQuestion 弹问，question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，'
+  + 'options 两项：「满意交付」（可以交付使用）/「需要调整」（说明问题，回炉修复后重新测试）。'
+  + '用户选满意交付或明确表达满意/确认交付 → 立即输出 <!-- PHASE_ADVANCE: delivered --> 完成交付'
+  + '（交付门禁校验 verdict=pass 已满足，不要重新委派、不要重复产出、不要再询问）。'
+  + '用户选需要调整或描述问题 → 按意见收集轮收集修改意见（可引导用户点选右侧预览元素精准定位，逐条确认理解、收齐后统一改），'
+  + '收齐后 continue_delegation 委派「全栈开发」修复 08_APP/ 下的代码（不动 06_TESTS/ 与 01_PRD/），'
+  + '修复完成后输出 <!-- PHASE_ADVANCE: testing --> 重跑自动测试（回炉预算 ≤2 次由系统计数，超限系统转人工）。'
+
 export async function runNanjuGwtAcceptance(input: {
   workspaceSlug: string
   projectId: string

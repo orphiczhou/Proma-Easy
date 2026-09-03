@@ -362,7 +362,8 @@ describe('L1 调度员指令（v0.17.64：超时纪律 + 收口果断性）', ()
   test('testing 收口果断性（实证④）：立即输出推进标记，不等用户确认、不以核实/澄清代替推进', () => {
     const prompt = buildPrompt('testing')
     expect(prompt).toContain('【果断收口】双文件核验通过')
-    expect(prompt).toContain('不要等待用户确认')
+    // W12 措辞收敛：场景产出推进不等人；交付验收（GWT-pass 后）是另一个独立确认点
+    expect(prompt).toContain('不等待用户确认')
     expect(prompt).toContain('不要以「核实/澄清」')
     expect(prompt).toContain('<!-- PHASE_ADVANCE: testing -->')
   })
@@ -464,5 +465,86 @@ describe('L1 指令：意见收集轮回归标记 + architecture 环境确认流
     })
     expect(prompt).toContain('主进程环境清单预校验通过')
     // 首轮无产出文档时无预校验注入（buildPromptFor('architecture') 不带 files 场景已由上一用例覆盖）
+  })
+})
+
+// ═══════════════ W12（v0.17.74）：coding 轻过渡收口 + testing 三态指令（交付验收后置） ═══════════════
+
+describe('W12：coding L1 轻过渡收口（故事覆盖交还 GWT 机器裁判）', () => {
+  /** 构造 fixture 并返回 prompt（复用文件级 fixtureRoot；coding/testing 不经 channel-manager 解析） */
+  function buildPromptForW12(stage: string, files?: Record<string, string>): string {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-w12-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pw12')
+    mkdirSync(projectDir, { recursive: true })
+    for (const [name, content] of Object.entries(files ?? {})) {
+      const full = join(projectDir, name)
+      mkdirSync(join(full, '..'), { recursive: true })
+      writeFileSync(full, content)
+    }
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pw12', name: 'W12 测试项目', mode: 'iterative', status: 'active',
+      currentStage: stage, createdAt: '', updatedAt: '', sessionId: 's-pw12', workspaceSlug: root,
+    }]))
+    const prompt = getNanjuRouterPrompt('test-ws', 's-pw12')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(() => {
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('coding 收口是轻过渡确认：预览确认 → 推进 testing 触发自动测试，故事完整性由自动测试判定', () => {
+    const prompt = buildPromptForW12('coding')
+    // 轻过渡话术（工单 §2.1 原文）
+    expect(prompt).toContain('应用已生成（右侧预览）')
+    expect(prompt).toContain('确认无误我将启动自动测试（GWT 场景验收）')
+    expect(prompt).toContain('用户故事的完整性由自动测试判定，无需人工核对')
+    expect(prompt).toContain('回复确认即开始测试')
+  })
+
+  test('coding 收口不再让用户背书故事实现：旧「应用验证」勾选收口与「全部通过，交付」选项删除', () => {
+    const prompt = buildPromptForW12('coding')
+    expect(prompt).not.toContain('header「应用验证」')
+    expect(prompt).not.toContain('全部通过，交付')
+    // W12 语义标注存在（指令自带设计理由，防回退）
+    expect(prompt).toContain('不再让用户逐条背书故事实现')
+  })
+
+  test('coding 点选纠错入口与意见收集轮保留（真实意见通道不动）', () => {
+    const prompt = buildPromptForW12('coding')
+    expect(prompt).toContain('【点选纠错】')
+    expect(prompt).toContain('【意见收集轮】')
+    expect(prompt).toContain('批量修改清单')
+    // 确认后仍走第 5 步标准收口（PHASE_ADVANCE: testing）
+    expect(prompt).toContain('<!-- PHASE_ADVANCE: testing -->')
+  })
+
+  test('testing 三态指令：产出果断收口 / pass 后交付验收询问 / fail 回炉分流并存', () => {
+    const prompt = buildPromptForW12('testing', {
+      '06_TESTS/features/index.feature': 'Feature: US-01 添加读书笔记\n  Scenario: US-01 成功添加\n    Given 用户在页面\n',
+      '06_TESTS/features/us-01.feature': 'Feature: US-01 添加读书笔记\n  Scenario: US-01 成功添加\n    Given 用户在页面\n',
+      '06_TESTS/features/us-01.steps.json': '{"feature":"us-01","scenario":"US-01 成功添加","skip":false,"skipReason":null,"steps":[{"kind":"given","text":"用户在页面","op":{"type":"assert-visible","selector":"data-ai-id=view-note-list"}}]}',
+    })
+    // 态一：场景产出后果断收口（机器判定推进触发 GWT，无用户确认）
+    expect(prompt).toContain('【果断收口】双文件核验通过')
+    expect(prompt).toContain('推进到自身 = 触发 Harness 自动执行 GWT 验收测试')
+    // 态二：GWT-pass 后的交付验收（W12 新交互点：满意交付 / 需要调整）
+    expect(prompt).toContain('交付验收')
+    expect(prompt).toContain('应用已完成并通过自动测试，可以交付使用。你用过了吗？')
+    expect(prompt).toContain('满意交付')
+    expect(prompt).toContain('需要调整')
+    expect(prompt).toContain('<!-- PHASE_ADVANCE: delivered -->')
+    // 用户要调整 → 意见收集回炉修复 → testing 重跑（回炉 ≤2 既有）
+    expect(prompt).toContain('<!-- PHASE_ADVANCE: testing --> 重跑自动测试')
+    expect(prompt).toContain('回炉修复与重映射合计 ≤2 次')
+    // 态三：fail 分流既有指令保留（行为/映射/覆盖三类）
+    expect(prompt).toContain('行为类失败')
+    expect(prompt).toContain('映射类失败')
+    expect(prompt).toContain('覆盖类失败')
+    // 旧「全部通过：项目自动交付」表述删除（自动交付已后置为用户验收）
+    expect(prompt).not.toContain('项目自动交付')
   })
 })

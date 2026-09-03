@@ -304,7 +304,9 @@ describe('W10 修订轮 A3：testing 确认提示特判为 GWT 重入（非 next
     const prompt = getNanjuRouterPrompt('test-ws', 'session-1')
     expect(prompt).toContain('⏩ 用户已确认本阶段产出（confirmPending=testing）')
     expect(prompt).toContain('<!-- PHASE_ADVANCE: testing -->')
-    expect(prompt).not.toContain('<!-- PHASE_ADVANCE: delivered -->')
+    // W12 起 testing 指令正文合法含 delivered 标记（满意交付路径教学），
+    // 断言收窄到提示行本身：无报告时确认提示目标是 testing 重入而非交付
+    expect(prompt).not.toContain('请立即输出推进标记 <!-- PHASE_ADVANCE: delivered -->')
   })
 
   test('iterative 模式 testing 同样特判（两模式机器判定收口一致）；非 testing 阶段仍按 next 同源推导', () => {
@@ -313,5 +315,66 @@ describe('W10 修订轮 A3：testing 确认提示特判为 GWT 重入（非 next
     // 对照：requirements 阶段不受特判影响（next 同源推导 prototype 不变）
     setupProject({ stage: 'requirements', mode: 'quick', confirmPending: 'requirements' })
     expect(getNanjuRouterPrompt('test-ws', 'session-1')).toContain('<!-- PHASE_ADVANCE: prototype -->')
+  })
+})
+
+// ═══════════════ W12（交付验收后置）：GWT-pass 后确认提示目标切换 + 验收选项词表 ═══════════════
+
+describe('W12：GWT-pass 后 confirmPending 提示目标切 delivered（工单 §4 兼容性验证）', () => {
+  /** 在 fixture 项目写入 06_TESTS/report.json（verdict 可控） */
+  function writeGwtReport(verdict: 'pass' | 'fail' | 'error'): void {
+    const reportDir = join(fixtureRoot, 'project-p1', '06_TESTS')
+    mkdirSync(reportDir, { recursive: true })
+    writeFileSync(join(reportDir, 'report.json'), JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      verdict,
+      scenariosTotal: 6, passed: verdict === 'pass' ? 6 : 4, failed: verdict === 'pass' ? 0 : 2, skipped: 0,
+      coveredUs: ['US-01'], uncoveredUs: [], retryCount: 0, scenarios: [],
+    }))
+  }
+
+  afterEach(() => {
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('GWT-pass（report verdict=pass）+ 用户确认 → 提示 PHASE_ADVANCE: delivered（满意交付走交付门禁路径）', () => {
+    setupProject({ stage: 'testing', mode: 'quick', confirmPending: 'testing' })
+    writeGwtReport('pass')
+    const prompt = getNanjuRouterPrompt('test-ws', 'session-1')
+    expect(prompt).toContain('⏩ 用户已确认本阶段产出（confirmPending=testing）')
+    expect(prompt).toContain('请立即输出推进标记 <!-- PHASE_ADVANCE: delivered --> 完成交付')
+    // 不再引导 testing 重入（GWT 已通过，重入会浪费一轮重跑）
+    expect(prompt).not.toContain('请立即输出推进标记 <!-- PHASE_ADVANCE: testing -->')
+  })
+
+  test('报告未通过（verdict=fail/error）→ 维持 A3 语义：提示 testing 重入（触发/重跑 GWT）', () => {
+    for (const verdict of ['fail', 'error'] as const) {
+      setupProject({ stage: 'testing', mode: 'quick', confirmPending: 'testing' })
+      writeGwtReport(verdict)
+      const prompt = getNanjuRouterPrompt('test-ws', 'session-1')
+      expect(prompt).toContain('请立即输出推进标记 <!-- PHASE_ADVANCE: testing -->')
+      expect(prompt).not.toContain('请立即输出推进标记 <!-- PHASE_ADVANCE: delivered -->')
+    }
+  })
+
+  test('报告损坏（非法 JSON）→ 按未通过处理（testing 重入），不阻断提示注入', () => {
+    setupProject({ stage: 'testing', mode: 'quick', confirmPending: 'testing' })
+    const reportDir = join(fixtureRoot, 'project-p1', '06_TESTS')
+    mkdirSync(reportDir, { recursive: true })
+    writeFileSync(join(reportDir, 'report.json'), '{broken json')
+    const prompt = getNanjuRouterPrompt('test-ws', 'session-1')
+    expect(prompt).toContain('请立即输出推进标记 <!-- PHASE_ADVANCE: testing -->')
+  })
+
+  test('验收选项词表：「满意交付」确认置位；「需要调整」「不满意」反悔清除（W12 配对扩词）', () => {
+    // 满意交付（选项词整词）→ set（testing 产出达标时）
+    expect(judgeConfirmAdvance('满意交付', 'testing', null)).toBe('set')
+    expect(judgeConfirmAdvance('我用过了，满意交付', 'testing', null)).toBe('set')
+    // 需要调整 / 不满意 → clear（撤下待推进提示，走意见收集轮）
+    expect(judgeConfirmAdvance('需要调整：按钮太小', 'testing', null)).toBe('clear')
+    expect(judgeConfirmAdvance('不满意，再改改', 'testing', null)).toBe('clear')
+    // 否定形「不太满意」不含确认词（整词入表的设计依据：裸「满意」会让它误置位）→ none
+    expect(judgeConfirmAdvance('不太满意', 'testing', null)).toBe('none')
   })
 })

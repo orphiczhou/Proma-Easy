@@ -687,10 +687,11 @@ export function buildGuideDsl(input: BuildGuideDslInput): string {
     }
   })
 
-  // 交付终点：边标签忠实于路由语义（Sprint B 起两模式均由 testing 裁判交付；prototype 直连 DONE 为遗留路由兼容）
+  // 交付终点：边标签忠实于路由语义（W12：GWT-pass 后有用户交付验收环节——机器裁判通过 ≠ 直接交付，
+  // 用户「满意交付」确认后才 delivered；TEST_JUDGE 节点 label 保持机器裁判口径不变）
   const last = phases[phases.length - 1]
   const doneEdgeLabel = (last?.id as GuidePhaseId | undefined) === 'testing'
-    ? '全场景通过 · 裁判判定'
+    ? 'GWT 通过 · 用户验收'
     : (last?.id as GuidePhaseId | undefined) === 'prototype'
       ? '全部用户故事通过'
       : '确认'

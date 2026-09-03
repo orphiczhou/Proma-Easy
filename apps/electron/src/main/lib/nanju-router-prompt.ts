@@ -349,16 +349,29 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   // 而非 next 同源推导的「立即交付」——标记特判为 testing 重入（触发 GwtRunner），
   // 消除提示与阶段推进机制的语义错配（原设计会引导 L1 输出 delivered 被 GWT 门禁拦后
   // 绕路一轮教育；特判后提示即正确路径）。
+  // W12（交付验收后置）：GWT-pass 后语义反转——报告 verdict=pass 时用户确认的真实语义是
+  // 「满意交付」（交付门禁已满足），提示目标切 delivered（走 isDeliverFromTesting + 门禁）；
+  // 无报告/未通过时维持 A3 语义（testing 重入触发/重跑 GWT）。报告读取失败按未通过处理。
   let confirmHintLines: string[] = []
   try {
     const { getProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
     const pending = getProjectConfirmPending(workspaceSlug, project.projectId)
     if (pending && pending === stage) {
-      const hintAdvanceTarget = stage === 'testing' && phase.requiresUserConfirmation === false
-        ? 'testing'
-        : nextPhase
+      let hintAdvanceTarget: string = nextPhase
+      if (stage === 'testing' && phase.requiresUserConfirmation === false) {
+        hintAdvanceTarget = 'testing'
+        try {
+          const { existsSync: reportExists, readFileSync: reportRead } = require('node:fs') as typeof import('node:fs')
+          const reportPath = join(projectDir, '06_TESTS', 'report.json')
+          if (reportExists(reportPath)
+            && (JSON.parse(reportRead(reportPath, 'utf-8')) as { verdict?: string })?.verdict === 'pass') {
+            hintAdvanceTarget = 'delivered'
+          }
+        } catch { /* 报告读取失败按未通过处理（testing 重入），不阻断提示注入 */ }
+      }
+      const hintTail = hintAdvanceTarget === 'delivered' ? '完成交付' : '进入下一阶段'
       confirmHintLines = [
-        `⏩ 用户已确认本阶段产出（confirmPending=${pending}）。请立即输出推进标记 <!-- PHASE_ADVANCE: ${hintAdvanceTarget} --> 进入下一阶段——不要重新委派任务、不要重复产出。若你认为产出确需补充，先向用户说明理由。`,
+        `⏩ 用户已确认本阶段产出（confirmPending=${pending}）。请立即输出推进标记 <!-- PHASE_ADVANCE: ${hintAdvanceTarget} --> ${hintTail}——不要重新委派任务、不要重复产出。若你认为产出确需补充，先向用户说明理由。`,
         '',
       ]
     }
@@ -516,7 +529,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ]
       : stage === 'coding'
       ? [
-        '4. 【交互验证 + 确认收口】（编码阶段核心环节：预览应用 → 收集意见 → 批量修复 → 确认）：',
+        '4. 【交互验证 + 轻过渡确认】（编码阶段核心环节：预览应用 → 收集意见 → 批量修复 → 确认进入自动测试）：',
         '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
         '   b. 向用户宣布代码已生成，邀请直接用自然语言提修改意见；同时告知：',
         '      「也可以直接在右侧预览上【点击】想改的元素，点选后元素会出现在输入框，',
@@ -537,9 +550,12 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '        整体转 continue_delegation 委派全栈开发改 08_APP，【不得】再追问「还有其他意见吗」。',
         '      - 修复完成 → 重新 open_preview 展示新版 → 逐条报告改了什么，再次进入意见收集轮；',
         '      - 此循环直到用户对结果表示满意（不再有新意见且说满意/交付）。',
-        '   e. 用户表示满意后，AskUserQuestion 收口：header「应用验证」，multiSelect=true，',
-        '      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。',
-        '      全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。',
+        '   e. 【轻过渡收口】（W12：用户故事覆盖交还 GWT 机器裁判，coding 收口不再让用户逐条背书故事实现）：',
+        '      用户表示满意（或无修改意见直接确认）后，用 AskUserQuestion 弹轻过渡确认：header「预览确认」，',
+        '      question「应用已生成（右侧预览）。确认无误我将启动自动测试（GWT 场景验收）——',
+        '      用户故事的完整性由自动测试判定，无需人工核对。回复确认即开始测试。」，',
+        '      options：确认无误，开始自动测试 / 还有意见要提（回到 d 循环）。',
+        '      用户确认 → 进入第 5 步（输出推进标记进入 testing，触发自动测试）；提意见 → d 循环修复后重新收口。',
       ]
       : stage === 'architecture'
       ? [
@@ -578,14 +594,22 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ]),
     ...(stage === 'testing'
       ? [
-        '5. 场景生成完成后的收口（机器判定，无用户确认环节）：',
+        '5. 场景生成完成后的收口（场景产出是机器判定，无用户确认环节）：',
         '   【果断收口】双文件核验通过（index/us-XX.feature + 成对 steps.json）后【立即】输出推进标记收口——',
-        '   testing 是机器判定收口（requiresUserConfirmation=false）：不要等待用户确认、不要以「核实/澄清」',
+        '   testing 的场景产出推进不等待用户确认（requiresUserConfirmation=false）、不要以「核实/澄清」',
         '   代替推进；除非核验不通过需要修复，否则唯一正确动作就是输出推进标记。',
         '   【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
         '   再输出推进标记：<!-- PHASE_ADVANCE: testing -->（推进到自身 = 触发 Harness 自动执行 GWT 验收测试）。',
-        '   测试结果由系统注入消息告知，按注入消息的分流指引处理（三类失败成因不同、修复通道不同）：',
-        '   - ✅ 全部通过：项目自动交付（delivered），无需再做任何操作。',
+        '   测试结果由系统注入消息告知，按结果三态处理（W12：GWT 通过后的交付验收是唯一用户确认点，故事覆盖仍由机器裁判）：',
+        '   - ✅ 全部通过（GWT-pass）：系统续接你发起【交付验收】——用 AskUserQuestion 弹问：',
+        '     question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，',
+        '     options：满意交付（可以交付使用）/ 需要调整（说明问题，回炉修复后重新测试）。',
+        '     · 用户满意交付（或明确确认交付）→ 【立即】输出 <!-- PHASE_ADVANCE: delivered --> 完成交付',
+        '       （交付门禁校验测试报告 verdict=pass 已满足，直接推进——不要重新委派、不要重复产出、不要再询问）。',
+        '     · 用户需要调整（或描述问题）→ 意见收集轮收集修改意见（可引导用户点选右侧预览元素精准定位，',
+        '       复用编码阶段 c/d 的收集节奏：逐条确认理解、收齐后统一改），收齐后 continue_delegation',
+        '       委派「全栈开发」修复 08_APP/ 下的代码（不动 06_TESTS/ 与 01_PRD/），修复完成后输出',
+        '       <!-- PHASE_ADVANCE: testing --> 重跑自动测试（回炉修复与重映射合计 ≤2 次，超限系统转人工）。',
         '   - ❌ 行为类失败（断言不匹配等应用缺陷）：按失败清单 continue_delegation 委派「全栈开发」修复缺陷',
         '     （仅改 08_APP/ 下的代码，不得改 06_TESTS/ 与 01_PRD/），修复完成后重新输出',
         '     <!-- PHASE_ADVANCE: testing --> 重跑测试。',
