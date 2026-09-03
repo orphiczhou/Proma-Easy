@@ -20,6 +20,8 @@ export type TelemetryEventType =
   // v0.17.69 W2c/W7：回归流 + 架构师环节 + 环境配置
   | 'regression.detected' | 'arch.executed'
   | 'env.check.executed' | 'env.setup.verified' | 'env.setup.failed'
+  // W8 流程程序化强制：委派守卫（阶段拒绝 / 误拦观察 / AC 模型覆写）
+  | 'delegate.guard.stage-deny' | 'delegate.guard.pass-unmatched' | 'delegate.guard.ac-override'
 
 export interface TelemetryEvent {
   eventId: string
@@ -39,7 +41,7 @@ function getTelemetryPath(workspaceSlug: string): string {
 
 // ===== 公开接口 =====
 
-/** 记录埋点事件 */
+/** 记录埋点事件（R3/AC 裁决 A5：内部 try-catch——写失败只告警不上抛，门禁热路径不因埋点盘中断） */
 export function recordTelemetry(
   workspaceSlug: string,
   eventType: TelemetryEventType,
@@ -54,11 +56,15 @@ export function recordTelemetry(
     payload,
   }
 
-  const dir = join(getWorkspaceFilesDir(workspaceSlug), '_telemetry')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  try {
+    const dir = join(getWorkspaceFilesDir(workspaceSlug), '_telemetry')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
-  const filePath = getTelemetryPath(workspaceSlug)
-  appendFileSync(filePath, JSON.stringify(event) + '\n', 'utf-8')
+    const filePath = getTelemetryPath(workspaceSlug)
+    appendFileSync(filePath, JSON.stringify(event) + '\n', 'utf-8')
+  } catch (err) {
+    console.warn('[南大埋点] 写入失败（不阻断主流程）:', err instanceof Error ? err.message : err)
+  }
 
   return event
 }

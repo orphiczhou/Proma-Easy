@@ -10,6 +10,18 @@ import { join, dirname, resolve, sep } from 'node:path'
 import { listNanjuProjects, getProjectCategory, getProjectEnvState, type NanjuProject } from './nanju-project'
 import { getPhaseNode, type PhaseId, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
+import {
+  STAGE_ROLE_KEYWORDS,
+  STAGE_TITLES,
+  checkDelegationAgainstStage,
+  detectACRole,
+  extractDelegationSources,
+  injectStagePathConstraint,
+  isDelegationTool,
+  matchACKeyword,
+  resolveACOverride,
+} from './nanju-delegate-guard'
+import { recordTelemetry } from './nanju-telemetry'
 
 // ===== 工具白名单（修正 Y9：移除 EnterPlanMode/ExitPlanMode） =====
 
@@ -57,12 +69,14 @@ const GLOBAL_ALLOWED_TOOLS = new Set([
  *
  * 在 canUseTool 中调用，返回 null 表示放行（非南大会话或不限制），
  * 返回 { behavior: 'deny', message } 表示拒绝。
+ * W8（v0.17.71）：白名单放行委派工具后追加参数级三层强制
+ * （checkNanjuDelegateGuard——阶段匹配 deny / AC 模型覆写 / 路径约束注入）。
  */
 export function checkNanjuRouterGate(
   workspaceSlug: string | undefined,
   sessionId: string,
   toolName: string,
-  _input: Record<string, unknown>,
+  input: Record<string, unknown>,
 ): { behavior: 'deny'; message: string } | null {
   if (!workspaceSlug) return null
 
@@ -85,7 +99,11 @@ export function checkNanjuRouterGate(
 
   // 活跃阶段
   const whitelist = PHASE_TOOL_WHITELIST[stage] ?? PHASE_TOOL_WHITELIST.delivered
-  if (whitelist.has(toolName)) return null
+  if (whitelist.has(toolName)) {
+    // W8：白名单放行委派工具后，追加参数级三层强制（非委派工具零变化）。
+    // automation/triggeredBy 豁免由调用方（agent-orchestrator canUseTool）既有守卫保证。
+    return checkNanjuDelegateGuard(workspaceSlug, project, stage, toolName, input)
+  }
 
   // 阶段信息
   const phase = getPhaseNode(project.mode, stage)
@@ -104,6 +122,154 @@ export function checkNanjuRouterGate(
 export function findNanjuProjectBySession(workspaceSlug: string, sessionId: string): NanjuProject | undefined {
   const projects = listNanjuProjects(workspaceSlug)
   return projects.find((p) => p.sessionId === sessionId)
+}
+
+/** 判定对象型值（mutate 目标防御） */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function taskPreview(text: string | undefined): string {
+  if (!text) return ''
+  return text.length > 80 ? `${text.slice(0, 80)}…` : text
+}
+
+/**
+ * W8 委派守卫（v0.17.71）：三层程序化强制，在 router-gate 白名单放行
+ * delegate_agent / delegate_agents 后追加参数级校验。
+ *
+ * - 层一（硬拦截）：委派角色-阶段匹配——命中其他阶段专属词则拒绝
+ *   （批量委派任一不匹配则整批拒绝，文案列出违规项）；
+ * - 层二（模型覆写）：命中 AC 词且能区分攻/防时，按项目 mode 覆写
+ *   channelId/modelId 为 AC 预设（quick→light / iterative→medium），
+ *   根治 L1 自选已下线模型（如 glm-5-turbo）；
+ * - 层三（软约束注入）：放行的非 AC 类委派在 task 末尾追加阶段写入
+ *   边界约束（幂等标记防重复；AC 类不注入——审计只读）。
+ *
+ * 副作用：层二/层三 mutate input（canUseTool 的 allow 路径返回
+ * updatedInput: input 同一引用，mutate 即生效）；telemetry 记录
+ * stage-deny / pass-unmatched / ac-override。
+ *
+ * 设计决策：无用户级跳过通道——用户要快可走 quick 流程本身，阶段序列
+ * 不可跳（品类判定/环境探测是 W7 用户裁决的不可裁剪目标）。
+ */
+function checkNanjuDelegateGuard(
+  workspaceSlug: string,
+  project: NanjuProject,
+  stage: PhaseId,
+  toolName: string,
+  input: Record<string, unknown>,
+): { behavior: 'deny'; message: string } | null {
+  // 非委派工具（白名单内其他工具）：零变化放行
+  if (!isDelegationTool(toolName)) return null
+  // 非六活跃阶段（mode-select 等）：不校验（既有白名单语义已足够）
+  if (!(stage in STAGE_ROLE_KEYWORDS)) return null
+
+  const guardStage = stage as keyof typeof STAGE_ROLE_KEYWORDS
+  // 单次遍历构造（source 与 result 同源，避免 noUncheckedIndexedAccess 索引访问 undefined 问题）
+  const entries = extractDelegationSources(input).map((source, index) => ({
+    source,
+    index,
+    result: checkDelegationAgainstStage(guardStage, source),
+  }))
+
+  // ── 层一：任一命中其他阶段专属词 → 拒绝 ──
+  const violations = entries.filter((e) => !e.result.allowed)
+  if (violations.length > 0) {
+    const stageTitle = STAGE_TITLES[guardStage]
+    const lines = violations.map((v) => {
+      const label = v.source.title?.trim() || taskPreview(v.source.task) || '未命名委派'
+      // R5（AC 裁决 A6）：不断言归属阶段（键序首命中词未必是最专属词——如「测试工程师」
+      // 首命中「工程」标 planning），只声明与当前阶段不符，避免误导 L1 纠偏方向
+      return `· #${v.index + 1}「${label}」命中「${v.result.violatedKeyword}」（与当前阶段「${stageTitle}」不符，命中他阶段词）`
+    })
+    recordTelemetry(
+      workspaceSlug,
+      'delegate.guard.stage-deny',
+      {
+        stage: guardStage,
+        toolName,
+        count: violations.length,
+        violations: violations.map((v) => ({
+          stage: v.result.violatedStage,
+          keyword: v.result.violatedKeyword,
+          title: v.source.title,
+          taskPreview: taskPreview(v.source.task),
+        })),
+      },
+      project.projectId,
+    )
+    return {
+      behavior: 'deny',
+      message:
+        `🔒 南大向导委派门禁：当前处于「${stageTitle}」（${guardStage}）阶段，本次委派与阶段职责不匹配，已拒绝。\n` +
+        `\n${lines.join('\n')}\n` +
+        `\n当前阶段允许委派的角色（关键词）：${STAGE_ROLE_KEYWORDS[guardStage].join('、')}；` +
+        `AC 攻防审计类（攻击/防御/审计/复审）全阶段可委派。\n` +
+        `\n推进方式：完成本阶段产出并在会话中输出 PHASE_ADVANCE 标记，进入下一阶段后再委派。\n` +
+        `若你判断确需调整阶段：请在对话中向用户说明理由，由推进链裁决，不可直接越阶段委派` +
+        `（阶段序列不可跳过——品类判定/环境探测是用户已裁决的不可裁剪目标）。`,
+    }
+  }
+
+  // ── 放行路径副作用（层二覆写 + 层三注入）──
+  // 单个委派 target 即 input 本身；批量委派 target 为 items 各元素（与 entries 索引对齐）。
+  const targets: unknown[] = Array.isArray(input.items) ? input.items : [input]
+  for (const { source, result, index } of entries) {
+    const target = targets[index]
+    if (!isRecord(target)) continue
+
+    // 层二：AC 模型程序化覆写（命中 AC 词且能区分攻/防；不受层一判定顺序影响）
+    if (matchACKeyword(source) !== undefined) {
+      const acRole = detectACRole(source)
+      if (acRole !== null) {
+        const override = resolveACOverride(acRole, project.mode)
+        const originalChannelId = typeof target.channelId === 'string' ? target.channelId : '(inherit)'
+        const originalModelId = typeof target.modelId === 'string' ? target.modelId : '(inherit)'
+        target.channelId = override.channel
+        target.modelId = override.model
+        recordTelemetry(
+          workspaceSlug,
+          'delegate.guard.ac-override',
+          {
+            stage: guardStage,
+            acRole,
+            mode: project.mode,
+            originalChannelId,
+            originalModelId,
+            channelId: override.channel,
+            modelId: override.model,
+            title: source.title,
+          },
+          project.projectId,
+        )
+      }
+    }
+
+    // 层三：产出路径阶段约束注入（AC 类不注入——审计只读；宁多勿少）
+    // R1（AC 裁决 A3）：注入条件与层二识别同源——不看层一 matchKind，看 matchACKeyword，
+    // 消除「本阶段词+AC 词并存」时层二覆写/层三注入判定分叉（本阶段词先命中 →
+    // matchKind='stage' 但 AC 词在场 → 不注入）
+    if (matchACKeyword(source) === undefined && typeof target.task === 'string') {
+      target.task = injectStagePathConstraint(guardStage, target.task)
+    }
+
+    // 误拦观察：两类词都不命中的辅助类委派，放行 + telemetry（第一版保守观察误拦率）
+    if (result.matchKind === 'unmatched') {
+      recordTelemetry(
+        workspaceSlug,
+        'delegate.guard.pass-unmatched',
+        {
+          stage: guardStage,
+          toolName,
+          title: source.title,
+          taskPreview: taskPreview(source.task),
+        },
+        project.projectId,
+      )
+    }
+  }
+  return null
 }
 
 /**
