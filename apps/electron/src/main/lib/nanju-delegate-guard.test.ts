@@ -36,6 +36,8 @@ const {
   AC_KEYWORDS,
   STAGE_WRITE_DIR,
   PATH_CONSTRAINT_MARKER,
+  STRONG_ACTION_VERBS,
+  STAGE_OUTPUT_KEYWORDS,
   checkDelegationAgainstStage,
   detectACRole,
   matchACKeyword,
@@ -518,5 +520,203 @@ describe('R5：deny 文案弱化（不断言归属阶段）', () => {
     expect(result?.behavior).toBe('deny')
     expect(result?.message).toContain('与当前阶段「需求分析师」不符')
     expect(result?.message).not.toContain('属于「工程经理」阶段职责')
+  })
+})
+
+// ═══════════════ W10-V2.1：unmatched 强动作动词兜底 ═══════════════
+
+describe('W10-V2.1：unmatched 强动作动词 deny 矩阵（动词 × 无阶段词文本）', () => {
+  // 「实现/开发」同时是 coding 角色词（STAGE_ROLE_KEYWORDS.coding）：在 requirements 阶段
+  // 会被第 3 步他阶段扫描先命中（denialKind='other-stage'，W8 既有行为，deny 结果等价）；
+  // 其余动词（不属任何阶段词表）走第 4a 条 strong-verb。矩阵固化两者的完整分流。
+  test('全部强动词在 requirements 阶段（无阶段词文本）→ denied；动词属 coding 词表的走 other-stage，其余走 strong-verb', () => {
+    const codingVerbs = new Set(['实现', '开发'])
+    for (const verb of STRONG_ACTION_VERBS) {
+      const result = checkDelegationAgainstStage('requirements', { title: '助手', task: `把这个小工具${verb}，交付可用结果` })
+      expect(result.allowed).toBe(false)
+      if (codingVerbs.has(verb)) {
+        expect(result.denialKind).toBe('other-stage')
+        expect(result.violatedStage).toBe('coding')
+      } else {
+        expect(result.denialKind).toBe('strong-verb')
+        expect(result.matchedVerb).toBe(verb)
+      }
+    }
+  })
+
+  test('E2E 复现场景（dev-test-report §六）：requirements 阶段委派「把这个倒计时小工具做出来」→ strong-verb deny', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      title: '助手',
+      task: '把这个倒计时小工具做出来，能跑就行',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('strong-verb')
+    expect(result.matchedVerb).toBe('做出来')
+  })
+
+  test('coding 阶段反例：「实现登录功能」→ 本阶段词放行（实现 ∈ coding 角色词，防 coding 自身误拦）', () => {
+    const result = checkDelegationAgainstStage('coding', { title: '开发任务', task: '实现登录功能与表单校验' })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('AC 词优先于强动词：requirements 阶段「review 后 build the feature」→ ac 放行（AC 审计类不误拦）', () => {
+    const result = checkDelegationAgainstStage('requirements', { title: '审计', task: 'review the draft then build the feature list' })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('ac')
+  })
+
+  test('无强动词 unmatched（查询/分析/总结类）→ 维持放行（宽匹配原则不推翻）', () => {
+    for (const stage of STAGES) {
+      const result = checkDelegationAgainstStage(stage, { title: '调研', task: '搜集同类产品的定价策略并汇总对比' })
+      expect(result.allowed).toBe(true)
+      expect(result.matchKind).toBe('unmatched')
+      expect(result.denialKind).toBeUndefined()
+    }
+  })
+})
+
+describe('W10-V2.1：产出物词优先缓解误拦（本阶段目录词 > 强动词判定）', () => {
+  test('工单案例：requirements「调研并编写 PRD 草稿要点」→ stage 放行（「编写」是强动词但「PRD」命中产出物词）', () => {
+    const result = checkDelegationAgainstStage('requirements', { title: '调研助手', task: '调研并编写 PRD 草稿要点' })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+    expect(result.matchedKeyword).toBe('PRD')
+  })
+
+  test('各阶段产出物词 × 同文本强动词 → 全部 stage 放行（全词表矩阵）', () => {
+    const pairs: Array<[Stage, string]> = [
+      ['requirements', '调研并编写 PRD 草稿要点'],
+      ['requirements', '整理用户故事供确认'],
+      ['prototype', '生成原型交互稿初版'],
+      ['prototype', '绘制界面稿与线框'],
+      ['architecture', '构建技术选型清单'],
+      ['architecture', '梳理组件清单与风险'],
+      ['planning', '编写计划与里程碑拆分'],
+      ['coding', 'write the code for timer'],
+      ['coding', '生成应用入口 index.html'],
+      ['testing', '编写 steps.json 步骤映射'],
+      ['testing', '整理场景覆盖情况'],
+    ]
+    for (const [stage, task] of pairs) {
+      const result = checkDelegationAgainstStage(stage, { title: '助手', task })
+      expect(result.allowed).toBe(true)
+      expect(result.matchKind).toBe('stage')
+    }
+  })
+
+  test('产出物词不参与他阶段扫描：requirements 阶段「构建代码评审清单」不被 coding 产出物词误放（仍按 unmatched+强动词 deny）', () => {
+    // 「代码」是 coding 产出物词但不在任何角色词表——第 3 步他阶段扫描不扫产出物词表，
+    // requirements 下此文本不中任何阶段词 → unmatched + 「构建」强动词 → strong-verb deny
+    // （交叉表述靠 AC 词表兜底，产出物词只用于本阶段放行补充，防推翻宽匹配原则）
+    const result = checkDelegationAgainstStage('requirements', { title: '评审', task: '构建代码评审清单' })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('strong-verb')
+    expect(result.matchedVerb).toBe('构建')
+  })
+})
+
+describe('W10-V2.1：误拦残留场景（设计权衡固化，报告记录）', () => {
+  test('requirements「编写调研纪要」→ strong-verb deny（产出物词表不含「纪要」——deny 文案引导补角色声明后可重试）', () => {
+    const result = checkDelegationAgainstStage('requirements', { title: '助手', task: '编写调研纪要一份' })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('strong-verb')
+    expect(result.matchedVerb).toBe('编写')
+  })
+
+  test('coding「build the app」→ strong-verb deny（app 已从产出物词表移除——保护 W8 的 ac 归类断言；残余误拦面记录）', () => {
+    const result = checkDelegationAgainstStage('coding', { title: 'helper', task: 'build the app for timer' })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('strong-verb')
+    expect(result.matchedVerb).toBe('build')
+  })
+})
+
+describe('W10-V2.1：router-gate 集成（deny 文案与 telemetry）', () => {
+  test('requirements 委派「把这个工具做出来」→ deny 文案含产出类动作引导 + unmatched-action-deny 事件（含动词与文本摘要）', () => {
+    setupProject({ stage: 'requirements' })
+    const result = checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', {
+      title: '助手',
+      task: '把这个工具做出来，交付能跑的版本',
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('含产出类动作词「做出来」')
+    expect(result?.message).toContain('委派内容含产出类动作但未声明阶段角色。请在 title/task 明确角色')
+    expect(result?.message).toContain('当前requirements阶段，允许的角色关键词见上')
+    expect(result?.message).toContain('需求分析师')
+    const events = readTelemetryEvents()
+    const denyEvents = events.filter((e) => e.eventType === 'delegate.guard.unmatched-action-deny')
+    expect(denyEvents).toHaveLength(1)
+    expect(denyEvents[0]?.payload.stage).toBe('requirements')
+    expect(denyEvents[0]?.payload.denies).toEqual([
+      expect.objectContaining({ verb: '做出来', title: '助手' }),
+    ])
+  })
+
+  test('批量混合（他阶段词 + 强动词）→ 整批拒绝，两类违规行都在文案，两个 telemetry 事件各 1', () => {
+    setupProject({ stage: 'requirements' })
+    const result = checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agents', {
+      items: [
+        { title: '测试工程师', task: '写验收用例' },
+        { title: '助手', task: '把这个工具做出来' },
+      ],
+    })
+    expect(result?.behavior).toBe('deny')
+    // 键序首命中（W8 报告已知特性）：「测试工程师」先撞 planning 的「工程」而非 testing 的「测试」
+    expect(result?.message).toContain('命中「工程」')
+    expect(result?.message).toContain('含产出类动作词「做出来」') // 强动词行
+    const events = readTelemetryEvents()
+    expect(events.filter((e) => e.eventType === 'delegate.guard.stage-deny')).toHaveLength(1)
+    const verbEvents = events.filter((e) => e.eventType === 'delegate.guard.unmatched-action-deny')
+    expect(verbEvents).toHaveLength(1)
+    expect(verbEvents[0]?.payload.count).toBe(1)
+  })
+
+  test('纯他阶段词 deny（无强动词）→ 文案不含产出类动作段、只记 stage-deny 事件（W8 行为不变）', () => {
+    setupProject({ stage: 'requirements' })
+    const result = checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', {
+      title: '测试工程师',
+      task: '写验收用例',
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).not.toContain('产出类动作')
+    const events = readTelemetryEvents()
+    expect(events.filter((e) => e.eventType === 'delegate.guard.unmatched-action-deny')).toHaveLength(0)
+    expect(events.filter((e) => e.eventType === 'delegate.guard.stage-deny')).toHaveLength(1)
+  })
+})
+
+// ═══════════════ W10 修订轮 A1（随批）：动词表补词与表外边界（裁决 20260903） ═══════════════
+
+describe('W10 修订轮 A1：动词表补 7 词 + 表外放行边界', () => {
+  test('新补 7 词（完善/优化/调整/fix/ship/refine/polish）在 requirements 无阶段词文本 → strong-verb deny', () => {
+    for (const verb of ['完善', '优化', '调整', 'fix', 'ship', 'refine', 'polish']) {
+      const result = checkDelegationAgainstStage('requirements', { title: '助手', task: `把这个小工具${verb}一下再交付` })
+      expect(result.allowed).toBe(false)
+      expect(result.denialKind).toBe('strong-verb')
+      expect(result.matchedVerb).toBe(verb)
+    }
+  })
+
+  test('暂缓词（修复/调一下/改一下——裁决 A1 明确暂缓入表）表外 → requirements/prototype/architecture 全阶段 unmatched 放行（设计内行为固化）', () => {
+    for (const stage of STAGES.filter((s) => s === 'requirements' || s === 'prototype' || s === 'architecture')) {
+      for (const task of ['修复已知问题清单', '把这个页面调一下', '改一下文案措辞']) {
+        const result = checkDelegationAgainstStage(stage, { title: '助手', task })
+        expect(result.allowed).toBe(true)
+        expect(result.matchKind).toBe('unmatched')
+      }
+    }
+  })
+
+  test('coding 阶段 fix 边界：无 coding 阶段词 → strong-verb deny（引导补角色词）；含产出物词 → 放行', () => {
+    // fix 补入（修订轮 A1）后 coding 纯英文 fix 委派若无阶段词会被拦一次——deny 文案引导
+    // 补角色词后可重试（残余误拦面，报告 §1.3 记录）；同文本带 'code' 产出物词即放行
+    const denied = checkDelegationAgainstStage('coding', { title: 'helper', task: 'fix the latest regression' })
+    expect(denied.allowed).toBe(false)
+    expect(denied.denialKind).toBe('strong-verb')
+    expect(denied.matchedVerb).toBe('fix')
+    const allowed = checkDelegationAgainstStage('coding', { title: 'helper', task: 'fix the code for timer' })
+    expect(allowed.allowed).toBe(true)
+    expect(allowed.matchKind).toBe('stage')
   })
 })

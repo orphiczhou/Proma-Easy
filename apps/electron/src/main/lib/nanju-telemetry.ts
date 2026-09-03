@@ -22,6 +22,8 @@ export type TelemetryEventType =
   | 'env.check.executed' | 'env.setup.verified' | 'env.setup.failed'
   // W8 流程程序化强制：委派守卫（阶段拒绝 / 误拦观察 / AC 模型覆写）
   | 'delegate.guard.stage-deny' | 'delegate.guard.pass-unmatched' | 'delegate.guard.ac-override'
+  // W10 推进闭环强化：unmatched 强动词拒绝 + 确认待推进提示
+  | 'delegate.guard.unmatched-action-deny' | 'confirm.advance-hint'
 
 export interface TelemetryEvent {
   eventId: string

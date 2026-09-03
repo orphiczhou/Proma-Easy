@@ -339,6 +339,30 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   const prdSummary = getPrdSummary(workspaceSlug, project.projectId)
   const priorArtifacts = getPriorArtifacts(workspaceSlug, project.projectId, stage)
   const nextPhase = phase.next ?? 'delivered'
+
+  // W10（v0.17.72）：确认待推进提示注入——confirmPendingStage === 当前阶段时在阶段 header
+  // 后注入醒目提示。设计决策：不自动推进（推进权在 L1 输出 PHASE_ADVANCE 标记，检查器只
+  // 强提示——消除「用干活响应确认」的 prompt 遵从薄弱点，不夺 L1 流程控制权）。
+  // 防脏数据：confirmPending ≠ 当前阶段（推进后清除失败的残留）不注入，防误导。
+  // W10 修订轮 A3 特判（裁决 20260903 partially-upheld）：testing 是机器判定收口
+  // （requiresUserConfirmation=false），用户「继续」的真实语义是触发 GWT 验收测试，
+  // 而非 next 同源推导的「立即交付」——标记特判为 testing 重入（触发 GwtRunner），
+  // 消除提示与阶段推进机制的语义错配（原设计会引导 L1 输出 delivered 被 GWT 门禁拦后
+  // 绕路一轮教育；特判后提示即正确路径）。
+  let confirmHintLines: string[] = []
+  try {
+    const { getProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
+    const pending = getProjectConfirmPending(workspaceSlug, project.projectId)
+    if (pending && pending === stage) {
+      const hintAdvanceTarget = stage === 'testing' && phase.requiresUserConfirmation === false
+        ? 'testing'
+        : nextPhase
+      confirmHintLines = [
+        `⏩ 用户已确认本阶段产出（confirmPending=${pending}）。请立即输出推进标记 <!-- PHASE_ADVANCE: ${hintAdvanceTarget} --> 进入下一阶段——不要重新委派任务、不要重复产出。若你认为产出确需补充，先向用户说明理由。`,
+        '',
+      ]
+    }
+  } catch { /* 读取失败不阻断 prompt 构建（无提示即常态） */ }
   // 新阶段 Todo 强制前缀（向导图进度徽标按此解析；delivered 无新 Todo，PRD 修订 Y5）
   const nextTodoPrefix = nextPhase !== 'delivered' ? PHASE_TODO_PREFIX[nextPhase as Exclude<typeof nextPhase, 'delivered'>] : null
 
@@ -415,6 +439,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
 
   const prompt = [
     '## 🔒 南大向导 — 当前阶段：' + phase.title + '（' + stage + '）',
+    ...confirmHintLines,
     '项目名：' + project.name + '（' + (project.mode === 'quick' ? '快消型' : '长期迭代型') + '）',
     '项目目录：' + projectDir,
     '',

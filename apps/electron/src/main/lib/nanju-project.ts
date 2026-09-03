@@ -128,6 +128,14 @@ export interface NanjuProjectInfoFile {
   envCheck?: Array<{ component: string; version?: string; ok: boolean; reason?: string; attemptedAt: string }>
   /** 最近一次环境检查时间（ISO） */
   checkedAt?: string
+  /**
+   * 确认待推进阶段（W10，v0.17.72）：用户确认词 + 本阶段产出达标（verifyPhaseOutput null）
+   * 时由唯一写入点 setProjectConfirmPending 置位（=当时 currentStage）；PHASE_ADVANCE
+   * 推进成功时清除（clearProjectConfirmPending）；用户反义词清除。非空且 = 当前阶段 →
+   * getNanjuRouterPrompt 注入强推进提示（不自动推进——推进权在 L1 输出标记）。
+   * 缺失 = 无待推进（新/存量项目，可选字段向后兼容）。
+   */
+  confirmPendingStage?: string
 }
 
 /**
@@ -539,4 +547,104 @@ export function getProjectEnvState(
     missingComponents: envCheck.filter((c) => !c.ok).map((c) => c.component),
     envCheck,
   }
+}
+
+// ===== 确认响应推进检查（W10，v0.17.72：检测置位 + 提示注入 + 消费清除，不自动推进） =====
+
+/**
+ * 用户确认词表（工单 §2.1）：命中且产出达标时置位 confirmPendingStage。
+ * 中文 includes / 纯英文 \b 词边界（大小写不敏感，同 guard 惯例——'ok' 不误命中 'skip'）。
+ * 可演进常量：按 confirm.advance-hint 观察数据增删。
+ */
+export const CONFIRM_ADVANCE_KEYWORDS: readonly string[] = [
+  '确认', '通过', '没问题', '好的', '可以', '继续', '推进', 'ok', 'approve',
+]
+
+/**
+ * 确认反义词（工单 §2.1 排除反义；W10 修订轮 A2 必修扩充，裁决 20260903）：命中则【不算确认】
+ * 且清除已置位的待推进状态（用户明确反悔——意味着产出要返工或暂缓，待推进提示必须撤下）。
+ * 注意「不通过/没通过」含子串「通过」、「先别推进」含子串「推进」——反义判定必须先于确认词
+ * 判定（见 isConfirmAdvanceText），否则反悔被反向置位（裁决 A2 加重证据实测修复）。
+ * 扩词风险不对称性有利：clear 代价（撤一条提示，真确认可重置位）≪ set 误置位代价（引导推进）。
+ */
+export const CONFIRM_REJECT_KEYWORDS: readonly string[] = [
+  '不通过', '没通过', '需要修复', '重做', '不行',
+  '改主意', '先别', '暂缓', '再想想', '等等', '先停', '不急', '取消',
+]
+
+/** 词匹配（中文 includes / 纯英文 \b 词边界，大小写不敏感——同 nanju-delegate-guard 惯例；
+ *  不复用 guard 的 keywordMatcher 避免 project↔guard 跨模块依赖） */
+function confirmKeywordHit(text: string, keywords: readonly string[]): string | undefined {
+  for (const kw of keywords) {
+    if (/^[\x20-\x7E]+$/.test(kw)) {
+      if (new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)) return kw
+    } else if (text.includes(kw)) {
+      return kw
+    }
+  }
+  return undefined
+}
+
+/** 用户文本是否为确认推进语义（纯函数）：反义词优先排除，再匹配确认词 */
+export function isConfirmAdvanceText(text: string): boolean {
+  if (confirmKeywordHit(text, CONFIRM_REJECT_KEYWORDS) !== undefined) return false
+  return confirmKeywordHit(text, CONFIRM_ADVANCE_KEYWORDS) !== undefined
+}
+
+/** 用户文本是否为明确反悔语义（纯函数，调用方据此清除待推进状态） */
+export function isConfirmRejectText(text: string): boolean {
+  return confirmKeywordHit(text, CONFIRM_REJECT_KEYWORDS) !== undefined
+}
+
+/**
+ * 确认检测判定（纯函数，agent-orchestrator 每条用户消息调用；置位/清除动作由调用方执行）。
+ *
+ * @param text 用户消息文本（type=user 且非 tool_result 的文本拼接）
+ * @param currentStage 项目当前阶段
+ * @param verifyError verifyPhaseOutput(currentStage) 的返回值（null = 产出达标）
+ * @returns 'set' = 置位待推进（确认词 + 产出达标 + 活跃阶段）；'clear' = 清除（反义词）；
+ *   'none' = 无动作（非确认文本 / 产出未达标 / 终态或选型阶段）
+ *
+ * 设计（工单 §2.3 防误触发）：产出未达标不置位（避免产出未完成时的误导）；确认词误触发
+ * （闲聊「好的」）+ 产出达标 → 仍置位——注入提示本身无害（L1 若判断无需推进会向用户说明）。
+ */
+export function judgeConfirmAdvance(
+  text: string,
+  currentStage: string,
+  verifyError: string | null,
+): 'set' | 'clear' | 'none' {
+  if (isConfirmRejectText(text)) return 'clear'
+  if (currentStage === 'delivered' || currentStage === 'mode-select') return 'none'
+  if (!isConfirmAdvanceText(text)) return 'none'
+  if (verifyError !== null) return 'none'
+  return 'set'
+}
+
+/** 置位确认待推进（唯一写入点，setProjectSubStage 同型 read-construct-write 纪律；幂等） */
+export function setProjectConfirmPending(workspaceSlug: string, projectId: string, stage: string): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  base.confirmPendingStage = stage
+  writeProjectInfo(workspaceSlug, projectId, base)
+}
+
+/** 清除确认待推进（PHASE_ADVANCE 推进成功 / 用户反义词；幂等——无字段时 no-op） */
+export function clearProjectConfirmPending(workspaceSlug: string, projectId: string): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  if (!info || info.confirmPendingStage === undefined) return
+  info.confirmPendingStage = undefined
+  writeProjectInfo(workspaceSlug, projectId, info)
+}
+
+/** 读取确认待推进阶段。无文件/无字段返回 null */
+export function getProjectConfirmPending(workspaceSlug: string, projectId: string): string | null {
+  return readProjectInfo(workspaceSlug, projectId)?.confirmPendingStage ?? null
 }

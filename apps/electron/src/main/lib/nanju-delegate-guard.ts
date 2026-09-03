@@ -39,6 +39,57 @@ export const STAGE_ROLE_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
 /** 全阶段通用的 AC 攻防类词（命中即放行，且触发层二覆写候选 / 不注入路径约束） */
 export const AC_KEYWORDS: readonly string[] = ['攻击', '防御', '审计', '复审', 'attack', 'defense', 'review', 'AC']
 
+/**
+ * 强动作动词表（W10-V2.1，v0.17.72）：明确产出物类动作的中英文动词。
+ *
+ * 背景：dev-test-report-20260903 §六——W8 层一 unmatched 敞口实测成真（L1 在 requirements
+ * 名下用无阶段词委派「把这个工具做出来」完成原型+coding 产物，阶段推进从未发生）。
+ * 兜底：unmatched 内部再分级——含强动词（=明确产出物动作）→ deny，要求补角色声明；
+ * 无强动词（查询/分析/总结类辅助动作）→ 维持 W8 宽匹配放行（pass-unmatched 现状不变）。
+ *
+ * 误拦缓解（工单 §1 误拦权衡）：本阶段产出物词优先于强动词判定（见 STAGE_OUTPUT_KEYWORDS
+ * ——如 requirements 阶段「调研并编写 PRD 草稿要点」的「编写」是强动词但「PRD」命中
+ * 本阶段产出物词，按 stage 放行）。注意「实现/开发」同时是 coding 的角色词（STAGE_ROLE_
+ * KEYWORDS.coding），coding 阶段命中它们在第 1 步即放行，强动词表只在其他阶段兜底。
+ *
+ * 可演进常量：按观察数据（telemetry unmatched-action-deny 的 verbs 分布）增删；
+ * 中文词 includes / 纯英文词 \b 词边界（同 W8 惯例，大小写不敏感）。
+ *
+ * 补词候选清单（W10 修订轮 A1 随批补入 7 词：完善/优化/调整/fix/ship/refine/polish——
+ * 迭代类产出动作，裁决 20260903 attack-upheld）；下一批候选按 telemetry verbs 分布决策：
+ * - '修复'：暂缓入表（GWT 回炉指令高频合法词，需配合 testing 产出词放行或 verbs 分布数据
+ *   裁决后入；现表外=unmatched 放行，设计内行为，边界测试固化）；
+ * - '调一下'/'改一下' 等口语化短谓语：误拦风险高于收益，待语料；
+ * - 入表前先验证：候选词是否为某阶段 ROLE/OUTPUT 词（同词不宣重复，避免他阶段误拦）。
+ */
+export const STRONG_ACTION_VERBS: readonly string[] = [
+  '实现', '开发', '构建', '生成', '制作', '编写', '写代码', '做成', '做出来',
+  'build', 'implement', 'code', 'create the', 'make the', 'develop',
+  // W10 修订轮 A1：迭代类产出动作补入（裁决随批）
+  '完善', '优化', '调整', 'fix', 'ship', 'refine', 'polish',
+]
+
+/**
+ * 各阶段产出物词（W10-V2.1：强动词 deny 的误拦缓解——「本阶段目录词优先」）。
+ *
+ * 只并入第 1 步本阶段放行的补充匹配（与 STAGE_ROLE_KEYWORDS[stage] 并集），
+ * **不参与第 3 步他阶段扫描**——产出物词多为跨阶段动作对象（如「代码」也出现在
+ * 「代码评审」），若进他阶段扫描会把合法交叉表述误拦（推翻宽匹配原则）。
+ * 与角色词表的重复词（需求/PRD/原型/架构等已在 STAGE_ROLE_KEYWORDS）保留：两表
+ * 语义不同（角色 vs 产物），重复命中无行为差异（第 1 步并集放行），各自完整可演进。
+ */
+export const STAGE_OUTPUT_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
+  requirements: ['PRD', '需求', '用户故事', 'user story', 'user stories'],
+  prototype: ['原型', 'prototype', '界面稿', '视觉稿', '线框'],
+  architecture: ['架构', 'architecture', '技术选型', '组件清单'],
+  planning: ['计划', '规划', '里程碑', 'milestone'],
+  coding: ['代码', 'code', '应用', 'index.html'],
+  testing: ['测试', 'test', '场景', 'scenario', 'steps.json', 'report.json'],
+}
+// 注：不含 'app'——过宽（AC 委派文本 'run AC audit on app' 会把 matchKind 从 ac 改判
+// stage，磁碰 W8 基线断言且模糊 AC 归类）；英文 coding 委派由 'code'/'index.html' 覆盖，
+// 'build the app' 类纯动作文本记为残余误拦面（deny 文案引导补角色声明后可重试）。
+
 /** AC 攻方识别词（用于层二区分攻/防） */
 const AC_ATTACKER_KEYWORDS: readonly string[] = ['攻击', 'attack']
 
@@ -103,22 +154,30 @@ export interface DelegationCheckResult {
   /** false = 命中其他阶段专属词，拒绝 */
   allowed: boolean
   matchKind: DelegationMatchKind
-  /** 命中的本阶段词 / AC 词 */
+  /** 命中的本阶段词（角色词或产出物词，W10 起）/ AC 词 */
   matchedKeyword?: string
-  /** 拒绝时：命中的其他阶段专属词 */
+  /** 拒绝时：命中的其他阶段专属词 / 强动作动词（W10） */
   violatedKeyword?: string
-  /** 拒绝时：该词所属阶段 */
+  /** 拒绝时：该词所属阶段（仅 other-stage 拒绝时有值） */
   violatedStage?: NanjuGuardStage
+  /** W10：拒绝原因细分——'other-stage'（命中他阶段词）/ 'strong-verb'（unmatched+强动作动词）。
+   *  未定义 = W8 既有语义（other-stage），调用方按该默认分流（向后兼容） */
+  denialKind?: 'other-stage' | 'strong-verb'
+  /** W10：strong-verb 拒绝时命中的动作动词（= violatedKeyword 的语义别名，便于调用方取用） */
+  matchedVerb?: string
 }
 
 /**
  * 层一核心判定：单个委派的标题+任务 与 currentStage 的匹配。
  *
- * 判定顺序（宽匹配保守放行）：
- * 1. 命中本阶段词 → 放行（stage）
+ * 判定顺序（宽匹配保守放行；W10-V2.1 在第 4 条内部再分级，不推翻宽匹配原则）：
+ * 1. 命中本阶段词（角色词 ∪ 产出物词）→ 放行（stage；产出物词优先于强动词判定——误拦缓解）
  * 2. 命中 AC 通用词 → 放行
- * 3. 命中其他阶段专属词 → 拒绝（violatedKeyword/violatedStage）
- * 4. 都不命中 → 放行（unmatched，调用方记 telemetry 观察）
+ * 3. 命中其他阶段专属词 → 拒绝（violatedKeyword/violatedStage/denialKind='other-stage'）
+ * 4. 都不命中（unmatched）内部再分级：
+ *    a. 命中强动作动词 → 拒绝（denialKind='strong-verb'/matchedVerb——W8 敞口兜底：
+ *       无阶段词委派干活实测可绕过阶段序列，产出类动作必须显式声明角色）
+ *    b. 无强动词（查询/分析/总结类）→ 放行（unmatched，调用方记 telemetry 观察，现状不变）
  */
 export function checkDelegationAgainstStage(
   stage: NanjuGuardStage,
@@ -130,8 +189,9 @@ export function checkDelegationAgainstStage(
     return { allowed: true, matchKind: 'unmatched' }
   }
 
-  // 1. 本阶段词
-  const stageHit = findKeyword(text, STAGE_ROLE_KEYWORDS[stage])
+  // 1. 本阶段词（角色词 ∪ 产出物词：W10 产出物词优先缓解强动词误拦——「编写 PRD」在
+  //    requirements 按本阶段词放行，而非掉入第 4a 条强动词拒绝）
+  const stageHit = findKeyword(text, [...STAGE_ROLE_KEYWORDS[stage], ...STAGE_OUTPUT_KEYWORDS[stage]])
   if (stageHit !== undefined) {
     return { allowed: true, matchKind: 'stage', matchedKeyword: stageHit }
   }
@@ -142,16 +202,22 @@ export function checkDelegationAgainstStage(
     return { allowed: true, matchKind: 'ac', matchedKeyword: acHit }
   }
 
-  // 3. 其他阶段专属词
+  // 3. 其他阶段专属词（仅扫角色词表——产出物词不参与他阶段扫描，见 STAGE_OUTPUT_KEYWORDS 注释）
   for (const otherStage of Object.keys(STAGE_ROLE_KEYWORDS) as NanjuGuardStage[]) {
     if (otherStage === stage) continue
     const hit = findKeyword(text, STAGE_ROLE_KEYWORDS[otherStage])
     if (hit !== undefined) {
-      return { allowed: false, matchKind: 'unmatched', violatedKeyword: hit, violatedStage: otherStage }
+      return { allowed: false, matchKind: 'unmatched', violatedKeyword: hit, violatedStage: otherStage, denialKind: 'other-stage' }
     }
   }
 
-  // 4. 都不命中（辅助类）
+  // 4. 都不命中（unmatched）内部再分级（W10-V2.1）：
+  //    a. 强动作动词 → 拒绝（产出类动作必须显式声明角色——W8 敞口兜底）
+  const verbHit = findKeyword(text, STRONG_ACTION_VERBS)
+  if (verbHit !== undefined) {
+    return { allowed: false, matchKind: 'unmatched', violatedKeyword: verbHit, denialKind: 'strong-verb', matchedVerb: verbHit }
+  }
+  //    b. 无强动词（辅助类）→ 放行（现状不变）
   return { allowed: true, matchKind: 'unmatched' }
 }
 

@@ -676,11 +676,13 @@ export class AgentOrchestrator {
           updateNanjuProject(workspaceSlug, projectId, { currentStage: 'delivered' })
           console.log(`[南大路由] ✅ GWT 验收通过，项目交付: ${projectName}`)
           // W2 S1：机器裁判交付是推进点 A/B 之外的第三条 delivered 路径，同步清空子步骤
-          // 并广播（同 A 语义；工单未列此路径，按「交付=清空子步骤」纪律补齐，报告记录）
+          // 并广播（同 A 语义；工单未列此路径，按「交付=清空子步骤」纪律补齐，报告记录）；
+          // W10：同路径消费清除确认待推进（confirmPending=testing 时确认提示已引导过推进）
           try {
-            const { setProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+            const { setProjectSubStage, clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
             const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
             setProjectSubStage(workspaceSlug, projectId, '')
+            clearProjectConfirmPending(workspaceSlug, projectId)
             emitGuideProgress(sessionId, projectId, 'delivered', '')
           } catch { /* 向导图子步骤广播失败不影响交付 */ }
           this.finalizeNanjuPhaseTodos(sessionId)
@@ -2444,6 +2446,49 @@ export class AgentOrchestrator {
               }
             }
 
+            // W10（v0.17.72）：确认响应推进检查——用户确认语义检测置位。
+            // 背景：dev-test-report §六——L1 收到确认后用「干活」响应而非输出 PHASE_ADVANCE，
+            // 推进纪律是 prompt 遵从薄弱点。检测（type=user 且非 tool_result）命中确认词
+            // 且 verifyPhaseOutput 达标时置位 confirmPendingStage（getNanjuRouterPrompt 注入
+            // 强推进提示）；反义词清除（用户反悔）。不自动推进——推进权仍在 L1 输出标记（设计决策）。
+            // try-catch 不影响主流程；用户非确认消息不清除（保持待推进直到推进或反悔，工单 §2.3）。
+            if (msg.type === 'user' && workspaceSlug && !automationContext && !input.triggeredBy) {
+              try {
+                const userContent = (msg as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
+                if (Array.isArray(userContent) && !userContent.some((b) => b.type === 'tool_result')) {
+                  const userText = userContent.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+                  if (userText.trim() !== '') {
+                    const { listNanjuProjects, judgeConfirmAdvance, setProjectConfirmPending, clearProjectConfirmPending } =
+                      require('./nanju-project')
+                    const project = listNanjuProjects(workspaceSlug).find(
+                      (p: { sessionId?: string }) => p.sessionId === sessionId,
+                    )
+                    if (project) {
+                      const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
+                      const action = judgeConfirmAdvance(userText, project.currentStage, verifyError)
+                      if (action === 'set') {
+                        setProjectConfirmPending(workspaceSlug, project.projectId, project.currentStage)
+                        try {
+                          const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+                          recordTelemetry(workspaceSlug, 'confirm.advance-hint', {
+                            project_id: project.projectId,
+                            stage: project.currentStage,
+                            mode: project.mode,
+                          }, project.projectId)
+                        } catch { /* 埋点失败不影响置位 */ }
+                        console.log(`[南大路由] 确认检测：置位 confirmPending=${project.currentStage}（${project.name}）`)
+                      } else if (action === 'clear') {
+                        clearProjectConfirmPending(workspaceSlug, project.projectId)
+                        console.log(`[南大路由] 确认检测：反义词清除 confirmPending（${project.name}）`)
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('[南大路由] 确认检测异常（不阻断）:', e instanceof Error ? e.message : String(e))
+              }
+            }
+
             // 南大向导：检测 PHASE_ADVANCE 标记 + 文件验证后推进阶段
             if (msg.type === 'result' && workspaceSlug && !automationContext && !input.triggeredBy) {
               try {
@@ -2568,6 +2613,11 @@ export class AgentOrchestrator {
                           updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                           console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
                           nanjuPhaseAdvanced = newStage ?? null
+                          // W10：推进成功——消费清除确认待推进（幂等，工单 §2.1 消费侧）
+                          try {
+                            const { clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
+                            clearProjectConfirmPending(workspaceSlug, project.projectId)
+                          } catch { /* 清除失败不影响推进（残留提示无害，下次推进再清） */ }
                           this.finalizeNanjuPhaseTodos(sessionId)
                           // W2 S1 推进点 A：交付清空子步骤（delivered 无子步骤态）并广播。
                           // write-then-emit；失败不阻断交付（渲染端 10s 轮询兑底）。
@@ -2663,6 +2713,11 @@ export class AgentOrchestrator {
                         updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                         console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
                         nanjuPhaseAdvanced = newStage ?? null
+                        // W10：推进成功——消费清除确认待推进（幂等，工单 §2.1 消费侧）
+                        try {
+                          const { clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
+                          clearProjectConfirmPending(workspaceSlug, project.projectId)
+                        } catch { /* 清除失败不影响推进（残留提示无害，下次推进再清） */ }
                         // Todo 纪律兜底（P3/L4）：调度员经常忘记在阶段推进时收尾 Todo，
                         // 程序化把该会话关联的 open Todo 标记完成（nativeOrigin 外部来源不动，
                         // 避免同步到系统提醒事项的副作用；只处理本会话通过 TaskCreate 建的）。

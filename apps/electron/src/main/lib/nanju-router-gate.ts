@@ -148,7 +148,7 @@ function taskPreview(text: string | undefined): string {
  *
  * 副作用：层二/层三 mutate input（canUseTool 的 allow 路径返回
  * updatedInput: input 同一引用，mutate 即生效）；telemetry 记录
- * stage-deny / pass-unmatched / ac-override。
+ * stage-deny / unmatched-action-deny（W10）/ pass-unmatched / ac-override。
  *
  * 设计决策：无用户级跳过通道——用户要快可走 quick 流程本身，阶段序列
  * 不可跳（品类判定/环境探测是 W7 用户裁决的不可裁剪目标）。
@@ -173,32 +173,60 @@ function checkNanjuDelegateGuard(
     result: checkDelegationAgainstStage(guardStage, source),
   }))
 
-  // ── 层一：任一命中其他阶段专属词 → 拒绝 ──
-  const violations = entries.filter((e) => !e.result.allowed)
-  if (violations.length > 0) {
+  // ── 层一：任一命中其他阶段专属词（W8）或强动作动词（W10-V2.1）→ 拒绝 ──
+  // W10 起拒绝原因分流（result.denialKind）：other-stage = 命中他阶段词（既有语义，
+  // 未定义时也归此类向后兼容）；strong-verb = unmatched+强动词（W8 敞口兜底）。
+  const stageViolations = entries.filter((e) => !e.result.allowed && e.result.denialKind !== 'strong-verb')
+  const verbViolations = entries.filter((e) => !e.result.allowed && e.result.denialKind === 'strong-verb')
+  if (stageViolations.length > 0 || verbViolations.length > 0) {
     const stageTitle = STAGE_TITLES[guardStage]
-    const lines = violations.map((v) => {
+    const lines: string[] = []
+    for (const v of stageViolations) {
       const label = v.source.title?.trim() || taskPreview(v.source.task) || '未命名委派'
       // R5（AC 裁决 A6）：不断言归属阶段（键序首命中词未必是最专属词——如「测试工程师」
       // 首命中「工程」标 planning），只声明与当前阶段不符，避免误导 L1 纠偏方向
-      return `· #${v.index + 1}「${label}」命中「${v.result.violatedKeyword}」（与当前阶段「${stageTitle}」不符，命中他阶段词）`
-    })
-    recordTelemetry(
-      workspaceSlug,
-      'delegate.guard.stage-deny',
-      {
-        stage: guardStage,
-        toolName,
-        count: violations.length,
-        violations: violations.map((v) => ({
-          stage: v.result.violatedStage,
-          keyword: v.result.violatedKeyword,
-          title: v.source.title,
-          taskPreview: taskPreview(v.source.task),
-        })),
-      },
-      project.projectId,
-    )
+      lines.push(`· #${v.index + 1}「${label}」命中「${v.result.violatedKeyword}」（与当前阶段「${stageTitle}」不符，命中他阶段词）`)
+    }
+    for (const v of verbViolations) {
+      const label = v.source.title?.trim() || taskPreview(v.source.task) || '未命名委派'
+      lines.push(`· #${v.index + 1}「${label}」含产出类动作词「${v.result.matchedVerb}」但未声明任何阶段角色`)
+    }
+    if (stageViolations.length > 0) {
+      recordTelemetry(
+        workspaceSlug,
+        'delegate.guard.stage-deny',
+        {
+          stage: guardStage,
+          toolName,
+          count: stageViolations.length,
+          violations: stageViolations.map((v) => ({
+            stage: v.result.violatedStage,
+            keyword: v.result.violatedKeyword,
+            title: v.source.title,
+            taskPreview: taskPreview(v.source.task),
+          })),
+        },
+        project.projectId,
+      )
+    }
+    // W10：unmatched+强动词拒绝单独埋点（含命中动词与文本摘要——工单 §1 观察口径）
+    if (verbViolations.length > 0) {
+      recordTelemetry(
+        workspaceSlug,
+        'delegate.guard.unmatched-action-deny',
+        {
+          stage: guardStage,
+          toolName,
+          count: verbViolations.length,
+          denies: verbViolations.map((v) => ({
+            verb: v.result.matchedVerb,
+            title: v.source.title,
+            taskPreview: taskPreview(v.source.task),
+          })),
+        },
+        project.projectId,
+      )
+    }
     return {
       behavior: 'deny',
       message:
@@ -206,6 +234,9 @@ function checkNanjuDelegateGuard(
         `\n${lines.join('\n')}\n` +
         `\n当前阶段允许委派的角色（关键词）：${STAGE_ROLE_KEYWORDS[guardStage].join('、')}；` +
         `AC 攻防审计类（攻击/防御/审计/复审）全阶段可委派。\n` +
+        (verbViolations.length > 0
+          ? `\n委派内容含产出类动作但未声明阶段角色。请在 title/task 明确角色（如「UX 顾问原型」「全栈开发」）后重试——阶段校验依赖角色声明。（当前${guardStage}阶段，允许的角色关键词见上）\n`
+          : '') +
         `\n推进方式：完成本阶段产出并在会话中输出 PHASE_ADVANCE 标记，进入下一阶段后再委派。\n` +
         `若你判断确需调整阶段：请在对话中向用户说明理由，由推进链裁决，不可直接越阶段委派` +
         `（阶段序列不可跳过——品类判定/环境探测是用户已裁决的不可裁剪目标）。`,
