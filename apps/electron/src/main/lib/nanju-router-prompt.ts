@@ -383,6 +383,9 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   // W12（交付验收后置）：GWT-pass 后语义反转——报告 verdict=pass 时用户确认的真实语义是
   // 「满意交付」（交付门禁已满足），提示目标切 delivered（走 isDeliverFromTesting + 门禁）；
   // 无报告/未通过时维持 A3 语义（testing 重入触发/重跑 GWT）。报告读取失败按未通过处理。
+  // W17-AC-M3（A2 提示词缓和）：末句扩「用户同消息修改请求优先」——强命令（立即输出
+  // 推进标记/不要重新委派）与用户同消息真实修改请求存在指令对冲（W16 实证 L1 遵从性强，
+  // 误推进会级联自动续接烧预算）；缓和为：用户修改/补充请求先完成再推进。
   let confirmHintLines: string[] = []
   try {
     const { getProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
@@ -402,7 +405,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       }
       const hintTail = hintAdvanceTarget === 'delivered' ? '完成交付' : '进入下一阶段'
       confirmHintLines = [
-        `⏩ 用户已确认本阶段产出（confirmPending=${pending}）。请立即输出推进标记 <!-- PHASE_ADVANCE: ${hintAdvanceTarget} --> ${hintTail}——不要重新委派任务、不要重复产出。若你认为产出确需补充，先向用户说明理由。`,
+        `⏩ 用户已确认本阶段产出（confirmPending=${pending}）。请立即输出推进标记 <!-- PHASE_ADVANCE: ${hintAdvanceTarget} --> ${hintTail}——不要重新委派任务、不要重复产出。若用户消息中还包含修改/补充请求，先完成该请求再推进；仅当你确信产出确需补充时，先向用户说明理由。`,
         '',
       ]
     }

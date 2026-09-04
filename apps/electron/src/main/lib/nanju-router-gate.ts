@@ -165,6 +165,82 @@ export function validateAdvanceTarget(
   return { ok: false, expected }
 }
 
+/**
+ * W17（v0.17.77，Q1 主修）：从本轮累积消息中按序收集全部 PHASE_ADVANCE / PHASE_COMPLETE
+ * 推进标记（纯函数，供编排器 result 检测块消费前调用）。
+ *
+ * 背景（终局复测实证）：原检测仅扫 run 末条 assistant 消息，而 L1 的三次标记全部
+ * 输出在 run 中段收口消息里（其后还有委派/轮询/兜底等 assistant 消息）——标记永远
+ * 不在扫描窗口，零消费、currentStage 冻结、六阶段状态机名存实亡。
+ *
+ * W17-AC-S1（A3 锚定收集，裁决采纳防御方案）：收集正则收紧为两种锚定形态——
+ * ① 注释形态 `<!-- PHASE_ADVANCE: xxx -->`（W11 拒绝消息引导的输出形态；W2c
+ *   NANJU_REGRESSION 同库锚定先例）；
+ * ② 行首形态（串首/换行后可选空白直接跟标记，容忍缩进）。
+ * 句中引用（正文/代码块/说明文字复述协议字面串，如「下一步我会输出 PHASE_ADVANCE:
+ * architecture」）不再收集；丢弃命中记 console.warn + phase.advance.discarded-unanchored
+ * telemetry（opts.workspaceSlug 提供时），观察一迭代周期后再定稿（裁决：欠收集比误
+ * 收集致命，故行首裸标记仍收集——独立行声明的标记视为真实意图）。
+ *
+ * 语义：按「消息序 × 消息内偏移」全量收集（同一条消息内多个标记也按出现序），
+ * 大小写归一（与原单标记正则同型 /i）；仅扫 assistant 消息的 text 块。收集后的
+ * 消费语义（W11 validateAdvanceTarget 按序校验 + 同 run 去重）在
+ * nanju-phase-advance-consumer.consumePhaseAdvanceMarks，勿在此处重复。
+ */
+export function collectPhaseAdvanceStages(
+  messages: ReadonlyArray<{ type?: string; message?: unknown }>,
+  opts?: { workspaceSlug?: string },
+): string[] {
+  const stages: string[] = []
+  const discarded: Array<{ stage: string; context: string }> = []
+  for (const msg of messages) {
+    if (msg.type !== 'assistant') continue
+    const content = (msg.message as { content?: Array<{ type: string; text?: string }> } | undefined)?.content
+    const text = (content ?? [])
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text ?? '')
+      .join('')
+    if (!text) continue
+    // 锚定形态：注释 ∪ 行首（捕获组 1=注释内、2=行首）
+    const anchoredMatches = [...text.matchAll(
+      /(?:<!--\s*(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)\s*-->)|(?:^|\n)[ \t]*(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)/gi,
+    )]
+    for (const match of anchoredMatches) {
+      const stage = (match[1] ?? match[2] ?? '').toLowerCase()
+      if (stage) stages.push(stage)
+    }
+    // 丢弃观测：宽松命中数 - 锚定命中数 = 句中引用丢弃数（附上下文样本）
+    const looseMatches = [...text.matchAll(/(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)/gi)]
+    if (looseMatches.length > anchoredMatches.length) {
+      for (const match of looseMatches) {
+        const idx = match.index ?? 0
+        const covered = anchoredMatches.some((am) => {
+          const amIdx = am.index ?? 0
+          return idx >= amIdx && idx < amIdx + am[0].length
+        })
+        if (covered) continue
+        const stage = (match[1] ?? '').toLowerCase()
+        if (!stage) continue
+        discarded.push({ stage, context: text.slice(Math.max(0, idx - 20), idx + 40).replace(/\n/g, ' ') })
+      }
+    }
+  }
+  if (discarded.length > 0) {
+    console.warn(`[南大路由] 丢弃 ${discarded.length} 处未锚定推进标记引用（句中非声明形态）: ${discarded.map((d) => d.stage).join(', ')}`)
+    try {
+      if (opts?.workspaceSlug) {
+        const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+        recordTelemetry(opts.workspaceSlug, 'phase.advance.discarded-unanchored', {
+          count: discarded.length,
+          stages: discarded.map((d) => d.stage),
+          sample: discarded.slice(0, 3).map((d) => d.context),
+        })
+      }
+    } catch { /* telemetry 失败不影响收集 */ }
+  }
+  return stages
+}
+
 /** 判定对象型值（mutate 目标防御） */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null

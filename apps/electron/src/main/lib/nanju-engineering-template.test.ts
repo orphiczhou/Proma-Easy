@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /**
  * 工程样板模块（W3，v0.17.66）单测。
@@ -15,6 +16,28 @@ mock.module('./config-paths', () => ({
   getWorkspaceFilesDir: () => fixtureRoot,
   getAgentWorkspacePath: () => fixtureRoot,
 }))
+
+// W17 验收补修（组合污染甄别后修复）：本文件 4 个用例（「仓库实际资源可用」的
+// resolveEngineeringTemplatesDir 无参 cwd 回退解析，及 materialize 无 explicitBase
+// 的 R3 前移标注 ×2 + B2 品类写入 ×1）隐含契约「bun test 在仓库根或 apps/electron
+// 目录跑」；多文件合跑时调用方 cwd 任意（验收实证 `cd apps/electron/src && bun test …`
+// 打破契约 → 本文件 4 用例稳定挂，与 w17 测试文件在场与否无关——同 cwd 下 13 文件
+// 无 w17 同挂，见 plan/w17-report.md 组合污染修复节）。以 import.meta.url 定位仓库根
+// 并临时 chdir（用例跑完恢复），cwd 无关化后任意调用目录全绿。
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..')
+let chdirOrigin = ''
+beforeAll(() => {
+  if (process.cwd() === REPO_ROOT) return
+  if (!existsSync(join(REPO_ROOT, 'apps', 'electron', 'resources', 'nanju-engineering-templates'))) return
+  chdirOrigin = process.cwd()
+  process.chdir(REPO_ROOT)
+})
+afterAll(() => {
+  if (chdirOrigin) {
+    try { process.chdir(chdirOrigin) } catch { /* 恢复失败不影响后续文件（仅 cwd 偏移） */ }
+    chdirOrigin = ''
+  }
+})
 
 const {
   extractProjectCategoryFromDoc,

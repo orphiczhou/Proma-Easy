@@ -56,7 +56,8 @@ import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { getNanjuRouterPrompt } from './nanju-router-prompt'
-import { checkNanjuRouterGate, verifyPhaseOutput } from './nanju-router-gate'
+import { checkNanjuRouterGate, verifyPhaseOutput, collectPhaseAdvanceStages } from './nanju-router-gate'
+import { checkConfirmAdvanceInput, consumePhaseAdvanceMarks } from './nanju-phase-advance-consumer'
 import { NANJU_GUARDS, type NanjuGuardStage } from './nanju-project'
 import type { GwtProgressEvent } from './nanju-gwt-runner'
 import { resolveProjectInstructions } from './project-instruction-resolver'
@@ -547,6 +548,31 @@ export class AgentOrchestrator {
     }
   }
 
+
+  /**
+   * W17：PhaseAdvanceHooks 装配（消费器副作用注入——nanju-phase-advance-consumer 与
+   * 编排器解耦的唯一粘合点；检测/消费逻辑见该模块）。
+   */
+  private buildPhaseAdvanceHooks(sessionId: string): import('./nanju-phase-advance-consumer').PhaseAdvanceHooks {
+    return {
+      emitAssistantMessage: (sid, text) => {
+        this.eventBus.emit(sid, {
+          kind: 'sdk_message',
+          message: {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text }] },
+            parent_tool_use_id: null,
+            uuid: randomUUID(),
+          } as unknown as SDKMessage,
+        })
+      },
+      injectAssistantMessage: (sid, text) => this.injectNanjuAssistantMessage(sid, text),
+      triggerGwtRun: (input) => this.triggerNanjuGwtRun(input),
+      checkGwtDeliveryGate: (workspaceSlug, projectId) => this.checkNanjuGwtDeliveryGate(workspaceSlug, projectId),
+      finalizePhaseTodos: (sid) => this.finalizeNanjuPhaseTodos(sid),
+    }
+  }
+
   /**
    * 触发 GWT 验收测试（异步，不阻塞本轮 result 流）。
    *
@@ -695,6 +721,7 @@ export class AgentOrchestrator {
               {
                 sessionId,
                 userMessage: GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE,
+                systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                 channelId: resume.channelId,
                 modelId: resume.modelId,
                 workspaceId: resume.workspaceId,
@@ -753,6 +780,7 @@ export class AgentOrchestrator {
               {
                 sessionId,
                 userMessage: '验收未通过（覆盖类：部分用户故事无可执行场景）。请按系统注入的清单处理：用 continue_delegation 委派测试工程师为缺失的用户故事补场景与映射（只写 06_TESTS/），完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                 channelId: resume.channelId,
                 modelId: resume.modelId,
                 workspaceId: resume.workspaceId,
@@ -788,6 +816,7 @@ export class AgentOrchestrator {
               {
                 sessionId,
                 userMessage: '验收未通过（映射类：步骤映射与实际代码不符）。请按系统注入的清单处理：用 continue_delegation 委派测试工程师重新映射 steps.json（只改 06_TESTS/，不得改 08_APP/），完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                 channelId: resume.channelId,
                 modelId: resume.modelId,
                 workspaceId: resume.workspaceId,
@@ -822,6 +851,7 @@ export class AgentOrchestrator {
               {
                 sessionId,
                 userMessage: '验收测试未全部通过（行为类：应用缺陷）。请按系统注入的失败清单处理：用 continue_delegation 委派全栈开发修复缺陷（仅改 08_APP/），修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                 channelId: resume.channelId,
                 modelId: resume.modelId,
                 workspaceId: resume.workspaceId,
@@ -989,6 +1019,7 @@ export class AgentOrchestrator {
         {
           sessionId,
           userMessage: message,
+          systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
           channelId: meta.channelId,
           modelId: meta.modelId,
           workspaceId: meta.workspaceId,
@@ -1527,6 +1558,12 @@ export class AgentOrchestrator {
 
     // 5. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
+    // W17-AC-M1（A1 横幅接活）：run 闭包内 tool_use_id → toolName 登记——AskUserQuestion
+    // 的用户答案以 tool_result 形态回传（canUseTool 横幅 → updatedInput.answers →
+    // createJsonToolResult），事件流 user 文本消息路径无法捕获；凭登记表识别
+    // AskUserQuestion 的 tool_result 后调 checkConfirmAdvanceInput，修横幅主确认通道失明。
+    // 闭包变量，run 结束释放（裁决 M1 风险列明）。
+    const askToolUseNames = new Map<string, string>()
     let pendingSkillActivations: SkillActivation[] = []
     const recordSkillActivation = (
       activations: SkillActivation[],
@@ -2039,6 +2076,21 @@ export class AgentOrchestrator {
         memoryRefreshOpportunity,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
 
+      // W17（v0.17.77，Q2 主修）：确认检测补 run 初始输入路径——用户以新消息开启 run 时，
+      // 该消息作为初始输入在步骤 5 手动持久化、不进事件流，事件流检测对最常见确认路径
+      // 失明（W16 Q2：终局复测实证 confirmPendingStage 全程零置位）。入口跑同一
+      // checkConfirmAdvanceInput（与事件流路径共用实现），且置于 getNanjuRouterPrompt
+      // 之前——本轮 prompt 即可注入「⏩ 用户已确认本阶段产出」强推进提示。
+      // 条件与事件流路径一致（非自动化/非委派触发）；shouldPersistUserMessage 确保只对
+      // 真正作为新输入落库的消息检测（重试不重复置位，幂等防御）。
+      // W17-AC-M2（A2 系统消息豁免）：systemInitiated 续接（阶段推进自动续接/GWT 验收
+      // 与回炉/护栏续接）不进用户意图检测——「请继续下一阶段的工作。」等系统消息含
+      // 「继续/推进」字样，属 wiring 类别混淆（裁决 A2）；不可用 triggeredBy 替代
+      //（会连带跳过 nanjuRouterPrompt 阶段门禁注入）。
+      if (workspaceSlug && !automationContext && !input.triggeredBy && !input.systemInitiated && shouldPersistUserMessage) {
+        checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage)
+      }
+
       // 南大向导阶段门禁：注入当前阶段的硬性指令
       const nanjuRouterPrompt = workspaceSlug && !automationContext && !input.triggeredBy
         ? getNanjuRouterPrompt(workspaceSlug, sessionId)
@@ -2467,64 +2519,87 @@ export class AgentOrchestrator {
               }
             }
 
-            // W10（v0.17.72）：确认响应推进检查——用户确认语义检测置位。
+            // W10（v0.17.72）+ W17（v0.17.77，Q2）：确认响应推进检查——用户确认语义检测置位。
             // 背景：dev-test-report §六——L1 收到确认后用「干活」响应而非输出 PHASE_ADVANCE，
-            // 推进纪律是 prompt 遵从薄弱点。检测（type=user 且非 tool_result）命中确认词
-            // 且 verifyPhaseOutput 达标时置位 confirmPendingStage（getNanjuRouterPrompt 注入
-            // 强推进提示）；反义词清除（用户反悔）。不自动推进——推进权仍在 L1 输出标记（设计决策）。
-            // try-catch 不影响主流程；用户非确认消息不清除（保持待推进直到推进或反悔，工单 §2.3）。
-            if (msg.type === 'user' && workspaceSlug && !automationContext && !input.triggeredBy) {
-              try {
-                const userContent = (msg as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
-                if (Array.isArray(userContent) && !userContent.some((b) => b.type === 'tool_result')) {
-                  const userText = userContent.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
-                  if (userText.trim() !== '') {
-                    const { listNanjuProjects, judgeConfirmAdvance, setProjectConfirmPending, clearProjectConfirmPending } =
-                      require('./nanju-project')
-                    const project = listNanjuProjects(workspaceSlug).find(
-                      (p: { sessionId?: string }) => p.sessionId === sessionId,
-                    )
-                    if (project) {
-                      const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
-                      const action = judgeConfirmAdvance(userText, project.currentStage, verifyError)
-                      if (action === 'set') {
-                        setProjectConfirmPending(workspaceSlug, project.projectId, project.currentStage)
-                        try {
-                          const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-                          recordTelemetry(workspaceSlug, 'confirm.advance-hint', {
-                            project_id: project.projectId,
-                            stage: project.currentStage,
-                            mode: project.mode,
-                          }, project.projectId)
-                        } catch { /* 埋点失败不影响置位 */ }
-                        console.log(`[南大路由] 确认检测：置位 confirmPending=${project.currentStage}（${project.name}）`)
-                      } else if (action === 'clear') {
-                        clearProjectConfirmPending(workspaceSlug, project.projectId)
-                        console.log(`[南大路由] 确认检测：反义词清除 confirmPending（${project.name}）`)
-                      }
-                    }
+            // 推进纪律是 prompt 遵从薄弱点。检测命中确认词且 verifyPhaseOutput 达标时置位
+            // confirmPendingStage（getNanjuRouterPrompt 注入强推进提示）；反义词清除（用户反悔）。
+            // 不自动推进——推进权仍在 L1 输出标记（设计决策）。
+            // W17：检测实现抽为 checkConfirmAdvanceInput（nanju-phase-advance-consumer），
+            // 三条路径共用同一实现，防口径漂移：
+            // ① run 初始输入（sendMessage 入口，步骤 5 附近）；
+            // ② 事件流 user 文本消息（非 tool_result，Pi adapter 下实际不可达——见 ④，保留作
+            //    adapter 行为变化时的兼容层 + 源码断言锁定的接线层）；
+            // ④ W17-AC-M1（A1 横幅接活）：AskUserQuestion 横幅答案——主确认通道（W10 各阶段
+            //    收口均为 AskUserQuestion），答案经 canUseTool 横幅 → updatedInput.answers →
+            //    createJsonToolResult 以 tool_result 形态回传，凭 run 闭包 askToolUseNames
+            //    登记表识别；W16 终局复测实证横幅确认全链路失明，本路径为闭环主腿。
+            if (msg.type === 'assistant' && !isPartialMessage) {
+              // 登记本条 assistant 消息的全部 tool_use（幂等覆盖；isReplay 在当前 adapter
+              // 下不出现——裁决 A4 惰性守卫同源，登记无重复风险）
+              const assistantBlocks = (msg as { message?: { content?: Array<{ type: string; id?: string; name?: string }> } }).message?.content
+              if (Array.isArray(assistantBlocks)) {
+                for (const block of assistantBlocks) {
+                  if (block.type === 'tool_use' && typeof block.id === 'string') {
+                    askToolUseNames.set(block.id, block.name ?? '')
                   }
                 }
-              } catch (e) {
-                console.warn('[南大路由] 确认检测异常（不阻断）:', e instanceof Error ? e.message : String(e))
+              }
+            }
+            if (msg.type === 'user' && workspaceSlug && !automationContext && !input.triggeredBy) {
+              const userContent = (msg as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
+              if (Array.isArray(userContent) && !userContent.some((b) => b.type === 'tool_result')) {
+                const userText = userContent.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+                checkConfirmAdvanceInput(sessionId, workspaceSlug, userText)
+              }
+              // W17-AC-M1：AskUserQuestion 答案（tool_result 形态）→ 提取 answers 值送同一检测
+              if (Array.isArray(userContent) && userContent.some((b) => b.type === 'tool_result')) {
+                for (const block of userContent as Array<{ type: string; tool_use_id?: string; content?: unknown }>) {
+                  if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
+                  if (askToolUseNames.get(block.tool_use_id) !== 'AskUserQuestion') continue
+                  try {
+                    // createJsonToolResult：content = [{type:'text', text:'{"answers":{…}}'}]；
+                    // 兼容字符串型 content。answers 值 = 用户点选/输入的答案文本（如「满意交付」）。
+                    const inner = block.content
+                    const rawText = Array.isArray(inner)
+                      ? (inner as Array<{ type: string; text?: string }>).filter((t) => t.type === 'text').map((t) => t.text ?? '').join('')
+                      : typeof inner === 'string' ? inner : ''
+                    if (!rawText.trim()) continue
+                    const parsed = JSON.parse(rawText) as { answers?: Record<string, unknown> }
+                    const answerText = Object.values(parsed?.answers ?? {})
+                      .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+                      .join('\n')
+                    if (answerText.trim() !== '') {
+                      checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText)
+                    }
+                  } catch (e) {
+                    console.warn('[南大路由] AskUserQuestion 答案解析失败（不阻断）:', e instanceof Error ? e.message : String(e))
+                  }
+                }
               }
             }
 
             // 南大向导：检测 PHASE_ADVANCE 标记 + 文件验证后推进阶段
+            // W17（v0.17.77，Q1 主修）：标记检测从「仅取 run 末条 assistant 消息」改为本轮
+            // 全部 assistant 消息全量扫描——终局复测实证 L1 的三次 PHASE_ADVANCE 标记全部
+            // 输出在 run 中段收口消息里（其后还有委派/轮询/兜底等 assistant 消息），原扫描
+            // 窗口永远扫不到（零消费、currentStage 冻结、六阶段状态机名存实亡）。收集走
+            // collectPhaseAdvanceStages（纯函数，消息序 × 消息内偏移），按序消费走
+            // consumePhaseAdvanceMarks（W11 校验保留 + 同轮多标记按序消费 + 去重）。
             if (msg.type === 'result' && workspaceSlug && !automationContext && !input.triggeredBy) {
               try {
-                // 从本轮累积的消息中提取最后一条 assistant 文本
+                // W17-AC-S1：传 workspaceSlug 启用未锚定命中丢弃观测（telemetry 落库）
+                const collectedStages = collectPhaseAdvanceStages(accumulatedMessages, { workspaceSlug })
+                // 意见收集轮收口消息文本（W2c regression 检测仍绑定末条 assistant，勿随 Q1 扩散到全消息）
                 const lastAccumulated = [...accumulatedMessages].reverse().find(
                   (m) => (m as { type?: string }).type === 'assistant',
                 )
                 const textBlocks = (lastAccumulated as { message?: { content?: Array<{ type: string; text?: string }> } })?.message?.content
                 const fullText = (textBlocks ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
-                const phaseMatch = fullText.match(/(?:PHASE_COMPLETE|PHASE_ADVANCE):\s*([a-z-]+)/i)
                 // W2c（v0.17.69）：意见收集轮 L1 语义回归标记检测（PHASE_ADVANCE 同型字符串检测；
                 // 判定协议 v1 第 3 条——硬规则未命中时 L1 语义判定启动，只标建议，
                 // 写入走主进程唯一写入点 recordRegressionEvent，judgment 必附审计日志）
                 const regressionMatch = fullText.match(/<!--\s*NANJU_REGRESSION:\s*([^-]+?)\s*-->/)
-                if (regressionMatch && !phaseMatch) {
+                if (regressionMatch && collectedStages.length === 0) {
                   try {
                     const { listNanjuProjects: listProj } = require('./nanju-project') as typeof import('./nanju-project')
                     const proj = listProj(workspaceSlug).find((p: { sessionId?: string }) => p.sessionId === sessionId)
@@ -2543,265 +2618,13 @@ export class AgentOrchestrator {
                     console.warn('[南大回归] 标记检测异常（不阻断）:', e instanceof Error ? e.message : String(e))
                   }
                 }
-                if (phaseMatch) {
-                  const newStage = phaseMatch[1]?.toLowerCase()
-                  console.log(`[南大路由] 检测到 PHASE_ADVANCE: ${newStage}`)
-                  // 文件验证
-                  const { verifyPhaseOutput } = require('./nanju-router-gate')
-                  const { listNanjuProjects, updateNanjuProject } = require('./nanju-project')
-                  const projects = listNanjuProjects(workspaceSlug)
-                  const project = projects.find((p: { sessionId: string }) => p.sessionId === sessionId)
-                  if (project) {
-                    // W7（v0.17.69 + AC 审计 M3/M4）：architecture 产出验证前置位——解析
-                    // architecture.md 的 projectEnv 标记行写 envReady（write-then-gate：先置位
-                    // 再跑含 envReady 门禁的 verifyPhaseOutput，避免首推进被自己未置位的门禁
-                    // 误拦）。解析+置位逻辑已抽 syncProjectEnvStateFromArchitectureDoc 共用
-                    //（M3 正则放宽 + 幂等 + 无标记行 warn），与 syncNanjuGuideConfirmState
-                    // result 侧复用同一实现，防两处解析口径漂移。
-                    if (project.currentStage === 'architecture') {
-                      try {
-                        const { syncProjectEnvStateFromArchitectureDoc } =
-                          require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
-                        syncProjectEnvStateFromArchitectureDoc(workspaceSlug, project.projectId, sessionId)
-                      } catch (e) {
-                        console.warn('[南大路由] 环境状态置位失败（不阻断验证）:', e instanceof Error ? e.message : String(e))
-                      }
-                    }
-                    const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
-                    if (verifyError) {
-                      console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
-                      // 可见化（AC L-002）：校验失败时 PHASE_ADVANCE 不推进，除主进程日志外
-                      // 向会话注入 assistant 消息，让用户/调度员在 UI 直接看到拦截原因；
-                      // 不自动续接，待修复后重新声明推进（本轮照常 completeRun）。
-                      this.eventBus.emit(sessionId, {
-                        kind: 'sdk_message',
-                        message: {
-                          type: 'assistant',
-                          message: { content: [{ type: 'text', text: `⚠️ 阶段推进被拦截：${verifyError}\n产出未达交付标准，请继续修复后重新声明推进。` }] },
-                          parent_tool_use_id: null,
-                          uuid: randomUUID(),
-                        } as unknown as SDKMessage,
-                      })
-                    } else {
-                      // coding.executed 埋点（P1 Sprint A）：coding 阶段推进成功 = 用户已确认的可运行应用交付事实
-                      // （推进即事实；不用 verifyPhaseOutput 通过后记，避免把重试中的半成品计入）
-                      if (project.currentStage === 'coding') {
-                        try {
-                          const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-                          recordTelemetry(workspaceSlug, 'coding.executed', {
-                            project_id: project.projectId, mode: project.mode,
-                            entry: '08_APP/index.html',
-                          }, project.projectId)
-                        } catch { /* 埋点失败不影响推进 */ }
-                      }
-                      // arch.executed 埋点（W7，v0.17.69）：architecture 阶段推进成功 = 架构师
-                      // 环节（含环境探测）首次两模式可观测的交付事实（推进即事实口径，同 coding.executed）
-                      if (project.currentStage === 'architecture') {
-                        try {
-                          const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-                          const { getPhaseNode } = require('./nanju-router') as typeof import('./nanju-router')
-                          recordTelemetry(workspaceSlug, 'arch.executed', {
-                            project_id: project.projectId, mode: project.mode,
-                            requires_ac: getPhaseNode(project.mode, 'architecture')?.requiresAC ?? false,
-                          }, project.projectId)
-                        } catch { /* 埋点失败不影响推进 */ }
-                      }
-                      // Sprint B：testing 阶段推进语义分叉（机器裁判闭环）
-                      // ① PHASE_ADVANCE: testing 重入（currentStage 已是 testing）= 场景已生成/缺陷已修复
-                      //    → Harness 异步触发 GwtRunner（不改阶段；完成后按裁判结果注入/续接）
-                      // ② PHASE_ADVANCE: delivered（当前 testing）= 要求交付
-                      //    → 必须已有 verdict=pass 的测试报告，否则拦截（机器裁判收口）
-                      const isTestingSelfAdvance = project.currentStage === 'testing' && newStage === 'testing'
-                      const isDeliverFromTesting = project.currentStage === 'testing' && newStage === 'delivered'
-                      if (isTestingSelfAdvance) {
-                        console.log(`[南大路由] testing 重入推进：触发 GWT 验收测试（${project.name}）`)
-                        this.triggerNanjuGwtRun({
-                          workspaceSlug,
-                          projectId: project.projectId,
-                          projectName: project.name,
-                          projectMode: project.mode,
-                          sessionId,
-                          resume: { channelId, modelId, workspaceId, permissionModeOverride },
-                        })
-                        // 不改 currentStage（保持 testing）；不设 nanjuPhaseAdvanced（不触发通用续接，
-                        // GwtRunner 完成后按裁判结果自行注入/续接）
-                      } else if (isDeliverFromTesting) {
-                        const gateError = this.checkNanjuGwtDeliveryGate(workspaceSlug, project.projectId)
-                        if (gateError) {
-                          console.log(`[南大路由] GWT 交付门禁拦截，不推进: ${gateError}`)
-                          this.injectNanjuAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}`)
-                        } else {
-                          updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
-                          console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
-                          nanjuPhaseAdvanced = newStage ?? null
-                          // W10：推进成功——消费清除确认待推进（幂等，工单 §2.1 消费侧）
-                          try {
-                            const { clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
-                            clearProjectConfirmPending(workspaceSlug, project.projectId)
-                          } catch { /* 清除失败不影响推进（残留提示无害，下次推进再清） */ }
-                          this.finalizeNanjuPhaseTodos(sessionId)
-                          // W2 S1 推进点 A：交付清空子步骤（delivered 无子步骤态）并广播。
-                          // write-then-emit；失败不阻断交付（渲染端 10s 轮询兑底）。
-                          try {
-                            const { setProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
-                            const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
-                            setProjectSubStage(workspaceSlug, project.projectId, '')
-                            emitGuideProgress(sessionId, project.projectId, newStage ?? 'delivered', '')
-                          } catch { /* 向导图子步骤广播失败不影响交付 */ }
-                        }
-                      } else {
-                        // W11（v0.17.73）：推进目标校验——通用分支消费标记前校验标记目标
-                        // 必须 === getNextPhase(mode, currentStage)（与 route.next 同源），
-                        // 不接受跳级/跨级/回退。终测 E2E 实锤：L1 在 prototype 阶段输出
-                        // `PHASE_ADVANCE: coding` 跳过 architecture（jsonl 行 81），检测块
-                        // 此前按标记目标推进、无校验（继 W8 拦委派角色/W10 提示推进纪律
-                        // 之后的第三个强制力缺口）。插入点在 else 通用分支开头：
-                        // isTestingSelfAdvance / isDeliverFromTesting 两特殊分支已在上方
-                        // 分流（testing 重入/交付不受本校验影响——纯函数同口径豁免）；
-                        // 拒绝时本分支全部推进钩子（熔断复位/埋点/模板落位/
-                        // updateNanjuProject/confirmPending 清除/Todo 兑底/子步骤广播）
-                        // 都不执行，注入教育消息后本轮照常 completeRun、不设
-                        // nanjuPhaseAdvanced（不触发自动续接），待修正标记后重新声明。
-                        // try-catch 兜底取舍：校验自身异常（route 数据损坏等）不阻断既有
-                        // 推进路径——宁可放行不可卡死（与 verifyPhaseOutput 的拦截语义
-                        // 不同：文件验证失败拦推进，校验代码自身出 bug 不能把流程卡死）；
-                        // 异常 mode / route 缺失的防御性放行在纯函数内处理（见
-                        // validateAdvanceTarget）。
-                        let advanceTargetOk = true
-                        try {
-                          const { validateAdvanceTarget } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
-                          const advanceVerdict = validateAdvanceTarget(project.mode, project.currentStage, newStage ?? '')
-                          if (!advanceVerdict.ok) {
-                            advanceTargetOk = false
-                            console.log(`[南大路由] 推进目标校验拒绝: ${project.currentStage} → ${newStage}（合法目标 ${advanceVerdict.expected ?? '无（终态）'}）`)
-                            if (advanceVerdict.expected) {
-                              this.injectNanjuAssistantMessage(
-                                sessionId,
-                                `⚠️ 推进标记目标错误：当前 ${project.currentStage} 的下一阶段是 ${advanceVerdict.expected}，`
-                                + `不接受跳级/跨级（标记目标 ${newStage} 被忽略）。请输出 <!-- PHASE_ADVANCE: ${advanceVerdict.expected} -->。`,
-                              )
-                            } else {
-                              // 终态兜底（currentStage=delivered，next=null）：无正确标记可引导
-                              this.injectNanjuAssistantMessage(
-                                sessionId,
-                                `⚠️ 推进标记目标错误：当前 ${project.currentStage} 已是终态，无合法下一阶段（标记目标 ${newStage} 被忽略）。`,
-                              )
-                            }
-                          }
-                        } catch (e) {
-                          console.warn('[南大路由] 推进目标校验异常（放行，不阻断推进）:', e instanceof Error ? e.message : String(e))
-                        }
-                        if (advanceTargetOk) {
-                          // 阶段熔断复位 + phase.elapsed 埋点 + US-xx 上游提示（v0.17.64 Sprint C1）。
-                          // 推进 = 离开阶段已收口（用户确认/修复完成）：清零该阶段 guard（用户驱动的复位路径）；
-                          // 阶段时长以 project.updatedAt（上次写 currentStage 的时间）近似，够漏斗分析用。
-                          try {
-                            const { updatePhaseGuard } = require('./nanju-project') as typeof import('./nanju-project')
-                            updatePhaseGuard(workspaceSlug, project.projectId, project.currentStage as NanjuGuardStage, {
-                              kind: 'reset',
-                              note: '阶段推进收口',
-                            })
-                            const stageDurationMs = Date.now() - Date.parse(project.updatedAt)
-                            if (Number.isFinite(stageDurationMs) && stageDurationMs >= 0) {
-                              const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-                              recordTelemetry(workspaceSlug, 'phase.elapsed', {
-                                project_id: project.projectId,
-                                from_stage: project.currentStage,
-                                to_stage: newStage,
-                                duration_ms: stageDurationMs,
-                              }, project.projectId)
-                            }
-                          } catch { /* 复位/埋点失败不影响推进 */ }
-                          // US-xx 上游检查强化（#5 升级，提示不阻断）：requirements 收口时 PRD 仍无
-                          // US-xx 编号清单 → 注入提醒（测试阶段 parseUserStories 判定将无法进行）
-                          if (project.currentStage === 'requirements') {
-                            try {
-                              const { existsSync: prdExists, readFileSync: prdRead } = require('node:fs')
-                              const { join: prdJoin } = require('node:path')
-                              const { getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
-                              const { parseUserStories } = require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
-                              const prdPath = prdJoin(getNanjuProjectDir(workspaceSlug, project.projectId), '01_PRD', 'prd.md')
-                              if (prdExists(prdPath) && parseUserStories(prdRead(prdPath, 'utf-8')).length === 0) {
-                                this.injectNanjuAssistantMessage(
-                                  sessionId,
-                                  '⚠️ 上游检查提示：PRD 未提取到「US-xx」编号用户故事清单，后续测试阶段的覆盖性判定将无法进行'
-                                  + '（测试阶段会 fail-fast 要求补 PRD）。建议补充用户故事编号清单后再继续；本次不阻断推进，可按需继续。',
-                                )
-                              }
-                            } catch { /* 检查失败不阻断推进 */ }
-                          }
-                          // 工程模板前移落位（W7 R3 前移契约，v0.17.69）：即将进入 architecture
-                          // ——按 PRD 初判/默认品类 materialize 模板到 00_ENGINEERING_TEMPLATE/
-                          //（头部标注「初判参考」），【不写 projectCategory】：品类写入与权威
-                          // 重落位只在 coding 推进钩子（防 existing?? 幂等污染终判）。
-                          if (newStage === 'architecture') {
-                            try {
-                              const {
-                                resolveProjectCategoryForCoding,
-                                materializeEngineeringTemplate,
-                              } = require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
-                              const initial = resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
-                                ?? { category: 'web-fullstack' as const, source: 'default' as const }
-                              const templatePath = materializeEngineeringTemplate(
-                                workspaceSlug, project.projectId, initial.category,
-                                undefined, { annotateInitialGuess: true },
-                              )
-                              console.log(`[南大路由] 工程模板前移落位: ${project.name} → ${initial.category}（${initial.source}，初判参考）${templatePath ? '' : '（模板缺失，架构师按品类自行降级）'}`)
-                            } catch (e) {
-                              console.warn('[南大路由] 工程模板前移落位异常（不阻断推进）:', e instanceof Error ? e.message : String(e))
-                            }
-                          }
-                          // 工程品类判定与模板落位（W3，v0.17.66）：即将进入 coding——从
-                          // architecture/prd 提取 projectCategory 写入 _project-info.json，并把
-                          // 对应品类工程模板复制到 00_ENGINEERING_TEMPLATE/（coding 委派任务
-                          // 注入精简要点 + 全文路径引用）。失败不阻断推进（coding 侧另有
-                          // 现场降级兑底，见 getNanjuRouterPrompt）。
-                          if (newStage === 'coding') {
-                            try {
-                              const {
-                                resolveProjectCategoryForCoding,
-                                materializeEngineeringTemplate,
-                              } = require('./nanju-engineering-template') as typeof import('./nanju-engineering-template')
-                              const { setProjectCategory, getProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
-                              const existing = getProjectCategory(workspaceSlug, project.projectId)
-                              const resolved = existing ?? resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
-                                ?? { category: 'web-fullstack' as const, source: 'default' as const }
-                              setProjectCategory(workspaceSlug, project.projectId, resolved.category, resolved.source)
-                              const templatePath = materializeEngineeringTemplate(workspaceSlug, project.projectId, resolved.category)
-                              console.log(`[南大路由] 工程品类判定: ${project.name} → ${resolved.category}（${resolved.source}）${templatePath ? '' : '，模板落位失败（coding 侧降级仅要点）'}`)
-                            } catch (e) {
-                              console.warn('[南大路由] 工程品类判定异常（不阻断推进）:', e instanceof Error ? e.message : String(e))
-                            }
-                          }
-                          updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
-                          console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
-                          nanjuPhaseAdvanced = newStage ?? null
-                          // W10：推进成功——消费清除确认待推进（幂等，工单 §2.1 消费侧）
-                          try {
-                            const { clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
-                            clearProjectConfirmPending(workspaceSlug, project.projectId)
-                          } catch { /* 清除失败不影响推进（残留提示无害，下次推进再清） */ }
-                          // Todo 纪律兜底（P3/L4）：调度员经常忘记在阶段推进时收尾 Todo，
-                          // 程序化把该会话关联的 open Todo 标记完成（nativeOrigin 外部来源不动，
-                          // 避免同步到系统提醒事项的副作用；只处理本会话通过 TaskCreate 建的）。
-                          this.finalizeNanjuPhaseTodos(sessionId)
-                          // W2 S1 推进点 B：新阶段子步骤 = 主节点（作者产出中）并广播；推进到
-                          // 无主节点阶段（delivered，防御兑底——实际 delivered 推进走 A 点/GWT-pass
-                          // 路径，A7 笔误修正：quick 路由 prototype.next=coding 无直连交付边）→ 清空
-                          // 子步骤。失败不阻断推进。
-                          try {
-                            const { setProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
-                            const { getGuideStageMainNodeId, emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
-                            const subStage = (newStage ? getGuideStageMainNodeId(newStage) : undefined) ?? ''
-                            setProjectSubStage(workspaceSlug, project.projectId, subStage)
-                            emitGuideProgress(sessionId, project.projectId, newStage ?? 'delivered', subStage)
-                          } catch { /* 向导图子步骤广播失败不影响推进 */ }
-                        }
-                      }
-                    }
-                  } else {
-                    console.log(`[南大路由] 未找到关联的南大项目: sessionId=${sessionId}`)
-                  }
+                if (collectedStages.length > 0) {
+                  console.log(`[南大路由] 检测到 PHASE_ADVANCE 标记 ${collectedStages.length} 处: ${collectedStages.join(' → ')}`)
+                  nanjuPhaseAdvanced = consumePhaseAdvanceMarks(
+                    sessionId, workspaceSlug, collectedStages,
+                    { channelId, modelId, workspaceId, permissionModeOverride },
+                    this.buildPhaseAdvanceHooks(sessionId),
+                  ) ?? nanjuPhaseAdvanced
                 }
               } catch (e) {
                 console.warn(`[南大路由] PHASE_ADVANCE 检测异常:`, e instanceof Error ? e.message : String(e))
@@ -2997,6 +2820,7 @@ export class AgentOrchestrator {
                 {
                   sessionId,
                   userMessage: '请继续下一阶段的工作。',
+                  systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                   channelId,
                   modelId,
                   workspaceId,
