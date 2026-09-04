@@ -28,6 +28,13 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
   const tab = tabs.find((t) => t.id === tabId)
 
+  // [W14] 以下 hooks 必须先于所有 early return 调用（React Rules of Hooks）：
+  // TabContent 是 MainArea 中跨标签复用的单实例组件，tab 切换时 tabId 指向的
+  // tab 可能短暂不存在（useDeferredValue 旧值渲染帧 / openTab 替换语义移除旧 tab），
+  // 曾因 nanju 两个 useState 放在 `if (!tab)` 之后触发 React #300 白屏（详见 plan/w14-report.md）。
+  const [nanjuCreating, setNanjuCreating] = React.useState(false)
+  const [nanjuCreateError, setNanjuCreateError] = React.useState<string | null>(null)
+
   // [FLASH-DEBUG] 监控 tab 查找失败（说明 tabId 指向了不存在的标签）
   React.useEffect(() => {
     if (!tab) {
@@ -43,11 +50,8 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     )
   }
 
-  // R4（W1）：南大模式选择创建链路的可见性状态——静默失败（IPC reject 后无任何反馈，
-  // 用户感知即「点击无响应」）与双击重复建项目，均在静态审查中确认为可修缺陷。
-  // 注：卡片选中不亮属运行时问题，本修复不改 ModeSelectView（部署批次复现验证）。
-  const [nanjuCreating, setNanjuCreating] = React.useState(false)
-  const [nanjuCreateError, setNanjuCreateError] = React.useState<string | null>(null)
+  // R4（W1）：南大模式选择创建链路的失败可见化（原：async IIFE 无 catch，IPC 失败后无任何反馈；
+  // 状态定义已上提到 early return 之前，见顶部 [W14] 注释）
 
   if (tab.type === 'scratch') {
     return <ScratchPadView />
