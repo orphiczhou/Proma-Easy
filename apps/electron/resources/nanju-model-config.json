@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "phases": {
+    "requirements": {
+      "channel": "deepseek",
+      "model": "deepseek-v4-pro",
+      "fallbacks": ["deepseek:deepseek-v4-flash", "glm-zhipu:glm-5.3-flash"]
+    },
+    "prototype": {
+      "channel": "minimax",
+      "model": "MiniMax-M3",
+      "fallbacks": ["glm-zhipu:glm-5.3-flash"]
+    },
+    "architecture": {
+      "channel": "glm-zhipu",
+      "model": "GLM-5.3",
+      "fallbacks": ["deepseek:deepseek-v4-pro"],
+      "acDefender": { "channel": "minimax", "model": "MiniMax-M3" }
+    },
+    "planning": {
+      "channel": "deepseek",
+      "model": "deepseek-v4-flash",
+      "fallbacks": ["glm-zhipu:glm-5.3-flash"]
+    },
+    "coding": {
+      "channel": "glm-zhipu",
+      "model": "GLM-5.3",
+      "fallbacks": ["glm-zhipu:glm-5.3-flash", "deepseek:deepseek-v4-flash"],
+      "acDefender": { "channel": "minimax", "model": "MiniMax-M3" }
+    },
+    "testing": {
+      "channel": "glm-zhipu",
+      "model": "glm-5.3-flash",
+      "fallbacks": ["deepseek:deepseek-v4-flash"],
+      "acDefender": { "channel": "minimax", "model": "MiniMax-M3" }
+    }
+  },
+  "acPresets": {
+    "light": {
+      "attacker": { "channel": "deepseek", "model": "deepseek-v4-flash" },
+      "defender": { "channel": "glm-zhipu", "model": "glm-5.3-flash" }
+    },
+    "medium": {
+      "attacker": { "channel": "deepseek", "model": "deepseek-v4-pro" },
+      "defender": { "channel": "glm-zhipu", "model": "GLM-5.3" }
+    }
+  }
+}

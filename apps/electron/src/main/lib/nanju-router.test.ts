@@ -134,13 +134,13 @@ describe('quick/iterative 默认分级映射', () => {
 })
 
 describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
-  test('coding 节点定义：全栈开发 / deepseek-v4-pro / 08_APP/index.html / next=testing（Sprint B 改向）', () => {
+  test('coding 节点定义：全栈开发 / glm-zhipu:GLM-5.3（W13b 用户 09-04 07:25 核心裁定，经参数文件下发）/ 08_APP/index.html / next=testing（Sprint B 改向）', () => {
     for (const mode of ['quick', 'iterative'] as const) {
       const coding = getPhaseNode(mode, 'coding')
       expect(coding?.role).toBe('fullstack-developer')
       expect(coding?.title).toBe('全栈开发')
-      expect(coding?.channel).toBe('deepseek')
-      expect(coding?.model).toBe('deepseek-v4-pro')
+      expect(coding?.channel).toBe('glm-zhipu') // W13b：GLM 化（原 deepseek-v4-pro），值随 nanju-model-config 下发
+      expect(coding?.model).toBe('GLM-5.3')
       expect(coding?.outputPath).toBe('08_APP/index.html')
       expect(coding?.next).toBe('testing')
       expect(coding?.requiresUserConfirmation).toBe(true)
@@ -164,16 +164,101 @@ describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
     expect(checkOutputFormat('coding', '这不是 HTML，没有脚本')).toBe(false)
   })
 
-  test('coding 作者 deepseek 系与两套 AC 预设防御者（glm 系）均满足家族多样性断言', () => {
+  test('W13b：coding 作者换 glm 系后显式覆盖 acDefender=minimax 系（两档预设防御者均 glm 系会同族抛错；攻者两档均 deepseek 系 → 唯一异族备援，W13 testing 先例）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const coding = getPhaseNode(mode, 'coding')!
+      expect(coding.acDefenderChannel).toBe('minimax')
+      expect(coding.acDefenderModel).toBe('MiniMax-M3')
+      // 覆盖优先于预设（resolveACActors 显式字段优先）
+      const actors = resolveACActors(coding)
+      expect(actors.defender.channel).toBe('minimax')
+      expect(actors.defender.model).toBe('MiniMax-M3')
+      // 攻者仍为预设 deepseek 系（quick=light flash / iterative=medium pro）
+      expect(actors.attacker.channel).toBe('deepseek')
+      expect(actors.attacker.model).toBe(mode === 'quick' ? 'deepseek-v4-flash' : 'deepseek-v4-pro')
+    }
+  })
+
+  test('W13b 反例锁定：若不覆盖 acDefender，glm 作者与两档预设防御者必抛错（覆盖位的必要性回归钉）', () => {
+    for (const weight of ['light', 'medium'] as const) {
+      const coding = getPhaseNode('quick', 'coding')!
+      const presetDefender = AC_PRESETS[weight].defender.channel
+      expect(() => assertACFamilyDiversity({
+        authorChannel: coding.channel,
+        attackerChannel: 'deepseek',
+        defenderChannel: presetDefender,
+      })).toThrow('防御者渠道')
+    }
+  })
+
+  test('coding 作者与覆盖后的 AC 攻防满足家族多样性断言（defender=minimax ≠ author=glm；attacker=deepseek ≠ defender）', () => {
     for (const mode of ['quick', 'iterative'] as const) {
       const coding = getPhaseNode(mode, 'coding')!
       const actors = resolveACActors(coding)
-      expect(actors.defender.channel).not.toBe(coding.channel)
       expect(() => assertACFamilyDiversity({
         authorChannel: coding.channel,
         attackerChannel: actors.attacker.channel,
         defenderChannel: actors.defender.channel,
       })).not.toThrow()
+    }
+  })
+})
+
+describe('planning 阶段（W13：v4-pro → v4-flash 降档）', () => {
+  test('planning 节点定义：工程经理 / deepseek-v4-flash（模板化拆分，技术决策已由 architecture 终判）/ 05_PROJECT_PLAN/plan.md / next=coding', () => {
+    const planning = getPhaseNode('iterative', 'planning')
+    expect(planning?.role).toBe('engineering-manager')
+    expect(planning?.title).toBe('工程经理')
+    expect(planning?.channel).toBe('deepseek')
+    expect(planning?.model).toBe('deepseek-v4-flash') // W13 降档：无独立技术决策耦合，成本敏感
+    expect(planning?.outputPath).toBe('05_PROJECT_PLAN/plan.md')
+    expect(planning?.next).toBe('coding')
+    expect(planning?.requiresUserConfirmation).toBe(true)
+    expect(planning?.requiresAC).toBe(false)
+    expect(planning?.retryLimit).toBe(2)
+    expect(planning?.taskWeight).toBe('medium')
+    // quick 模式无 planning 节点（架构后直入 coding）
+    expect(getPhaseNode('quick', 'planning')).toBeUndefined()
+  })
+
+  test('planning 作者 deepseek-flash 与两档预设防御者（glm 系）均满足家族多样性断言（降档不影响断言）', () => {
+    const planning = getPhaseNode('iterative', 'planning')!
+    const actors = resolveACActors(planning)
+    expect(() => assertACFamilyDiversity({
+      authorChannel: planning.channel,
+      attackerChannel: actors.attacker.channel,
+      defenderChannel: actors.defender.channel,
+    })).not.toThrow()
+  })
+})
+
+describe('architecture 阶段（W13b：deepseek-v4-pro → glm-zhipu:GLM-5.3，用户 09-04 07:25 核心裁定）', () => {
+  test('两模式变体均换 GLM-5.3 + acDefender=minimax 覆盖（经参数文件下发；quick 变体同样需要——家族断言先于 skipInlineAC 执行）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const arch = getPhaseNode(mode, 'architecture')!
+      expect(arch.channel).toBe('glm-zhipu')
+      expect(arch.model).toBe('GLM-5.3')
+      expect(arch.acDefenderChannel).toBe('minimax')
+      expect(arch.acDefenderModel).toBe('MiniMax-M3')
+      const actors = resolveACActors(arch)
+      expect(actors.defender).toEqual({ channel: 'minimax', model: 'MiniMax-M3' })
+      expect(actors.attacker.model).toBe(mode === 'quick' ? 'deepseek-v4-flash' : 'deepseek-v4-pro')
+      expect(() => assertACFamilyDiversity({
+        authorChannel: arch.channel,
+        attackerChannel: actors.attacker.channel,
+        defenderChannel: actors.defender.channel,
+      })).not.toThrow()
+    }
+  })
+
+  test('W13b 反例锁定：不覆盖 acDefender 时 glm 作者与两档预设防御者必抛错（与 W13 testing 反例同型）', () => {
+    for (const weight of ['light', 'medium'] as const) {
+      const arch = getPhaseNode('iterative', 'architecture')!
+      expect(() => assertACFamilyDiversity({
+        authorChannel: arch.channel,
+        attackerChannel: 'deepseek',
+        defenderChannel: AC_PRESETS[weight].defender.channel,
+      })).toThrow('防御者渠道')
     }
   })
 })
@@ -238,19 +323,34 @@ describe('AC 家族多样性断言', () => {
 })
 
 describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', () => {
-  test('testing 节点定义：测试工程师 / deepseek-v4-pro（v0.17.63 回退，仲裁 selection_ruling）/ 06_TESTS/features/index.feature / next=delivered', () => {
+  test('testing 节点定义：测试工程师 / glm-5.3-flash（W13 用户裁定：机械任务+视觉+成本）/ 06_TESTS/features/index.feature / next=delivered', () => {
     for (const mode of ['quick', 'iterative'] as const) {
       const testing = getPhaseNode(mode, 'testing')
       expect(testing?.role).toBe('test-engineer')
       expect(testing?.title).toBe('测试工程师')
-      expect(testing?.channel).toBe('deepseek') // 纯文本 spec 生成任务，不绑视觉模型（AC F-001）
-      expect(testing?.model).toBe('deepseek-v4-pro')
+      expect(testing?.channel).toBe('glm-zhipu') // W13：机械任务+视觉能力+成本（替代 v4-pro 的贵+无视觉双重错配）
+      expect(testing?.model).toBe('glm-5.3-flash')
       expect(testing?.outputPath).toBe('06_TESTS/features/index.feature')
       expect(testing?.next).toBe('delivered')
       expect(testing?.requiresUserConfirmation).toBe(false) // 机器判定收口（裁判规则），不做人肉确认
       expect(testing?.requiresAC).toBe(false)
       expect(testing?.retryLimit).toBe(2) // PRD §9.3：测试回炉上限 2 次
       expect(testing?.taskWeight).toBe(mode === 'quick' ? 'light' : 'medium')
+    }
+  })
+
+  test('W13：testing 作者换 glm 系后显式覆盖 acDefender=minimax 系（两档预设防御者均 glm 系会同族抛错；攻者均 deepseek 系 → 唯一异族备援）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const testing = getPhaseNode(mode, 'testing')!
+      expect(testing.acDefenderChannel).toBe('minimax')
+      expect(testing.acDefenderModel).toBe('MiniMax-M3')
+      // 覆盖优先于预设（resolveACActors 显式字段优先）
+      const actors = resolveACActors(testing)
+      expect(actors.defender.channel).toBe('minimax')
+      expect(actors.defender.model).toBe('MiniMax-M3')
+      // 攻者仍为预设 deepseek 系（quick=light flash / iterative=medium pro）
+      expect(actors.attacker.channel).toBe('deepseek')
+      expect(actors.attacker.model).toBe(mode === 'quick' ? 'deepseek-v4-flash' : 'deepseek-v4-pro')
     }
   })
 
@@ -263,6 +363,18 @@ describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', ()
         attackerChannel: actors.attacker.channel,
         defenderChannel: actors.defender.channel,
       })).not.toThrow()
+    }
+  })
+
+  test('W13 反例锁定：若不覆盖 acDefender，glm 作者与预设防御者同族必抛错（覆盖位的必要性回归锥）', () => {
+    for (const weight of ['light', 'medium'] as const) {
+      const testing = getPhaseNode('quick', 'testing')!
+      const presetDefender = AC_PRESETS[weight].defender.channel
+      expect(() => assertACFamilyDiversity({
+        authorChannel: testing.channel,
+        attackerChannel: 'deepseek',
+        defenderChannel: presetDefender,
+      })).toThrow('防御者渠道')
     }
   })
 

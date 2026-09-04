@@ -24,6 +24,8 @@ export type TelemetryEventType =
   | 'delegate.guard.stage-deny' | 'delegate.guard.pass-unmatched' | 'delegate.guard.ac-override'
   // W10 推进闭环强化：unmatched 强动词拒绝 + 确认待推进提示
   | 'delegate.guard.unmatched-action-deny' | 'confirm.advance-hint'
+  // W13 模型 fallback 让步链：委派降级可观测（原值→新值→原因）
+  | 'model.fallback.used'
 
 export interface TelemetryEvent {
   eventId: string

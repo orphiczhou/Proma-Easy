@@ -13,6 +13,12 @@
 
 import type { ProjectMode } from './nanju-project'
 import { CATEGORY_MARKER_GUIDE } from './nanju-engineering-template'
+import {
+  FALLBACK_AC_PRESETS,
+  resolveAcPreset,
+  resolvePhaseModelConfig,
+  type NanjuModelPhaseId,
+} from './nanju-model-config'
 import type { GuideRoutePhase } from '@proma/shared'
 
 // ===== 类型定义 =====
@@ -55,20 +61,13 @@ export interface ACActorConfig {
 
 /**
  * AC 审计预设表。
+ * W13b（v0.17.75）：本常量为代码兜底层（层 3），与内置 resources/nanju-model-config.json
+ * 的 acPresets 同值——一致性由 nanju-model-config.test.ts 锁定测试保证；运行时攻防取值
+ * 经 resolveAcPreset 从参数文件解析（~/.proma/ 用户覆盖 > 内置 json > 本兜底）。
  * 攻击者固定 deepseek 家族、防御者固定智谱家族，避免与常见作者渠道同家族；
  * light 用快模型（快消型项目），medium 用强模型（长期迭代型项目）。
  */
-export const AC_PRESETS: Record<TaskWeight, { attacker: ACActorConfig; defender: ACActorConfig }> = {
-  light: {
-    attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' },
-    // W4：glm-5-turbo 已在 glm-zhipu 渠道下线（悬空引用），快模型档位由 glm-5.3-flash 顶替
-    defender: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
-  },
-  medium: {
-    attacker: { channel: 'deepseek', model: 'deepseek-v4-pro' },
-    defender: { channel: 'glm-zhipu', model: 'GLM-5.3' },
-  },
-}
+export const AC_PRESETS = FALLBACK_AC_PRESETS
 
 /**
  * AC 攻/防可选池（W4）：预设之外的可选角色配置，供 PhaseNode 的 acAttacker / acDefender
@@ -123,7 +122,8 @@ export function assertACFamilyDiversity(input: {
  * 未标注 taskWeight 时按 medium 处理。
  */
 export function resolveACActors(phase: PhaseNode): { attacker: ACActorConfig; defender: ACActorConfig } {
-  const preset = AC_PRESETS[phase.taskWeight ?? 'medium']
+  // W13b：预设从参数文件解析（resolveAcPreset：两层外置 + 代码兜底），显式字段仍优先
+  const preset = resolveAcPreset(phase.taskWeight ?? 'medium')
   return {
     attacker: {
       channel: phase.acAttackerChannel ?? preset.attacker.channel,
@@ -176,13 +176,30 @@ const SENTINEL: PhaseNode = {
   next: null,
 }
 
-/** 需求阶段基础定义（各模式共用；taskWeight 在 makeRoute 中按模式赋值） */
-const REQUIREMENTS_BASE: Omit<PhaseNode, 'taskWeight'> = {
+/**
+ * W13b（v0.17.75）：阶段模型配置从外置参数文件解析（~/.proma/nanju-model-config.json 用户覆盖
+ * > resources/nanju-model-config.json 内置 > nanju-model-config.ts 代码兑底），叠加到节点的
+ * channel/model 与 AC 覆盖位。含 per-phase AC 防御者覆盖（coding/architecture/testing =
+ * minimax:MiniMax-M3，家族多样性必查项，见 FALLBACK_PHASE_MODELS 注释）。本文件内原有的
+ * 节点字面硬编码模型值已收敛到兑底常量（与内置 json 同值，锁定测试保证一致）。
+ */
+function phaseModelFields(id: NanjuModelPhaseId): Pick<PhaseNode, 'channel' | 'model'>
+  & Partial<Pick<PhaseNode, 'acAttackerChannel' | 'acAttackerModel' | 'acDefenderChannel' | 'acDefenderModel'>> {
+  const cfg = resolvePhaseModelConfig(id)
+  return {
+    channel: cfg.channel,
+    model: cfg.model,
+    ...(cfg.acAttacker ? { acAttackerChannel: cfg.acAttacker.channel, acAttackerModel: cfg.acAttacker.model } : {}),
+    ...(cfg.acDefender ? { acDefenderChannel: cfg.acDefender.channel, acDefenderModel: cfg.acDefender.model } : {}),
+  }
+}
+
+/** 需求阶段基础定义（各模式共用；taskWeight 在 makeRoute 中按模式赋值；
+ *  channel/model 由 phaseModelFields 从参数文件解析，W13b） */
+const REQUIREMENTS_BASE: Omit<PhaseNode, 'taskWeight' | 'channel' | 'model'> = {
   id: 'requirements',
   role: 'requirement-analyst',
   title: '需求分析师',
-  channel: 'deepseek',
-  model: 'deepseek-v4-pro',
   task: '你是需求分析师。与用户对话收集需求，产出 PRD。',
   outputPath: '01_PRD/prd.md',
   constraints: [
@@ -210,7 +227,7 @@ const REQUIREMENTS_BASE: Omit<PhaseNode, 'taskWeight'> = {
  */
 function makeRoute(mode: ProjectMode): PhaseNode[] {
   const defaultWeight: TaskWeight = mode === 'quick' ? 'light' : 'medium'
-  const REQUIREMENTS: PhaseNode = { ...REQUIREMENTS_BASE, taskWeight: defaultWeight }
+  const REQUIREMENTS: PhaseNode = { ...REQUIREMENTS_BASE, ...phaseModelFields('requirements'), taskWeight: defaultWeight }
 
   const prototype: PhaseNode = {
     id: 'prototype',
@@ -218,8 +235,8 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     title: 'UX 顾问',
     // 作者为 MiniMax-M3（视觉模型）。minimax 渠道 ID 是 UUID（release/dev 环境不同），
     // 这里的 'minimax' 只是家族标记；实际渠道在构建委派指令时运行时解析（见 nanju-router-prompt.ts）。
-    channel: 'minimax',
-    model: 'MiniMax-M3',
+    // W13b：值随参数文件下发（phaseModelFields）。
+    ...phaseModelFields('prototype'),
     task: '你是 UX 顾问。根据 PRD 生成可交互 HTML 原型。',
     outputPath: '02_UX_DESIGN/prototype.html',
     constraints: [
@@ -240,14 +257,17 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
 
   // coding 阶段（P1 Sprint A：v0.17.60 向导域→编程域贯通）
   // 两条路由共用同一节点（quick: prototype→coding→delivered；iterative: planning→coding→delivered）。
-  // 作者选 deepseek 系：与 light/medium 两套 AC 预设防御者（glm 系）均满足家族多样性断言；
-  // 若后续切 GLM 系作者，必须显式覆盖 acDefender*（PhaseNode 已预留覆盖位）。
+  // W13b（v0.17.75，用户 09-04 07:25 核心裁定）：作者换 glm-zhipu:GLM-5.3（备选链
+  // glm-5.3-flash → deepseek-v4-flash），经参数文件 phaseModelFields 下发。
+  // AC 家族多样性（必查项）：作者 glm 系与两档预设防御者（light=glm-5.3-flash /
+  // medium=GLM-5.3，均 glm 系）同族 → 构建期必抛错；攻者两档均 deepseek 系 → 防御者
+  // 唯一可用异族 = minimax 系，per-phase 显式覆盖 acDefender=MiniMax-M3（W13 testing 先例；
+  // 'minimax' 仅是家族标记，构建 L2 指令时运行时解析，见 nanju-router-prompt.ts）。
   const coding: PhaseNode = {
     id: 'coding',
     role: 'fullstack-developer',
     title: '全栈开发',
-    channel: 'deepseek',
-    model: 'deepseek-v4-pro',
+    ...phaseModelFields('coding'),
     task: '你是全栈开发工程师。先阅读任务末尾「前序产出文件」一节实际列出的产出（PRD 必读；原型按取舍提示阅读），'
       + '然后生成可直接在浏览器运行的零构建应用代码，入口写入 08_APP/index.html。',
     outputPath: '08_APP/index.html',
@@ -271,10 +291,18 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
   }
 
   // testing 阶段（P1 Sprint B：GWT 验收测试 + 裁判判定闭环）
-  // 作者回 deepseek-v4-pro（v0.17.63，AC F-001/仲裁 selection_ruling）：测试工程师是纯文本
-  // spec 生成任务（Gherkin + steps.json），不绑视觉模型；与 coding 作者同渠道不构成构建期
-  // 约束（assertACFamilyDiversity 只要求 defender≠author / attacker≠defender，coding 阶段
-  // deepseek 作者 + deepseek 攻击者已是生产先例），不再自设「testing≠coding 家族」断言。
+  // 作者换 glm-5.3-flash（W13，v0.17.75，用户 09-03 23:54 裁定）：GWT 场景生成是机械
+  // 任务（PRD US-xx → Gherkin + steps.json 映射），glm-5.3-flash 成本档更低且带视觉
+  // 能力（可 Read 截图辅助场景设计），替代 v0.17.63 仲裁回退的 deepseek-v4-pro
+  // （贵+无视觉双重错配）。
+  // AC 家族多样性（W13 必查项）：assertACFamilyDiversity 要求 defender≠author 家族 +
+  // attacker≠defender 家族。作者换 glm 系后，light/medium 两档预设防御者（glm-5.3-flash /
+  // GLM-5.3）均为 glm 系 → 两模式都会在构建期抛错；攻者两档均为 deepseek 系 → 防御者
+  // 唯一可用异族是 minimax 系，故显式覆盖 acDefender=MiniMax-M3。W13b 起该覆盖随参数
+  // 文件下发（phases.testing.acDefender，per-phase 覆盖能力）；'minimax' 仅是家族标记，
+  // 渠道 ID 是 UUID，构建 L2 指令时运行时解析（getNanjuRouterPrompt，同 prototype 作者
+  // 模式）；未配置 minimax 渠道时降级用字面值（家族断言仍过，AC 委派启动会失败并走
+  // fallback/重试链，可观测后人工处理）。
   // 机器判定推进（requiresUserConfirmation=false）：场景产出后推进即触发 GWT 机器裁判
   // （全场景通过 + 用户故事全覆盖）。W12 交付验收后置：GWT-pass 后的交付确认由 GWT 结果
   // 处理直接注入（不经本节点的 requiresUserConfirmation 机制，避免改 PhaseNode 语义引发连锁）。
@@ -282,8 +310,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     id: 'testing',
     role: 'test-engineer',
     title: '测试工程师',
-    channel: 'deepseek',
-    model: 'deepseek-v4-pro',
+    ...phaseModelFields('testing'), // 含 acDefender=minimax 覆盖（W13b 起随参数文件下发）
     task: '你是测试工程师。依据 PRD 用户故事清单，为每条故事生成 GWT 验收场景（中文 Gherkin）'
       + '及可执行的步骤映射（steps.json），写入 06_TESTS/。',
     outputPath: '06_TESTS/features/index.feature', // 汇总入口文件（FORMAT_CHECKS 用）
@@ -321,13 +348,17 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
   // PhaseNode 与 defaultWeight 惯例，quick 轻量化方案 A + 四层兑底，用户 U1-U5 已确认）：
   // - quick 变体：免 AC 攻防；用户确认与环境就绪合并为一次（一条消息看架构摘要+环境清单）。
   // - iterative 变体：完整 AC 攻防 + 职责扩充（模板参考 + 环境配置清单节）。
+  // W13b（v0.17.75，用户 09-04 07:25 核心裁定）：作者换 glm-zhipu:GLM-5.3（备选
+  // deepseek-v4-pro，用户指定备选），经参数文件 phaseModelFields 下发；两变体同源。
+  // AC 防御者 per-phase 覆盖 minimax:MiniMax-M3（家族多样性：glm 作者 + glm 系预设防御者
+  // 同族必抛错，同 W13 testing 先例）——quick 变体虽免 inline AC 攻防，但家族断言在构建
+  // L2 指令时仍执行（buildL2TaskWithAC 断言先于 skipInlineAC 分支）→ 覆盖两变体都必须存在。
   const architecture: PhaseNode = mode === 'quick'
     ? {
       id: 'architecture',
       role: 'architect',
       title: '架构师',
-      channel: 'deepseek',
-      model: 'deepseek-v4-pro',
+      ...phaseModelFields('architecture'),
       task: '你是架构设计师。根据 PRD 和原型，产出精简架构文档（约 30-60 行）：'
         + '品类终判（projectCategory 标记）+ 技术选型（每项一句话理由）'
         + '+ 组件清单（含环境探测结果）+ 环境就绪结论。',
@@ -347,8 +378,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       id: 'architecture',
       role: 'architect',
       title: '架构师',
-      channel: 'deepseek',
-      model: 'deepseek-v4-pro',
+      ...phaseModelFields('architecture'),
       task: '你是架构设计师。根据 PRD 和原型，产出架构文档（技术选型、目录结构、API 规范、'
         + '环境配置清单）。',
       outputPath: '03_ARCHITECTURE/architecture.md',
@@ -382,12 +412,17 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     return [REQUIREMENTS, prototype, architecture, coding, testing, SENTINEL]
   }
 
+  // W13（v0.17.75）降档评估：planning 是模板化拆分——task 为「根据架构，产出工程计划」，
+  // 技术选型/品类/环境已由 architecture 阶段终判（planning 只确认与排期），约束仅
+  // 「技术栈确定 + 开发计划/里程碑」两条，输入是现成的 PRD + architecture.md，无独立
+  // 技术决策耦合 → deepseek-v4-pro 降 deepseek-v4-flash（成本敏感，工单授权自主评估、
+  // 倾向可降则降）。评估过程与理由记录于 plan/w13-report.md §2。
+  // AC 家族：作者 deepseek 系，light/medium 防御者均 glm 系 ✓（断言不受降档影响）。
   const planning: PhaseNode = {
     id: 'planning',
     role: 'engineering-manager',
     title: '工程经理',
-    channel: 'deepseek',
-    model: 'deepseek-v4-pro',
+    ...phaseModelFields('planning'), // deepseek-v4-flash（W13b 起随参数文件下发）
     task: '你是工程经理。根据架构，产出工程计划。',
     outputPath: '05_PROJECT_PLAN/plan.md',
     constraints: ['技术栈确定', '开发计划 + 里程碑'],

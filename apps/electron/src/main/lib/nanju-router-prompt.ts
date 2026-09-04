@@ -69,6 +69,29 @@ export function resolvePrototypeAuthor(): ResolvedChannelModel {
   return resolved
 }
 
+/**
+ * W13：运行时解析 MiniMax-M3 作为 AC 防御者渠道（testing 阶段作者换 glm 系后的异族覆盖）。
+ * 与 resolvePrototypeAuthor 同源解析，但未配置时返回 null 而非抛错——防御者是审计角色，
+ * 缺失不应阻断整个阶段 prompt 构建：降级用 PhaseNode 字面家族标记 'minimax'
+ * （assertACFamilyDiversity 仍按 family-minimax 通过），AC 委派启动会失败并可观测
+ * （model-not-found 错误 + fallback 链），人工补配渠道后自然恢复。
+ *
+ * electron 可用性探测（必须）：测试环境（bun）解析到真实 npm 包时它只导出安装路径
+ * 字符串，此时 require channel-manager 会在链接期抛不可捕获的 SyntaxError（named
+ * import safeStorage/shell 缺失）并毒化模块——先探测再 require，测试环境安全降级。
+ */
+export function resolveMinimaxM3Actor(): ResolvedChannelModel | null {
+  try {
+    const electronModule = require('electron') as unknown
+    if (typeof electronModule !== 'object' || electronModule === null) return null
+    const { listChannels } = require('./channel-manager') as typeof import('./channel-manager')
+    return resolveMinimaxM3Channel(listChannels())
+  } catch {
+    // 测试环境/解析异常：降级为字面家族标记（不阻断）
+    return null
+  }
+}
+
 /** 读取前序阶段产出文件路径列表 */
 function getPriorArtifacts(workspaceSlug: string, projectId: string, currentPhase: PhaseId): string[] {
   const projectDir = getNanjuProjectDir(workspaceSlug, projectId)
@@ -113,6 +136,9 @@ function getPrdSummary(workspaceSlug: string, projectId: string): string {
  * @param author 作者实际委派渠道/模型（prototype 阶段为运行时解析的 minimax 渠道，其余阶段为节点字面值）
  * @param categoryInfo 工程品类判定（W3，v0.17.66，仅 coding 阶段消费）：undefined 表示
  *   未传入（测试兼容旧签名）——与 source=default 同样按降级 web-fullstack 处理并注入自检
+ * @param acDefenderRuntime W13：AC 防御者运行时解析值（testing 阶段=minimax UUID 渠道）。
+ *   提供时覆盖 resolveACActors 解析出的防御者渠道/模型（家族断言用解析后的渠道判定）；
+ *   null/缺省 = 用节点解析值（字面家族标记，向后兼容）
  */
 export function buildL2TaskWithAC(
   phase: PhaseNode,
@@ -121,6 +147,7 @@ export function buildL2TaskWithAC(
   priorArtifacts: string[],
   projectDir: string,
   categoryInfo?: { category: ProjectCategory; source: ProjectCategorySource } | null,
+  acDefenderRuntime?: { channel: string; model: string } | null,
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
@@ -257,6 +284,10 @@ export function buildL2TaskWithAC(
   // ATK/DEF/GATE（结构忠实：不注入不渲染，图与行为一致）。
   const skipInlineAC = phase.id === 'architecture' && !phase.requiresAC
   const actors = resolveACActors(phase)
+  // W13：防御者运行时解析值优先（testing 阶段 minimax UUID 渠道；缺省回退节点解析值）
+  if (acDefenderRuntime) {
+    actors.defender = { channel: acDefenderRuntime.channel, model: acDefenderRuntime.model }
+  }
   const attackerCh = actors.attacker.channel
   const attackerModel = actors.attacker.model
   const defenderCh = actors.defender.channel
@@ -379,11 +410,16 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   // 新阶段 Todo 强制前缀（向导图进度徽标按此解析；delivered 无新 Todo，PRD 修订 Y5）
   const nextTodoPrefix = nextPhase !== 'delivered' ? PHASE_TODO_PREFIX[nextPhase as Exclude<typeof nextPhase, 'delivered'>] : null
 
-  // prototype 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析
-  // （v0.17.63：testing 作者回 deepseek-v4-pro，不再走视觉渠道解析）
+  // prototype 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析。
+  // W13：testing 作者换 glm-5.3-flash（字面渠道即可，与 AC 预设防御者同惯例）；
+  // testing 的 AC 防御者=minimax 家族覆盖（UUID 渠道），构建 L2 指令时运行时解析
   const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
   const authorChannel = authorOverride?.channelId ?? phase.channel
   const authorModel = authorOverride?.modelId ?? phase.model
+  const acDefenderRuntime = phase.acDefenderChannel === 'minimax' ? resolveMinimaxM3Actor() : null
+  const acDefenderEndpoint = acDefenderRuntime
+    ? { channel: acDefenderRuntime.channelId, model: acDefenderRuntime.modelId }
+    : null
 
   // 工程品类（W3，v0.17.66，仅 coding 消费）：优先读推进钩子写入的判定结果；
   // 读不到（老项目/钩子未触发）时现场从文档提取降级判定，并顺手补写元信息与模板落位
@@ -403,7 +439,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   }
 
   // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导）
-  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo)
+  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo, acDefenderEndpoint)
 
   // M7（AC 审计 A9-timing，v0.17.69）：主进程预校验——architecture 阶段构建 L1 指令时
   // 现场对 architecture.md 环境清单跑 validateEnvChecklist（§九「清单执行前过确定性规则

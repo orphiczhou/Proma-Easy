@@ -91,6 +91,11 @@ extraResources:
     to: nanju-engineering-templates
     filter:
       - "**/*"
+  # 南大向导全环节模型参数文件（W13b，v0.17.75）：两层外置的内置层
+  # （~/.proma/ 用户覆盖 > 本文件 > 代码兜底常量；加载逻辑见
+  # src/main/lib/nanju-model-config.ts）
+  - from: resources/nanju-model-config.json
+    to: nanju-model-config.json
 
 # ============================================
 # macOS 配置

@@ -9,14 +9,19 @@ import { describe, expect, test } from 'bun:test'
 import { getGuideRoute, getRoute, AC_PRESETS } from './nanju-router'
 
 describe('getGuideRoute（nanju:get-route 数据面）', () => {
-  test('quick：6 个阶段（含 delivered 哨兵；W7 v0.17.69 起必经 architecture 轻量变体），taskWeight=light，acActors=light 预设', () => {
+  test('quick：6 个阶段（含 delivered 哨兵；W7 v0.17.69 起必经 architecture 轻量变体），taskWeight=light，acActors=light 预设（W13b 例外：architecture/coding/testing 防御者=minimax 覆盖）', () => {
     const route = getGuideRoute('quick')
     expect(route.length).toBe(6)
     expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'coding', 'testing', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('light')
-      expect(phase.acActors).toEqual(AC_PRESETS.light)
+      // W13b：作者 glm 系阶段（architecture/coding）防御者显式覆盖 minimax 系
+      // （testing 为 W13 先例；其余阶段 = light 预设）
+      const expected = phase.id === 'architecture' || phase.id === 'coding' || phase.id === 'testing'
+        ? { attacker: AC_PRESETS.light.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
+        : AC_PRESETS.light
+      expect(phase.acActors).toEqual(expected)
     }
     // 哨兵节点字段为空（渲染端按 id==='delivered' 过滤，修订 Y3）
     const sentinel = route.find((p) => p.id === 'delivered')
@@ -24,13 +29,16 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(sentinel?.outputPath).toBe('')
   })
 
-  test('iterative：7 个阶段（含 delivered 哨兵；Sprint B 起 testing 入路由），taskWeight=medium，acActors=medium 预设', () => {
+  test('iterative：7 个阶段（含 delivered 哨兵；Sprint B 起 testing 入路由），taskWeight=medium，acActors=medium 预设（W13b 例外：architecture/coding/testing 防御者=minimax 覆盖）', () => {
     const route = getGuideRoute('iterative')
     expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('medium')
-      expect(phase.acActors).toEqual(AC_PRESETS.medium)
+      const expected = phase.id === 'architecture' || phase.id === 'coding' || phase.id === 'testing'
+        ? { attacker: AC_PRESETS.medium.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
+        : AC_PRESETS.medium
+      expect(phase.acActors).toEqual(expected)
     }
   })
 
@@ -79,18 +87,25 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     }
   })
 
-  test('阶段角色与模型（v0.16.87 基准：UX 顾问为 MiniMax-M3 家族标记；v0.17.60：coding 为全栈开发）', () => {
+  test('阶段角色与模型（v0.16.87 基准：UX 顾问为 MiniMax-M3 家族标记；W13b：coding/architecture 换 glm-zhipu:GLM-5.3）', () => {
     const iterative = getGuideRoute('iterative')
     const byTitle = (phase: string) => iterative.find((p) => p.id === phase)
     expect(byTitle('requirements')?.title).toBe('需求分析师')
     expect(byTitle('prototype')?.model).toBe('MiniMax-M3')
     expect(byTitle('architecture')?.title).toBe('架构师')
+    // W13b：架构师 GLM 化（用户 09-04 07:25 核心裁定，经参数文件下发）
+    expect(byTitle('architecture')?.model).toBe('GLM-5.3')
+    expect(byTitle('architecture')?.channel).toBe('glm-zhipu')
     expect(byTitle('planning')?.title).toBe('工程经理')
     expect(byTitle('coding')?.title).toBe('全栈开发')
     expect(byTitle('coding')?.role).toBe('fullstack-developer')
-    expect(byTitle('coding')?.model).toBe('deepseek-v4-pro')
-    // v0.17.63：测试工程师回 deepseek-v4-pro（纯文本 spec 任务，不绑视觉模型）
-    expect(byTitle('testing')?.model).toBe('deepseek-v4-pro')
-    expect(byTitle('testing')?.channel).toBe('deepseek')
+    // W13b：coding GLM 化（原 deepseek-v4-pro）
+    expect(byTitle('coding')?.model).toBe('GLM-5.3')
+    expect(byTitle('coding')?.channel).toBe('glm-zhipu')
+    // W13：测试工程师换 glm-5.3-flash（机械任务+视觉+成本，用户 09-03 裁定）
+    expect(byTitle('testing')?.model).toBe('glm-5.3-flash')
+    expect(byTitle('testing')?.channel).toBe('glm-zhipu')
+    // W13：planning 降档 deepseek-v4-flash（模板化拆分）
+    expect(byTitle('planning')?.model).toBe('deepseek-v4-flash')
   })
 })

@@ -37,12 +37,15 @@ import {
   resolveDelegationPermissionMode,
 } from './agent-collaboration-utils'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel, pickDefaultModelForChannel } from './agent-model-selection'
+import { findNanjuFallbackProject, getFallbackChain, recordModelFallbackUsed, type ModelEndpoint } from './nanju-model-fallback'
 
 interface CollaborationToolContext {
   sessionId: string
   channelId: string
   modelId?: string
   workspaceId?: string
+  /** W13：工作区 slug（nanju fallback 链的范围判定与埋点路径用；普通会话可不传） */
+  workspaceSlug?: string
   permissionMode?: PromaPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation'
 }
@@ -746,23 +749,68 @@ function startDelegation(
     args.permissionMode,
   )
   // 目标渠道：未传则继承父会话渠道
-  const effectiveChannelId = args.channelId && args.channelId.trim()
+  let effectiveChannelId = args.channelId && args.channelId.trim()
     ? args.channelId.trim()
     : ctx.channelId
+  // W13 模型 fallback 让步链（nanju 会话范围限定）：显式 channel:model 委派的启动失败
+  // （渠道/模型校验抛错，或 headless 启动/运行失败）按链降级重试，重试次数 ≤ 链长；
+  // 每次降级埋点 model.fallback.used（原值→新值→原因）。委派内容（task/权限模式）不变
+  // 只换执行模型——非「超范围」变更，不重复扣用户确认；全链失败走既有失败路径。
+  // 范围限定：parent 会话必须是 nanju 项目绑定的 L1 调度员会话（findNanjuProjectBySession
+  // 同模式）；普通 Proma 会话与 L2 内部 inline AC 委派不在保护范围（链为空 = 零行为变化）。
+  const fallbackProject = findNanjuFallbackProject(ctx.workspaceSlug, ctx.sessionId)
+  const fallbackChain = fallbackProject
+    ? getFallbackChain(effectiveChannelId, args.modelId?.trim())
+    : []
+  let fallbackIndex = 0
+  let fallbackFrom: ModelEndpoint = { channelId: effectiveChannelId, modelId: args.modelId?.trim() ?? '' }
+  /** 推进降级链：返回下一端点或 null（链尽/不在范围）；埋点后自增游标 */
+  const advanceFallback = (reason: string): ModelEndpoint | null => {
+    if (fallbackIndex >= fallbackChain.length) return null
+    const next = fallbackChain[fallbackIndex]
+    if (!next) return null
+    fallbackIndex += 1
+    if (ctx.workspaceSlug) {
+      recordModelFallbackUsed({
+        workspaceSlug: ctx.workspaceSlug,
+        project: fallbackProject,
+        from: fallbackFrom,
+        to: next,
+        reason,
+        context: { delegationTitle: title, parentSessionId: ctx.sessionId },
+      })
+    }
+    fallbackFrom = next
+    return next
+  }
   // 目标模型：
   // - 显式传了 modelId → 校验属于目标渠道且已启用
   // - 跨渠道但未传 modelId → 自动选目标渠道第一个 enabled 模型
   //   （若沿用父会话 modelId，它属于另一个渠道，下游会以 API 400 失败）
   // - 同渠道且未传 → 继承父会话模型
-  const effectiveModelId = args.modelId !== undefined
-    ? assertEnabledModelForChannel({
-        channelId: effectiveChannelId,
-        modelId: args.modelId,
-        purpose: '创建协作子会话',
-      })
-    : effectiveChannelId !== ctx.channelId
-      ? pickDefaultModelForChannel({ channelId: effectiveChannelId, purpose: '跨渠道协作子会话' })
-      : ctx.modelId?.trim() || undefined
+  // W13：校验抛错（渠道不存在/模型未启用）时按链降级后重校（同步启动失败的重试点）
+  let effectiveModelId: string | undefined
+  let requestedModelId = args.modelId
+  for (;;) {
+    try {
+      effectiveModelId = requestedModelId !== undefined
+        ? assertEnabledModelForChannel({
+            channelId: effectiveChannelId,
+            modelId: requestedModelId,
+            purpose: '创建协作子会话',
+          })
+        : effectiveChannelId !== ctx.channelId
+          ? pickDefaultModelForChannel({ channelId: effectiveChannelId, purpose: '跨渠道协作子会话' })
+          : ctx.modelId?.trim() || undefined
+      break
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      const next = advanceFallback(reason)
+      if (!next) throw error
+      effectiveChannelId = next.channelId
+      requestedModelId = next.modelId
+    }
+  }
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
@@ -824,41 +872,70 @@ function startDelegation(
     allowSubDelegation: args.allowSubDelegation === true,
   })
 
-  runRegisteredHeadlessAgent(
-    {
-      sessionId: child.id,
-      userMessage: prompt,
-      // 运行渠道必须用目标渠道（effectiveChannelId），而不是父会话渠道：
-      // orchestrator 会用这里的 channelId 解析 baseUrl/apiKey，若误传父渠道，
-      // 请求会打到父渠道端点 + 子渠道模型名，直接 API 400（如智谱端点收到
-      // deepseek-v4-pro 会报 1214 modelCode 不存在）。
-      channelId: effectiveChannelId,
-      modelId: effectiveModelId,
-      workspaceId: ctx.workspaceId,
-      permissionModeOverride: permissionMode,
-      triggeredBy: 'delegation',
-      startedAt: record.startedAt,
-    },
-    {
-      source: 'delegation',
-      originSessionId: ctx.sessionId,
-      onError: (error) => {
-        markDelegationFinished(record, 'failed', { error })
+  // W13：headless 启动/运行失败（promise 拒绝或 onError 回调——如渠道解析失败、
+  // API 鉴权/模型错误）按链降级重试。generation 守卫：被降级取代的旧 run 的
+  // onComplete/onError 回调直接丢弃——防旧 run 收尾回调把新 run 的 record 误标
+  // completed/failed（runAgentHeadless 的 catch 分支会先 onError 后 onComplete 连发）。
+  // 重试复用同一 delegationId/childSessionId：wait_for_delegations 等待不中断、
+  // 委派内容不变不重复扣用户确认；record.channelId/modelId 随降级更新（可观测）。
+  let runGeneration = 0
+  const launchHeadlessRun = (runChannelId: string, runModelId: string | undefined): void => {
+    const generation = ++runGeneration
+    runRegisteredHeadlessAgent(
+      {
+        sessionId: child.id,
+        userMessage: prompt,
+        // 运行渠道必须用目标渠道（runChannelId），而不是父会话渠道：
+        // orchestrator 会用这里的 channelId 解析 baseUrl/apiKey，若误传父渠道，
+        // 请求会打到父渠道端点 + 子渠道模型名，直接 API 400（如智谱端点收到
+        // deepseek-v4-pro 会报 1214 modelCode 不存在）。
+        channelId: runChannelId,
+        modelId: runModelId,
+        workspaceId: ctx.workspaceId,
+        permissionModeOverride: permissionMode,
+        triggeredBy: 'delegation',
+        startedAt: record.startedAt,
       },
-      onComplete: (messages) => {
-        if (record.status !== 'running') return
-        const resultSummary = summarizeChildResult(child.id, messages)
-        markDelegationFinished(record, 'completed', { resultSummary })
+      {
+        source: 'delegation',
+        originSessionId: ctx.sessionId,
+        onError: (error) => {
+          if (generation !== runGeneration) return
+          const next = advanceFallback(error)
+          if (next) {
+            record.channelId = next.channelId
+            record.modelId = next.modelId
+            launchHeadlessRun(next.channelId, next.modelId)
+            return
+          }
+          markDelegationFinished(record, 'failed', { error })
+        },
+        onComplete: (messages) => {
+          if (generation !== runGeneration) return
+          if (record.status !== 'running') return
+          const resultSummary = summarizeChildResult(child.id, messages)
+          markDelegationFinished(record, 'completed', { resultSummary })
+        },
+        onTitleUpdated: (updatedTitle) => {
+          record.title = updatedTitle
+        },
       },
-      onTitleUpdated: (updatedTitle) => {
-        record.title = updatedTitle
-      },
-    },
-  ).catch((error: unknown) => {
-    markDelegationFinished(record, 'failed', {
-      error: error instanceof Error ? error.message : '未知错误',
+    ).catch((error: unknown) => {
+      if (generation !== runGeneration) return
+      const message = error instanceof Error ? error.message : '未知错误'
+      const next = advanceFallback(message)
+      if (next) {
+        record.channelId = next.channelId
+        record.modelId = next.modelId
+        launchHeadlessRun(next.channelId, next.modelId)
+        return
+      }
+      markDelegationFinished(record, 'failed', {
+        error: message,
+      })
     })
-  })
+  }
+  launchHeadlessRun(effectiveChannelId, effectiveModelId)
 
   return { record, effectivePermissionMode: permissionMode, effectiveModelId }
 }

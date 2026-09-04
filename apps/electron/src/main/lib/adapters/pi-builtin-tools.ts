@@ -1191,6 +1191,8 @@ export async function buildPiBuiltinTools(
         channelId: ctx.channelId,
         modelId: ctx.modelId,
         workspaceId: ctx.workspaceId,
+        // W13：nanju fallback 让步链的范围判定与埋点路径用
+        workspaceSlug: ctx.workspaceSlug,
         permissionMode: ctx.permissionMode,
         triggeredBy: ctx.triggeredBy,
       })

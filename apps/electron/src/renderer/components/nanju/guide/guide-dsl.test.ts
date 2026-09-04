@@ -23,6 +23,14 @@ import {
 
 const LIGHT_ACTORS = { attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' }, defender: { channel: 'glm-zhipu', model: 'glm-5.3-flash' } }
 const MEDIUM_ACTORS = { attacker: { channel: 'deepseek', model: 'deepseek-v4-pro' }, defender: { channel: 'glm-zhipu', model: 'GLM-5.3' } }
+// W13：testing 作者换 glm-5.3-flash → 防御者显式覆盖 minimax 系（异族约束，两档同形）
+const TESTING_LIGHT_ACTORS = { attacker: LIGHT_ACTORS.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
+const TESTING_MEDIUM_ACTORS = { attacker: MEDIUM_ACTORS.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
+// W13b：architecture/coding 作者换 glm 系 → 防御者同样显式覆盖 minimax 系（同 W13 testing 先例）
+const ARCH_LIGHT_ACTORS = { attacker: LIGHT_ACTORS.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
+const ARCH_MEDIUM_ACTORS = { attacker: MEDIUM_ACTORS.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
+const CODE_LIGHT_ACTORS = { attacker: LIGHT_ACTORS.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
+const CODE_MEDIUM_ACTORS = { attacker: MEDIUM_ACTORS.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
 
 function makePhase(overrides: Partial<GuideRoutePhase>): GuideRoutePhase {
   return {
@@ -57,18 +65,19 @@ const QUICK_ROUTE: GuideRoutePhase[] = [
     outputPath: '02_UX_DESIGN/prototype.html', retryLimit: 2, next: 'architecture', taskWeight: 'light', acActors: LIGHT_ACTORS,
   }),
   // W7（v0.17.69）：quick 必经架构师轻量变体（requiresAC=false → DSL 精简链 ARCH→ENV→UC）
+  // W13b：architecture 换 glm-zhipu:GLM-5.3（经参数文件下发）
   makePhase({
-    id: 'architecture', role: 'architect', title: '架构师', channel: 'deepseek', model: 'deepseek-v4-pro',
+    id: 'architecture', role: 'architect', title: '架构师', channel: 'glm-zhipu', model: 'GLM-5.3',
     outputPath: '03_ARCHITECTURE/architecture.md', retryLimit: 2, next: 'coding', taskWeight: 'light',
-    requiresAC: false, acActors: LIGHT_ACTORS,
+    requiresAC: false, acActors: ARCH_LIGHT_ACTORS,
   }),
   makePhase({
-    id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'light', acActors: LIGHT_ACTORS,
+    id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'glm-zhipu', model: 'GLM-5.3',
+    outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'light', acActors: CODE_LIGHT_ACTORS,
   }),
   makePhase({
-    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'light', acActors: LIGHT_ACTORS,
+    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'glm-zhipu', model: 'glm-5.3-flash',
+    outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'light', acActors: TESTING_LIGHT_ACTORS,
   }),
   SENTINEL,
 ]
@@ -80,20 +89,20 @@ const ITERATIVE_ROUTE: GuideRoutePhase[] = [
     outputPath: '02_UX_DESIGN/prototype.html', retryLimit: 2, next: 'architecture', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
   }),
   makePhase({
-    id: 'architecture', role: 'architect', title: '架构师', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '03_ARCHITECTURE/architecture.md', requiresAC: true, retryLimit: 2, next: 'planning', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
+    id: 'architecture', role: 'architect', title: '架构师', channel: 'glm-zhipu', model: 'GLM-5.3',
+    outputPath: '03_ARCHITECTURE/architecture.md', requiresAC: true, retryLimit: 2, next: 'planning', taskWeight: 'medium', acActors: ARCH_MEDIUM_ACTORS,
   }),
   makePhase({
-    id: 'planning', role: 'engineering-manager', title: '工程经理', channel: 'deepseek', model: 'deepseek-v4-pro',
+    id: 'planning', role: 'engineering-manager', title: '工程经理', channel: 'deepseek', model: 'deepseek-v4-flash',
     outputPath: '05_PROJECT_PLAN/plan.md', retryLimit: 2, next: 'coding', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
   }),
   makePhase({
-    id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
+    id: 'coding', role: 'fullstack-developer', title: '全栈开发', channel: 'glm-zhipu', model: 'GLM-5.3',
+    outputPath: '08_APP/index.html', retryLimit: 2, next: 'testing', taskWeight: 'medium', acActors: CODE_MEDIUM_ACTORS,
   }),
   makePhase({
-    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'deepseek', model: 'deepseek-v4-pro',
-    outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'medium', acActors: MEDIUM_ACTORS,
+    id: 'testing', role: 'test-engineer', title: '测试工程师', channel: 'glm-zhipu', model: 'glm-5.3-flash',
+    outputPath: '06_TESTS/features/index.feature', retryLimit: 2, next: 'delivered', taskWeight: 'medium', acActors: TESTING_MEDIUM_ACTORS,
   }),
   SENTINEL,
 ]
@@ -572,9 +581,9 @@ describe('buildGuideDsl 展开/折叠（W2 S3）', () => {
     expect(dsl).toContain('subgraph SG_PROTO')
     // 折叠框：id=主节点（锚点兼容）+ 标题/产出/状态行摘要
     expect(dsl).toContain('REQ["① 需求分析师 requirement-analyst · deepseek-v4-pro<br/>产出 PRD<br/>✓ 已完成"]')
-    // W7：ARCH 折叠框为③、CODE 顺延为④
-    expect(dsl).toContain('ARCH["③ 架构师 architect · deepseek-v4-pro<br/>产出架构文档<br/>未开始"]')
-    expect(dsl).toContain('CODE["④ 全栈开发 fullstack-developer · deepseek-v4-pro<br/>可运行应用代码<br/>未开始"]')
+    // W7：ARCH 折叠框为③、CODE 顺延为④（W13b：两阶段换 GLM-5.3）
+    expect(dsl).toContain('ARCH["③ 架构师 architect · GLM-5.3<br/>产出架构文档<br/>未开始"]')
+    expect(dsl).toContain('CODE["④ 全栈开发 fullstack-developer · GLM-5.3<br/>可运行应用代码<br/>未开始"]')
     // 折叠阶段不输出内部边/子节点
     expect(dsl.includes('REQ_ATK')).toBe(false)
     expect(dsl.includes('CODE_UC')).toBe(false)

@@ -255,12 +255,12 @@ describe('coding 工程品类注入（W3，v0.17.66）', () => {
   })
 })
 
-describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；v0.17.63 作者回 deepseek）', () => {
-  const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
+describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；W13 作者换 glm-5.3-flash）', () => {
+  const glmAuthor = { channel: 'glm-zhipu', model: 'glm-5.3-flash' }
 
   test('包含 steps.json 机器可执行 schema 规范（op 白名单不含 eval + 双文件契约 + 透明 skip）', () => {
     const phase = getPhaseNode('quick', 'testing')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
     expect(task).toContain('steps.json 格式规范')
     expect(task).toContain('click / fill / press / wait-selector / assert-text / assert-visible / assert-count。')
     expect(task).toContain('复杂状态断言暂不支持自定义脚本')
@@ -274,14 +274,44 @@ describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；v0.1
 
   test('包含 PRD 用户故事清单必读强调（覆盖性判定的对照基准）', () => {
     const phase = getPhaseNode('quick', 'testing')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
     expect(task).toContain('前序必读：PRD 用户故事清单')
     expect(task).toContain('GWT 验收场景生成、步骤映射、AC 审计')
   })
 
-  test('testing 作者（deepseek）与 AC 攻防满足家族多样性断言（不抛错；不再要求与 coding 异构）', () => {
-    const phase = getPhaseNode('iterative', 'testing')!
-    expect(() => buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')).not.toThrow()
+  test('W13：testing 作者（glm）与覆盖后的 AC 攻防满足家族多样性断言（防御者=minimax 覆盖，不抛错）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const phase = getPhaseNode(mode, 'testing')!
+      expect(() => buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')).not.toThrow()
+    }
+  })
+
+  test('W13 反例：glm 作者 + 预设防御者（glm 系）必抛错——acDefenderRuntime 不能回退到 glm 系端点', () => {
+    const phase = getPhaseNode('quick', 'testing')!
+    expect(() => buildL2TaskWithAC(
+      phase,
+      glmAuthor,
+      'PRD 摘要',
+      [],
+      '/tmp/project',
+      undefined,
+      { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
+    )).toThrow('防御者渠道')
+  })
+
+  test('W13：acDefenderRuntime 运行时解析值优先——UUID 渠道写入攻防指令且家族断言通过（minimax UUID 与字面渠道异族）', () => {
+    const phase = getPhaseNode('quick', 'testing')!
+    const task = buildL2TaskWithAC(
+      phase,
+      glmAuthor,
+      'PRD 摘要',
+      [],
+      '/tmp/project',
+      undefined,
+      { channel: 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd', model: 'MiniMax-M3' },
+    )
+    expect(task).toContain('channel=ad74ac74-aaaa-bbbb-cccc-dddddddddddd, model=MiniMax-M3')
+    expect(task).toContain('防御者')
   })
 })
 
@@ -366,6 +396,18 @@ describe('L1 调度员指令（v0.17.64：超时纪律 + 收口果断性）', ()
     expect(prompt).toContain('不等待用户确认')
     expect(prompt).toContain('不要以「核实/澄清」')
     expect(prompt).toContain('<!-- PHASE_ADVANCE: testing -->')
+  })
+
+  test('W13：testing L1 委派指令指向 glm-zhipu/glm-5.3-flash；AC 防御者=minimax 家族（字面标记或同 worker 有 electron mock 时解析出的 UUID 渠道；家族断言两部均通过）', () => {
+    const prompt = buildPrompt('testing')
+    // 作者委派参数
+    expect(prompt).toContain('channelId: glm-zhipu')
+    expect(prompt).toContain('modelId: glm-5.3-flash')
+    // L2 任务内 AC 防御者：minimax 家族（字面标记 = 测试环境降级；ch-minimax-uuid = 本文件
+    // channel-manager mock 注入且同 worker 有 electron mock 时的运行时解析值）
+    expect(prompt).toMatch(/channel=(minimax|ch-minimax-uuid), model=MiniMax-M3/)
+    // 攻者仍为 deepseek 系预设
+    expect(prompt).toContain('channel=deepseek, model=deepseek-v4-flash')
   })
 
   test('非 testing 阶段：用户确认后立即收口，不得以再核实/再澄清推迟推进（一句话强化，不改语义）', () => {
