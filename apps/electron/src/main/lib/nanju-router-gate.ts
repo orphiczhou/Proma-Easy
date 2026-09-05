@@ -19,6 +19,7 @@ import {
   injectStagePathConstraint,
   isDelegationTool,
   matchACKeyword,
+  matchStageKeyword,
   resolveACOverride,
 } from './nanju-delegate-guard'
 import { recordTelemetry } from './nanju-telemetry'
@@ -319,6 +320,9 @@ function checkNanjuDelegateGuard(
           violations: stageViolations.map((v) => ({
             stage: v.result.violatedStage,
             keyword: v.result.violatedKeyword,
+            // W18：本阶段词共现观察口径——严格序（他阶段扫描先于本阶段词）下，
+            // 合法交叉表述被拒时此字段非空；非空占比即误拦率统计依据
+            coPresentStageKeyword: matchStageKeyword(guardStage, v.source),
             title: v.source.title,
             taskPreview: taskPreview(v.source.task),
           })),

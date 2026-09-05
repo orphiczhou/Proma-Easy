@@ -33,7 +33,7 @@ mock.module('./config-paths', () => ({
 
 const {
   STAGE_ROLE_KEYWORDS,
-  AC_KEYWORDS,
+  AC_AUDIT_VERBS,
   STAGE_WRITE_DIR,
   PATH_CONSTRAINT_MARKER,
   STRONG_ACTION_VERBS,
@@ -52,14 +52,20 @@ const { recordTelemetry } = await import('./nanju-telemetry')
 const STAGES = ['requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing'] as const
 type Stage = (typeof STAGES)[number]
 
-/** 各阶段典型「本阶段委派」样例（title + task） */
+/**
+ * 各阶段典型「本阶段委派」样例（title + task）。
+ * W18 严格序基线：样例文本不得含他阶段角色词子串（如 architecture 样例不可含 planning
+ * 的「工程」、coding 样例不可含 requirements 的「PRD」、testing 样例 title 不可含
+ * 「测试工程师」——「工程」子串会先被 planning 扫描命中而 deny，属已接受的误拦成本，
+ * 见 __tests__/w18-delegate-intent.test.ts 基线翻转固化）。
+ */
 const STAGE_SELF_EXAMPLES: Record<Stage, { title: string; task: string }> = {
   requirements: { title: '需求分析师', task: '梳理工具类应用的核心需求，产出 PRD 初稿' },
   prototype: { title: 'UX 顾问', task: '设计首屏界面原型与视觉风格基调' },
-  architecture: { title: '架构师', task: '完成技术选型与工程环境探测，产出架构文档' },
+  architecture: { title: '架构师', task: '完成技术选型与环境探测，产出架构文档' },
   planning: { title: '工程经理', task: '制定迭代规划与工程计划，拆分里程碑' },
-  coding: { title: '全栈开发', task: '按 PRD 实现应用全部页面与交互逻辑' },
-  testing: { title: '测试工程师', task: '编写 GWT 验收测试场景与步骤映射' },
+  coding: { title: '全栈开发', task: '按既定方案实现应用全部页面与交互逻辑' },
+  testing: { title: 'GWT 验收测试', task: '编写 GWT 验收测试场景与步骤映射' },
 }
 
 /** 各阶段典型「他阶段委派」样例（应被拒绝） */
@@ -144,12 +150,20 @@ describe('W8 层一：checkDelegationAgainstStage 匹配矩阵（6 阶段全组�
       }
     })
 
-    test('AC 通用词 → 放行（ac）且不注入约束类', () => {
-      for (const kw of AC_KEYWORDS) {
+    test('AC 审计动词（W18：裸 AC 已移出词表）→ 放行（ac）', () => {
+      for (const kw of AC_AUDIT_VERBS) {
         const result = checkDelegationAgainstStage(stage, { title: '', task: `独立段落 ${kw} 检查任务` })
         expect(result.allowed).toBe(true)
         expect(result.matchKind).toBe('ac')
       }
+    })
+
+    test('裸 AC（W18 翻转：不再构成审计意图）→ 非 ac，按普通判定流分流', () => {
+      // 「独立段落 AC 检查任务」无阶段词/无强动词 → unmatched 放行（宽匹配兑底不推翻）；
+      // 裸 AC 掩护混合任务的拒例见 __tests__/w18-delegate-intent.test.ts 例 3
+      const result = checkDelegationAgainstStage(stage, { title: '', task: '独立段落 AC 检查任务' })
+      expect(result.allowed).toBe(true)
+      expect(result.matchKind).toBe('unmatched')
     })
 
     test('无关词（查资料/分析类）→ 放行（unmatched）', () => {
@@ -165,11 +179,14 @@ describe('W8 层一：checkDelegationAgainstStage 匹配矩阵（6 阶段全组�
     })
   })
 
-  test('本阶段词优先于他阶段词（多词并存不误拦）', () => {
-    // planning 阶段委派含「规划」（本阶段）与「实现」（coding 词）→ 本阶段优先放行
+  test('W18 严格序翻转：他阶段词先于本阶段词（多词并存改拒）', () => {
+    // planning 阶段委派含「规划」（本阶段）与「实现」（coding 词）→ W8 旧序 stage 放行；
+    // W18 他阶段扫描前置 → deny(other-stage, coding)。翻转固化，详见 w18-delegate-intent.test.ts
     const result = checkDelegationAgainstStage('planning', { task: '规划工程实现步骤与里程碑计划' })
-    expect(result.allowed).toBe(true)
-    expect(result.matchKind).toBe('stage')
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('实现')
   })
 
   test('大小写不敏感：PrD / ANALYST / Requirements 均命中', () => {
@@ -178,9 +195,10 @@ describe('W8 层一：checkDelegationAgainstStage 匹配矩阵（6 阶段全组�
     expect(checkDelegationAgainstStage('requirements', { task: 'Requirements gathering' }).matchKind).toBe('stage')
   })
 
-  test('词边界：ac 不误命中 trace/space；AC 命中独立词', () => {
+  test('词边界：ac 不误命中 trace/space；裸 AC 不再判 ac（W18 翻转）', () => {
     expect(checkDelegationAgainstStage('coding', { task: 'trace the space flow' }).matchKind).toBe('unmatched')
-    expect(checkDelegationAgainstStage('coding', { task: 'run AC audit on app' }).matchKind).toBe('ac')
+    // W8 旧序：独立词 'AC' 在 AC_KEYWORDS 内 → ac；W18 裸 AC 移出词表，无阶段词/强动词 → unmatched
+    expect(checkDelegationAgainstStage('coding', { task: 'run AC audit on app' }).matchKind).toBe('unmatched')
   })
 
   test('词边界：test 不命中 latest；testing 单独成词命中 testing 阶段', () => {
@@ -387,10 +405,12 @@ describe('W8 集成：checkNanjuRouterGate 参数级三层强制', () => {
 
   test('批量 delegate_agents：全部匹配 → 放行并逐项注入约束', () => {
     setupProject({ stage: 'testing' })
+    // W18 严格序：title 不可含他阶段角色词子串（「测试工程师」含 planning「工程」会先被扫中），
+    // 改用「测试专员」保持本测试对批量注入路径的覆盖焦点
     const input: Record<string, unknown> = {
       items: [
-        { title: '测试工程师 A', task: '编写登录验收测试' },
-        { title: '测试工程师 B', task: '编写支付 GWT 场景' },
+        { title: '测试专员 A', task: '编写登录验收测试' },
+        { title: '测试专员 B', task: '编写支付 GWT 场景' },
       ],
     }
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agents', input)).toBeNull()
@@ -560,10 +580,13 @@ describe('W10-V2.1：unmatched 强动作动词 deny 矩阵（动词 × 无阶段
     expect(result.matchKind).toBe('stage')
   })
 
-  test('AC 词优先于强动词：requirements 阶段「review 后 build the feature」→ ac 放行（AC 审计类不误拦）', () => {
+  test('W18 翻转：AC 动词与强动词并存不判 ac——「review 后 build the feature」→ strong-verb deny', () => {
+    // W18：审计词不掩护产出动作（「审计+产出」不是同一意图）→ ① 不裁决，掉入后续判定；
+    // 无阶段词 → 第 4 条强动词 deny（W8 旧序 ac 放行，基线翻转固化）
     const result = checkDelegationAgainstStage('requirements', { title: '审计', task: 'review the draft then build the feature list' })
-    expect(result.allowed).toBe(true)
-    expect(result.matchKind).toBe('ac')
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('strong-verb')
+    expect(result.matchedVerb).toBe('build')
   })
 
   test('无强动词 unmatched（查询/分析/总结类）→ 维持放行（宽匹配原则不推翻）', () => {

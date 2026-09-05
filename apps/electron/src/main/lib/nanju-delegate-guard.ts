@@ -10,9 +10,11 @@
  * - 层二：AC 委派模型程序化覆写（本模块 detectACRole / resolveACOverride）
  * - 层三：产出路径阶段约束注入（本模块 injectStagePathConstraint）
  *
- * 设计原则：宽匹配保守放行——本阶段词或 AC 词命中即放行；两类都不命中（辅助类：
- * 查资料/分析等）也放行并记录 telemetry（pass-unmatched）供观察误拦率；
- * 只有明确命中其他阶段专属词才拒绝。
+ * 设计原则：W18（v0.17.81）起为严格序——AC 纯审计意图最先裁决（审计动词且无强动词），
+ * 其后他阶段词扫描先于本阶段词（合法交叉表述误拦成本经用户裁决接受，
+ * coPresentStageKeyword 埋点观察）；两类都不命中（辅助类：查资料/分析等）
+ * 且无强动词时也放行并记录 telemetry（pass-unmatched）供观察误拦率；
+ * 详见 checkDelegationAgainstStage 的判定顺序注释。
  *
  * 匹配文本：delegate_agent 的 title + task 字段（参数结构调研结论：任务字段名是
  * task 而非 prompt；role 是 explore/research/implement/review/custom 枚举，语义过泛，
@@ -36,8 +38,13 @@ export const STAGE_ROLE_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
   testing: ['测试', 'test', 'GWT', 'QA', '验收', 'testing'],
 }
 
-/** 全阶段通用的 AC 攻防类词（命中即放行，且触发层二覆写候选 / 不注入路径约束） */
-export const AC_KEYWORDS: readonly string[] = ['攻击', '防御', '审计', '复审', 'attack', 'defense', 'review', 'AC']
+/**
+ * 全阶段通用的 AC 攻防类词。W18（v0.17.81）起拆分：
+ * - AC_AUDIT_VERBS：AC 审计动词（去裸 'AC'）——层一 ① 审计意图裁决与层二 matchACKeyword 共用；
+ * - 裸 'AC' 不再构成审计意图（例：「对照 AC-05 编写测试场景」在 requirements 应 deny testing，
+ *   而非被独立词 'AC' 放行 ac 类）；裸 AC 文本回归普通判定流（可能 unmatched 放行/被注入约束）。
+ */
+export const AC_AUDIT_VERBS: readonly string[] = ['攻击', '防御', '审计', '复审', 'attack', 'defense', 'review']
 
 /**
  * 强动作动词表（W10-V2.1，v0.17.72）：明确产出物类动作的中英文动词。
@@ -170,14 +177,18 @@ export interface DelegationCheckResult {
 /**
  * 层一核心判定：单个委派的标题+任务 与 currentStage 的匹配。
  *
- * 判定顺序（宽匹配保守放行；W10-V2.1 在第 4 条内部再分级，不推翻宽匹配原则）：
- * 1. 命中本阶段词（角色词 ∪ 产出物词）→ 放行（stage；产出物词优先于强动词判定——误拦缓解）
- * 2. 命中 AC 通用词 → 放行
- * 3. 命中其他阶段专属词 → 拒绝（violatedKeyword/violatedStage/denialKind='other-stage'）
- * 4. 都不命中（unmatched）内部再分级：
- *    a. 命中强动作动词 → 拒绝（denialKind='strong-verb'/matchedVerb——W8 敞口兜底：
- *       无阶段词委派干活实测可绕过阶段序列，产出类动作必须显式声明角色）
- *    b. 无强动词（查询/分析/总结类）→ 放行（unmatched，调用方记 telemetry 观察，现状不变）
+ * 判定顺序（W18，v0.17.81 重排——严格序，用户裁决接受合法交叉表述误拦成本，
+ * 误拦面经 router-gate stage-deny 埋点 coPresentStageKeyword 观察统计；
+ * W8/W10 的「本阶段词优先」原则被本条推翻，基线翻转测试固化）：
+ * 1. AC 审计意图：命中 AC 审计动词（AC_AUDIT_VERBS）**且无强动作动词** → 放行（ac）。
+ *    审计宾语天然跨阶段（「攻击 02_UX_DESIGN 原型」含原型/UX 词仍须放行）——审计
+ *    意图不受他阶段词影响；但「审计+产出」不是同一意图：强动词在场时本条不裁决，
+ *    落入 2-4（「review 架构并实现应用」「审计后顺便编写测试」均拒）。
+ * 2. 他阶段角色词扫描（无条件、先于本阶段词）→ 拒绝（other-stage；产出物词仍不参与
+ *    他阶段扫描——跨阶段动作对象误拦风险，见 STAGE_OUTPUT_KEYWORDS 注释）。
+ * 3. 本阶段词（角色词 ∪ 产出物词）→ 放行（stage；产出物词优先于强动词判定——误拦缓解）。
+ * 4. 强动作动词 → 拒绝（strong-verb——W8 敞口兜底：产出类动作必须显式声明角色）。
+ * 5. 都不命中（查询/分析/总结类辅助动作）→ 放行（unmatched，调用方记 telemetry 观察）。
  */
 export function checkDelegationAgainstStage(
   stage: NanjuGuardStage,
@@ -189,20 +200,13 @@ export function checkDelegationAgainstStage(
     return { allowed: true, matchKind: 'unmatched' }
   }
 
-  // 1. 本阶段词（角色词 ∪ 产出物词：W10 产出物词优先缓解强动词误拦——「编写 PRD」在
-  //    requirements 按本阶段词放行，而非掉入第 4a 条强动词拒绝）
-  const stageHit = findKeyword(text, [...STAGE_ROLE_KEYWORDS[stage], ...STAGE_OUTPUT_KEYWORDS[stage]])
-  if (stageHit !== undefined) {
-    return { allowed: true, matchKind: 'stage', matchedKeyword: stageHit }
-  }
-
-  // 2. AC 通用词
-  const acHit = findKeyword(text, AC_KEYWORDS)
-  if (acHit !== undefined) {
+  // 1. AC 审计意图：审计动词命中且无强动词 → 只读审计放行（ac）；强动词在场则不裁决
+  const acHit = findKeyword(text, AC_AUDIT_VERBS)
+  if (acHit !== undefined && findKeyword(text, STRONG_ACTION_VERBS) === undefined) {
     return { allowed: true, matchKind: 'ac', matchedKeyword: acHit }
   }
 
-  // 3. 其他阶段专属词（仅扫角色词表——产出物词不参与他阶段扫描，见 STAGE_OUTPUT_KEYWORDS 注释）
+  // 2. 其他阶段专属词（仅扫角色词表——产出物词不参与他阶段扫描，见 STAGE_OUTPUT_KEYWORDS 注释）
   for (const otherStage of Object.keys(STAGE_ROLE_KEYWORDS) as NanjuGuardStage[]) {
     if (otherStage === stage) continue
     const hit = findKeyword(text, STAGE_ROLE_KEYWORDS[otherStage])
@@ -211,13 +215,19 @@ export function checkDelegationAgainstStage(
     }
   }
 
-  // 4. 都不命中（unmatched）内部再分级（W10-V2.1）：
-  //    a. 强动作动词 → 拒绝（产出类动作必须显式声明角色——W8 敞口兜底）
+  // 3. 本阶段词（角色词 ∪ 产出物词：产出物词优先缓解强动词误拦——「编写 PRD」在
+  //    requirements 按本阶段词放行，而非掉入第 4 条强动词拒绝）
+  const stageHit = findKeyword(text, [...STAGE_ROLE_KEYWORDS[stage], ...STAGE_OUTPUT_KEYWORDS[stage]])
+  if (stageHit !== undefined) {
+    return { allowed: true, matchKind: 'stage', matchedKeyword: stageHit }
+  }
+
+  // 4. 强动作动词 → 拒绝（产出类动作必须显式声明角色——W8 敞口兜底）
   const verbHit = findKeyword(text, STRONG_ACTION_VERBS)
   if (verbHit !== undefined) {
     return { allowed: false, matchKind: 'unmatched', violatedKeyword: verbHit, denialKind: 'strong-verb', matchedVerb: verbHit }
   }
-  //    b. 无强动词（辅助类）→ 放行（现状不变）
+  // 5. 无强动词（辅助类）→ 放行（现状不变）
   return { allowed: true, matchKind: 'unmatched' }
 }
 
@@ -261,8 +271,10 @@ export const STAGE_WRITE_DIR: Record<NanjuGuardStage, string> = {
 export const PATH_CONSTRAINT_MARKER = '【阶段边界】'
 
 /**
- * 层三：在委派 task 末尾追加一行阶段写入边界硬约束（幂等——已含标记原样返回）。
+ * 层三：在委派 task 末尾追加一行阶段写入边界约束（幂等——已含标记原样返回）。
  * AC 类委派不注入（审计只读）；判不准（stage/unmatched）时注入（宁多勿少）。
+ * F6（W18，v0.17.81）文案诚实化：层三是提示性软约束——主进程对 L2 写入无强制拦截
+ * 机制，不再声称「将被记录并要求返工」（虚假承诺），改为明示软约束边界。
  */
 export function injectStagePathConstraint(stage: NanjuGuardStage, task: string): string {
   if (task.includes(PATH_CONSTRAINT_MARKER)) return task
@@ -270,7 +282,7 @@ export function injectStagePathConstraint(stage: NanjuGuardStage, task: string):
   const dir = STAGE_WRITE_DIR[stage]
   return (
     `${task}\n${PATH_CONSTRAINT_MARKER}当前处于「${title}」（${stage}）阶段，` +
-    `本委派只允许在项目目录 ${dir} 内写入文件；跨目录写入将被记录并要求返工。`
+    `本委派只允许在项目目录 ${dir} 内写入文件；跨目录写入为提示性软约束（系统当前不强制拦截），请遵守阶段产出边界。`
   )
 }
 
@@ -288,9 +300,19 @@ export function isDelegationTool(toolName: string): boolean {
   return DELEGATE_TOOL_NAMES.has(normalizeDelegationToolName(toolName))
 }
 
-/** 单个委派的文本是否命中 AC 通用词（层二独立判定：不受层一判定顺序影响，阶段词先命中也不妨砧AC 覆写） */
+/** 单个委派的文本是否命中 AC 审计动词（层二独立判定：不受层一判定顺序影响；W18 起用
+ * AC_AUDIT_VERBS——裸 'AC' 不再触发层二覆写候选/层三注入豁免，与层一 ① 同源） */
 export function matchACKeyword(source: DelegationMatchSource): string | undefined {
-  return findKeyword(buildMatchText(source), AC_KEYWORDS)
+  return findKeyword(buildMatchText(source), AC_AUDIT_VERBS)
+}
+
+/**
+ * W18：文本同时命中的**当前阶段**词（角色词 ∪ 产出物词，键序首命中）。
+ * 用途：router-gate stage-deny 埋点 coPresentStageKeyword——严格序下合法交叉表述
+ * （本阶段词+他阶段词并存）被拒时的误拦观察口径；undefined = 无本阶段词共现。
+ */
+export function matchStageKeyword(stage: NanjuGuardStage, source: DelegationMatchSource): string | undefined {
+  return findKeyword(buildMatchText(source), [...STAGE_ROLE_KEYWORDS[stage], ...STAGE_OUTPUT_KEYWORDS[stage]])
 }
 
 /**
