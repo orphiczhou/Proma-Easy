@@ -1,10 +1,17 @@
 import * as React from 'react'
 import { renderMermaidSvg } from '@proma/ui'
 import { resolveGuideNodeTarget, type GuideNodeTarget } from './guide-dsl'
+import { buildDivergenceWarningText } from './useNanjuGuideData'
 
 interface GuideFlowProps {
   dsl: string
   onNodeClick: (target: GuideNodeTarget) => void
+  /**
+   * W18 Wave3：阶段偏差观测（弱断言）：未来阶段产出文件已存在且 >100B 的记录；
+   * 非空时顶部渲染 st-warning 警示条（非阻断，用户裁决 D4：仅展示不拦截）。
+   * 结构与主进程 StageDivergence 同构（此处保持展示组件自包含的最小字段面）。
+   */
+  divergences?: Array<{ stage: string; artifact: string; observedAt?: string }>
   /**
    * active 回归边（W2c，v0.17.69）：主进程 regressionEvents 投影中 active=true 的边
    *（阶段 id 对）。SVG 后处理按 mermaid 边 path 的 data-id 前缀匹配（v11.15.0 实测：
@@ -60,9 +67,12 @@ function extractNodeId(el: Element): string | null {
   return null
 }
 
-export function GuideFlow({ dsl, onNodeClick, activeRegressionEdges }: GuideFlowProps): React.ReactElement {
+export function GuideFlow({ dsl, onNodeClick, activeRegressionEdges, divergences }: GuideFlowProps): React.ReactElement {
   const [renderedSvg, setRenderedSvg] = React.useState<string | null>(null)
   const [renderFailed, setRenderFailed] = React.useState(false)
+
+  /** W18 Wave3：偏差警示条文案（弱断言纯函数；空列表/undefined → null 不渲染） */
+  const divergenceWarning = divergences !== undefined ? buildDivergenceWarningText(divergences) : null
 
   /** 视口变换：scale + translate（拖拽平移） */
   const [scale, setScale] = React.useState<number>(INITIAL_SCALE)
@@ -387,6 +397,16 @@ export function GuideFlow({ dsl, onNodeClick, activeRegressionEdges }: GuideFlow
   return (
     <div className="flex flex-col min-h-0 h-full">
       <style>{PULSE_CSS}</style>
+      {/* W18 Wave3：阶段偏差警示条（st-warning，非阻断）——只说「可能存在越阶段施工」
+          （弱断言 SHOULD-6：观测≠施工事实），不拦截任何推进/交互 */}
+      {divergenceWarning !== null && (
+        <div
+          className="st-warning flex items-start gap-1 mx-2 mt-1 px-2 py-1 rounded text-[11px] leading-relaxed shrink-0 bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+          role="status"
+        >
+          <span className="break-all">{divergenceWarning}</span>
+        </div>
+      )}
       <div className="flex items-center justify-end gap-0.5 px-2 py-1 text-xs text-muted-foreground shrink-0">
         <button type="button" onClick={zoomOut} className="size-6 rounded hover:bg-muted/70 hover:text-foreground" title="缩小">−</button>
         <button type="button" onClick={zoomReset} className="px-1.5 h-6 rounded hover:bg-muted/70 hover:text-foreground tabular-nums min-w-[38px]" title="重置缩放">{Math.round(scale * 100)}%</button>

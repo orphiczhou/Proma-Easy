@@ -9,11 +9,13 @@
  * 3. 事件广播 emitGuideProgress + 冷启动快照 getGuideProgressSnapshot。
  *
  * 纪律：
- * - 本文件顶部零 import（纯常量/纯函数），IPC 与文件 IO 全部惰性 require
+ * - 本文件顶部仅类型导入（编译期擦除）——纯常量/纯函数，IPC 与文件 IO 全部惰性 require
  *   （agent-orchestrator 钩子同型惯例），保证可被任何测试环境直接 import。
  * - write-then-emit：调用方必须先 setProjectSubStage 落盘、再 emitGuideProgress 广播，
  *   保证渲染端冷启动 snapshot 读到的数据不旧于已发事件（seq 高者胜语义）。
  */
+
+import type { StageDivergence } from './nanju-state-divergence'
 
 /** 向导图可执行阶段（六阶段，与渲染端 GuidePhaseId 对应；mode-select/delivered 无子步骤） */
 export type GuideProgressStage =
@@ -115,12 +117,25 @@ export interface GuideProgressEvent {
   envState?: GuideEnvState
   /** 回归边投影（W2c；缺失 = 无回归事件） */
   regressions?: GuideProgressRegression[]
+  /** 阶段偏差观测（W18 Wave3；缺失 = 无数据——仅旧主进程事件，向前兼容） */
+  divergences?: StageDivergence[]
+  /** 偏差事实集合指纹（divergences 稳定派生；渲染端独立通道比较用） */
+  divergenceFingerprint?: string
 }
 
 /** 事件附加载荷（emitGuideProgress 可选第五参；与 GuideProgressEvent 可选字段对应） */
 export interface GuideProgressExtra {
   envState?: GuideEnvState
   regressions?: GuideProgressRegression[]
+  /**
+   * W18 Wave3 事件侧偏差计算挂点：提供 workspaceSlug 时在广播前现算 divergences
+   *（推进点调用方可直接携带，无需自己引依赖）。未提供则事件不带偏差字段——
+   * 渲染端由 10s 轮询快照的独立通道兑底（向前兼容，调用方零改动）。
+   */
+  workspaceSlug?: string
+  /** 直通偏差载荷（已由调用方现算时优先；与 workspaceSlug 二选一） */
+  divergences?: StageDivergence[]
+  divergenceFingerprint?: string
 }
 
 /** 冷启动快照（nanju:get-guide-progress 返回值） */
@@ -132,6 +147,13 @@ export interface GuideProgressSnapshot {
   envState?: GuideEnvState
   /** 回归事件投影（getRegressionEvents + projectRegressions；无事件时缺失） */
   regressions?: GuideProgressRegression[]
+  /**
+   * 阶段偏差观测（W18 Wave3）：快照恒携带（无偏差为空数组）——divergence 事实
+   * 随磁盘文件增删变化，与 seq（进度事件序号）无关，快照是渲染端独立通道的
+   * 兜底数据源（缺失 = 旧主进程，渲染端维持现状）。
+   */
+  divergences?: StageDivergence[]
+  divergenceFingerprint?: string
 }
 
 /**
@@ -151,14 +173,32 @@ export function emitGuideProgress(
 ): number {
   guideProgressSeq += 1
   const seq = guideProgressSeq
+  // W18 Wave3：事件侧偏差挂点——extra.workspaceSlug 提供且未直通 divergences 时现算
+  //（计算失败不影响广播；渲染端由 10s 轮询快照独立通道兑底）
+  let divergences = extra?.divergences
+  let divergenceFingerprint = extra?.divergenceFingerprint
+  if (divergences === undefined && extra?.workspaceSlug !== undefined) {
+    try {
+      const { detectStageDivergence, divergenceFingerprint: fp } =
+        require('./nanju-state-divergence') as typeof import('./nanju-state-divergence')
+      divergences = detectStageDivergence(extra.workspaceSlug, projectId)
+      divergenceFingerprint = fp(divergences)
+    } catch { /* 偏差现算失败：事件照发（不带该字段），快照通道兑底 */ }
+  }
   try {
     const { getMainWindow } = require('./main-window-store') as typeof import('./main-window-store')
     const win = getMainWindow()
-    win?.webContents.send('nanju:guide-progress', {
+    const event: GuideProgressEvent = {
       sessionId, projectId, currentStage, subStage, seq,
       envState: extra?.envState,
       regressions: extra?.regressions,
-    } satisfies GuideProgressEvent)
+    }
+    // 条件附加（向前兼容）：未现算/未直通时不含该键，与旧主进程载荷同形
+    if (divergences !== undefined) {
+      event.divergences = divergences
+      event.divergenceFingerprint = divergenceFingerprint
+    }
+    win?.webContents.send('nanju:guide-progress', event)
   } catch { /* 主窗口不可用不影响主流程；seq 已计入，渲染端冷启动 snapshot 仍可取到最新数据 */ }
   return seq
 }
@@ -191,6 +231,16 @@ export function getGuideProgressSnapshot(
       const { projectRegressions } = require('./nanju-regression') as typeof import('./nanju-regression')
       snapshot.regressions = projectRegressions(events, project.currentStage)
     }
+    // W18 Wave3：偏差观测恒携带（无偏差为空数组）——divergence 事实随磁盘文件增删变化，
+    // 与 seq 无关；快照是渲染端独立通道的主数据源（10s 轮询）。失败时快照不带该字段，
+    // 渲染端维持现状（向前兼容）。
+    try {
+      const { detectStageDivergence, divergenceFingerprint } =
+        require('./nanju-state-divergence') as typeof import('./nanju-state-divergence')
+      const dv = detectStageDivergence(workspaceSlug, projectId)
+      snapshot.divergences = dv
+      snapshot.divergenceFingerprint = divergenceFingerprint(dv)
+    } catch { /* 偏差观测失败：快照不带该字段 */ }
     return snapshot
   } catch {
     return null

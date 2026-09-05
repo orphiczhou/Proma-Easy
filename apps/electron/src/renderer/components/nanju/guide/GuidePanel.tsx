@@ -326,7 +326,7 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
           <NoticeBar text={`预览另一种模式（${compareMode === 'quick' ? '快消型' : '长期迭代型'}）流程，非本项目进度。`} tone="info" onClose={() => setViewMode('project')} />
         )}
         <div className="flex-1 min-h-0">
-          <GuideFlow dsl={dsl} onNodeClick={handleNodeClick} activeRegressionEdges={activeRegressionEdges} />
+          <GuideFlow dsl={dsl} onNodeClick={handleNodeClick} activeRegressionEdges={activeRegressionEdges} divergences={data.divergences ?? undefined} />
         </div>
         {/* 图例（§5.2）：绿=已完成、主色脉冲=进行中、灰=未开始 */}
         <div className="flex items-center gap-3 px-3 py-1.5 border-t border-border/40 text-[11px] text-muted-foreground shrink-0">

@@ -299,6 +299,14 @@ describe('getGuideProgressSnapshot（冷启动初值）', () => {
     expect(snapshot?.seq).toBeGreaterThanOrEqual(seqBefore)
     expect(getGuideProgressSnapshot(ws, 'no-such-project')).toBeNull()
   })
+
+  test('W18 Wave3：快照恒携带 divergences（无偏差为空数组）+ divergenceFingerprint（独立通道数据源）', () => {
+    // fixture：requirements 无未来产物 → 空数组（非 undefined，渲染端可据此清角标）
+    const ws = setupFixture({ stage: 'requirements', prd: VALID_PRD, subStage: 'REQ' })
+    const snapshot = getGuideProgressSnapshot(ws, PROJECT_ID)
+    expect(snapshot?.divergences).toEqual([])
+    expect(typeof snapshot?.divergenceFingerprint).toBe('string')
+  })
 })
 
 // ===== M4（AC 审计 A5）：architecture result 侧先同步环境状态再判定 =====
