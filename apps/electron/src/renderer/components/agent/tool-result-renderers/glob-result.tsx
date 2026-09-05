@@ -12,14 +12,7 @@ interface GlobResultRendererProps {
 }
 
 export function GlobResultRenderer({ result, isError }: GlobResultRendererProps): React.ReactElement {
-  if (isError) {
-    return (
-      <pre className="rounded-md p-3 text-[12px] font-mono text-destructive/80 bg-destructive/5 whitespace-pre-wrap break-all overflow-x-auto">
-        {result}
-      </pre>
-    )
-  }
-
+  // hooks 必须全部位于条件 return 之前（Rules of Hooks）
   const files = React.useMemo(() => result.split('\n').filter(Boolean), [result])
 
   const renderList = React.useCallback((text: string): React.ReactNode => {
@@ -40,6 +33,14 @@ export function GlobResultRenderer({ result, isError }: GlobResultRendererProps)
       </div>
     )
   }, [files.length])
+
+  if (isError) {
+    return (
+      <pre className="rounded-md p-3 text-[12px] font-mono text-destructive/80 bg-destructive/5 whitespace-pre-wrap break-all overflow-x-auto">
+        {result}
+      </pre>
+    )
+  }
 
   return (
     <CollapsibleResult

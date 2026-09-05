@@ -38,7 +38,32 @@ function UpdateCard(): React.ReactElement | null {
   const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
   const [release, setRelease] = React.useState<import('@proma/shared').GitHubRelease | null>(null)
 
-  // updater 不可用时不渲染
+  // 状态非 downloaded 时清除空闲安装标记。
+  // updater 不可用时组件渲染 null，effect 直接跳过，行为与移出前一致。
+  // 注意：hooks 必须全部位于下方条件 return 之前（Rules of Hooks）。
+  React.useEffect(() => {
+    if (!available || status.status !== 'downloaded') setIdleInstallScheduled(false)
+  }, [available, status.status])
+
+  // 当检测到新版本时，获取完整的 release 信息
+  React.useEffect(() => {
+    if (!available) return
+    if (status.status === 'available' && status.version && !release) {
+      window.electronAPI
+        .getReleaseByTag(`v${status.version}`)
+        .then((r) => {
+          if (r) {
+            setRelease(r)
+            setShowReleaseNotes(true)
+          }
+        })
+        .catch((err) => {
+          console.error('[更新] 获取 Release 信息失败:', err)
+        })
+    }
+  }, [available, status.status, status.version, release])
+
+  // updater 不可用时不渲染（必须位于全部 hooks 之后）
   if (!available) return null
 
   const handleCheck = async (): Promise<void> => {
@@ -66,27 +91,6 @@ function UpdateCard(): React.ReactElement | null {
     void window.electronAPI.updater?.cancelIdleInstall()
       .then(() => setIdleInstallScheduled(false))
   }
-
-  // 当检测到新版本时，获取完整的 release 信息
-  React.useEffect(() => {
-    if (status.status !== 'downloaded') setIdleInstallScheduled(false)
-  }, [status.status])
-
-  React.useEffect(() => {
-    if (status.status === 'available' && status.version && !release) {
-      window.electronAPI
-        .getReleaseByTag(`v${status.version}`)
-        .then((r) => {
-          if (r) {
-            setRelease(r)
-            setShowReleaseNotes(true)
-          }
-        })
-        .catch((err) => {
-          console.error('[更新] 获取 Release 信息失败:', err)
-        })
-    }
-  }, [status.status, status.version, release])
 
   const isChecking = checking || status.status === 'checking' || status.status === 'downloading'
   const hasReleaseNotes = status.releaseNotes || release?.body

@@ -76,35 +76,14 @@ function highlightPattern(text: string, pattern: string): React.ReactNode {
 export function GrepResultRenderer({ result, isError, input }: GrepResultRendererProps): React.ReactElement {
   const pattern = typeof input.pattern === 'string' ? input.pattern : ''
 
-  if (isError) {
-    return (
-      <pre className="rounded-md p-3 text-[12px] font-mono text-destructive/80 bg-destructive/5 whitespace-pre-wrap break-all overflow-x-auto">
-        {result}
-      </pre>
-    )
-  }
-
+  // hooks 必须全部位于条件 return 之前（Rules of Hooks）
   const groups = React.useMemo(() => parseGrepOutput(result), [result])
-
-  // 无法解析时 fallback 到纯文本
-  if (!groups) {
-    return (
-      <CollapsibleResult
-        content={result}
-        renderContent={(text) => (
-          <pre className="rounded-md p-3 text-[12px] font-mono text-foreground/60 bg-muted/30 whitespace-pre-wrap break-all overflow-x-auto">
-            {text}
-          </pre>
-        )}
-      />
-    )
-  }
-
-  const totalMatches = groups.reduce((sum, g) => sum + g.matches.length, 0)
+  const totalMatches = groups?.reduce((sum, g) => sum + g.matches.length, 0) ?? 0
 
   const renderGroups = React.useCallback((text: string): React.ReactNode => {
     // 根据 text 长度决定显示多少（CollapsibleResult 会截断）
     const visibleLines = text.split('\n').length
+    if (!groups) return null
 
     return (
       <div className="space-y-2">
@@ -139,6 +118,28 @@ export function GrepResultRenderer({ result, isError, input }: GrepResultRendere
       </div>
     )
   }, [groups, pattern, totalMatches])
+
+  if (isError) {
+    return (
+      <pre className="rounded-md p-3 text-[12px] font-mono text-destructive/80 bg-destructive/5 whitespace-pre-wrap break-all overflow-x-auto">
+        {result}
+      </pre>
+    )
+  }
+
+  // 无法解析时 fallback 到纯文本
+  if (!groups) {
+    return (
+      <CollapsibleResult
+        content={result}
+        renderContent={(text) => (
+          <pre className="rounded-md p-3 text-[12px] font-mono text-foreground/60 bg-muted/30 whitespace-pre-wrap break-all overflow-x-auto">
+            {text}
+          </pre>
+        )}
+      />
+    )
+  }
 
   return (
     <CollapsibleResult
