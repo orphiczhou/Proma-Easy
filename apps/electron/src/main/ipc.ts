@@ -2265,8 +2265,18 @@ export function registerIpcHandlers(): void {
       // P0-B Phase2：删除仍在运行的会话先中止 run（与工作区删除路径对齐），
       // 再确定性清理 pending capability——run 终结链路在 utility 失联时不可达，
       // 不能只依赖下方 clearSessionPending 的 deny-resolve。
-      if (isAgentSessionActive(id)) stopAgent(id)
-      abortAgentPendingCapabilities(id)
+      // 审查 F1 加固：stop/abort 各自兜底，任一抛错不得跳过后续清理链
+      //（否则会话卡"已停未删"中间态）。
+      try {
+        if (isAgentSessionActive(id)) stopAgent(id)
+      } catch (e) {
+        console.error('[Agent 会话删除] stopAgent 失败（继续清理）:', e)
+      }
+      try {
+        abortAgentPendingCapabilities(id)
+      } catch (e) {
+        console.error('[Agent 会话删除] abort capability 失败（继续清理）:', e)
+      }
       // 清理权限服务中该会话的白名单
       permissionService.clearSessionWhitelist(id)
       permissionService.clearSessionPending(id)

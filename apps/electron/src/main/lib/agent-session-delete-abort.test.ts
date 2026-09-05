@@ -66,5 +66,9 @@ describe('会话删除触发 pending capability abort（P0-B Phase2）', () => {
     expect(handler.indexOf('abortAgentPendingCapabilities(id)')).toBeLessThan(
       handler.indexOf('askUserService.clearSessionPending(id)'),
     )
+    // 审查 F1：stop/abort 各自 try/catch 兜底，抛错不跳过后续清理链
+    expect(handler).toContain('} catch (e) {')
+    expect((handler.match(/} catch \(e\) \{/g) ?? []).length).toBeGreaterThanOrEqual(2)
+    expect(handler).toContain('deleteAgentSession(id)')
   })
 })
