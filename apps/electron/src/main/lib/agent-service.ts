@@ -87,6 +87,8 @@ const wcWithCleanupHook = new WeakSet<WebContents>()
  * webContents 提前销毁的场景——destroyed 事件兜底。
  */
 function registerWebContents(sessionId: string, wc: WebContents): void {
+  // 会话重新获得真实 wc，后续丢窗口时可再次告警。
+  sessionsWarnedNoWebContents.delete(sessionId)
   // 同一 sessionId 切换 renderer 时，先丢弃捕获旧 wc.send 的等待 partial，避免投递到旧窗口。
   const previousWebContents = sessionWebContents.get(sessionId)
   if (previousWebContents && previousWebContents !== wc) streamForwarder.clear(sessionId)
@@ -158,8 +160,15 @@ function getSessionMetaForRenderer(sessionId: string) {
   return meta
 }
 
+/** 已因无可用渲染窗口告警过的会话；重新注册 wc 后重置，避免事件风暴刷屏。 */
+const sessionsWarnedNoWebContents = new Set<string>()
+
 eventBus.use((sessionId, payload, next) => {
-  const wc = sessionWebContents.get(sessionId)
+  // P0-B：wc 缺失时事件此前被静默丢弃（ask_user_request 黑洞 → 横幅/系统通知均不发生，
+  // utility 侧 120s 必超时且无任何日志）。与 AgentQueueCoordinator.getWebContents、
+  // runAgentHeadless 一致回退主窗口：事件按 sessionId 路由，不会串会话；主窗口全局
+  // 监听（useGlobalAgentListeners）仍可触发系统通知。完全无窗口时至少留一次性 warn 供诊断。
+  const wc = getHeadlessAgentRunTarget(sessionWebContents, sessionId, getMainRendererWebContents)
   if (wc && !wc.isDestroyed()) {
     try {
       streamForwarder.forward(
@@ -170,6 +179,9 @@ eventBus.use((sessionId, payload, next) => {
     } catch (err) {
       console.error(`[EventBus] wc.send 失败: sessionId=${sessionId}, payload.kind=${(payload as Record<string, unknown>)?.kind}`, err)
     }
+  } else if (!sessionsWarnedNoWebContents.has(sessionId)) {
+    sessionsWarnedNoWebContents.add(sessionId)
+    console.warn(`[EventBus] 会话无可用渲染窗口，事件仅保留在主进程: sessionId=${sessionId}, payload.kind=${(payload as Record<string, unknown>)?.kind}`)
   }
   if (payload.kind === 'sdk_message' && payload.message.type === 'system' && payload.message.subtype === 'task_notification') {
     agentQueueCoordinator.onBackgroundTaskComplete(sessionId)

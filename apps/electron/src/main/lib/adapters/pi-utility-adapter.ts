@@ -12,6 +12,7 @@ import {
 } from '@proma/shared'
 import type { PermissionResult, CanUseToolOptions } from '../agent-permission-service'
 import { AgentRuntimeClient } from '../agent-runtime-client'
+import { abortCapabilityControllersForQuery } from './pi-utility-capability-abort'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 
 type PendingQuery = {
@@ -83,6 +84,10 @@ export class PiUtilityAdapter {
       pending.ended = true
       unsubscribe()
       this.pendingQueries.delete(queryId)
+      // Terra MUST-2（P0-B）：query 终结即按 queryId 中止本 query 的 capability（如仍在
+      // 等待用户作答的 askUserService），不依赖 utility 侧 QUERY_ABORT 往返；utility
+      // 已崩溃/失联时主进程 pending 交互仍得到确定性清理。
+      abortCapabilityControllersForQuery(this.capabilityAbortControllers, queryId)
       if (pending.accepted && !pending.runtimeFailed) {
         await client.call(
           AGENT_RUNTIME_METHODS.QUERY_ABORT,

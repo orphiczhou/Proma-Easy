@@ -12,6 +12,7 @@ import {
   type AgentRuntimeState,
 } from '@proma/shared'
 import { PiAgentAdapter, type PiAgentQueryOptions } from '../main/lib/adapters/pi-agent-adapter'
+import { getParentRequestTimeoutMs } from './parent-request-timeout'
 
 type MessagePortLike = {
   on(event: 'message', listener: (event: { data: unknown }) => void): void
@@ -27,9 +28,11 @@ type ParentPortLike = {
 
 type RuntimeRequest = AgentRuntimeRequest & { payload?: Record<string, unknown> }
 type PendingParentRequest = {
+  method: string
+  queryId: string | undefined
   resolve: (value: unknown) => void
   reject: (reason: unknown) => void
-  timer: ReturnType<typeof setTimeout>
+  timer: ReturnType<typeof setTimeout> | undefined
   cleanup: () => void
 }
 type ActiveQuery = {
@@ -244,6 +247,9 @@ async function pumpQuery(active: ActiveQuery, input: PiAgentQueryOptions): Promi
       activeQuery = undefined
       emitState()
     }
+    // query 已终结，其 pending capability 请求（如未被 abort 的 canUseTool/customTool
+    // 挂起等待）不可能再被 main 合法 resolve，统一 reject 防泄漏。
+    rejectPendingParentRequestsForQuery(active.queryId, `Agent query ended: ${active.queryId}`)
     active.resolveDone()
   }
 }
@@ -325,21 +331,30 @@ function requestParent<Result = unknown>(
   return new Promise<Result>((resolve, reject) => {
     let removeAbortListener = (): void => {}
     const cleanup = (): void => {
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
       removeAbortListener()
     }
-    const timer = setTimeout(() => {
-      if (!parentRequests.delete(request.requestId)) return
-      cleanup()
-      port.postMessage(createAgentRuntimeRequest(
-        AGENT_RUNTIME_METHODS.CAPABILITY_CANCEL,
-        { requestId: request.requestId },
-        { sessionId: activeQuery?.sessionId, queryId: activeQuery?.queryId },
-        bootId,
-      ))
-      reject(new Error(`Main runtime request timed out: ${method}`))
-    }, 120_000)
+    // 按 method 分表超时（P0-B）：canUseTool（AskUserQuestion 用户交互）默认无超时，
+    // customTool 长等待默认 30min，其余维持 120s；undefined 表示不设定时器，
+    // 生命周期由 abort 信号 / query 结束清理（rejectPendingParentRequestsForQuery）
+    // 与 shutdown 全量 reject 兜底。
+    const timeoutMs = getParentRequestTimeoutMs(method)
+    const timer = timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          if (!parentRequests.delete(request.requestId)) return
+          cleanup()
+          port.postMessage(createAgentRuntimeRequest(
+            AGENT_RUNTIME_METHODS.CAPABILITY_CANCEL,
+            { requestId: request.requestId },
+            { sessionId: activeQuery?.sessionId, queryId: activeQuery?.queryId },
+            bootId,
+          ))
+          reject(new Error(`Main runtime request timed out after ${timeoutMs}ms: ${method}`))
+        }, timeoutMs)
     parentRequests.set(request.requestId, {
+      method,
+      queryId: request.queryId,
       resolve: (value) => resolve(value as Result),
       reject,
       timer,
@@ -377,6 +392,22 @@ function resolveParentRequest(response: AgentRuntimeResponse): void {
   else {
     const error = response.error ?? { code: 'runtime.parent_request_failed', message: `Main request failed: ${response.method}` }
     pending.reject(Object.assign(new Error(error.message), error))
+  }
+}
+
+/**
+ * query 终结时 reject 属于该 query 的 pending capability 请求（P0-B）。
+ *
+ * canUseTool 默认无超时后，若 SDK 在未触发 abort 信号的情况下结束 query
+ * （异常收尾/流提前结束），挂起的请求会永久滞留 parentRequests；
+ * query 已终结的 capability 请求不可能再被合法 resolve，统一在这里清理。
+ */
+function rejectPendingParentRequestsForQuery(queryId: string, reason: string): void {
+  for (const [requestId, pending] of parentRequests) {
+    if (pending.queryId !== queryId) continue
+    parentRequests.delete(requestId)
+    pending.cleanup()
+    pending.reject(new Error(reason))
   }
 }
 
