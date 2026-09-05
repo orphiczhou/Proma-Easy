@@ -54,9 +54,9 @@ type Stage = (typeof STAGES)[number]
 
 /**
  * 各阶段典型「本阶段委派」样例（title + task）。
- * W18 严格序基线：样例文本不得含他阶段角色词子串（如 architecture 样例不可含 planning
- * 的「工程」、coding 样例不可含 requirements 的「PRD」、testing 样例 title 不可含
- * 「测试工程师」——「工程」子串会先被 planning 扫描命中而 deny，属已接受的误拦成本，
+ * W18.1（Wave1.1）修复后：planning 已移除裸「工程」（「工程师」职称后缀不再误撞），
+ * testing 样例 title 可含本阶段规范角色名「测试工程师」；样例文本仍避免含
+ * 他阶段角色词子串（如 coding 样例不含「PRD」——严格序下他阶段词仍先拦，
  * 见 __tests__/w18-delegate-intent.test.ts 基线翻转固化）。
  */
 const STAGE_SELF_EXAMPLES: Record<Stage, { title: string; task: string }> = {
@@ -65,7 +65,7 @@ const STAGE_SELF_EXAMPLES: Record<Stage, { title: string; task: string }> = {
   architecture: { title: '架构师', task: '完成技术选型与环境探测，产出架构文档' },
   planning: { title: '工程经理', task: '制定迭代规划与工程计划，拆分里程碑' },
   coding: { title: '全栈开发', task: '按既定方案实现应用全部页面与交互逻辑' },
-  testing: { title: 'GWT 验收测试', task: '编写 GWT 验收测试场景与步骤映射' },
+  testing: { title: '测试工程师', task: '编写 GWT 验收测试场景与步骤映射' },
 }
 
 /** 各阶段典型「他阶段委派」样例（应被拒绝） */
@@ -405,12 +405,12 @@ describe('W8 集成：checkNanjuRouterGate 参数级三层强制', () => {
 
   test('批量 delegate_agents：全部匹配 → 放行并逐项注入约束', () => {
     setupProject({ stage: 'testing' })
-    // W18 严格序：title 不可含他阶段角色词子串（「测试工程师」含 planning「工程」会先被扫中），
-    // 改用「测试专员」保持本测试对批量注入路径的覆盖焦点
+    // W18.1 修复：title 还原为真实职称「测试工程师」（曾因 planning 裸「工程」子串被净化为
+    // 「测试专员」规避——A2 修复后不再需要，回归固化真实职称不再被拒）
     const input: Record<string, unknown> = {
       items: [
-        { title: '测试专员 A', task: '编写登录验收测试' },
-        { title: '测试专员 B', task: '编写支付 GWT 场景' },
+        { title: '测试工程师 A', task: '编写登录验收测试' },
+        { title: '测试工程师 B', task: '编写支付 GWT 场景' },
       ],
     }
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agents', input)).toBeNull()
@@ -460,7 +460,9 @@ describe('R1：层三注入与层二识别同源（matchACKeyword 替代 matchKi
 
   test('混合文本 3：本阶段词+英文 attack 并存（coding）→ 不注入但覆写', () => {
     setupProject({ stage: 'coding', mode: 'iterative' })
-    const input: Record<string, unknown> = { task: '实现登录页，完成后 attack 场景复审' }
+    // W18.1：文本避开下游（testing）产出物词「场景」——coding 强动词在场 + 下游 OUTPUT 词
+    // 并存会被 A3 守卫 deny（见 w18-delegate-intent.test.ts）；本测试焦点是层二覆写/层三注入
+    const input: Record<string, unknown> = { task: '实现登录页，完成后 attack 认证链路复审' }
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
     expect(String(input.task)).not.toContain(PATH_CONSTRAINT_MARKER)
     expect(input.modelId).toBe('deepseek-v4-pro') // iterative→medium attacker
@@ -547,10 +549,12 @@ describe('R5：deny 文案弱化（不断言归属阶段）', () => {
 
 describe('W10-V2.1：unmatched 强动作动词 deny 矩阵（动词 × 无阶段词文本）', () => {
   // 「实现/开发」同时是 coding 角色词（STAGE_ROLE_KEYWORDS.coding）：在 requirements 阶段
-  // 会被第 3 步他阶段扫描先命中（denialKind='other-stage'，W8 既有行为，deny 结果等价）；
-  // 其余动词（不属任何阶段词表）走第 4a 条 strong-verb。矩阵固化两者的完整分流。
-  test('全部强动词在 requirements 阶段（无阶段词文本）→ denied；动词属 coding 词表的走 other-stage，其余走 strong-verb', () => {
-    const codingVerbs = new Set(['实现', '开发'])
+  // 被第 2 步他阶段扫描先命中（denialKind='other-stage'，W8 既有行为，deny 结果等价）；
+  // W18.1 后「写代码」（含产出物词「代码」）与「code」（同词）再被 2.5 步下游 OUTPUT 守卫
+  // 先拦（violatedStage 同为 coding，denialKind='other-stage'）；其余动词走第 4 条 strong-verb。
+  // 矩阵固化三路分流。
+  test('全部强动词在 requirements 阶段（无阶段词文本）→ denied；动词属 coding 阶段词的走 other-stage，其余走 strong-verb', () => {
+    const codingVerbs = new Set(['实现', '开发', '写代码', 'code'])
     for (const verb of STRONG_ACTION_VERBS) {
       const result = checkDelegationAgainstStage('requirements', { title: '助手', task: `把这个小工具${verb}，交付可用结果` })
       expect(result.allowed).toBe(false)
@@ -628,14 +632,15 @@ describe('W10-V2.1：产出物词优先缓解误拦（本阶段目录词 > 强�
     }
   })
 
-  test('产出物词不参与他阶段扫描：requirements 阶段「构建代码评审清单」不被 coding 产出物词误放（仍按 unmatched+强动词 deny）', () => {
-    // 「代码」是 coding 产出物词但不在任何角色词表——第 3 步他阶段扫描不扫产出物词表，
-    // requirements 下此文本不中任何阶段词 → unmatched + 「构建」强动词 → strong-verb deny
-    // （交叉表述靠 AC 词表兜底，产出物词只用于本阶段放行补充，防推翻宽匹配原则）
+  test('W18.1 分流迁移：requirements 阶段「构建代码评审清单」含强动词「构建」+下游产出词「代码」→ deny(other-stage, coding)（原 strong-verb）', () => {
+    // W10 原断言：产出物词不参与他阶段扫描 → unmatched+「构建」强动词 strong-verb deny；
+    // W18.1 A3 守卫有条件纳入下游产出物词（强动词在场时）——本文本从 strong-verb 迁移到
+    // other-stage（deny 语义等价，且归因到 coding 更准）；无强动词的交叉表述仍不扫产出词（宽匹配原则不推翻）
     const result = checkDelegationAgainstStage('requirements', { title: '评审', task: '构建代码评审清单' })
     expect(result.allowed).toBe(false)
-    expect(result.denialKind).toBe('strong-verb')
-    expect(result.matchedVerb).toBe('构建')
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('代码')
   })
 })
 
@@ -685,8 +690,9 @@ describe('W10-V2.1：router-gate 集成（deny 文案与 telemetry）', () => {
       ],
     })
     expect(result?.behavior).toBe('deny')
-    // 键序首命中（W8 报告已知特性）：「测试工程师」先撞 planning 的「工程」而非 testing 的「测试」
-    expect(result?.message).toContain('命中「工程」')
+    // W18.1（A2 修复后）：「测试工程师」首命中 testing 的「测试」（原裸「工程」已从 planning
+    // 词表移除——归因更贴切，不再自相矛盾地归 planning）
+    expect(result?.message).toContain('命中「测试」')
     expect(result?.message).toContain('含产出类动作词「做出来」') // 强动词行
     const events = readTelemetryEvents()
     expect(events.filter((e) => e.eventType === 'delegate.guard.stage-deny')).toHaveLength(1)

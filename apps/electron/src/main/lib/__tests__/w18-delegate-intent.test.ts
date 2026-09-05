@@ -254,6 +254,124 @@ describe('W18 router-gate：stage-deny 埋点 coPresentStageKeyword（严格序�
   })
 })
 
+// ═══════════════ W18.1（Wave1.1）：A2 工程师职称误拦修复 ═══════════════
+
+describe('W18.1 A2：工程师职称不再被 planning「工程」子串误拦（审查 A2 回归固化）', () => {
+  test('testing 阶段 title「测试工程师」（本阶段规范角色名）→ allowed=true（stage）', () => {
+    // 修复前：'工程' ∈ STAGE_ROLE_KEYWORDS.planning，② 他阶段扫描先于 ③ 命中 → deny(other-stage, planning,
+    // violatedKeyword='工程')——本阶段自身标题被拒且文案自相矛盾（审查探针 A2 实锤）
+    const result = checkDelegationAgainstStage('testing', {
+      title: '测试工程师',
+      task: '编写 GWT 验收测试场景与步骤映射',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('coding 阶段 title「全栈开发工程师」→ allowed=true（stage，「工程师」为中文标准职称后缀）', () => {
+    const result = checkDelegationAgainstStage('coding', {
+      title: '全栈开发工程师',
+      task: '按既定方案实现应用全部页面与交互逻辑',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('coding 阶段「配置开发环境」→ allowed=true（architecture「环境」已收紧为「环境配置」）', () => {
+    // 修复前：'环境' ∈ STAGE_ROLE_KEYWORDS.architecture → ② deny(other-stage, architecture, '环境')
+    // （审查探针：'配置开发环境' 不含连续子串 '环境配置'——语序相反，收紧后不再误拦）
+    const result = checkDelegationAgainstStage('coding', {
+      title: '开发任务',
+      task: '配置开发环境并初始化工程骨架',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('护栏：architecture 阶段「环境配置」词仍命中（stage）——收紧不削弱本阶段匹配', () => {
+    const result = checkDelegationAgainstStage('architecture', {
+      title: '架构师',
+      task: '完成环境配置清单与技术选型',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('护栏：planning 阶段典型委派仍命中（stage）——去裸「工程」后换精确词', () => {
+    const result = checkDelegationAgainstStage('planning', {
+      title: '工程经理',
+      task: '制定迭代规划与工程计划，拆分里程碑',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+})
+
+// ═══════════════ W18.1（Wave1.1）：A3 OUTPUT 词绕过闭合 ═══════════════
+
+describe('W18.1 A3：强动词 + 下游阶段产出物词 → deny（OUTPUT 词绕过闭合）', () => {
+  test('例1：requirements「按 PRD 生成应用代码」→ deny(other-stage, coding, violatedKeyword=「代码」)', () => {
+    // 修复前：② 只扫 ROLE 词（无命中），③ 本阶段词 'PRD' 命中 → pass(stage)——OUTPUT 词+强动词绕过（审查 A3 探针）
+    const result = checkDelegationAgainstStage('requirements', {
+      title: '快速交付',
+      task: '按 PRD 生成应用代码',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.matchKind).toBe('unmatched')
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('代码')
+  })
+
+  test('例2：requirements「对照 PRD 需求，编写 08_APP 应用的全部页面代码」→ deny(other-stage, coding)', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '对照 PRD 需求，编写 08_APP 应用的全部页面代码',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('代码')
+  })
+
+  test('例3：requirements「基于需求，构建 08_APP/index.html 页面」→ deny(other-stage, coding, violatedKeyword=「index.html」)', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '基于需求，构建 08_APP/index.html 页面',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('index.html')
+  })
+
+  test('不回归：本阶段产出物+强动词「调研并编写 PRD 草稿要点」→ pass(stage)（下游 OUTPUT 词不命中，守卫不触发）', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      title: '调研助手',
+      task: '调研并编写 PRD 草稿要点',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+    expect(result.matchedKeyword).toBe('PRD')
+  })
+
+  test('不回归：审计宾语跨阶段「攻击 02_UX_DESIGN 原型找可用性问题」→ pass(ac)（① 先裁决，守卫不达）', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      title: 'AC 攻击者',
+      task: '攻击 02_UX_DESIGN 原型找可用性问题',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('ac')
+  })
+
+  test('不回归：同阶段产出物+强动词（coding「生成应用入口 index.html」）→ pass(stage)（守卫只扫严格下游阶段）', () => {
+    const result = checkDelegationAgainstStage('coding', {
+      title: '开发任务',
+      task: '生成应用入口 index.html',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+})
+
 describe('W18 router-gate：纯审计意图放行端到端（① 先于他阶段扫描 + 层三不注入）', () => {
   test('requirements「攻击 02_UX_DESIGN 原型找可用性问题」→ 放行、不注入路径约束', () => {
     setupProject({ stage: 'requirements' })

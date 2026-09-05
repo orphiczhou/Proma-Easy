@@ -321,7 +321,9 @@ function checkNanjuDelegateGuard(
             stage: v.result.violatedStage,
             keyword: v.result.violatedKeyword,
             // W18：本阶段词共现观察口径——严格序（他阶段扫描先于本阶段词）下，
-            // 合法交叉表述被拒时此字段非空；非空占比即误拦率统计依据
+            // 合法交叉表述被拒时此字段非空；非空占比即本阶段词共现率（deny-with-coPresent）
+            // 统计依据。注意：共现既出现在误拦、也出现在正确拦截上（如「基于 PRD 需求直接
+            // 开发」是真阳拦截），非空占比≠误拦率（W18.1 A4 口径修正）
             coPresentStageKeyword: matchStageKeyword(guardStage, v.source),
             title: v.source.title,
             taskPreview: taskPreview(v.source.task),
@@ -406,7 +408,8 @@ function checkNanjuDelegateGuard(
       target.task = injectStagePathConstraint(guardStage, target.task)
     }
 
-    // 误拦观察：两类词都不命中的辅助类委派，放行 + telemetry（第一版保守观察误拦率）
+    // 误拦观察：两类词都不命中的辅助类委派，放行 + telemetry（第一版保守观察 unmatched 放行面；
+    // deny 侧误拦观察见 stage-deny 埋点 coPresentStageKeyword 的共现率口径）
     if (result.matchKind === 'unmatched') {
       recordTelemetry(
         workspaceSlug,
