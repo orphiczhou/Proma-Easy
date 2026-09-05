@@ -644,7 +644,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '     question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，',
         '     options：满意交付（可以交付使用）/ 需要调整（说明问题，回炉修复后重新测试）。',
         '     · 用户满意交付（或明确确认交付）→ 【立即】输出 <!-- PHASE_ADVANCE: delivered --> 完成交付',
-        '       （交付门禁校验测试报告 verdict=pass 已满足，直接推进——不要重新委派、不要重复产出、不要再询问）。',
+        '       （交付门禁校验测试报告 verdict=pass 且系统已记录用户满意交付确认已满足——用户经 AskUserQuestion 选择「满意交付」后系统自动登记，直接推进——不要重新委派、不要重复产出、不要再询问）。',
         '     · 用户需要调整（或描述问题）→ 意见收集轮收集修改意见（可引导用户点选右侧预览元素精准定位，',
         '       复用编码阶段 c/d 的收集节奏：逐条确认理解、收齐后统一改），收齐后 continue_delegation',
         '       委派「全栈开发」修复 08_APP/ 下的代码（不动 06_TESTS/ 与 01_PRD/），修复完成后输出',

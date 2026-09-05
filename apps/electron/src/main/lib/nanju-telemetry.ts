@@ -29,6 +29,9 @@ export type TelemetryEventType =
   // W17-AC-S1（A3 锚定收集）：未锚定命中丢弃观测——收集正则收紧为注释/行首形态后，
   // 句中引用（正文/代码块复述协议字面串）不再误收集，丢弃事件供一迭代周期观察后定稿
   | 'phase.advance.discarded-unanchored'
+  // W18 Wave2 交付双事实门禁：确认登记（ask-answer 精确等值置位）/ 门禁拦截现测（四道校验
+  // 归因）/ 自由文本拒绝观测（message 来源命中交付词但不置位）
+  | 'delivery.ack-recorded' | 'delivery.gate.blocked' | 'delivery.ack-rejected-freetext'
 
 export interface TelemetryEvent {
   eventId: string

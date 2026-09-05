@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 
 let fixtureRoot = ''
 
@@ -36,6 +37,9 @@ const { checkConfirmAdvanceInput, consumePhaseAdvanceMarks } =
   await import('../nanju-phase-advance-consumer')
 type PhaseAdvanceHooks = import('../nanju-phase-advance-consumer').PhaseAdvanceHooks
 const { getProjectConfirmPending } = await import('../nanju-project')
+// W18：交付双事实门禁（delivered 消费用例前置）
+const { checkGwtDeliveryFacts } = await import('../nanju-gwt-runner')
+const { readProjectInfo, setProjectDeliveryChallenge, setProjectDeliveryAck } = await import('../nanju-project')
 
 /** 测试用 hooks：捕获注入消息 / GWT 触发 / Todo 收尾 */
 function buildTestHooks(): PhaseAdvanceHooks & {
@@ -289,6 +293,74 @@ describe('W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现）', (
   })
 })
 
+// ═══════════════ W18 前置：delivered 消费链（交付双事实门禁接入后的 fixture 前置） ═══════════════
+
+describe('W18 前置：delivered 消费需 runId+ack 双事实（无 ack 拦截，有 ack 推进+completed）', () => {
+  /** fixture 补前置：testing 阶段 + 新版 schema pass 报告（runId+指纹）+ challenge（可选 ack） */
+  function setupDeliveryFixture(opts: { ack?: boolean } = {}): void {
+    setupFixture({ stage: 'testing' })
+    const html = '<!DOCTYPE html><html><body><div data-ai-id="view-note-list">列表</div></body></html>'
+    mkdirSync(join(fixtureRoot, 'project-p1', '06_TESTS'), { recursive: true })
+    mkdirSync(join(fixtureRoot, 'project-p1', '08_APP'), { recursive: true })
+    writeFileSync(join(fixtureRoot, 'project-p1', '08_APP', 'index.html'), html)
+    writeFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), JSON.stringify({
+      generatedAt: '2026-09-05T10:00:00.000Z',
+      runId: 'R1',
+      entryFingerprint: { sha256: createHash('sha256').update(html, 'utf-8').digest('hex'), size: Buffer.byteLength(html, 'utf-8') },
+      executionContext: 'file://',
+      coverageUnverified: [],
+      verdict: 'pass', scenariosTotal: 1, passed: 1, failed: 0, skipped: 0,
+      coveredUs: ['US-01'], uncoveredUs: [], retryCount: 0, scenarios: [],
+    }))
+    setProjectDeliveryChallenge('w17-ws', 'p1', 'R1', SESSION_ID)
+    if (opts.ack) setProjectDeliveryAck('w17-ws', 'p1', 'R1', '2026-09-05T10:30:00.000Z')
+  }
+
+  /** 门禁接真实事实校验（编排器 checkNanjuGwtDeliveryGate 的 pass 后置同装配） */
+  function buildDeliveryHooks() {
+    const base = buildTestHooks()
+    return {
+      ...base,
+      checkGwtDeliveryGate: (ws: string, pid: string): string | null => {
+        const projectDir = join(fixtureRoot, `project-${pid}`)
+        const block = checkGwtDeliveryFacts({
+          workspaceSlug: ws,
+          projectId: pid,
+          reportJsonPath: join(projectDir, '06_TESTS', 'report.json'),
+          projectDir,
+          info: readProjectInfo(ws, pid),
+        })
+        return block?.message ?? null
+      },
+    }
+  }
+
+  test('无 ack（用户尚未应答）→ 门禁拦截：状态机不动，注入含「满意交付确认」的拦截文案', () => {
+    setupDeliveryFixture({ ack: false })
+    const hooks = buildDeliveryHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['delivered'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    expect(readProjects()[0]?.currentStage).toBe('testing')
+    const blocked = hooks.injected.find((t) => t.includes('交付被拦截'))
+    expect(blocked).toBeTruthy()
+    expect(blocked).toContain('满意交付确认')
+  })
+
+  test('有 ack（绑当前 runId）→ 推进 delivered + status=completed + project.finished 埋点 + ack 终态清理', () => {
+    setupDeliveryFixture({ ack: true })
+    const hooks = buildDeliveryHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['delivered'], RESUME, hooks)
+    expect(advanced).toBe('delivered')
+    expect(readProjects()[0]).toMatchObject({ currentStage: 'delivered', status: 'completed' })
+    const month = new Date().toISOString().slice(0, 7)
+    const telemetryPath = join(fixtureRoot, '_telemetry', `events-${month}.jsonl`)
+    expect(existsSync(telemetryPath)).toBe(true)
+    const events = readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(events.filter((e) => e.eventType === 'project.finished').length).toBe(1)
+    expect(readProjectInfo(WS, 'p1')?.deliveryAck).toBeUndefined()
+  })
+})
+
 // ═══════════════ 工单 §3-5/§3-6：接线不回归 + W11 规则零变化 ═══════════════
 
 describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
@@ -341,8 +413,9 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
     expect(orchestratorSource).toMatch(/askToolUseNames\.set\(block\.id, block\.name \?\? ''\)/)
     // AskUserQuestion tool_result 识别（凭登记表，非文本猜测）
     expect(orchestratorSource).toContain("askToolUseNames.get(block.tool_use_id) !== 'AskUserQuestion'")
-    // 答案文本（answers 值）送同一 checkConfirmAdvanceInput（三路径共用）
-    expect(orchestratorSource).toContain('checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText)')
+    // 答案文本（answers 值）送同一 checkConfirmAdvanceInput（三路径共用；W18 起横幅答案
+    // 额外传 source='ask-answer'——唯一可置位交付 ack 的来源）
+    expect(orchestratorSource).toContain("checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText, 'ask-answer')")
   })
 
   test('W17-AC-M2（A2 系统消息豁免）：systemInitiated 续接不进用户意图检测，且不用 triggeredBy 替代', () => {

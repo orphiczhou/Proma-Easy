@@ -136,6 +136,19 @@ export interface NanjuProjectInfoFile {
    * 缺失 = 无待推进（新/存量项目，可选字段向后兼容）。
    */
   confirmPendingStage?: string
+  /**
+   * 交付满意确认（W18 Wave2，v0.17.83）：用户经 AskUserQuestion 精确应答「满意交付」且
+   * 双事实门禁前置满足时由唯一写入点 setProjectDeliveryAck 置位；delivered 推进成功后
+   * 由 clearProjectDeliveryAck 终态清理（防下个项目误读）。缺失 = 无有效确认。
+   */
+  deliveryAck?: { at: string; reportRunId: string }
+  /**
+   * 待应答交付挑战（W18 Wave2）：GWT-pass 注入验收消息时由唯一写入点
+   * setProjectDeliveryChallenge 登记（记录当时 report.runId + 会话 + 时间）；
+   * 应答只认登记值（防旧问题延迟作答绑到新报告）。ask-answer 置位 ack 时清除；
+   * 交付否定词 / 下次 GWT-pass 注入重建时清除。缺失 = 无待应答挑战。
+   */
+  deliveryChallenge?: { reportRunId: string; sessionId: string; askedAt: string }
 }
 
 /**
@@ -647,6 +660,104 @@ export function clearProjectConfirmPending(workspaceSlug: string, projectId: str
   const info = readProjectInfo(workspaceSlug, projectId)
   if (!info || info.confirmPendingStage === undefined) return
   info.confirmPendingStage = undefined
+  writeProjectInfo(workspaceSlug, projectId, info)
+}
+
+// ===== 交付确认读写（W18 Wave2，v0.17.83：交付双事实门禁——用户确认侧） =====
+
+/**
+ * 交付否定词（工单 §1.2）：命中则清除 ack+challenge（用户明确反悔，待验收状态撤下）。
+ * 仅用于清除，不承担置位排除——置位走 ask-answer 精确等值天然免疫否定形。
+ * 扩词风险不对称性有利：clear 代价（撤一个待应答状态，真确认可重登记）≪ 误置位代价。
+ */
+export const DELIVERY_REJECT_WORDS: readonly string[] = [
+  '不确认交付', '暂不确认', '不要交付', '不接受交付', '先不交付',
+]
+
+/** 读取交付确认（无文件/无字段返回 null） */
+export function getProjectDeliveryAck(
+  workspaceSlug: string,
+  projectId: string,
+): { at: string; reportRunId: string } | null {
+  return readProjectInfo(workspaceSlug, projectId)?.deliveryAck ?? null
+}
+
+/** 读取待应答交付挑战（无文件/无字段返回 null） */
+export function getProjectDeliveryChallenge(
+  workspaceSlug: string,
+  projectId: string,
+): { reportRunId: string; sessionId: string; askedAt: string } | null {
+  return readProjectInfo(workspaceSlug, projectId)?.deliveryChallenge ?? null
+}
+
+/**
+ * 置位交付确认（唯一写入点，setProjectConfirmPending 同型 read-construct-write 纪律）。
+ * 幂等：同 reportRunId 重复置位不重写（at 不变）；不同 reportRunId 防御性覆盖
+ * （正常流不会出现——应答前置条件要求 challenge 在场，challenge 登记前旧 ack 已被注入侧清除）。
+ * @returns 实际生效的 ack（含 at），供调用方埋点/日志。
+ */
+export function setProjectDeliveryAck(
+  workspaceSlug: string,
+  projectId: string,
+  reportRunId: string,
+  at?: string,
+): { at: string; reportRunId: string; rewritten: boolean } {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  if (base.deliveryAck && base.deliveryAck.reportRunId === reportRunId) {
+    return { at: base.deliveryAck.at, reportRunId, rewritten: false }
+  }
+  const writtenAt = at ?? new Date().toISOString()
+  base.deliveryAck = { at: writtenAt, reportRunId }
+  writeProjectInfo(workspaceSlug, projectId, base)
+  return { at: writtenAt, reportRunId, rewritten: true }
+}
+
+/** 清除交付确认（delivered 终态清理 / 否定词反悔；幂等——无字段时 no-op） */
+export function clearProjectDeliveryAck(workspaceSlug: string, projectId: string): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  if (!info || info.deliveryAck === undefined) return
+  info.deliveryAck = undefined
+  writeProjectInfo(workspaceSlug, projectId, info)
+}
+
+/**
+ * 登记待应答交付挑战（唯一写入点：GWT-pass 注入验收消息前，记录当时 report.runId +
+ * 会话 + 时间——应答只认登记值，见工单 §0 核心修正 1）。
+ */
+export function setProjectDeliveryChallenge(
+  workspaceSlug: string,
+  projectId: string,
+  reportRunId: string,
+  sessionId: string,
+): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  base.deliveryChallenge = { reportRunId, sessionId, askedAt: new Date().toISOString() }
+  writeProjectInfo(workspaceSlug, projectId, base)
+}
+
+/** 清除待应答交付挑战（ask-answer 已置 ack / 否定词反悔 / 下次注入重建前；幂等） */
+export function clearProjectDeliveryChallenge(workspaceSlug: string, projectId: string): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  if (!info || info.deliveryChallenge === undefined) return
+  info.deliveryChallenge = undefined
   writeProjectInfo(workspaceSlug, projectId, info)
 }
 

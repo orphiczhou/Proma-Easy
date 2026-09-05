@@ -14,6 +14,7 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 
 /** 当前 fixture 根目录（mock 的 getWorkspaceFilesDir 每次调用时读取） */
 let fixtureRoot = ''
@@ -619,6 +620,19 @@ describe('runNanjuGwtAcceptance', () => {
     expect(Array.isArray(report.scenarios)).toBe(true)
     expect(report.scenarios[0]).toMatchObject({ feature: 'us-01', status: 'pass' })
 
+    // W18（v0.17.83）：交付事实字段——runId（本次运行唯一标识）+ entryFingerprint（写盘时刻
+    // 对 08_APP/index.html 实测 sha256/size）+ executionContext + coverageUnverified 三口径
+    expect(typeof report.runId).toBe('string')
+    expect(report.runId.length).toBeGreaterThan(0)
+    const entryBytes = readFileSync(join(fixtureRoot, 'project-p1', '08_APP', 'index.html'))
+    expect(report.entryFingerprint).toEqual({
+      sha256: createHash('sha256').update(entryBytes).digest('hex'),
+      size: entryBytes.byteLength,
+    })
+    expect(report.executionContext).toBe('file://')
+    expect(report.coverageUnverified.length).toBe(3)
+    expect(report.coverageUnverified.some((s: string) => s.includes('file://'))).toBe(true)
+
     // judge.verdict 埋点落盘（推进即事实口径）
     const telemetryDir = join(fixtureRoot, '_telemetry')
     expect(existsSync(telemetryDir)).toBe(true)
@@ -831,15 +845,18 @@ describe('W12：GWT-pass 交付验收两段化（不直接 delivered）', () => 
     expect(instruction).toContain('应用已完成并通过自动测试，可以交付使用。你用过了吗？')
     expect(instruction).toContain('满意交付')
     expect(instruction).toContain('需要调整')
-    // 满意交付 → 既有 isDeliverFromTesting 路径（交付门禁 verdict=pass 已满足）
+    // 满意交付 → 既有 isDeliverFromTesting 路径（W18：门禁双事实——verdict=pass 且系统已记录用户满意交付确认）
     expect(instruction).toContain('<!-- PHASE_ADVANCE: delivered -->')
-    expect(instruction).toContain('交付门禁校验 verdict=pass 已满足')
+    expect(instruction).toContain('交付门禁校验 verdict=pass 且系统已记录用户满意交付确认')
     // 需要调整 → 意见收集 → 修复 08_APP/ → testing 重跑（不动测试与需求产物）
     expect(instruction).toContain('<!-- PHASE_ADVANCE: testing -->')
     expect(instruction).toContain('修复 08_APP/ 下的代码')
     expect(instruction).toContain('不动 06_TESTS/ 与 01_PRD/')
     // 回炉预算 ≤2 既有约束交代（系统计数，L1 不自作主张超限）
     expect(instruction).toContain('回炉预算 ≤2 次')
+    // W18：话术尾注覆盖边界一行（file:// 上下文诚实声明——预览协议差异不在机器背书内）
+    expect(instruction).toContain('覆盖边界')
+    expect(instruction).toContain('file://')
   })
 
   test('回炉预算未动：GWT_RETRY_LIMIT 仍为 2（交付验收不烧回炉次数）', () => {

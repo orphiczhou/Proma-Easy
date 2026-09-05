@@ -523,7 +523,19 @@ export class AgentOrchestrator {
       if (report?.verdict !== 'pass') {
         return `验收测试未通过（${report?.passed ?? 0}/${report?.scenariosTotal ?? 0} 个场景通过）。请按测试报告修复缺陷后重跑（声明 <!-- PHASE_ADVANCE: testing -->）。`
       }
-      return null
+      // W18 Wave2（工单 §1.3）：verdict=pass 之后追加四道事实校验（旧 schema / 指纹不符 /
+      // 无 ack / runId 不匹配；拦截文案由 checkGwtDeliveryFacts 单一来源，
+      // delivery.gate.blocked 埋点含 reason 归因在其内部记录）
+      const { checkGwtDeliveryFacts } = require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
+      const { readProjectInfo } = require('./nanju-project') as typeof import('./nanju-project')
+      const factBlock = checkGwtDeliveryFacts({
+        workspaceSlug,
+        projectId,
+        reportJsonPath: reportPath,
+        projectDir: getNanjuProjectDir(workspaceSlug, projectId),
+        info: readProjectInfo(workspaceSlug, projectId),
+      })
+      return factBlock ? factBlock.message : null
     } catch (e) {
       return `测试报告读取失败：${e instanceof Error ? e.message : String(e)}`
     }
@@ -714,6 +726,28 @@ export class AgentOrchestrator {
           //      （回炉预算 ≤2 次既有约束不变，GWT_RETRY_LIMIT 未动）。
           const { buildGwtDeliveryAcceptanceMessage, GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE } =
             require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
+          // W18 Wave2（工单 §1.3 核心修正 1）：发起时登记 pending 挑战——先读刚落盘
+          // report 的 runId，setProjectDeliveryChallenge(runId, sessionId) 再注入；注入前
+          // 已有旧 challenge/ack 一并清除（防跨轮残留：旧问题的延迟作答不得绑到新报告）。
+          // 登记失败不阻断验收注入（无 challenge 时 ask-answer 不置位，门禁以 no-ack
+          // 拦截，安全降级）。
+          try {
+            const { readFileSync: reportRead } = require('node:fs')
+            const {
+              setProjectDeliveryChallenge, clearProjectDeliveryAck, clearProjectDeliveryChallenge,
+            } = require('./nanju-project') as typeof import('./nanju-project')
+            clearProjectDeliveryAck(workspaceSlug, projectId)
+            clearProjectDeliveryChallenge(workspaceSlug, projectId)
+            const reportRunId = (JSON.parse(reportRead(outcome.reportJsonPath, 'utf-8')) as { runId?: string })?.runId
+            if (typeof reportRunId === 'string' && reportRunId !== '') {
+              setProjectDeliveryChallenge(workspaceSlug, projectId, reportRunId, sessionId)
+              console.log(`[南大路由] 交付挑战已登记（runId=${reportRunId}，等待用户应答）`)
+            } else {
+              console.warn('[南大路由] GWT 报告缺 runId（旧 schema），交付挑战未登记——应答不置位，门禁将按旧版格式拦截')
+            }
+          } catch (challengeErr) {
+            console.warn('[南大路由] 交付挑战登记失败（不阻断验收注入）:', challengeErr instanceof Error ? challengeErr.message : String(challengeErr))
+          }
           console.log(`[南大路由] ✅ GWT 验收通过，进入交付验收（等待用户确认交付）: ${projectName}`)
           this.injectNanjuAssistantMessage(sessionId, buildGwtDeliveryAcceptanceMessage(outcome.summaryText))
           setTimeout(() => {
@@ -2569,7 +2603,9 @@ export class AgentOrchestrator {
                       .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
                       .join('\n')
                     if (answerText.trim() !== '') {
-                      checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText)
+                      // W18：AskUserQuestion 横幅答案传 source='ask-answer'——唯一可置位
+                      // 交付 ack 的来源（精确等值「满意交付」+ challenge 在场，见 consumer）
+                      checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText, 'ask-answer')
                     }
                   } catch (e) {
                     console.warn('[南大路由] AskUserQuestion 答案解析失败（不阻断）:', e instanceof Error ? e.message : String(e))

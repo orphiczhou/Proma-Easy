@@ -43,10 +43,26 @@ export interface PhaseAdvanceHooks {
 }
 
 /**
- * W10/W17：确认响应推进检测（单条用户文本）——事件流路径与 run 初始输入路径共用。
+ * W10/W17/W18：确认响应推进检测（单条用户文本）——事件流路径与 run 初始输入路径共用。
  * 语义见模块头；置位/清除/埋点与 W10 原事件流块完全一致，不自动推进（W10 设计决策）。
+ *
+ * W18 Wave2（v0.17.83）交付域（先于普通 confirmPending 检测，两者独立不至扩散）：
+ * - 否定词（DELIVERY_REJECT_WORDS，两来源均生效）→ 清除 ack+challenge；
+ * - ask-answer 来源且精确等值「满意交付」且 testing 阶段且 challenge 在场且磁盘报告
+ *   verdict=pass 且新 schema 合格 → setProjectDeliveryAck(challenge.reportRunId) +
+ *   清除 challenge + 埋点 delivery.ack-recorded（ack 只认登记值，不绑磁盘当前 runId）；
+ * - message 来源命中「满意交付」→ 仅埋点 delivery.ack-rejected-freetext（观测，不置位）。
+ * 普通确认语义（'满意交付' 在 CONFIRM_ADVANCE_KEYWORDS 的既有置位行为）不动。
+ *
+ * @param source 'ask-answer' = AskUserQuestion 横幅答案（结构化精确选项，可置位交付 ack）；
+ *   'message' = 事件流/初始输入自由文本（只观测不置位；旧 tool_result 重放走此路径天然免疫）
  */
-export function checkConfirmAdvanceInput(sessionId: string, workspaceSlug: string, userText: string): void {
+export function checkConfirmAdvanceInput(
+  sessionId: string,
+  workspaceSlug: string,
+  userText: string,
+  source: 'message' | 'ask-answer' = 'message',
+): void {
   if (userText.trim() === '') return
   try {
     const { listNanjuProjects, judgeConfirmAdvance, setProjectConfirmPending, clearProjectConfirmPending } =
@@ -55,6 +71,14 @@ export function checkConfirmAdvanceInput(sessionId: string, workspaceSlug: strin
       (p: { sessionId?: string }) => p.sessionId === sessionId,
     )
     if (!project) return
+
+    // —— W18 交付域（双事实门禁的确认侧）——
+    try {
+      checkDeliveryConfirmation(project, workspaceSlug, userText, source)
+    } catch (deliveryErr) {
+      console.warn('[南大路由] 交付确认检测异常（不阻断普通确认检测）:', deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr))
+    }
+
     const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage as import('./nanju-router').PhaseId)
     const action = judgeConfirmAdvance(userText, project.currentStage, verifyError)
     if (action === 'set') {
@@ -74,6 +98,86 @@ export function checkConfirmAdvanceInput(sessionId: string, workspaceSlug: strin
     }
   } catch (e) {
     console.warn('[南大路由] 确认检测异常（不阻断）:', e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** W18 交付域检测（checkConfirmAdvanceInput 内部段；project 已解析） */
+function checkDeliveryConfirmation(
+  project: { projectId: string; name: string; currentStage: string; mode: string },
+  workspaceSlug: string,
+  userText: string,
+  source: 'message' | 'ask-answer',
+): void {
+  const {
+    readProjectInfo, setProjectDeliveryAck, clearProjectDeliveryAck, clearProjectDeliveryChallenge,
+    getNanjuProjectDir, DELIVERY_REJECT_WORDS,
+  } = require('./nanju-project') as typeof import('./nanju-project')
+  const trimmed = userText.trim()
+  const info = readProjectInfo(workspaceSlug, project.projectId)
+
+  // 1) 否定词：用户明确反悔 → 清除 ack+challenge（两来源一致；幂等）
+  if (DELIVERY_REJECT_WORDS.some((w) => userText.includes(w))) {
+    if (info?.deliveryAck || info?.deliveryChallenge) {
+      clearProjectDeliveryAck(workspaceSlug, project.projectId)
+      clearProjectDeliveryChallenge(workspaceSlug, project.projectId)
+      console.log(`[南大路由] 交付确认检测：否定词清除 ack+challenge（${project.name}）`)
+    }
+    return
+  }
+
+  // 2) ask-answer 精确等值 + 全前置 → 登记交付 ack（只认 challenge 登记值）
+  if (source === 'ask-answer' && trimmed === '满意交付') {
+    const challenge = info?.deliveryChallenge
+    if (project.currentStage !== 'testing' || !challenge) {
+      console.log(`[南大路由] 交付确认检测：ask-answer 满意交付但前置不满足（stage=${project.currentStage}，challenge=${challenge ? '在场' : '缺失'}），不置位`)
+      return
+    }
+    // 磁盘报告须 verdict=pass 且新 schema 合格（旧报告/失败报告不置位）
+    const { readFileSync, existsSync } = require('node:fs')
+    const { join } = require('node:path')
+    const { hasGwtDeliverySchemaFields } = require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
+    const reportPath = join(getNanjuProjectDir(workspaceSlug, project.projectId), '06_TESTS', 'report.json')
+    let reportPass = false
+    try {
+      if (existsSync(reportPath)) {
+        const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as { verdict?: string } & Record<string, unknown>
+        reportPass = report?.verdict === 'pass' && hasGwtDeliverySchemaFields(report as Parameters<typeof hasGwtDeliverySchemaFields>[0])
+      }
+    } catch { /* 报告损坏按不置位处理 */ }
+    if (!reportPass) {
+      console.log(`[南大路由] 交付确认检测：磁盘报告非 pass/新 schema，不置位 ack（${project.name}）`)
+      return
+    }
+    const { at, reportRunId, rewritten } = setProjectDeliveryAck(workspaceSlug, project.projectId, challenge.reportRunId)
+    clearProjectDeliveryChallenge(workspaceSlug, project.projectId)
+    if (rewritten) {
+      try {
+        const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+        recordTelemetry(workspaceSlug, 'delivery.ack-recorded', {
+          project_id: project.projectId,
+          mode: project.mode,
+          report_run_id: reportRunId,
+          source,
+          at,
+        }, project.projectId)
+      } catch { /* 埋点失败不影响置位 */ }
+      console.log(`[南大路由] 交付确认检测：登记 deliveryAck（runId=${reportRunId}，${project.name}）`)
+    }
+    return
+  }
+
+  // 3) message 来源命中交付确认词 → 仅观测（自由文本/旧 tool_result 重放不置位）
+  if (source === 'message' && userText.includes('满意交付')) {
+    try {
+      const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+      recordTelemetry(workspaceSlug, 'delivery.ack-rejected-freetext', {
+        project_id: project.projectId,
+        mode: project.mode,
+        stage: project.currentStage,
+        challenge_present: Boolean(info?.deliveryChallenge),
+      }, project.projectId)
+    } catch { /* 埋点失败不影响 */ }
+    console.log(`[南大路由] 交付确认检测：message 来源命中交付词，仅观测不置位（${project.name}）`)
   }
 }
 
@@ -135,10 +239,28 @@ hooks: PhaseAdvanceHooks,
             console.log(`[南大路由] GWT 交付门禁拦截，不推进: ${gateError}`)
             hooks.injectAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}`)
           } else {
-            updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
-            console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
+            // W18 Wave2：交付成功单次写双字段（currentStage=delivered + status=completed
+            // 同拍落库）；finishedFirstTime 守门幂等——跨 run 重复 delivered 声明不重复计埋点
+            const finishedFirstTime = project.status !== 'completed'
+            updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage, status: 'completed' })
+            console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}（status=completed）`)
             advanced = newStage ?? null
             consumedStages.add(newStage)
+            // project.finished 埋点（W18 首次启用）：项目交付完成事实（推进即事实口径）
+            if (finishedFirstTime) {
+              try {
+                const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+                recordTelemetry(workspaceSlug, 'project.finished', {
+                  project_id: project.projectId,
+                  mode: project.mode,
+                }, project.projectId)
+              } catch { /* 埋点失败不影响交付 */ }
+            }
+            // W18：ack 终态清理（防下个项目误读；ack 按 projectId 存于 project-info，随项目清理）
+            try {
+              const { clearProjectDeliveryAck } = require('./nanju-project') as typeof import('./nanju-project')
+              clearProjectDeliveryAck(workspaceSlug, project.projectId)
+            } catch { /* 清理失败不影响交付（ack 随项目删除兑底） */ }
             // W10：推进成功——消费清除确认待推进（幂等，工单 §2.1 消费侧）
             try {
               const { clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')

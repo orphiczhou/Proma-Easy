@@ -26,8 +26,10 @@
 
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
 import { writeJsonFileAtomic, writeTextFileAtomic } from './safe-file'
 import { getNanjuProjectDir } from './nanju-project'
+import type { NanjuProjectInfoFile } from './nanju-project'
 import { recordTelemetry } from './nanju-telemetry'
 
 // ===== steps.json schema =====
@@ -287,6 +289,21 @@ export function judgeGwtResult(results: Array<Pick<GwtScenarioResult, 'feature' 
 export interface GwtReportJson {
   generatedAt: string
   verdict: 'pass' | 'fail' | 'error'
+  /**
+   * 本次测试运行唯一标识（W18 Wave2，v0.17.83）：交付 ack 绑定用的运行事实。
+   * 旧报告（v0.17.82 及以前）无此字段 → 交付门禁按旧版格式拦截。
+   */
+  runId?: string
+  /**
+   * 写盘时刻对 08_APP/index.html 实测指纹（W18 Wave2）：防「pass 后改应用仍拿旧报告交付」
+   * 的陈旧错配。入口缺失（全 skip 降级路径）时缺省。注意：这不是 OS 沙箱——L2 有文件写
+   * 权限可同时改入口与 report（含重算指纹），不宣称不可伪造。
+   */
+  entryFingerprint?: { sha256: string; size: number }
+  /** 执行上下文声明（W18 Wave2）：file:// 直载（预览协议 token 门控/注入差异不在覆盖内） */
+  executionContext?: 'file://'
+  /** 覆盖口径外事项（W18 Wave2，SHOULD-3 收口）：机器不背书的三口径诚实声明 */
+  coverageUnverified?: string[]
   /** 失败构成（回炉分流，v0.17.63 AC L-001）：behavior/mapping/coverage；pass 时为 null */
   failureKind: GwtFailureKind | null
   /** PRD 存在但未提取到 US-xx 清单（覆盖性基准缺失，fail-fast，v0.17.63 AC F-002） */
@@ -312,6 +329,127 @@ export interface GwtReportJson {
     screenshot: string | null
     durationMs: number
   }>
+}
+
+// ===== W18 Wave2：交付事实字段（指纹实测 / schema 判定 / 门禁四道校验） =====
+
+/** 覆盖口径外事项（报告 coverageUnverified 固定口径，SHOULD-3 收口） */
+export const GWT_COVERAGE_UNVERIFIED: readonly string[] = [
+  '预览协议 token 门控与 click-to-fix 注入不在 file:// 测试上下文覆盖内',
+  '场景步骤与用户故事的语义等价由 L2 映射背书，机器只验证步骤执行结果',
+  'PRD 未编号/未提及的需求不在覆盖性基准内',
+]
+
+/**
+ * 入口文件指纹实测（纯函数，无副作用）：sha256 + 字节长度。文件缺失/读取异常返回 null
+ * （报告侧缺省写 undefined；门禁侧按指纹不符拦截——入口被删也是「pass 后被修改」）。
+ */
+export function computeGwtEntryFingerprint(entryHtmlPath: string): { sha256: string; size: number } | null {
+  try {
+    if (!existsSync(entryHtmlPath)) return null
+    const buf = readFileSync(entryHtmlPath)
+    return { sha256: createHash('sha256').update(buf).digest('hex'), size: buf.byteLength }
+  } catch {
+    return null
+  }
+}
+
+/** 交付侧 schema 判定（纯函数）：runId/entryFingerprint/generatedAt 齐备（旧报告 false） */
+export function hasGwtDeliverySchemaFields(report: {
+  runId?: unknown
+  entryFingerprint?: { sha256?: unknown; size?: unknown } | null
+  generatedAt?: unknown
+} | null | undefined): boolean {
+  if (!report) return false
+  return (
+    typeof report.runId === 'string' && report.runId !== ''
+    && typeof report.entryFingerprint?.sha256 === 'string' && report.entryFingerprint.sha256 !== ''
+    && typeof report.entryFingerprint?.size === 'number'
+    && typeof report.generatedAt === 'string' && report.generatedAt !== ''
+  )
+}
+
+/** 门禁拦截归因（delivery.gate.blocked 埋点 reason 口径） */
+export type GwtDeliveryBlockReason =
+  | 'legacy-schema' | 'fingerprint-mismatch' | 'no-ack' | 'ack-run-mismatch' | 'ack-stale'
+
+export interface GwtDeliveryFactBlock {
+  reason: GwtDeliveryBlockReason
+  message: string
+}
+
+/**
+ * 交付四道事实校验（W18 Wave2，工单 §1.3）：verdict=pass 之后追加——
+ * a. 旧 schema（缺 runId/entryFingerprint/generatedAt）→ 旧版格式不可用，指引重跑；
+ * b. entryFingerprint 与当前 08_APP/index.html 实测不符 → pass 后被修改，指引重跑；
+ * c. ProjectInfo 无 deliveryAck → 指引 AskUserQuestion 发起交付验收；
+ * d. ack.reportRunId ≠ report.runId → 确认对应运行已被替代，指引重新验收；
+ *    冗余防御：ack.at ≤ report.generatedAt（同 runId 内）→ 确认已过期。
+ * 拦截时记 delivery.gate.blocked 埋点（reason 归因；埋点失败不阻断门禁）。
+ * 返回 null = 四道全过（放行交付）。
+ */
+export function checkGwtDeliveryFacts(input: {
+  workspaceSlug: string
+  projectId: string
+  reportJsonPath: string
+  projectDir: string
+  info: NanjuProjectInfoFile | null
+}): GwtDeliveryFactBlock | null {
+  let report: (Parameters<typeof hasGwtDeliverySchemaFields>[0] & {
+    runId?: string
+    entryFingerprint?: { sha256: string; size: number }
+    generatedAt?: string
+  }) | null
+  try {
+    report = JSON.parse(readFileSync(input.reportJsonPath, 'utf-8'))
+  } catch {
+    report = null
+  }
+  const block = (reason: GwtDeliveryBlockReason, message: string): GwtDeliveryFactBlock => {
+    try {
+      recordTelemetry(input.workspaceSlug, 'delivery.gate.blocked', {
+        project_id: input.projectId,
+        reason,
+      }, input.projectId)
+    } catch { /* 埋点失败不阻断门禁 */ }
+    return { reason, message }
+  }
+  // a. 旧版 schema
+  if (!hasGwtDeliverySchemaFields(report)) {
+    return block('legacy-schema',
+      '测试报告为旧版格式（缺少运行标识/入口指纹），不可用于交付。请重跑测试（声明 <!-- PHASE_ADVANCE: testing -->）后重新交付验收。')
+  }
+  // schema 判定通过 → 收窄为非空新 schema 报告（后续四道校验基于此）
+  const valid = report as NonNullable<Parameters<typeof hasGwtDeliverySchemaFields>[0]> & {
+    runId: string
+    entryFingerprint: { sha256: string; size: number }
+    generatedAt: string
+  }
+  // b. 入口指纹（pass 后改应用）
+  const currentFingerprint = computeGwtEntryFingerprint(join(input.projectDir, '08_APP', 'index.html'))
+  if (!currentFingerprint
+    || currentFingerprint.sha256 !== valid.entryFingerprint.sha256
+    || currentFingerprint.size !== valid.entryFingerprint.size) {
+    return block('fingerprint-mismatch',
+      '应用在测试通过后被修改（08_APP/index.html 与测试报告记录的入口指纹不一致）。请重跑测试（声明 <!-- PHASE_ADVANCE: testing -->）后重新交付验收。')
+  }
+  // c. 无交付确认
+  const ack = input.info?.deliveryAck
+  if (!ack) {
+    return block('no-ack',
+      '尚未记录到用户满意交付确认。请先用 AskUserQuestion 发起交付验收（options 含「满意交付」），用户确认满意交付后再输出 delivered 标记。')
+  }
+  // d. 确认与运行不匹配（新报告替代旧确认）
+  if (ack.reportRunId !== valid.runId) {
+    return block('ack-run-mismatch',
+      '交付确认对应的测试运行已被替代（确认绑定的运行与当前报告不一致）。请重新发起交付验收。')
+  }
+  // d'. 冗余防御：同 runId 内确认早于报告生成（时钟错乱/手工注入 ack）
+  if (!(Date.parse(ack.at) > Date.parse(valid.generatedAt))) {
+    return block('ack-stale',
+      '交付确认已过期（确认时间不晚于报告生成时间）。请重新发起交付验收。')
+  }
+  return null
 }
 
 /** 人读报告（06_TESTS/report-YYYYMMDD-HHmmss.md） */
@@ -751,11 +889,12 @@ export const GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE =
   '自动验收测试全部通过（GWT-pass：全场景通过 + 用户故事全覆盖，测试报告 verdict=pass）。'
   + '请向用户发起【交付验收】询问：用 AskUserQuestion 弹问，question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，'
   + 'options 两项：「满意交付」（可以交付使用）/「需要调整」（说明问题，回炉修复后重新测试）。'
-  + '用户选满意交付或明确表达满意/确认交付 → 立即输出 <!-- PHASE_ADVANCE: delivered --> 完成交付'
-  + '（交付门禁校验 verdict=pass 已满足，不要重新委派、不要重复产出、不要再询问）。'
+  + '用户选满意交付 → 立即输出 <!-- PHASE_ADVANCE: delivered --> 完成交付'
+  + '（交付门禁校验 verdict=pass 且系统已记录用户满意交付确认已满足——用户经上方 AskUserQuestion 选择「满意交付」后系统自动登记，不要重新委派、不要重复产出、不要再询问）。'
   + '用户选需要调整或描述问题 → 按意见收集轮收集修改意见（可引导用户点选右侧预览元素精准定位，逐条确认理解、收齐后统一改），'
   + '收齐后 continue_delegation 委派「全栈开发」修复 08_APP/ 下的代码（不动 06_TESTS/ 与 01_PRD/），'
   + '修复完成后输出 <!-- PHASE_ADVANCE: testing --> 重跑自动测试（回炉预算 ≤2 次由系统计数，超限系统转人工）。'
+  + '覆盖边界：自动测试在 file:// 上下文执行，预览协议 token 门控与注入差异不在覆盖内；场景语义等价与 PRD 遗漏项不由机器背书。'
 
 export async function runNanjuGwtAcceptance(input: {
   workspaceSlug: string
@@ -881,6 +1020,12 @@ export async function runNanjuGwtAcceptance(input: {
       : (prevFailed ? prevErrorCount : 0)
   const report: GwtReportJson = {
     generatedAt: new Date().toISOString(),
+    // W18 Wave2：交付事实字段（runId 每次运行新发；指纹为写盘时刻对入口实测；
+    // 入口缺失的降级路径缺省指纹——门禁按旧版格式/指纹不符拦截，verdict 亦非 pass）
+    runId: randomUUID(),
+    entryFingerprint: computeGwtEntryFingerprint(entryHtmlPath) ?? undefined,
+    executionContext: 'file://',
+    coverageUnverified: [...GWT_COVERAGE_UNVERIFIED],
     verdict,
     failureKind,
     prdUserStoriesMissing: prdUserStoriesMissing || undefined,
