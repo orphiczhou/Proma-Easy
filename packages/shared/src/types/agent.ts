@@ -1186,6 +1186,11 @@ export interface AgentSendInput {
   retryOfErrorUuid?: string
   /** 触发来源：用户手动、定时任务、父 Agent 委派（用于 UI 区分标记） */
   triggeredBy?: 'user' | 'automation' | 'delegation'
+  /** W17-AC-M2（A2 系统消息豁免）：系统发起的续接 run（阶段推进自动续接/GWT 验收与
+   *  回炉续接/护栏续接）。与 triggeredBy 语义不同：不跳过 nanjuRouterPrompt（阶段
+   *  门禁仍需注入），仅豁免用户意图检测（入口确认检测/自动续接消息不得进入
+   *  judgeConfirmAdvance —— 裁决 A2 wiring 类别混淆修复，不可用 triggeredBy 替代）。 */
+  systemInitiated?: boolean
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
   automationContext?: string
 }
