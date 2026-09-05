@@ -113,6 +113,26 @@ export class PiUtilityAdapter {
     }
   }
 
+  /**
+   * P0-B Phase2：按 sessionId 确定性中止全部 pending capability。
+   *
+   * abort() 依赖 utility 侧 QUERY_ABORT 往返驱动 query 终结，utility 挂死时
+   * generator 的 finally（含按 queryId 的 capability 清理）不会执行；本方法
+   * 不等待往返，直接按会话清空 capability AbortController，供会话删除与
+   * 远端 abort 兑底。返回中止数量便于诊断。
+   */
+  abortPendingCapabilities(sessionId: string): number {
+    const queryIds = new Set<string>()
+    for (const pending of this.pendingQueries.values()) {
+      if (pending.sessionId === sessionId) queryIds.add(pending.queryId)
+    }
+    let aborted = 0
+    for (const queryId of queryIds) {
+      aborted += abortCapabilityControllersForQuery(this.capabilityAbortControllers, queryId)
+    }
+    return aborted
+  }
+
   async sendQueuedMessage(
     sessionId: string,
     message: SDKUserMessageInput,

@@ -58,6 +58,12 @@ export interface AgentProviderAdapter {
   /** 中止指定会话的执行 */
   abort(sessionId: string): void
   /**
+   * 确定性中止指定会话的全部 pending capability 交互（AskUser 等主进程挂起请求）。
+   * 会话删除/远端 abort 时调用；不等待底层 run 终结，用于 utility 失联等
+   * QUERY_ABORT 往返不可达、query 终结清理链路失效时的兑底。
+   */
+  abortPendingCapabilities?(sessionId: string): void
+  /**
    * 软中断当前 turn，但保留活跃 Query/Channel 以便继续注入下一条用户消息。
    * 与 abort() 的区别：不杀子进程，允许立即续跑新消息。
    */

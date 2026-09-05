@@ -364,6 +364,25 @@ export function buildPiRemoteSessionTools(sdk: PiSdk): ToolDefinition[] {
     }),
 
     sdk.defineTool({
+      name: 'mcp__remote-session__remote_abort_session',
+      label: '远端中止会话',
+      description: '在远端实例上按 sessionId 中止运行中的 run（含挂起的 AskUser 等交互）。用于救援挂起或失控的远端会话；消息未消费时也建议先 abort 再处理。',
+      promptSnippet: 'remote_abort_session: abort a running session on a remote instance.',
+      parameters: Type.Object({
+        instance: Type.String({ description: '远端实例名。本实例用 "release"。' }),
+        session_id: Type.String({ description: '远端会话 ID' }),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { instance: string; session_id: string }
+        const port = await findPortByInstance(args.instance)
+        if (!port) return jsonToolResult({ error: `未找到实例 "${args.instance}"` })
+        return jsonToolResult(await callRemoteTool(port, 'abort_session', {
+          session_id: args.session_id,
+        }))
+      },
+    }),
+
+    sdk.defineTool({
       name: 'mcp__remote-session__remote_get_my_session_id',
       label: '远端实例信息',
       description: '获取远端实例信息。始终返回 null session_id（你不在该实例内）。',

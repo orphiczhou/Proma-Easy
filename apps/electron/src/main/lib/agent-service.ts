@@ -12,7 +12,7 @@
 
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, Notification } from 'electron'
 import type { WebContents } from 'electron'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@proma/shared'
@@ -31,6 +31,7 @@ import type {
   PromaPermissionMode,
   AgentExternalRunSource,
   AgentMessage,
+  AskUserRequest,
 } from '@proma/shared'
 import { PiAgentAdapter } from './adapters/pi-agent-adapter'
 import { PiUtilityAdapter } from './adapters/pi-utility-adapter'
@@ -44,6 +45,7 @@ import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
 import { AgentStreamForwarder } from './agent-stream-forwarder'
 import { AgentQueueCoordinator } from './agent-queue-coordinator'
+import { getSettings } from './settings-service'
 
 // ===== 实例创建 =====
 
@@ -123,6 +125,46 @@ function getMainRendererWebContents(): WebContents | null {
   return win && !win.webContents.isDestroyed() ? win.webContents : null
 }
 
+/** 已因无可用渲染窗口告警过的会话；重新注册 wc 后重置，避免事件风暴刷屏。 */
+const sessionsWarnedNoWebContents = new Set<string>()
+
+/**
+ * P0-B Phase2：当前以 headless 方式运行的会话（runAgentHeadless 打点）。
+ *
+ * 这些会话（remote_create_session、外部 MCP bridge、飞书等）没有专属会话视图：
+ * AskUserBanner 只在对应会话的 AgentView 内渲染，用户未打开该会话时 atom 有值而
+ * 横幅无渲染点；ask_user_request 的主进程系统通知是该场景下唯一不依赖渲染进程的
+ * 可见信号。run 终结时移除，用户后续从 UI 发起的 run 走 renderer 正常横幅+通知路径。
+ */
+const headlessRunSessionIds = new Set<string>()
+
+/**
+ * P0-B Phase2：headless/remote 会话的 AskUser 询问由主进程直接发系统通知。
+ *
+ * 与 planning-reminder-scheduler 的系统通知同模式：尊重全局通知开关与
+ * Notification.isSupported()，点击时唤起主窗口（不要求渲染进程存活）。
+ */
+function showAskUserSystemNotification(sessionId: string, request: AskUserRequest): void {
+  if (!Notification.isSupported()) return
+  if (!getSettings().notificationsEnabled) return
+  const session = getAgentSessionMeta(sessionId)
+  const question = request.questions[0]?.question
+    ?? request.questions[0]?.header
+    ?? 'Agent 有问题需要你回答'
+  const notification = new Notification({
+    title: session?.title ? `[${session.title}] Agent 需要你的输入` : 'Agent 需要你的输入',
+    body: question,
+    silent: true,
+  })
+  notification.on('click', () => {
+    const win = BrowserWindow.getAllWindows().find(isMainRendererWindow)
+    if (!win) return
+    win.show()
+    win.focus()
+  })
+  notification.show()
+}
+
 const agentQueueCoordinator = new AgentQueueCoordinator({
   isActive: (sessionId) => orchestrator.isActive(sessionId),
   getWebContents: (sessionId) => sessionWebContents.get(sessionId) ?? getMainRendererWebContents(),
@@ -160,9 +202,6 @@ function getSessionMetaForRenderer(sessionId: string) {
   return meta
 }
 
-/** 已因无可用渲染窗口告警过的会话；重新注册 wc 后重置，避免事件风暴刷屏。 */
-const sessionsWarnedNoWebContents = new Set<string>()
-
 eventBus.use((sessionId, payload, next) => {
   // P0-B：wc 缺失时事件此前被静默丢弃（ask_user_request 黑洞 → 横幅/系统通知均不发生，
   // utility 侧 120s 必超时且无任何日志）。与 AgentQueueCoordinator.getWebContents、
@@ -182,6 +221,17 @@ eventBus.use((sessionId, payload, next) => {
   } else if (!sessionsWarnedNoWebContents.has(sessionId)) {
     sessionsWarnedNoWebContents.add(sessionId)
     console.warn(`[EventBus] 会话无可用渲染窗口，事件仅保留在主进程: sessionId=${sessionId}, payload.kind=${(payload as Record<string, unknown>)?.kind}`)
+  }
+  // P0-B Phase2：headless 会话的 AskUser 询问在用户未打开该会话时由主进程直接发系统通知。
+  // 可见性判定：目标窗口上当前可见的 Agent 会话不是本会话（或完全无窗口）。用户正
+  // 打开该会话时横幅可见，不重复弹主进程通知；renderer 侧通知仍按其自身逻辑发送。
+  if (
+    payload.kind === 'proma_event'
+    && payload.event.type === 'ask_user_request'
+    && headlessRunSessionIds.has(sessionId)
+    && (!wc || visibleAgentSessionByWebContents.get(wc) !== sessionId)
+  ) {
+    showAskUserSystemNotification(sessionId, payload.event.request)
   }
   if (payload.kind === 'sdk_message' && payload.message.type === 'system' && payload.message.subtype === 'task_notification') {
     agentQueueCoordinator.onBackgroundTaskComplete(sessionId)
@@ -341,6 +391,9 @@ export async function runAgentHeadless(
   if (wc) {
     registerWebContents(runInput.sessionId, wc)
   }
+  // P0-B Phase2：标记 headless run，供 EventBus 中间件在该会话 ask_user_request
+  // 无可见渲染点时触发主进程系统通知（run 终结即移除）。
+  headlessRunSessionIds.add(runInput.sessionId)
 
   try {
     await orchestrator.sendMessage(runInput, {
@@ -423,6 +476,7 @@ export async function runAgentHeadless(
     }
     agentQueueCoordinator.onRunComplete(runInput.sessionId, undefined, false, false)
   } finally {
+    headlessRunSessionIds.delete(runInput.sessionId)
     if (!orchestrator.isActive(runInput.sessionId)) {
       sessionWebContents.delete(runInput.sessionId)
       streamForwarder.clear(runInput.sessionId)
@@ -442,6 +496,15 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
  */
 export function stopAgent(sessionId: string): void {
   orchestrator.stop(sessionId, agentQueueCoordinator.isDispatching(sessionId))
+}
+
+/**
+ * P0-B Phase2：确定性中止会话的全部 pending capability（AskUser 等主进程挂起交互）。
+ *
+ * 会话删除/远端 abort 时调用；不依赖 QUERY_ABORT 往返与 query 终结的异步清理链路。
+ */
+export function abortAgentPendingCapabilities(sessionId: string): void {
+  orchestrator.abortPendingCapabilities(sessionId)
 }
 
 setHeadlessAgentRunner(runAgentHeadless)

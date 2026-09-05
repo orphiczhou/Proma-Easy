@@ -22,7 +22,8 @@ import {
 } from './agent-session-manager'
 import { listChannels, getChannelById } from './channel-manager'
 import { listAgentWorkspaces, getAgentWorkspace } from './agent-workspace-manager'
-import { runRegisteredHeadlessAgent } from './agent-headless-runner-registry'
+import { runRegisteredHeadlessAgent, stopRegisteredAgent } from './agent-headless-runner-registry'
+import { isAgentSessionActive, abortAgentPendingCapabilities } from './agent-service'
 import type { SDKMessage, PromaPermissionMode } from '@proma/shared'
 
 const LOG_PREFIX = '[MCP Bridge]'
@@ -225,6 +226,26 @@ function createSessionToolHandlers(): Record<string, ToolHandler> {
       const archived = args.archived ?? true
       updateAgentSessionMeta(args.session_id as string, { archived: !!archived })
       return { session_id: args.session_id, title: meta.title, archived }
+    },
+
+    // P0-B Phase2：终止运行中的 run（含挂起的 AskUser 等交互），供远端救援挂起会话。
+    abort_session: async (args) => {
+      const sessionId = args.session_id as string
+      const meta = getAgentSessionMeta(sessionId)
+      if (!meta) return { error: `Session not found: ${sessionId}` }
+      const wasActive = isAgentSessionActive(sessionId)
+      if (wasActive) stopRegisteredAgent(sessionId)
+      // QUERY_ABORT 往返不可达（utility 失联）时 query 终结清理不执行，这里确定性清空。
+      abortAgentPendingCapabilities(sessionId)
+      return {
+        session_id: sessionId,
+        title: meta.title,
+        was_active: wasActive,
+        status: 'aborted',
+        message: wasActive
+          ? '已请求中止运行中的 run，pending 交互已清理。'
+          : '会话当前无运行中 run，pending 交互已清理。',
+      }
     },
   }
 }

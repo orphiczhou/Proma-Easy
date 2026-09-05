@@ -3081,6 +3081,17 @@ export class AgentOrchestrator {
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
   }
 
+  /**
+   * P0-B Phase2：确定性中止该会话全部 pending capability 交互。
+   *
+   * 会话删除等场景下 run 终结链路（QUERY_ABORT 往返 → query finally 清理）可能
+   * 因 utility 失联而不可达；这里同步按 sessionId 清空 capability AbortController，
+   * 保证挂起的 AskUser 等主进程交互无残留。
+   */
+  abortPendingCapabilities(sessionId: string): void {
+    this.adapter.abortPendingCapabilities?.(sessionId)
+  }
+
   /** 检查指定会话是否正在处理中 */
   isActive(sessionId: string): boolean {
     return this.activeSessions.has(sessionId)
