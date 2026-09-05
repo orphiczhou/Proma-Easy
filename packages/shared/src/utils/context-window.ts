@@ -18,6 +18,11 @@ export const CODEX_GPT_54_55_CONTEXT_WINDOW = 272_000
 export const CODEX_GPT_54_MINI_CONTEXT_WINDOW = 400_000
 export const CODEX_GPT_56_CONTEXT_WINDOW = 372_000
 
+/** 归一化模型 ID 用于匹配：小写化并剥离历史 `[1m]` context 后缀（Anthropic 协议遗留开关）。 */
+function normalizeModelIdForMatch(modelId: string): string {
+  return modelId.toLowerCase().replace(/\[1m\]$/, '')
+}
+
 /**
  * 为与 ChatGPT Codex 同名的 GPT-5.x 模型返回统一上下文窗口。
  *
@@ -25,7 +30,7 @@ export const CODEX_GPT_56_CONTEXT_WINDOW = 372_000
  * provider catalog 决定，避免把不同 SKU 误写成同一窗口。
  */
 export function inferCodexAlignedGPT5ContextWindow(modelId: string | undefined): number | undefined {
-  const model = modelId?.toLowerCase().replace(/\[1m\]$/i, '')
+  const model = modelId ? normalizeModelIdForMatch(modelId) : undefined
   switch (model) {
     case 'gpt-5.4-mini': return CODEX_GPT_54_MINI_CONTEXT_WINDOW
     case 'gpt-5.4':
@@ -76,6 +81,25 @@ const ONE_MILLION_CONTEXT_RULES = {
 const ONE_MILLION_CONTEXT_DISPLAY_RULES = Object.values(ONE_MILLION_CONTEXT_RULES).flat()
 const EXACT_CONTEXT_RULES = new Set(['k3', 'kimi-k3'])
 
+/**
+ * 用户渠道 Azure 中转/折扣档 GPT 精确别名（已按渠道能力声明确认 1M）。
+ *
+ * 仅精确匹配（大小写不敏感，含历史 [1m] 后缀剥离），不走 ONE_MILLION_CONTEXT_RULES
+ * 的 substring 通道，也绝不使用任意 gpt 子串匹配：
+ * - 裸 Codex 型号（gpt-5.6-terra / sol / luna 等）保持 Codex 展示基线 372k；
+ * - 未列入本表的变体与未知模型保持 DEFAULT_CONTEXT_WINDOW。
+ * 依据：azure 目录（pi-ai 0.82.1/0.84.2）对 gpt-5.6-terra/sol 标 1_050_000，
+ * 折扣档后缀 ID 无目录条目，按用户渠道声明（-1 为折扣档、-az 为 Azure 中转）按 1M 注册；
+ * gpt-6-astra-1 在任何目录均无条目，1M 仅依据渠道能力声明，未经真实长上下文实测。
+ */
+const GPT_1M_AZURE_RELAY_ALIASES = new Set([
+  'gpt-5.6-terra-1',
+  'gpt-5.6-terra-az',
+  'gpt-5.6-sol-1',
+  'gpt-5.6-sol-az',
+  'gpt-6-astra-1',
+])
+
 function matchesContextRule(model: string, pattern: string): boolean {
   if (EXACT_CONTEXT_RULES.has(pattern)) {
     return model === pattern || model.startsWith(`${pattern}[`)
@@ -111,8 +135,9 @@ const CONTEXT_WINDOW_CONFIG = {
  */
 export function supports1MContext(modelId: string): boolean {
   if (!modelId) return false
-  const m = modelId.toLowerCase()
+  const m = normalizeModelIdForMatch(modelId)
   if (CONTEXT_WINDOW_CONFIG.exclude.some((p) => m.includes(p))) return false
+  if (GPT_1M_AZURE_RELAY_ALIASES.has(m)) return true
   return CONTEXT_WINDOW_CONFIG.rules.some((p) => matchesContextRule(m, p))
 }
 

@@ -30,6 +30,39 @@ describe('GLM 系列 1M 上下文判定', () => {
   })
 })
 
+describe('GPT 折扣档/Azure 中转别名 1M 上下文判定', () => {
+  test.each([
+    'gpt-5.6-terra-1',
+    'gpt-5.6-terra-az',
+    'gpt-5.6-sol-1',
+    'gpt-5.6-sol-az',
+    'gpt-6-astra-1',
+  ])('%s 命中 1M（大小写不敏感）', (modelId) => {
+    expect(supports1MContext(modelId)).toBe(true)
+    expect(supports1MContext(modelId.toUpperCase())).toBe(true)
+    expect(inferContextWindow(modelId)).toBe(ONE_MILLION_CONTEXT_WINDOW)
+  })
+
+  test('裸 Codex 型号保持 Codex 展示基线，不被别名表误伤', () => {
+    expect(inferContextWindow('gpt-5.6-terra')).toBe(372_000)
+    expect(inferContextWindow('gpt-5.6-sol')).toBe(372_000)
+    expect(inferContextWindow('gpt-5.6-luna')).toBe(372_000)
+    expect(inferContextWindow('gpt-5.6')).toBe(372_000)
+    expect(inferContextWindow('gpt-5.4')).toBe(272_000)
+    expect(supports1MContext('gpt-5.6-terra')).toBe(false)
+  })
+
+  test('未列入精准别名表的 GPT 变体保持默认 200K（禁止任意 gpt 子串匹配）', () => {
+    expect(inferContextWindow('gpt-5.6-terra-pro')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(inferContextWindow('gpt-5.6-terra-2')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(inferContextWindow('gpt-6-astra')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(inferContextWindow('gpt-6-astra-2')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(inferContextWindow('some-gpt-model')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(supports1MContext('gpt-5.6-terra-pro')).toBe(false)
+    expect(supports1MContext('gpt-6-astra')).toBe(false)
+  })
+})
+
 describe('其他家族回归（确认本次改动未误伤）', () => {
   test('deepseek-v4 pro/flash 命中 1M', () => {
     expect(supports1MContext('deepseek-v4-pro')).toBe(true)

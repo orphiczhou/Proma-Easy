@@ -545,7 +545,12 @@ export async function resolvePiReasoningCapability(
   })
 }
 
-async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiModelDefaults> {
+/**
+ * 解析注册进 Pi ModelRuntime 的模型默认值。导出仅供测试验证：注册链路
+ * （buildXXXModel → modelRuntime.registerProvider 的 contextWindow）必须消费
+ * shared 推断结果，而非仅前端展示。
+ */
+export async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
   const codexAlignedCapabilities = getCodexAlignedGPT5Capabilities(input.model)
   const api = normalizePiApi(input.provider)
