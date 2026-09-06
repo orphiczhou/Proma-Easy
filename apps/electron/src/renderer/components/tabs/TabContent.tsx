@@ -9,6 +9,8 @@ import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { getDefaultStore } from 'jotai'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
+import { agentSessionsAtom } from '@/atoms/agent-atoms'
+import type { AgentSessionMeta } from '@proma/shared'
 import type { TabItem } from '@/atoms/tab-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { ChatView } from '@/components/chat'
@@ -101,6 +103,16 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
                   // 2. 在南大工作区内创建 Agent 会话
                   const session = await window.electronAPI.createAgentSession(name, undefined, ws.id).catch(() => null)
                   const sessionId = session?.id ?? `nanju-${Date.now()}`
+
+                  // [W19 缺陷B] 创建后立即并入渲染端会话列表：AgentView 依据 sessionMeta.workspaceId
+                  // 派发请求工作区；列表未同步时会回退全局工作区（可能是默认工作区），与主进程
+                  // preflight 的权威会话归属比对即硬拒首发（E2E 2026-09-05 发现1，R 级）。
+                  if (session) {
+                    const created: AgentSessionMeta = session
+                    getDefaultStore().set(agentSessionsAtom, (prev: AgentSessionMeta[]) =>
+                      prev.some((s) => s.id === created.id) ? prev : [created, ...prev],
+                    )
+                  }
 
                   // 3. 创建南大项目元数据
                   try {

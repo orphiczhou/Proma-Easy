@@ -57,6 +57,7 @@ import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { getNanjuRouterPrompt } from './nanju-router-prompt'
 import { checkNanjuRouterGate, verifyPhaseOutput, collectPhaseAdvanceStages } from './nanju-router-gate'
+import { findNanjuProjectBySession } from './nanju-phase-gate'
 import { checkConfirmAdvanceInput, consumePhaseAdvanceMarks } from './nanju-phase-advance-consumer'
 import { NANJU_GUARDS, type NanjuGuardStage } from './nanju-project'
 import type { GwtProgressEvent } from './nanju-gwt-runner'
@@ -232,6 +233,41 @@ function resolveLocalProjectRootForRewind(projectRootPath: string): string {
 
 /** 南大 R1（W1）：委派状态事件接线幂等标记（orchestrator 重建不重复订阅） */
 let nanjuDelegationStatusWired = false
+
+/**
+ * W19 缺陷B（E2E 2026-09-05 发现1，R 级）：空会话首发的工作区竞态自愈判定（纯函数）。
+ *
+ * 背景：南大创建链显式以项目所属工作区建会话（TabContent → createAgentSession(ws.id)），
+ * 会话 meta.workspaceId 本身正确；但渲染端会话列表未同步新会话时，AgentView 以全局
+ * 工作区回退派发 requestedWorkspaceId（可能是默认工作区），与主进程权威会话归属比对
+ * 即硬拒「会话项目不匹配」，被拒会话从未获得 sdkSessionId；硬拒后的「在新会话中重试」
+ * 还会引入脱离六阶段的污染会话（同日发现2）。
+ *
+ * 规则（会话元数据仍是权威来源，自愈仅对从未运行过的空会话生效）：
+ * - 无不匹配（任一侧缺工作区）→ 'keep-session'：按原逻辑继续；
+ * - 已有运行历史（sdkSessionId 非空）→ 'reject'：保护既有归属，维持硬拒；
+ * - 空会话 + 会话已绑定南大项目（会话-项目注册表）→ 'keep-session'：以会话工作区
+ *   继续，绝不被过期导航状态剥离项目绑定（E2E 实测方向：会话=南大，请求=默认）；
+ * - 空会话 + 未绑定南大项目 + requestedWorkspaceId 对应工作区存在 → 'rebind'：
+ *   空会话无归属可失去，请求侧反映用户真实上下文，改绑后继续；
+ * - 空会话 + requested 是幽灵工作区 → 'reject'：绝不改绑到不存在的工作区。
+ */
+export type WorkspaceMismatchResolution = 'keep-session' | 'rebind' | 'reject'
+
+export function resolveWorkspaceMismatchSelfHeal(input: {
+  sessionWorkspaceId?: string | null
+  requestedWorkspaceId?: string | null
+  sessionHasRunHistory: boolean
+  sessionWorkspaceIsNanjuProjectBound: boolean
+  requestedWorkspaceExists: boolean
+}): WorkspaceMismatchResolution {
+  const { sessionWorkspaceId, requestedWorkspaceId, sessionHasRunHistory, sessionWorkspaceIsNanjuProjectBound, requestedWorkspaceExists } = input
+  const hasMismatch = Boolean(sessionWorkspaceId && requestedWorkspaceId && requestedWorkspaceId !== sessionWorkspaceId)
+  if (!hasMismatch) return 'keep-session'
+  if (sessionHasRunHistory) return 'reject'
+  if (sessionWorkspaceIsNanjuProjectBound) return 'keep-session'
+  return requestedWorkspaceExists ? 'rebind' : 'reject'
+}
 
 export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
@@ -1391,16 +1427,48 @@ export class AgentOrchestrator {
 
     // 会话元数据是运行项目的权威来源。渲染端的当前项目只是导航状态，不能
     // 覆盖已存在会话的项目归属，否则会把 Agent cwd 指到另一个用户项目根。
-    const sessionWorkspaceId = sessionMeta?.workspaceId
+    // W19 缺陷B：对从未运行过的空会话放开硬拒——渲染端列表未同步新会话时，请求工作区
+    // 可能是过期的全局导航状态（E2E 2026-09-05 发现1：首发被拒会话从未获得 sdkSessionId）；
+    // 按 resolveWorkspaceMismatchSelfHeal 自愈，已有运行历史的会话仍硬拒以保护既有归属。
+    let sessionWorkspaceId = sessionMeta?.workspaceId
     if (sessionWorkspaceId && requestedWorkspaceId && requestedWorkspaceId !== sessionWorkspaceId) {
-      reportPreflightError({
-        code: 'unknown_error',
-        title: '会话项目不匹配',
-        message: '当前会话所属项目与请求项目不一致，已拒绝执行以避免访问错误的项目目录。',
-        actions: [],
-        canRetry: false,
+      const sessionHasRunHistory = Boolean(sessionMeta?.sdkSessionId)
+      const sessionWorkspace = getAgentWorkspace(sessionWorkspaceId)
+      let sessionWorkspaceIsNanjuProjectBound = false
+      if (!sessionHasRunHistory && sessionWorkspace?.workspaceType === 'nanju') {
+        try {
+          sessionWorkspaceIsNanjuProjectBound = Boolean(findNanjuProjectBySession(sessionWorkspace.slug, sessionId))
+        } catch { /* 注册表读取失败按未绑定处理 */ }
+      }
+      const resolution = resolveWorkspaceMismatchSelfHeal({
+        sessionWorkspaceId,
+        requestedWorkspaceId,
+        sessionHasRunHistory,
+        sessionWorkspaceIsNanjuProjectBound,
+        requestedWorkspaceExists: Boolean(getAgentWorkspace(requestedWorkspaceId)),
       })
-      return
+      if (resolution === 'reject') {
+        reportPreflightError({
+          code: 'unknown_error',
+          title: '会话项目不匹配',
+          message: '当前会话所属项目与请求项目不一致，已拒绝执行以避免访问错误的项目目录。',
+          actions: [],
+          canRetry: false,
+        })
+        return
+      }
+      if (resolution === 'rebind') {
+        const previousWorkspaceId = sessionWorkspaceId
+        try {
+          sessionMeta = updateAgentSessionMeta(sessionId, { workspaceId: requestedWorkspaceId })
+          sessionWorkspaceId = requestedWorkspaceId
+          console.log(`[Agent 编排] 空会话工作区自愈（改绑）: 会话 ${sessionId.slice(0, 8)} 由 ${previousWorkspaceId.slice(0, 8)} 改绑至请求工作区 ${requestedWorkspaceId.slice(0, 8)}`)
+        } catch (error) {
+          console.warn('[Agent 编排] 空会话工作区自愈（改绑）失败，按会话原工作区继续:', error)
+        }
+      } else {
+        console.log(`[Agent 编排] 空会话工作区自愈（保持会话工作区）: 会话 ${sessionId.slice(0, 8)} 保持 ${sessionWorkspaceId.slice(0, 8)}，忽略过期请求工作区 ${requestedWorkspaceId.slice(0, 8)}`)
+      }
     }
     const workspaceId = sessionWorkspaceId ?? requestedWorkspaceId
 
