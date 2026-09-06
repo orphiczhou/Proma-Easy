@@ -17,6 +17,17 @@
  * （辅助类：查资料/分析等）且无强动词时也放行并记录 telemetry（pass-unmatched）
  * 供观察 unmatched 放行面；详见 checkDelegationAgainstStage 的判定顺序注释。
  *
+ * W19-C（v0.17.88，E2E 9 连拒实测修复）：
+ * - 路径豁免：匹配前剥离路径 token（绝对路径 + 含 CJK 的相对路径——项目名形态）；
+ *   纯 ASCII 相对路径（08_APP/index.html 等产出目标声明）保留参与匹配（A3 红测试依赖）；
+ * - 词表复核：requirements ROLE 去裸「需求」「PRD」（最高频合法上游引用，换精确
+ *   角色复合词）；coding ROLE 去「fullstack」（品类标记值 web-fullstack 碰撞）；
+ *   testing ROLE 裸「验收」换精确复合词（「验收标准」是正常 AC 引用）；coding
+ *   OUTPUT 去「应用」、testing OUTPUT 去「场景」（UX 正常词汇）；
+ * - OUTPUT 词邻近语境判定：规则 2.5 收紧为「OUTPUT 词 ±20 字符内存在强动词」
+ *   （「生成应用代码」仍拦，「不能只看代码推断」审查语境放行）；
+ * - stage-deny 埋点补 matchContext（命中字段/前后 20 字符/是否在路径内）。
+ *
  * 匹配文本：delegate_agent 的 title + task 字段（参数结构调研结论：任务字段名是
  * task 而非 prompt；role 是 explore/research/implement/review/custom 枚举，语义过泛，
  * 不纳入匹配文本）。中文词用 includes，英文词用 \b 词边界（防 'ac' 误命中
@@ -38,14 +49,24 @@ import { AC_PRESETS, type ACActorConfig } from './nanju-router'
  * W18.1（A2 探针）：architecture 的「环境」收紧为「环境配置」——「配置开发环境」
  * （语序相反，不含连续子串「环境配置」）在 coding 阶段被误拦；「环境配置」
  * 仍是 architecture 文档常用语，本阶段匹配不受削弱。
+ * W19-C（v0.17.88，E2E 9 连拒修复）：
+ * - requirements 去裸「需求」「PRD」——两者是最高频合法跨阶段引用（「根据 PRD 生成
+ *   原型」「产品需求文档」是编排器注入的前序文档标配语；实测 deny#1/#2 均为此），
+ *   换精确角色复合词，角色声明检测不削弱；requirements 阶段自身匹配不受影响
+ *   （OUTPUT 表含 需求/PRD/用户故事）。
+ * - coding 去「fullstack」——品类标记值 `projectCategory: web-fullstack` 被各阶段
+ *   委派文本复制（实测 deny#3）；连字符形态 full-stack 本就不命中 \bfullstack\b，
+ *   英文全栈角色声明由强动词 develop/build 兑底，中文由 全栈/开发/实现 覆盖。
+ * - testing 裸「验收」换精确复合词——「验收标准（AC）清单」是每个委派的标准 AC
+ *   引用语（实测 deny#4/#5 另一命中源）；项目名含「验收」碰撞已由路径豁免解决。
  */
 export const STAGE_ROLE_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
-  requirements: ['需求', 'PRD', 'analyst', 'requirements'],
+  requirements: ['需求调研', '需求收集', '收集需求', '需求梳理', '需求评审', 'analyst', 'requirements'],
   prototype: ['UX', '原型', 'prototype', '视觉', '界面'],
   architecture: ['架构', 'architect', '环境配置', '技术'],
   planning: ['规划', '工程计划', '计划', 'plan', '项目经理', '排期', '里程碑', '项目管理'],
-  coding: ['全栈', '开发', 'coding', 'fullstack', '实现'],
-  testing: ['测试', 'test', 'GWT', 'QA', '验收', 'testing'],
+  coding: ['全栈', '开发', 'coding', '实现'],
+  testing: ['测试', 'test', 'GWT', 'QA', '验收测试', '验收用例', '验收场景', '执行验收', '跑验收', 'UAT', 'testing'],
 }
 
 /**
@@ -101,14 +122,18 @@ export const STRONG_ACTION_VERBS: readonly string[] = [
  * 「代码评审」），若进他阶段扫描会把合法交叉表述误拦（推翻宽匹配原则）。
  * 与角色词表的重复词（需求/PRD/原型/架构等已在 STAGE_ROLE_KEYWORDS）保留：两表
  * 语义不同（角色 vs 产物），重复命中无行为差异（第 1 步并集放行），各自完整可演进。
+ * W19-C（v0.17.88）：coding 去「应用」、testing 去「场景」（UX 正常词汇——实测
+ * deny#7/#8：「单页应用」「多场景导航」是每个 UX 委派标配语；下游产出意图由
+ * 邻近语境判定 + 保留词 代码/index.html/steps.json 等覆盖）；requirements
+ * 键序重排（需求 在 PRD 前，保 coPresentStageKeyword 埋点口径不变）。
  */
 export const STAGE_OUTPUT_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
-  requirements: ['PRD', '需求', '用户故事', 'user story', 'user stories'],
+  requirements: ['需求', 'PRD', '用户故事', 'user story', 'user stories'],
   prototype: ['原型', 'prototype', '界面稿', '视觉稿', '线框'],
   architecture: ['架构', 'architecture', '技术选型', '组件清单'],
   planning: ['计划', '规划', '里程碑', 'milestone'],
-  coding: ['代码', 'code', '应用', 'index.html'],
-  testing: ['测试', 'test', '场景', 'scenario', 'steps.json', 'report.json'],
+  coding: ['代码', 'code', 'index.html'],
+  testing: ['测试', 'test', 'scenario', 'steps.json', 'report.json'],
 }
 // 注：不含 'app'——过宽（AC 委派文本 'run AC audit on app' 会把 matchKind 从 ac 改判
 // stage，磁碰 W8 基线断言且模糊 AC 归类）；英文 coding 委派由 'code'/'index.html' 覆盖，
@@ -147,6 +172,93 @@ function findKeyword(text: string, keywords: readonly string[]): string | undefi
   return undefined
 }
 
+// ===== W19-C（v0.17.88）：路径豁免 =====
+
+/**
+ * 路径 token 字符集：非空白、非引号、非中西文标点（斜杠属于 token，由整体形态判定）。
+ * CJK 文字 ∈ 路径字符集（项目目录名如 project-e2e-w18-验收2 含 CJK）。
+ */
+const PATH_RUN_CLASS = '[^\\s"\'`「」『』（）()【】《》<>，。；;：:、！？…\\\\]'
+const PATH_RUN_RE = new RegExp(`${PATH_RUN_CLASS}+`, 'g')
+
+/** 判断一个路径 run 是否应被剥离（与 stripPathTokens 同判据，供 inPath 归因复用） */
+function isStrippedPathRun(run: string): boolean {
+  if (!run.includes('/')) return false
+  // 绝对路径（含 ~ 家目录形态；Windows 盘符形态因反斜杠不在字符集内不入此判定，
+ // Linux 产品面向，见报告遗留项）
+  if (run.startsWith('/') || run.startsWith('~/')) return true
+  // 含 CJK 的相对路径——项目目录名形态（project-e2e-w18-验收2 等），
+  // ASCII 项目名（如 project-e2e-test-2）碰撞为已知残余面
+  return /[\u3400-\u9fff]/.test(run)
+}
+
+/**
+ * W19-C 路径豁免：从待检文本整体移除路径 token。
+ *
+ * 剥离范围（两类，均为 E2E 9 连拒实测碰撞源）：
+ * 1. 绝对路径（/ 或 ~/ 开头的连续 run）——机器生成，携带项目名/用户名；
+ * 2. 含 CJK 字符的含斜杠 run——项目目录名形态（验收2 等）。
+ *
+ * 保留：纯 ASCII 相对路径（08_APP/index.html、01_PRD/prd.md 等）——它们是 L1
+ * 主动声明的产出目标，OUTPUT 词需继续匹配（W18.1 A3 红测试「基于需求，构建
+ * 08_APP/index.html 页面」依赖 index.html 命中）。副作用：ASCII 相对路径内的
+ * 目录名词（01_PRD 含 PRD）仍参与匹配——但 PRD 已不在他阶段 ROLE 表，只在本
+ * 阶段 OUTPUT/上游引用语境中无害。
+ */
+export function stripPathTokens(text: string): string {
+  return text.replace(PATH_RUN_RE, (run) => (isStrippedPathRun(run) ? ' ' : run))
+}
+
+/** 关键词在文本中的全部出现位置（start index）；英文 \b 词边界 / 中文 includes（大小写不敏感） */
+function keywordIndices(text: string, keyword: string): number[] {
+  if (/^[\x20-\x7E]+$/.test(keyword)) {
+    const re = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')
+    return [...text.matchAll(re)].map((m) => m.index ?? -1).filter((i) => i >= 0)
+  }
+  const out: number[] = []
+  let from = 0
+  while (true) {
+    const i = text.indexOf(keyword, from)
+    if (i < 0) break
+    out.push(i)
+    from = i + 1
+  }
+  return out
+}
+
+/** W19-C：OUTPUT 词邻近语境窗口（字符数）——OUTPUT 词与强动词距离在窗口内才判产出意图 */
+export const OUTPUT_VERB_PROXIMITY = 20
+
+/** W19-C：telemetry 命中位置上下文（归因用：哪个字段、前后片段、是否在路径内） */
+export interface KeywordHitContext {
+  field: 'title' | 'task' | 'expectedOutput'
+  before: string
+  after: string
+  /** 命中位置是否位于将被剥离的路径 token 内（路径内命中 = 项目名/目录名碰撞类误拦信号） */
+  inPath: boolean
+}
+
+/** 在原文中定位关键词首处命中并给出归因上下文（找不到返回 undefined） */
+export function describeKeywordHit(source: DelegationMatchSource, keyword: string): KeywordHitContext | undefined {
+  if (!keyword) return undefined
+  for (const field of ['title', 'task', 'expectedOutput'] as const) {
+    const raw = source[field]
+    if (!raw) continue
+    for (const pos of keywordIndices(raw, keyword)) {
+      let inPath = false
+      for (const match of raw.matchAll(PATH_RUN_RE)) {
+        const start = match.index ?? 0
+        if (pos >= start && pos < start + match[0].length && isStrippedPathRun(match[0])) {
+          inPath = true
+          break
+        }
+      }
+      return { field, before: raw.slice(Math.max(0, pos - 20), pos), after: raw.slice(pos + keyword.length, pos + keyword.length + 20), inPath }
+    }
+  }
+  return undefined
+}
+
 // ===== 层一：校验 =====
 
 /** 委派校验输入（从 delegate_agent/delegate_agents 参数中提取的匹配文本源） */
@@ -159,9 +271,10 @@ export interface DelegationMatchSource {
   expectedOutput?: string
 }
 
-/** 匹配文本拼接（单一真源：checkDelegationAgainstStage / matchACKeyword / detectACRole 共用；R2 后含 expectedOutput） */
+/** 匹配文本拼接（单一真源：checkDelegationAgainstStage / matchACKeyword / detectACRole 共用；R2 后含 expectedOutput；
+ *  W19-C：拼接后剥离路径 token——项目名/用户名出现在路径内不再命中任何词表） */
 function buildMatchText(source: DelegationMatchSource): string {
-  return `${source.title ?? ''}\n${source.task ?? ''}\n${source.expectedOutput ?? ''}`
+  return stripPathTokens(`${source.title ?? ''}\n${source.task ?? ''}\n${source.expectedOutput ?? ''}`)
 }
 
 /** 匹配结果分类 */
@@ -209,6 +322,9 @@ export interface DelegationCheckResult {
  *    堵「本阶段引用词掩护他阶段产出」的 OUTPUT 词变体——② 只扫 ROLE 词，
  *    「按 PRD 生成应用代码」原先在 3 被本阶段词「PRD」放行。只扫严格下游：
  *    上游阶段产出的合法引用（如 coding 提「按计划」）仍走既有判定，不加码误拦。
+ *    W19-C（v0.17.88）邻近语境收紧：OUTPUT 词出现位置 ±OUTPUT_VERB_PROXIMITY
+ *    字符内存在强动词才判产出意图——「生成应用代码」（距离 4）仍拦，「不能只看
+ *    代码推断」「整理场景覆盖情况」等审查/引用语境放行（E2E 实测 deny#6/#8）。
  * 3. 本阶段词（角色词 ∪ 产出物词）→ 放行（stage；产出物词优先于强动词判定——误拦缓解）。
  * 4. 强动作动词 → 拒绝（strong-verb——W8 敞口兜底：产出类动作必须显式声明角色）。
  * 5. 都不命中（查询/分析/总结类辅助动作）→ 放行（unmatched，调用方记 telemetry 观察）。
@@ -238,15 +354,20 @@ export function checkDelegationAgainstStage(
     }
   }
 
-  // 2.5. W18.1（A3 闭合）：强动作动词在场 + 下游阶段产出物词 → 拒绝（other-stage，
-  //     violatedKeyword=该 OUTPUT 词）——堵「本阶段引用词掩护他阶段产出」绕过
-  //     （「按 PRD 生成应用代码」原先在 3 被本阶段词放行）。只扫严格下游阶段，
-  //     上游产出的合法引用仍走既有判定（见上方判定顺序注释 2.5 条）。
+  // 2.5. W18.1（A3 闭合）+ W19-C 邻近语境：强动词在场 + 下游 OUTPUT 词且两者距离在
+  //     邻近窗口内 → 拒绝（产出意图）；远距离共现（审查/引用语境）不拦
   if (findKeyword(text, STRONG_ACTION_VERBS) !== undefined) {
+    const verbPositions = STRONG_ACTION_VERBS.flatMap((v) => keywordIndices(text, v))
     const stageIdx = STAGE_ORDER.indexOf(stage)
     for (const downstreamStage of STAGE_ORDER) {
       if (STAGE_ORDER.indexOf(downstreamStage) <= stageIdx) continue
-      const outputHit = findKeyword(text, STAGE_OUTPUT_KEYWORDS[downstreamStage])
+      let outputHit: string | undefined
+      for (const kw of STAGE_OUTPUT_KEYWORDS[downstreamStage]) {
+        if (keywordIndices(text, kw).some((pos) => verbPositions.some((v) => Math.abs(pos - v) <= OUTPUT_VERB_PROXIMITY))) {
+          outputHit = kw
+          break
+        }
+      }
       if (outputHit !== undefined) {
         return { allowed: false, matchKind: 'unmatched', violatedKeyword: outputHit, violatedStage: downstreamStage, denialKind: 'other-stage' }
       }

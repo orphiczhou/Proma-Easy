@@ -14,6 +14,7 @@ import {
   STAGE_ROLE_KEYWORDS,
   STAGE_TITLES,
   checkDelegationAgainstStage,
+  describeKeywordHit,
   detectACRole,
   extractDelegationSources,
   injectStagePathConstraint,
@@ -549,6 +550,10 @@ function checkNanjuDelegateGuard(
             // 统计依据。注意：共现既出现在误拦、也出现在正确拦截上（如「基于 PRD 需求直接
             // 开发」是真阳拦截），非空占比≠误拦率（W18.1 A4 口径修正）
             coPresentStageKeyword: matchStageKeyword(guardStage, v.source),
+            // W19-C：命中位置上下文（哪个字段/前后 20 字符/是否在路径内）——误拦归因用
+            matchContext: v.result.violatedKeyword
+              ? describeKeywordHit(v.source, v.result.violatedKeyword)
+              : undefined,
             title: v.source.title,
             taskPreview: taskPreview(v.source.task),
           })),
