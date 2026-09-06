@@ -32,6 +32,8 @@ export type TelemetryEventType =
   // W18 Wave2 交付双事实门禁：确认登记（ask-answer 精确等值置位）/ 门禁拦截现测（四道校验
   // 归因）/ 自由文本拒绝观测（message 来源命中交付词但不置位）
   | 'delivery.ack-recorded' | 'delivery.gate.blocked' | 'delivery.ack-rejected-freetext'
+  // W19 缺陷A（v0.17.87）：未绑定会话直写项目目录拦截（E2E 6039a6af 续接直写事 Replay）
+  | 'router.gate.unbound-write-deny'
 
 export interface TelemetryEvent {
   eventId: string

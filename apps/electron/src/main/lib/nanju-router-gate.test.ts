@@ -11,7 +11,7 @@
  * 指向 tmpdir，再动态导入被测模块。
  */
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -27,7 +27,15 @@ mock.module('./config-paths', () => ({
   getAgentWorkspacePath: () => fixtureRoot,
 }))
 
-const { verifyPhaseOutput, validateAdvanceTarget } = await import('./nanju-router-gate')
+// W19 缺陷A：mock 委派子会话标记（sourceDelegationId 是 L2 专属，走真实 agent-session-manager
+// 会拉起 electron 依赖；本测试文件导入链中仅 nanju-router-gate 惰性 require 该模块）
+const delegationChildSessions = new Set<string>()
+mock.module('./agent-session-manager', () => ({
+  getAgentSessionMeta: (id: string) =>
+    delegationChildSessions.has(id) ? { id, sourceDelegationId: 'delegation-x' } : undefined,
+}))
+
+const { verifyPhaseOutput, validateAdvanceTarget, checkNanjuRouterGate } = await import('./nanju-router-gate')
 
 const WORKSPACE_SLUG = 'test-ws'
 const PROJECT_ID = 'p1'
@@ -447,5 +455,201 @@ describe('validateAdvanceTarget（W11 推进目标校验）', () => {
   test('终态 delivered：无合法下一阶段，任何目标拒绝（expected=null）', () => {
     expect(validateAdvanceTarget('iterative', 'delivered', 'requirements')).toEqual({ ok: false, expected: null })
     expect(validateAdvanceTarget('quick', 'delivered', 'delivered')).toEqual({ ok: false, expected: null })
+  })
+})
+
+// ═══════════════ W19 缺陷A（v0.17.87）：未绑定会话写保护 ═══════════════
+
+/**
+ * E2E 实测事故 Replay（6039a6af）：首发被拒 →「在新会话中重试」→ 普通续接会话
+ * 不在项目注册表 → 原 `!project → return null` 全放行 → Write 直写 01_PRD/02_UX_DESIGN 成功。
+ * fixture：双项目（dlv=delivered / act=requirements），被测 session-unbound 均不绑定。
+ */
+const UNBOUND_SESSION = 'session-unbound'
+
+function setupUnboundFixture(): void {
+  const dir = mkdtempSync(join(tmpdir(), 'nanju-unbound-guard-'))
+  fixtureRoot = dir
+  mkdirSync(join(dir, '_telemetry'), { recursive: true })
+  const now = new Date().toISOString()
+  writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([
+    { projectId: 'dlv', name: '已交付项目', mode: 'quick', status: 'active', currentStage: 'delivered', createdAt: now, updatedAt: now, sessionId: 'session-dlv-bound', workspaceSlug: WORKSPACE_SLUG },
+    { projectId: 'act', name: '进行中项目', mode: 'quick', status: 'active', currentStage: 'requirements', createdAt: now, updatedAt: now, sessionId: 'session-act-bound', workspaceSlug: WORKSPACE_SLUG },
+  ]))
+}
+
+function setupEmptyWorkspace(): void {
+  const dir = mkdtempSync(join(tmpdir(), 'nanju-unbound-empty-'))
+  fixtureRoot = dir
+  mkdirSync(join(dir, '_telemetry'), { recursive: true })
+  // 不写 _nanju-projects.json（非 nanju 工作区）
+}
+
+function readTelemetryEvents(): Array<{ eventType: string; payload: Record<string, unknown> }> {
+  const telemetryDir = join(fixtureRoot, '_telemetry')
+  if (!existsSync(telemetryDir)) return []
+  const files = require('node:fs').readdirSync(telemetryDir) as string[]
+  const events: Array<{ eventType: string; payload: Record<string, unknown> }> = []
+  for (const file of files.filter((f) => f.endsWith('.jsonl'))) {
+    for (const line of readFileSync(join(telemetryDir, file), 'utf-8').trim().split('\n').filter(Boolean)) {
+      events.push(JSON.parse(line))
+    }
+  }
+  return events
+}
+
+describe('W19 缺陷A：未绑定会话写保护（红测试，工单口径）', () => {
+  test('未绑定会话 Write 裸相对 01_PRD/x.md → deny + telemetry 留痕', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      path: '01_PRD/x.md', file_path: '01_PRD/x.md', content: '# x',
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('南大向导写保护')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload.sessionId).toBe(UNBOUND_SESSION)
+    expect(events[0]?.payload.reason).toBe('stage-dir-prefix')
+    expect(events[0]?.payload.stageDir).toBe('01_PRD')
+  })
+
+  test('未绑定会话 Write delivered 项目 08_APP/index.html → 放行（指挥官裁决豁免）', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: join(fixtureRoot, 'project-dlv', '08_APP', 'index.html'),
+    })
+    expect(result).toBeNull()
+    expect(readTelemetryEvents()).toHaveLength(0)
+  })
+
+  test('未绑定会话 Write active 项目 08_APP/x.html → deny（非 delivered 不豁免）', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: join(fixtureRoot, 'project-act', '08_APP', 'x.html'),
+    })
+    expect(result?.behavior).toBe('deny')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload.projectId).toBe('act')
+    expect(events[0]?.payload.reason).toBe('project-dir')
+  })
+
+  test('未绑定会话 Read 01_PRD/prd.md → 放行（读类不拦，零 telemetry）', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Read', {
+      file_path: join(fixtureRoot, 'project-act', '01_PRD', 'prd.md'),
+    })
+    expect(result).toBeNull()
+    expect(readTelemetryEvents()).toHaveLength(0)
+  })
+
+  test('非 nanju 工作区（无 _nanju-projects.json）未绑定会话 Write 任意 → 零行为变化', () => {
+    setupEmptyWorkspace()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: join(fixtureRoot, '01_PRD', 'x.md'),
+    })
+    expect(result).toBeNull()
+    expect(readTelemetryEvents()).toHaveLength(0)
+  })
+
+  test('Bash 命令含裸阶段目录写操作（echo x > 01_PRD/y）→ deny + telemetry', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Bash', {
+      command: 'echo x > 01_PRD/y',
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('保守拦截')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload.reason).toBe('bash-stage-dir')
+    expect(events[0]?.payload.stageDir).toBe('01_PRD')
+  })
+})
+
+describe('W19 缺陷A：边界与豁免矩阵', () => {
+  test('Bash 命令提及 delivered 项目 08_APP 尾随路径 → 放行', () => {
+    setupUnboundFixture()
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Bash', {
+      command: 'echo x > project-dlv/08_APP/app.js',
+    })).toBeNull()
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Bash', {
+      command: `cat ${join(fixtureRoot, 'project-dlv', '08_APP', 'index.html')}`,
+    })).toBeNull()
+    expect(readTelemetryEvents()).toHaveLength(0)
+  })
+
+  test('Bash 命令含 active 项目绝对路径（读命令也拦，保守口径）→ deny', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Bash', {
+      command: `cat ${join(fixtureRoot, 'project-act', '01_PRD', 'prd.md')}`,
+    })
+    expect(result?.behavior).toBe('deny')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events[0]?.payload.reason).toBe('bash-project-path')
+    expect(events[0]?.payload.projectId).toBe('act')
+  })
+
+  test('project-<id> 提及带 id 边界检查：project-act2 不误配 project-act', () => {
+    setupUnboundFixture()
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Bash', {
+      command: 'cat project-act2/notes.txt',
+    })).toBeNull()
+  })
+
+  test('L2 委派子会话（sourceDelegationId）写项目目录 → 放行（南大管线保护）', () => {
+    setupUnboundFixture()
+    delegationChildSessions.add('session-l2')
+    try {
+      const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-l2', 'Write', {
+        file_path: join(fixtureRoot, 'project-act', '01_PRD', 'prd.md'),
+      })
+      expect(result).toBeNull()
+      expect(readTelemetryEvents()).toHaveLength(0)
+    } finally {
+      delegationChildSessions.delete('session-l2')
+    }
+  })
+
+  test('未绑定会话写工作区根散文件（项目外）→ 放行（零变化范围外）', () => {
+    setupUnboundFixture()
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: join(fixtureRoot, 'notes.md'),
+    })).toBeNull()
+  })
+
+  test('未绑定会话写项目根散文件（project-act/readme.md）→ deny（工单：项目根散文件一律 deny）', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: join(fixtureRoot, 'project-act', 'readme.md'),
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('根目录')
+  })
+
+  test('Edit 工具同样拦截（写类工具集）；显式 project-<id>/ 前缀相对路径归因', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Edit', {
+      file_path: 'project-act/03_ARCHITECTURE/a.md',
+    })
+    expect(result?.behavior).toBe('deny')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events[0]?.payload.stageDir).toBe('03_ARCHITECTURE')
+  })
+
+  test('裸相对 08_APP 前缀：工作区存在未交付项目 → 保守 deny（无法归因）', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: '08_APP/index.html',
+    })
+    expect(result?.behavior).toBe('deny')
+  })
+
+  test('绑定会话回归：项目自身会话不受未绑定写保护影响（走既有阶段门禁）', () => {
+    setupUnboundFixture()
+    // act 项目绑定会话处于 requirements：委派工具在白名单内，走 W8 委派守卫（非未绑定分支）
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-act-bound', 'delegate_agent', {
+      title: '需求分析师', task: '梳理核心需求产出 PRD',
+    })
+    expect(result).toBeNull()
   })
 })

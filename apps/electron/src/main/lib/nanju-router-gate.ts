@@ -81,8 +81,17 @@ export function checkNanjuRouterGate(
 ): { behavior: 'deny'; message: string } | null {
   if (!workspaceSlug) return null
 
-  const project = findNanjuProjectBySession(workspaceSlug, sessionId)
-  if (!project) return null
+  // W19（v0.17.87）：projects 单次读取复用——未绑定分支的写保护也要消费同一份列表，
+  // 避免每次工具调用重复读盘（原 findNanjuProjectBySession 内部同样 listNanjuProjects）
+  const projects = listNanjuProjects(workspaceSlug)
+  const project = projects.find((p) => p.sessionId === sessionId)
+  if (!project) {
+    // W19 缺陷A：未绑定项目的会话写保护（E2E 实测 6039a6af——「在新会话中重试」产生的
+    // 普通续接会话 cwd=南大工作区根，Write 跨阶段直写 01_PRD/02_UX_DESIGN 成功，
+    // router-gate 与 telemetry 双盲）。仅拦写类工具与 Bash；L2 委派子会话豁免
+    // （sourceDelegationId 专属标记）；delivered 项目 08_APP 对普通会话开放。
+    return checkUnboundSessionWriteGuard(workspaceSlug, sessionId, toolName, input, projects)
+  }
 
   const stage = project.currentStage as PhaseId
 
@@ -123,6 +132,221 @@ export function checkNanjuRouterGate(
 export function findNanjuProjectBySession(workspaceSlug: string, sessionId: string): NanjuProject | undefined {
   const projects = listNanjuProjects(workspaceSlug)
   return projects.find((p) => p.sessionId === sessionId)
+}
+
+// ═══════════════ W19 缺陷A（v0.17.87）：未绑定会话写保护 ═══════════════
+
+/** 写类工具（工单口径：Write/Edit/NotebookEdit；Bash 按命令文本保守拦截，单独判定） */
+const UNBOUND_WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
+
+/** 项目脚手架阶段目录（nanju-project.ts createNanjuProject 的 docDirs 同源清单） */
+const STAGE_DIR_NAMES = new Set([
+  '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE', '04_API_SPEC',
+  '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS', '08_APP',
+])
+
+/** delivered 项目对未绑定会话开放的豁免目录（delivered 提示语明确允许普通会话继续改 08_APP 代码） */
+const DELIVERED_EXEMPT_DIR = '08_APP'
+
+/** 未绑定会话写拦截命中（供 deny 文案与 telemetry 共用） */
+interface UnboundWriteHit {
+  /** 归因到的项目（裸阶段目录前缀无法归因时为空） */
+  project?: NanjuProject
+  /** 项目内一级目录（项目根散文件时为空串） */
+  stageDir?: string
+  /** 拦截原因 */
+  reason: 'project-dir' | 'stage-dir-prefix' | 'bash-project-path' | 'bash-stage-dir'
+  /** 路径摘要（截断） */
+  pathSummary: string
+}
+
+function summarizePath(p: string): string {
+  return p.length > 160 ? `${p.slice(0, 160)}…` : p
+}
+
+/** 路径是否落在 root 下：返回相对部分（root 本身返回 ''），不在 root 下返回 null */
+function pathRelativeTo(path: string, root: string): string | null {
+  const p = path.replace(/\\/g, '/')
+  const r = root.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (p === r) return ''
+  if (p.startsWith(`${r}/`)) return p.slice(r.length + 1)
+  return null
+}
+
+/** delivered 项目 08_APP/ 前缀豁免（指挥官裁决：其余目录 01~07、09+、项目根散文件一律 deny） */
+function isDeliveredAppExempt(project: NanjuProject, rel: string): boolean {
+  if (project.currentStage !== 'delivered') return false
+  return (rel.split('/')[0] ?? '') === DELIVERED_EXEMPT_DIR
+}
+
+/** 会话是否为协作委派子会话（L2）。sourceDelegationId 是委派子会话专属标记
+ * （fork/「在新会话中重试」续接会话只有 parentSessionId，无此字段——收集判据见
+ * agent-session-manager.ts「仅收集协作委派子会话」注释）。南大管线的跨阶段写入由
+ * L2 完成，必须豁免。lazy require 规避模块初始化环。 */
+function isDelegationChildSession(sessionId: string): boolean {
+  try {
+    const { getAgentSessionMeta } = require('./agent-session-manager') as typeof import('./agent-session-manager')
+    return Boolean(getAgentSessionMeta(sessionId)?.sourceDelegationId)
+  } catch {
+    return false
+  }
+}
+
+/** Bash 命令中项目目录提及的尾随路径片段（到空白/引号/管道/分号为止），用于 08_APP 豁免判定 */
+function bashMentionTail(command: string, from: number): string {
+  return command.slice(from).match(/^[^\s'"`|;&<>()]*/)?.[0] ?? ''
+}
+
+/** Write/Edit/NotebookEdit 路径字段的写域判定（file_path 与 path 双字段兼容——E2E 6039a6af 实测两者并存） */
+function findUnboundWriteHit(
+  workspaceSlug: string,
+  projects: NanjuProject[],
+  input: Record<string, unknown>,
+): UnboundWriteHit | null {
+  for (const key of ['file_path', 'filePath', 'path', 'notebook_path'] as const) {
+    const value = input[key]
+    if (typeof value !== 'string' || value.trim() === '') continue
+
+    // 1) 项目目录归因（绝对路径或显式 project-<id>/ 前缀相对路径）
+    let attributed = false
+    for (const project of projects) {
+      const rootAbs = join(getWorkspaceFilesDir(workspaceSlug), `project-${project.projectId}`)
+      const rootRel = `project-${project.projectId}/`
+      const rel = pathRelativeTo(value, rootAbs) ?? (value.startsWith(rootRel) ? value.slice(rootRel.length) : null)
+      if (rel === null) continue
+      attributed = true
+      if (isDeliveredAppExempt(project, rel)) continue
+      return { project, stageDir: rel.split('/')[0] ?? '', reason: 'project-dir', pathSummary: summarizePath(value) }
+    }
+    if (attributed) continue // 落入唯一归属项目的豁免 → 本候选放行
+
+    // 2) 裸阶段目录前缀（相对路径，cwd 不可知——阶段目录是南大专属结构，保守拦截；
+    //    08_APP 仅当工作区全部项目 delivered 才放行，否则按保守 deny）
+    if (!value.startsWith('/') && !value.startsWith('~')) {
+      const seg = value.split('/')[0] ?? ''
+      if (STAGE_DIR_NAMES.has(seg)) {
+        if (seg === DELIVERED_EXEMPT_DIR && projects.every((p) => p.currentStage === 'delivered')) continue
+        return { stageDir: seg, reason: 'stage-dir-prefix', pathSummary: summarizePath(value) }
+      }
+    }
+  }
+  return null
+}
+
+/** Bash 命令文本的项目路径保守拦截（不做命令解析：读命令同样拦，工单裁决口径） */
+function findUnboundBashHit(
+  workspaceSlug: string,
+  projects: NanjuProject[],
+  command: string,
+): UnboundWriteHit | null {
+  // 1) 项目目录提及（绝对 root 或裸 project-<id>；带 id 边界检查防 project-p1 误配 project-p10）。
+  //    已豁免（delivered+08_APP）的提及记录字符范围，供第 2 步去重
+  const exemptRanges: Array<[number, number]> = []
+  for (const project of projects) {
+    const rootAbs = join(getWorkspaceFilesDir(workspaceSlug), `project-${project.projectId}`)
+    const rootRel = `project-${project.projectId}`
+    for (const needle of [rootAbs, rootRel]) {
+      let idx = command.indexOf(needle)
+      while (idx !== -1) {
+        const after = command[idx + needle.length] ?? ''
+        const isIdBoundary = after === '' || !/[A-Za-z0-9_-]/.test(after)
+        if (isIdBoundary) {
+          const tail = bashMentionTail(command, idx + needle.length)
+          const seg = tail.replace(/^\/+/, '').split('/')[0] ?? ''
+          if (!isDeliveredAppExempt(project, seg)) {
+            return {
+              project,
+              stageDir: seg,
+              reason: 'bash-project-path',
+              pathSummary: summarizePath(command.slice(idx, idx + needle.length + tail.length)),
+            }
+          }
+          exemptRanges.push([idx, idx + needle.length + tail.length])
+        }
+        idx = command.indexOf(needle, idx + 1)
+      }
+    }
+  }
+  // 2) 裸阶段目录前缀（echo x > 01_PRD/y 类；08_APP 仅全 delivered 工作区放行）。
+  //    落在已豁免项目路径提及范围内的阶段目录不重复计数（cat project-dlv/08_APP/x 的
+  //    08_APP/ 已在第 1 步按项目归属豁免）
+  const stageDirRe = /\b(01_PRD|02_UX_DESIGN|03_ARCHITECTURE|04_API_SPEC|05_PROJECT_PLAN|06_TESTS|07_VERSIONS|08_APP)\//g
+  for (const match of command.matchAll(stageDirRe)) {
+    const start = match.index ?? 0
+    if (exemptRanges.some(([s, e]) => start >= s && start < e)) continue
+    const seg = match[1] ?? ''
+    if (seg === DELIVERED_EXEMPT_DIR && projects.every((p) => p.currentStage === 'delivered')) continue
+    return { stageDir: seg, reason: 'bash-stage-dir', pathSummary: summarizePath(match[0]) }
+  }
+  return null
+}
+
+function buildUnboundWriteDenyMessage(hit: UnboundWriteHit, isBash: boolean): string {
+  const dirLabel = hit.stageDir && STAGE_DIR_NAMES.has(hit.stageDir) ? `${hit.stageDir}/ 目录` : '根目录'
+  const target = hit.project ? `项目「${hit.project.name}」的 ${dirLabel}内` : `南大项目阶段目录（${hit.stageDir ?? '阶段目录'}/ 前缀）内`
+  const deliveredHint = hit.project
+    ? hit.project.currentStage === 'delivered'
+      ? `当前项目已交付，但目标路径${hit.stageDir === DELIVERED_EXEMPT_DIR ? '' : `在 ${hit.stageDir ?? '项目根'}，`}不在豁免范围`
+      : '当前项目尚未交付（delivered），不适用 08_APP 豁免'
+    : '裸阶段目录前缀无法归因到具体项目，工作区内存在未交付项目时保守拦截'
+  return (
+    `🔒 南大向导写保护：当前会话未绑定南大项目，不能直接写入项目目录。\n\n` +
+    `本次${isBash ? ' Bash 命令' : '写入操作'}目标位于${target}。南大项目的阶段产物由向导流程的阶段会话统一管理，` +
+    `未绑定会话直写会导致阶段状态与产物脱节。\n\n` +
+    `· 想推进或修改该项目 → 请回到该项目的南大向导会话继续（由调度员按阶段委派完成）\n` +
+    `· 想继续改已交付应用 → 仅已交付（delivered）项目的 ${DELIVERED_EXEMPT_DIR}/ 目录对普通会话开放；${deliveredHint}\n` +
+    `· 只想查看内容 → Read / LS 等只读工具不受限制` +
+    (isBash
+      ? `\n\n（Bash 命令包含项目路径时不做命令解析、保守拦截——如需在项目目录内执行命令，请通过南大向导流程完成。）`
+      : '')
+  )
+}
+
+/**
+ * W19 缺陷A（v0.17.87）：未绑定南大项目的会话写保护。
+ *
+ * 背景：E2E 实测（6039a6af）——首发被拒后 UI「在新会话中重试」产生的普通续接会话
+ * 不在项目注册表，原 `!project → return null` 使其绕过全部守卫，跨阶段直写
+ * 01_PRD/02_UX_DESIGN 成功且 0 telemetry。
+ *
+ * 判定（工单口径）：
+ * - 零 nanju 项目的 workspace → 直接放行（非 nanju 工作区零行为变化）；
+ * - 仅拦写类工具（Write/Edit/NotebookEdit）与 Bash（命令文本含项目路径即拦，保守不解析）；
+ * - L2 委派子会话豁免（sourceDelegationId）——南大管线跨阶段写入由 L2 完成；
+ * - delivered 项目 08_APP/ 前缀对未绑定会话放行（delivered 提示语义）；
+ * - 读类（Read/LS/Grep/Glob）与会话元工具不拦。
+ */
+function checkUnboundSessionWriteGuard(
+  workspaceSlug: string,
+  sessionId: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  projects: NanjuProject[],
+): { behavior: 'deny'; message: string } | null {
+  if (projects.length === 0) return null
+  const isBash = toolName === 'Bash' || toolName === 'bash'
+  if (!UNBOUND_WRITE_TOOLS.has(toolName) && !isBash) return null
+  if (isDelegationChildSession(sessionId)) return null
+
+  const hit = isBash
+    ? (typeof input.command === 'string' && input.command.trim() !== '' ? findUnboundBashHit(workspaceSlug, projects, input.command) : null)
+    : findUnboundWriteHit(workspaceSlug, projects, input)
+  if (!hit) return null
+
+  recordTelemetry(
+    workspaceSlug,
+    'router.gate.unbound-write-deny',
+    {
+      sessionId,
+      toolName,
+      reason: hit.reason,
+      projectId: hit.project?.projectId,
+      stageDir: hit.stageDir ?? '',
+      pathSummary: hit.pathSummary,
+    },
+    hit.project?.projectId,
+  )
+  return { behavior: 'deny', message: buildUnboundWriteDenyMessage(hit, isBash) }
 }
 
 /**
