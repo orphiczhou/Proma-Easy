@@ -192,21 +192,46 @@ function isStrippedPathRun(run: string): boolean {
   return /[\u3400-\u9fff]/.test(run)
 }
 
+/** 段是否为纯 ASCII（可保留参与二次匹配——CJK 段是碰撞源，不保留） */
+function isAsciiSegment(seg: string): boolean {
+  return seg !== '' && /^[\x21-\x7E]+$/.test(seg)
+}
+
 /**
- * W19-C 路径豁免：从待检文本整体移除路径 token。
+ * F2（审查应修，v0.17.90）：被剥离路径的尾部 ASCII 产出签名。
+ *
+ * 背景：整 token 剥离会把尾部产出文件名一并移除，CJK/绝对路径形态下
+ * 「生成 08_APP/首页/index.html」「…/project-验收2/08_APP/index.html」在 requirements
+ * 阶段被放行（W18.1 2.5 语义应 DENY）——产出声明漏拦（审查探针实证）。
+ *
+ * 规则：取末段；末段非 ASCII（CJK 文件名/空）→ 无签名；末段 ASCII 且父段也 ASCII
+ * → 保留父段/末段（与 ASCII 相对路径保留形态一致，如 08_APP/index.html）；
+ * 父段非 ASCII → 仅末段。CJK 段（验收2 等碰撞源）永不保留。
+ */
+function asciiTailSignature(run: string): string {
+  const segs = run.split('/').filter((s) => s !== '' && s !== '.')
+  const last = segs[segs.length - 1] ?? ''
+  if (!isAsciiSegment(last)) return ''
+  const parent = segs.length >= 2 ? segs[segs.length - 2] ?? '' : ''
+  return isAsciiSegment(parent) ? `${parent}/${last}` : last
+}
+
+/**
+ * W19-C 路径豁免：从待检文本整体移除路径 token（F2：尾部 ASCII 产出签名除外）。
  *
  * 剥离范围（两类，均为 E2E 9 连拒实测碰撞源）：
  * 1. 绝对路径（/ 或 ~/ 开头的连续 run）——机器生成，携带项目名/用户名；
  * 2. 含 CJK 字符的含斜杠 run——项目目录名形态（验收2 等）。
  *
- * 保留：纯 ASCII 相对路径（08_APP/index.html、01_PRD/prd.md 等）——它们是 L1
- * 主动声明的产出目标，OUTPUT 词需继续匹配（W18.1 A3 红测试「基于需求，构建
- * 08_APP/index.html 页面」依赖 index.html 命中）。副作用：ASCII 相对路径内的
- * 目录名词（01_PRD 含 PRD）仍参与匹配——但 PRD 已不在他阶段 ROLE 表，只在本
- * 阶段 OUTPUT/上游引用语境中无害。
+ * 保留：① 纯 ASCII 相对路径（08_APP/index.html、01_PRD/prd.md 等）——它们是 L1
+ * 主动声明的产出目标，OUTPUT 词需继续匹配（W18.1 A3 红测试依赖）；② 被剥离
+ * token 的尾部 ASCII 产出签名（F2：CJK/绝对路径尾部的 index.html 等产出词不随
+ * 整体剥离消失，2.5 邻近语境可继续命中）。副作用：保留段内的目录名词
+ * （02_UX_DESIGN 含 UX 等）仍参与匹配——对本阶段词无害，他阶段词碰撞记为
+ * 残余面（与 ASCII 相对路径同源，matchContext.inPath 可观测）。
  */
 export function stripPathTokens(text: string): string {
-  return text.replace(PATH_RUN_RE, (run) => (isStrippedPathRun(run) ? ' ' : run))
+  return text.replace(PATH_RUN_RE, (run) => (isStrippedPathRun(run) ? ` ${asciiTailSignature(run)} ` : run))
 }
 
 /** 关键词在文本中的全部出现位置（start index）；英文 \b 词边界 / 中文 includes（大小写不敏感） */

@@ -6,6 +6,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
 import { listNanjuProjects, getProjectCategory, getProjectEnvState, type NanjuProject, type ProjectStage } from './nanju-project'
 import { getPhaseNode, getNextPhase, type PhaseId, checkOutputFormat } from './nanju-router'
@@ -165,6 +166,45 @@ function summarizePath(p: string): string {
   return p.length > 160 ? `${p.slice(0, 160)}…` : p
 }
 
+/** 当前用户 home（~ 展开用；获取失败退化为空串——~ 形态仅退化为字面比对，不抛错） */
+const HOME_DIR = (() => {
+  try {
+    return homedir()
+  } catch {
+    return ''
+  }
+})()
+
+/**
+ * F1（审查必修，v0.17.90）：守卫用词法路径归一化——归因与豁免判定前统一调用。
+ *
+ * 反斜杠→正斜杠；`~`/`~/` 展开为 home；剥空段与 `.` 段；消解 `..` 段（绝对路径
+ * 越到根则丢弃，相对路径的前导 `..` 保留——不预设 cwd，交由调用方保守处理）；
+ * 不触盘（纯词法，与 runtime 实际解析解耦——判定属保守拦截口径）。
+ *
+ * 堵审查实证三形态：`./project-<id>/…`（前缀比对绕过）、`08_APP/../01_PRD/…`
+ * （豁免穿越）、`~/…`（整体跳过归因）。
+ */
+function normalizeGuardPath(value: string): string {
+  let p = value.replace(/\\/g, '/')
+  if (HOME_DIR !== '') {
+    if (p === '~') p = HOME_DIR
+    else if (p.startsWith('~/')) p = `${HOME_DIR}/${p.slice(2)}`
+  }
+  const isAbs = p.startsWith('/')
+  const out: string[] = []
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      if (out.length > 0 && out[out.length - 1] !== '..') out.pop()
+      else if (!isAbs) out.push('..')
+      continue
+    }
+    out.push(seg)
+  }
+  return (isAbs ? '/' : '') + out.join('/')
+}
+
 /** 路径是否落在 root 下：返回相对部分（root 本身返回 ''），不在 root 下返回 null */
 function pathRelativeTo(path: string, root: string): string | null {
   const p = path.replace(/\\/g, '/')
@@ -174,10 +214,12 @@ function pathRelativeTo(path: string, root: string): string | null {
   return null
 }
 
-/** delivered 项目 08_APP/ 前缀豁免（指挥官裁决：其余目录 01~07、09+、项目根散文件一律 deny） */
+/** delivered 项目 08_APP/ 前缀豁免（指挥官裁决：其余目录 01~07、09+、项目根散文件一律 deny）。
+ *  F1：rel 先归一化再判——堵 `08_APP/../01_PRD/x` 穿越（首段 08_APP 但实写 01_PRD） */
 function isDeliveredAppExempt(project: NanjuProject, rel: string): boolean {
   if (project.currentStage !== 'delivered') return false
-  return (rel.split('/')[0] ?? '') === DELIVERED_EXEMPT_DIR
+  const norm = normalizeGuardPath(rel.replace(/^\/+/, ''))
+  return norm === DELIVERED_EXEMPT_DIR || norm.startsWith(`${DELIVERED_EXEMPT_DIR}/`)
 }
 
 /** 会话是否为协作委派子会话（L2）。sourceDelegationId 是委派子会话专属标记
@@ -198,17 +240,19 @@ function bashMentionTail(command: string, from: number): string {
   return command.slice(from).match(/^[^\s'"`|;&<>()]*/)?.[0] ?? ''
 }
 
-/** Write/Edit/NotebookEdit 路径字段的写域判定（file_path 与 path 双字段兼容——E2E 6039a6af 实测两者并存） */
+/** Write/Edit/NotebookEdit 路径字段的写域判定（file_path 与 path 双字段兼容——E2E 6039a6af 实测两者并存）。
+ *  F1：归因/豁免/裸前缀判定前统一 normalizeGuardPath（~ 展开与 ./、..、重复斜杠消解） */
 function findUnboundWriteHit(
   workspaceSlug: string,
   projects: NanjuProject[],
   input: Record<string, unknown>,
 ): UnboundWriteHit | null {
   for (const key of ['file_path', 'filePath', 'path', 'notebook_path'] as const) {
-    const value = input[key]
-    if (typeof value !== 'string' || value.trim() === '') continue
+    const raw = input[key]
+    if (typeof raw !== 'string' || raw.trim() === '') continue
+    const value = normalizeGuardPath(raw)
 
-    // 1) 项目目录归因（绝对路径或显式 project-<id>/ 前缀相对路径）
+    // 1) 项目目录归因（绝对路径或显式 project-<id>/ 前缀相对路径——均在归一化后比对）
     let attributed = false
     for (const project of projects) {
       const rootAbs = join(getWorkspaceFilesDir(workspaceSlug), `project-${project.projectId}`)
@@ -217,17 +261,19 @@ function findUnboundWriteHit(
       if (rel === null) continue
       attributed = true
       if (isDeliveredAppExempt(project, rel)) continue
-      return { project, stageDir: rel.split('/')[0] ?? '', reason: 'project-dir', pathSummary: summarizePath(value) }
+      return { project, stageDir: rel.split('/')[0] ?? '', reason: 'project-dir', pathSummary: summarizePath(raw) }
     }
     if (attributed) continue // 落入唯一归属项目的豁免 → 本候选放行
 
     // 2) 裸阶段目录前缀（相对路径，cwd 不可知——阶段目录是南大专属结构，保守拦截；
+ //    归一化后剥前导 ..（cwd 在工作区任意深度时 ../project-<id>/… 仍可达），
     //    08_APP 仅当工作区全部项目 delivered 才放行，否则按保守 deny）
-    if (!value.startsWith('/') && !value.startsWith('~')) {
-      const seg = value.split('/')[0] ?? ''
+    if (!value.startsWith('/')) {
+      const rel = value.replace(/^(?:\.\.\/)+/, '')
+      const seg = rel.split('/')[0] ?? ''
       if (STAGE_DIR_NAMES.has(seg)) {
         if (seg === DELIVERED_EXEMPT_DIR && projects.every((p) => p.currentStage === 'delivered')) continue
-        return { stageDir: seg, reason: 'stage-dir-prefix', pathSummary: summarizePath(value) }
+        return { stageDir: seg, reason: 'stage-dir-prefix', pathSummary: summarizePath(raw) }
       }
     }
   }
@@ -253,7 +299,8 @@ function findUnboundBashHit(
         const isIdBoundary = after === '' || !/[A-Za-z0-9_-]/.test(after)
         if (isIdBoundary) {
           const tail = bashMentionTail(command, idx + needle.length)
-          const seg = tail.replace(/^\/+/, '').split('/')[0] ?? ''
+          // F1：尾随路径归一化后再取首段——堵 08_APP/../01_PRD 豁免穿越（Bash 形态）
+          const seg = normalizeGuardPath(tail.replace(/^\/+/, '')).split('/')[0] ?? ''
           if (!isDeliveredAppExempt(project, seg)) {
             return {
               project,

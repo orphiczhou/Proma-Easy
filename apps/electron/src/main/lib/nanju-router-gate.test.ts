@@ -12,8 +12,8 @@
  */
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
 
 /** 当前 fixture 根目录（mock 的 getWorkspaceFilesDir 每次调用时读取） */
 let fixtureRoot = ''
@@ -651,5 +651,68 @@ describe('W19 缺陷A：边界与豁免矩阵', () => {
       title: '需求分析师', task: '梳理核心需求产出 PRD',
     })
     expect(result).toBeNull()
+  })
+})
+
+describe('W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵', () => {
+  test('探针①：Write ./project-act/01_PRD/x.md（前导 ./ 前缀绕过归因）→ deny + 归因到项目', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: './project-act/01_PRD/x.md',
+    })
+    expect(result?.behavior).toBe('deny')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events).toHaveLength(1)
+    expect(events[0]?.payload.projectId).toBe('act')
+    expect(events[0]?.payload.reason).toBe('project-dir')
+  })
+
+  test('探针②：delivered 豁免穿越 project-dlv/08_APP/../01_PRD/evil.html → deny（消解 .. 后不再豁免）', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: 'project-dlv/08_APP/../01_PRD/evil.html',
+    })
+    expect(result?.behavior).toBe('deny')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events[0]?.payload.projectId).toBe('dlv')
+    expect(events[0]?.payload.stageDir).toBe('01_PRD')
+    // 绝对路径形态同样封堵
+    const abs = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: join(fixtureRoot, 'project-dlv', '08_APP', '..', '01_PRD', 'evil.html'),
+    })
+    expect(abs?.behavior).toBe('deny')
+  })
+
+  test('探针②-Bash：cat project-dlv/08_APP/../01_PRD/x（豁免穿越，命令形态）→ deny', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Bash', {
+      command: 'cat project-dlv/08_APP/../01_PRD/x',
+    })
+    expect(result?.behavior).toBe('deny')
+  })
+
+  test('探针③：Write ~/… 形态（~ 展开后归因）→ deny；~ 指向项目外 → 放行', () => {
+    setupUnboundFixture()
+    // 用 ~ + relative(homedir → fixture) 构造同时锻炼 ~ 展开与 .. 消解的路径
+    const homeRelative = relative(homedir(), join(fixtureRoot, 'project-act', '01_PRD', 'x.md'))
+    const viaHome = `~/${homeRelative}`
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: viaHome,
+    })
+    expect(result?.behavior).toBe('deny')
+    const events = readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')
+    expect(events[0]?.payload.projectId).toBe('act')
+    // 指向 home 下的普通路径（项目外）→ 仍放行（零变化范围外）
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: '~/notes-outside.md',
+    })).toBeNull()
+  })
+
+  test('归一化回归：相对路径重复斜杠与中段 ./ 仍归因（project-act//01_PRD/./x.md）→ deny', () => {
+    setupUnboundFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, UNBOUND_SESSION, 'Write', {
+      file_path: 'project-act//01_PRD/./x.md',
+    })
+    expect(result?.behavior).toBe('deny')
   })
 })

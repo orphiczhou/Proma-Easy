@@ -850,13 +850,15 @@ const W19_E2E_REPLAY_SAMPLES: W19ReplaySample[] = [
 
 
 describe('W19-C：路径豁免（stripPathTokens + 匹配前剥离）', () => {
-  test('stripPathTokens：绝对路径整体剥离（含 CJK 项目名段，实测 deny#4/#5 碰撞源）', () => {
+  test('stripPathTokens：绝对路径剥离 CJK 碰撞词，保留尾部 ASCII 产出签名（F2）', () => {
     const stripped = stripPathTokens('前序 /home/orphic/.proma-dev/workspace-files/project-e2e-w18-验收2/02_UX_DESIGN/prototype.html 已就绪')
     expect(stripped).toContain('前序')
     expect(stripped).toContain('已就绪')
+    // 碰撞源（项目名 CJK 段 + 用户路径）整体消失
     expect(stripped).not.toContain('验收')
-    expect(stripped).not.toContain('02_UX_DESIGN')
-    expect(stripped).not.toContain('prototype.html')
+    expect(stripped).not.toContain('home/orphic')
+    // F2：尾部 ASCII 产出签名保留（末两段均 ASCII）
+    expect(stripped).toContain('02_UX_DESIGN/prototype.html')
   })
 
   test('stripPathTokens：纯 ASCII 相对路径保留（08_APP/index.html 继续参与 OUTPUT 匹配——A3 依赖）', () => {
@@ -864,9 +866,10 @@ describe('W19-C：路径豁免（stripPathTokens + 匹配前剥离）', () => {
     expect(stripPathTokens('读 01_PRD/prd.md 后汇总')).toBe('读 01_PRD/prd.md 后汇总')
   })
 
-  test('stripPathTokens：含 CJK 的相对路径剥离（项目名形态）', () => {
-    expect(stripPathTokens('读取 project-验收2/06_TESTS/report.json')).not.toContain('验收')
-    expect(stripPathTokens('读取 project-验收2/06_TESTS/report.json')).not.toContain('report.json')
+  test('stripPathTokens：含 CJK 的相对路径剥离碰撞词、保留尾部 ASCII 签名（F2）', () => {
+    const stripped = stripPathTokens('读取 project-验收2/06_TESTS/report.json')
+    expect(stripped).not.toContain('验收')
+    expect(stripped).toContain('06_TESTS/report.json')
   })
 
   test('stripPathTokens：无斜杠文本零变化（验收标准等正文不误伤）', () => {
@@ -881,6 +884,16 @@ describe('W19-C：路径豁免（stripPathTokens + 匹配前剥离）', () => {
     })
     expect(result.allowed).toBe(true)
     expect(result.matchKind).toBe('stage')
+  })
+
+  test('F2（审查应修）：尾部签名仅末段 ASCII 时不带 CJK 父段（验收2/首页 类碰撞词不回灌）', () => {
+    // 末段 ASCII、父段 CJK → 只保留末段；父段验收2 不回灌
+    const stripped = stripPathTokens('产出 /home/x/project-验收2/首页/index.html')
+    expect(stripped).not.toContain('验收')
+    expect(stripped).not.toContain('首页')
+    expect(stripped).toContain('index.html')
+    // 末段本身 CJK → 无任何保留
+    expect(stripPathTokens('输出 /home/x/项目/验收报告')).not.toContain('验收')
   })
 })
 
@@ -938,6 +951,23 @@ describe('W19-C：词表复核回归（移除词不误拦 + 复合词护栏不�
 })
 
 describe('W19-C：OUTPUT 词邻近语境判定（±20 字符强动词窗口）', () => {
+  test('F2（审查应修）探针①：requirements「基于需求，生成 08_APP/首页/index.html 页面」→ deny（CJK 中段路径尾部签名命中）', () => {
+    const result = checkDelegationAgainstStage('requirements', { task: '基于需求，生成 08_APP/首页/index.html 页面' })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('index.html')
+  })
+
+  test('F2 探针②：requirements「基于需求，生成 /…/project-e2e-w18-验收2/08_APP/index.html」→ deny（绝对路径尾部签名命中，验收不误拦）', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '基于需求，生成 /home/orphic/.proma-dev/agent-workspaces/workspace-1786847832507/workspace-files/project-e2e-w18-验收2/08_APP/index.html 首页',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('index.html')
+  })
+
   test('审查语境（实测 deny#6 复盘）：prototype「生成界面稿交付后自查，禁止只看代码就下结论」→ 放行（距离 >20）', () => {
     const result = checkDelegationAgainstStage('prototype', { task: '生成可交互界面稿原型交付；交付后自查环节禁止只看代码就下结论，必须实际点验交互' })
     expect(result.allowed).toBe(true)
