@@ -97,71 +97,90 @@ export function checkConfirmAdvanceInput(
     const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage as import('./nanju-router').PhaseId)
     const action = judgeConfirmAdvance(userText, project.currentStage, verifyError)
     if (action === 'set') {
-      setProjectConfirmPending(workspaceSlug, project.projectId, project.currentStage)
-      try {
-        const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-        recordTelemetry(workspaceSlug, 'confirm.advance-hint', {
-          project_id: project.projectId,
-          stage: project.currentStage,
-          mode: project.mode,
-        }, project.projectId)
-      } catch { /* 埋点失败不影响置位 */ }
-      console.log(`[南大路由] 确认检测：置位 confirmPending=${project.currentStage}（${project.name}）`)
-      // —— v2.4（D7 §1 I1）：推进授权置位（与 confirmPending 提示相互独立）——
+      // —— v2.4（D7 §1 I1 + 工程审查 F2-3②/F2-4）：确认词命中后按「活跃收口问句匹配」
+      // 统一决定置位（confirmPending 强推进提示 + confirmAuthorization 授权同拍）或纯观测——
+      // 散点确认词（无活跃问句）与注入文本（humanOrigin≠true）既不授权也不注入 ⏩ 提示
+      //（F2-4/#15：防「命令推进→被拒→循环」对话污染）。
       try {
         const {
           setConfirmAuthorization, getActiveConfirmAsk, clearActiveConfirmAsk,
         } = require('./nanju-project') as typeof import('./nanju-project')
         const { getNextPhase } = require('./nanju-router') as typeof import('./nanju-router')
+        const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+        let authorized = false
+        let expectedTarget = ''
+        let authSource: 'ask-answer' | 'user-message' = 'user-message'
         if (source === 'ask-answer') {
-          // I1-①：横幅 IPC 结构化答案（唯一产生点 renderer 横幅确认 IPC，不可伪造）。
-          // expectedTarget 由 harness 按阶段图算（L1 无法引导到非法目标）。
-          const expected = getNextPhase(project.mode, project.currentStage as import('./nanju-router').PhaseId)
-          if (expected) {
-            const ask = getActiveConfirmAsk(workspaceSlug, project.projectId)
-            if (!ask) {
-              // Defender #4 观测：无活跃确认问句在场的 ask-answer（话术失范/伪造「确认」
-              // header 嫌疑）——埋点必发，不阻断（结构化通道无伪造面，主口径：仍置位）
-              try {
-                const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-                recordTelemetry(workspaceSlug, 'clarify.suspect-fake-confirm' as never, {
-                  project_id: project.projectId,
-                  stage: project.currentStage,
-                  textPreview: userText.slice(0, 40),
-                }, project.projectId)
-              } catch { /* 埋点失败不影响 */ }
-            }
-            setConfirmAuthorization(workspaceSlug, project.projectId, 'ask-answer', expected)
-            clearActiveConfirmAsk(workspaceSlug, project.projectId) // 横幅已答，问句失效
-            console.log(`[南大路由] 推进授权置位：ask-answer → ${expected}（${project.name}）`)
-          }
-        } else if (opts?.humanOrigin === true) {
-          // I1-②：真 UI 人类消息 + 活跃确认问句绑定（R4-02：散点确认词不授权）
+          // I1-①：横幅 IPC 结构化答案（不可伪造）。F2-3②（#3）：置位前校验存在匹配的
+          // 活跃收口问句（activeConfirmAsk 在场 ∧ expectedTarget 与 harness 按阶段图算的
+          // 唯一合法下一阶段对齐）——中间确认（环境安装等）不登记问句，其横幅答案
+          // 不构成推进授权；不匹配只埋 clarify.suspect-fake-confirm 不授权。
           const ask = getActiveConfirmAsk(workspaceSlug, project.projectId)
-          if (ask) {
-            setConfirmAuthorization(workspaceSlug, project.projectId, 'user-message', ask.expectedTarget)
-            clearActiveConfirmAsk(workspaceSlug, project.projectId) // 确认词已消费问句（§1 I1-②b：横幅答或确认词命中即失效）
-            console.log(`[南大路由] 推进授权置位：user-message → ${ask.expectedTarget}（${project.name}）`)
+          const harnessExpected = getNextPhase(project.mode, project.currentStage as import('./nanju-router').PhaseId)
+          if (ask && harnessExpected && ask.expectedTarget === harnessExpected) {
+            authorized = true
+            expectedTarget = harnessExpected
+            authSource = 'ask-answer'
           } else {
             try {
-              const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-              recordTelemetry(workspaceSlug, 'confirm.scatter-no-auth' as never, {
+              recordTelemetry(workspaceSlug, 'clarify.suspect-fake-confirm', {
+                project_id: project.projectId,
+                stage: project.currentStage,
+                reason: ask ? 'target-mismatch' : 'no-active-ask',
+                textPreview: userText.slice(0, 40),
+              }, project.projectId)
+            } catch { /* 埋点失败不影响 */ }
+            console.log(`[南大路由] ask-answer 无匹配活跃收口问句（${ask ? '目标不匹配' : '无问句'}），不授权（${project.name}）`)
+          }
+        } else if (opts?.humanOrigin === true) {
+          // I1-②：真 UI 人类消息 + 活跃收口问句绑定（R4-02：散点确认词不授权）
+          const ask = getActiveConfirmAsk(workspaceSlug, project.projectId)
+          if (ask) {
+            authorized = true
+            expectedTarget = ask.expectedTarget
+            authSource = 'user-message'
+          } else {
+            try {
+              recordTelemetry(workspaceSlug, 'confirm.scatter-no-auth', {
                 project_id: project.projectId,
                 stage: project.currentStage,
                 textPreview: userText.slice(0, 40),
               }, project.projectId)
             } catch { /* 埋点失败不影响 */ }
-            console.log(`[南大路由] 确认词命中但无活跃确认问句，不授权（散点确认，${project.name}）`)
+            console.log(`[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，${project.name}）`)
           }
         }
         // 其余（source='message' 且 humanOrigin≠true）：send_message/HTTP bridge/事件流
-        // tool_result 重放/队列重放等注入文本——不授权（R4-01），仅保留既有 confirmPending 提示语义
+        // tool_result 重放/队列重放等注入文本——不授权不置 confirmPending（R4-01）
+        if (authorized) {
+          setProjectConfirmPending(workspaceSlug, project.projectId, project.currentStage)
+          try {
+            recordTelemetry(workspaceSlug, 'confirm.advance-hint', {
+              project_id: project.projectId,
+              stage: project.currentStage,
+              mode: project.mode,
+            }, project.projectId)
+          } catch { /* 埋点失败不影响置位 */ }
+          setConfirmAuthorization(workspaceSlug, project.projectId, authSource, expectedTarget)
+          clearActiveConfirmAsk(workspaceSlug, project.projectId) // 确认已消费问句（授权路径）
+          console.log(`[南大路由] 确认检测：置位 confirmPending=${project.currentStage} + 授权 ${authSource} → ${expectedTarget}（${project.name}）`)
+        }
       } catch (authErr) {
-        console.warn('[南大路由] 推进授权置位异常（不影响既有 confirmPending 语义）:', authErr instanceof Error ? (authErr as Error).message : String(authErr))
+        console.warn('[南大路由] 确认检测/授权置位异常（不阻断）:', authErr instanceof Error ? (authErr as Error).message : String(authErr))
       }
     } else if (action === 'clear') {
       clearProjectConfirmPending(workspaceSlug, project.projectId)
       console.log(`[南大路由] 确认检测：反义词清除 confirmPending（${project.name}）`)
+    }
+    // v2.4 F2-5（#5/D7 §3 清除条件）：活跃问句失效 = 应答（ask-answer 到达）∨ 新
+    // humanOrigin 消息到达（无论是否命中确认词——反义词/无关联消息同样终结问句
+    // 上下文；命中确认词的授权路径已在上方清除，此处幂等兜底）。TTL 过期由读取侧
+    // 惰性清除（getActiveConfirmAsk）。
+    if (source === 'ask-answer' || opts?.humanOrigin === true) {
+      try {
+        const { clearActiveConfirmAsk } = require('./nanju-project') as typeof import('./nanju-project')
+        clearActiveConfirmAsk(workspaceSlug, project.projectId)
+      } catch { /* 清除失败不影响主流程 */ }
     }
   } catch (e) {
     console.warn('[南大路由] 确认检测异常（不阻断）:', e instanceof Error ? e.message : String(e))
@@ -423,7 +442,7 @@ hooks: PhaseAdvanceHooks,
                 console.log(`[南大路由] 推进硬门拒绝：无授权（${project.currentStage} → ${newStage}，${project.name}）`)
                 try {
                   const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-                  recordTelemetry(workspaceSlug, 'advance.gate-deny' as never, {
+                  recordTelemetry(workspaceSlug, 'advance.gate-deny', {
                     project_id: project.projectId,
                     from_stage: project.currentStage,
                     target: newStage,

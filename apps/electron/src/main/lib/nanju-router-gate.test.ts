@@ -788,15 +788,43 @@ describe('v2.4 §3：L1 AskUserQuestion 路由（auto 开启时按 header 前缀
     __resetNanjuAdvanceAuthStoresForTests()
   })
 
-  test('auto 开启 + header「确认·…」前缀 → 放行 + 登记 activeConfirmAsk（expectedTarget=阶段图唯一下一阶段）', () => {
+  test('auto 开启 + 通用收口 header「确认·{phase.title}」→ 放行 + 登记 activeConfirmAsk（expectedTarget=阶段图唯一下一阶段）', () => {
     setupAskFixture(AUTO_ON)
     const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: 'PRD 已产出，是否确认进入下一阶段？', header: '确认·需求阶段收口', options: [{ label: '确认' }, { label: '需要修改' }] }],
+      questions: [{ question: 'PRD 已产出，是否确认进入下一阶段？', header: '确认·需求分析师', options: [{ label: '确认' }, { label: '需要修改' }] }],
     })
     expect(result).toBeNull()
     const ask = getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
     expect(ask).toBeTruthy()
     expect(ask!.expectedTarget).toBe('prototype') // quick: requirements → prototype
+  })
+
+  test('F2-3① 收口白名单：原型交互验证/预览确认/架构与环境配置/满意交付 均登记（直接门控 PHASE_ADVANCE 类）', () => {
+    setupAskFixture(AUTO_ON)
+    for (const header of ['确认·原型交互验证', '确认·预览确认', '确认·架构与环境配置', '确认·满意交付']) {
+      expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+        questions: [{ question: '收口确认', header, options: [] }],
+      })).toBeNull()
+      expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeTruthy()
+      __resetNanjuAdvanceAuthStoresForTests()
+    }
+  })
+
+  test('红测（F2-3①/#3）：中间确认 header「确认·安装缺失组件」→ 路由放行（「确认」前缀合法）但不登记 activeConfirmAsk', () => {
+    setupAskFixture(AUTO_ON)
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '环境缺失 Rust 工具链，确认安装？', header: '确认·安装缺失组件', options: [{ label: '确认安装' }, { label: '换技术栈' }] }],
+    })
+    expect(result).toBeNull() // 路由层放行（确认前缀）
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull() // 但不登记（中间确认不构成推进授权问句）
+  })
+
+  test('红测（F2-3①）：非收口确认 header（白名单外后缀）→ 放行但不登记', () => {
+    setupAskFixture(AUTO_ON)
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '某个自定义确认交互', header: '确认·自定义事项', options: [] }],
+    })).toBeNull()
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
   })
 
   test('auto 开启 + header「设计…」/「转述…」前缀 → 放行 + 不登记 activeConfirmAsk（非确认问句）', () => {
@@ -852,13 +880,13 @@ describe('v2.4 §3：L1 AskUserQuestion 路由（auto 开启时按 header 前缀
     expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
   })
 
-  test('「确认」类问句重复放行覆盖登记（新问句替代旧问句，10min TTL 语义不变）', () => {
+  test('收口问句重复放行覆盖登记（新问句替代旧问句，10min TTL 语义不变）', () => {
     setupAskFixture(AUTO_ON)
     checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: 'A', header: '确认·A', options: [] }],
+      questions: [{ question: 'A', header: '确认·需求分析师', options: [] }],
     })
     checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: 'B', header: '确认·B', options: [] }],
+      questions: [{ question: 'B', header: '确认·需求分析师', options: [] }],
     })
     expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeTruthy() // 后到者胜（覆盖式）
   })

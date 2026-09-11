@@ -278,9 +278,12 @@ describe('W17 §3-3：已消费标记去重（防重放）', () => {
 // ═══════════════ 工单 §3-4：确认检测补 run 初始输入路径（W16 Q2 失明场景） ═══════════════
 
 describe('W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现）', () => {
-  test('确认文本作为 run 初始输入 → confirmPendingStage 置位（当前失明场景）+ 埋点落库', () => {
-    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进')
+  test('确认文本作为 run 初始输入（活跃收口问句在场 + humanOrigin）→ confirmPending 置位 + 授权 + 埋点落库（v2.4 F2-3/F2-4：散点不再置位）', () => {
+    // v2.4：confirmPending/授权统一绑定活跃收口问句——补登记后再走确认链
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进', 'message', { humanOrigin: true })
     expect(getProjectConfirmPending(WS, 'p1')).toBe('requirements')
+    expect(getConfirmAuthorization(WS, 'p1')?.expectedTarget).toBe('prototype')
     // telemetry：confirm.advance-hint 事件落库
     const telemetryDir = join(fixtureRoot, '_telemetry')
     const month = new Date().toISOString().slice(0, 7)
@@ -535,11 +538,14 @@ describe('v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）', () 
     expect(getSystemAdvanceAuthorized(WS, 'p1')?.target).toBe('delivered') // 保留
   })
 
-  test('红测：send_message 注入消息（humanOrigin 缺省 false）+ 确认词 → 不构成授权（R4-01）', () => {
-    // 模拟 send_message/bridge 注入路径：入口检测 opts 不传 humanOrigin
+  test('红测：send_message 注入消息（humanOrigin 缺省 false）+ 确认词 → 不授权也不置 confirmPending（R4-01+F2-4：无 ⏩ 强推进提示）', () => {
+    // 模拟 send_message/bridge 注入路径：入口检测 opts 不传 humanOrigin；
+    // v2.4 F2-4：注入确认词同样不注入强推进提示（防「命令推进→被拒→循环」污染）
+    setActiveConfirmAsk(WS, 'p1', 'prototype') // 即使问句在场，注入文本也不消费它
     checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进')
-    expect(getProjectConfirmPending(WS, 'p1')).toBe('requirements') // 既有提示语义保留
-    expect(getConfirmAuthorization(WS, 'p1')).toBe(null) // 但不授权
+    expect(getProjectConfirmPending(WS, 'p1')).toBe(null) // 不置提示
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null) // 不授权
+    expect(getActiveConfirmAsk(WS, 'p1')).toBeTruthy() // 问句不被注入消费（留给真人）
     const hooks = buildTestHooks()
     expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe(null)
     expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
@@ -582,21 +588,76 @@ describe('v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）', () 
     expect(getConfirmAuthorization(WS, 'p1')?.expectedTarget).toBe('prototype')
   })
 
-  test('ask-answer 确认词 → 置位授权（I1-① 主通道）+ 无活跃问句时埋 suspect-fake-confirm 观测', () => {
+  test('ask-answer + 活跃收口问句匹配（F2-3②）→ 置位授权 + confirmPending（I1-① 主通道）', () => {
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
     checkConfirmAdvanceInput(SESSION_ID, WS, '确认', 'ask-answer')
     const auth = getConfirmAuthorization(WS, 'p1')
     expect(auth).toBeTruthy()
     expect(auth!.source).toBe('ask-answer')
     expect(auth!.expectedTarget).toBe('prototype') // harness 按阶段图算（quick: requirements→prototype）
+    expect(getProjectConfirmPending(WS, 'p1')).toBe('requirements') // 授权与提示同拍（F2-4）
+    expect(getActiveConfirmAsk(WS, 'p1')).toBe(null) // 到达即清（横幅已答）
     const month = new Date().toISOString().slice(0, 7)
     const telemetryPath = join(fixtureRoot, '_telemetry', `events-${month}.jsonl`)
     const events = readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
-    expect(events.some((e) => e.eventType === 'clarify.suspect-fake-confirm')).toBe(true)
+    expect(events.some((e) => e.eventType === 'clarify.suspect-fake-confirm')).toBe(false) // 匹配链路不误报
   })
 
-  test('ask-answer 到达时清除既有 activeConfirmAsk（横幅已答，问句失效）', () => {
-    setActiveConfirmAsk(WS, 'p1', 'prototype')
+  test('红测（F2-3②/#3）：中间确认横幅答案（无活跃收口问句的 ask-answer）→ 不授权，仅埋 suspect-fake-confirm（Defender #4 收紧）', () => {
+    // 模拟「确认·安装缺失组件」等中间确认横幅：不登记 activeConfirmAsk，答案即达
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认安装', 'ask-answer')
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+    expect(getProjectConfirmPending(WS, 'p1')).toBe(null)
+    const month = new Date().toISOString().slice(0, 7)
+    const telemetryPath = join(fixtureRoot, '_telemetry', `events-${month}.jsonl`)
+    const events = readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    const fakeEvent = events.find((e) => e.eventType === 'clarify.suspect-fake-confirm')
+    expect(fakeEvent).toBeTruthy()
+    expect((fakeEvent!.payload as Record<string, unknown>).reason).toBe('no-active-ask')
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe(null)
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
+  })
+
+  test('红测（F2-3②）：活跃问句 expectedTarget 不匹配 → 不授权（reason=target-mismatch）且问句清除', () => {
+    // 构造不匹配：prototype 阶段 harness 期望 architecture，登记问句却指向 coding
+    setupFixture({ stage: 'prototype' })
+    mkdirSync(join(fixtureRoot, 'project-p1', '02_UX_DESIGN'), { recursive: true })
+    writeFileSync(join(fixtureRoot, 'project-p1', '02_UX_DESIGN', 'prototype.html'),
+      '<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>fixture</title></head><body><div>原型</div></body></html>')
+    setActiveConfirmAsk(WS, 'p1', 'coding')
     checkConfirmAdvanceInput(SESSION_ID, WS, '确认', 'ask-answer')
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+    expect(getActiveConfirmAsk(WS, 'p1')).toBe(null) // 到达即清（防残留被后续误用）
+    const month = new Date().toISOString().slice(0, 7)
+    const events = readFileSync(join(fixtureRoot, '_telemetry', `events-${month}.jsonl`), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    const fakeEvent = events.find((e) => e.eventType === 'clarify.suspect-fake-confirm')
+    expect((fakeEvent!.payload as Record<string, unknown>).reason).toBe('target-mismatch')
+  })
+
+  test('红测（F2-4/#15）：散点确认词不注入 ⏩ 强推进提示（无 activeConfirmAsk → confirmPending 不置位，仅埋点）', () => {
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进', 'message', { humanOrigin: true })
+    expect(getProjectConfirmPending(WS, 'p1')).toBe(null) // 不注入强推进提示
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+    const month = new Date().toISOString().slice(0, 7)
+    const events = readFileSync(join(fixtureRoot, '_telemetry', `events-${month}.jsonl`), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(events.some((e) => e.eventType === 'confirm.scatter-no-auth')).toBe(true)
+    expect(events.some((e) => e.eventType === 'confirm.advance-hint')).toBe(false)
+  })
+
+  test('红测（F2-5/#5/§3）：新 humanOrigin 消息到达即清除活跃问句——非确认消息后续确认词不再授权', () => {
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
+    // 用户先发了一条与确认无关的新消息（humanOrigin，非确认词）
+    checkConfirmAdvanceInput(SESSION_ID, WS, '帮我把按钮改成蓝色', 'message', { humanOrigin: true })
+    expect(getActiveConfirmAsk(WS, 'p1')).toBe(null) // 问句被新消息终结
+    // 其后再发确认词（humanOrigin）→ 散点，不授权
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，继续', 'message', { humanOrigin: true })
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+  })
+
+  test('F2-5 对照：反义词（humanOrigin）同样终结活跃问句', () => {
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
+    checkConfirmAdvanceInput(SESSION_ID, WS, '测试不通过，需要修复后再说', 'message', { humanOrigin: true })
     expect(getActiveConfirmAsk(WS, 'p1')).toBe(null)
   })
 

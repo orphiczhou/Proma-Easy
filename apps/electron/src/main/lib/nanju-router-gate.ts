@@ -111,6 +111,54 @@ function checkNanjuProxyToolGate(
 
 // ===== v2.4：L1 AskUserQuestion 路由（D7 §3，auto 开启时） =====
 
+/**
+ * 阶段收口类确认 header 后缀白名单（F2-3，#3：activeConfirmAsk 只登记「直接门控
+ * PHASE_ADVANCE」的收口确认，中间确认不登记）。
+ *
+ * 与 C 域 nanju-router-prompt 六处确认话术对齐维护（改话术 header 时同步本表）：
+ * - 原型交互验证（prototype）——「全部勾选/选『全部通过』→ 进入第 5 步」（推进标记）；
+ * - 预览确认（coding）——「用户确认 → 进入第 5 步（输出推进标记进入 testing）」；
+ * - 架构与环境配置（architecture）——「用户确认通过 → 进入第 5 步」（返工单预分类为
+ *   中间类，但按其自身裁决标准「是否直接门控 PHASE_ADVANCE」，该确认即 architecture
+ *   阶段最终收口（c→d 步直连第 5 步推进标记）；若不登记则正常收口横幅答案永远无法
+ *   授权 → 推进门拒 → L1 重弹同话术死循环。裁决：登记；env-ready 门禁
+ *   （verifyPhaseOutput）作二道防线兑底）；
+ * - 满意交付（testing 交付验收）——「满意交付 → PHASE_ADVANCE: delivered」（特判 +
+ *   双事实门禁为主路径，登记防御性）；
+ * - 通用收口 header=「确认·{phase.title}」（需求分析师/UX 顾问/全栈开发/测试工程师/
+ *   架构师/工程经理）——动态匹配当前阶段 title（isPhaseClosureConfirmHeader）。
+ * 中间类（不登记）：安装缺失组件（确认后走安装流程；环境未就绪时话术明令禁止推进标记）。
+ */
+const CONFIRM_ASK_CLOSURE_SUFFIXES = new Set([
+  '原型交互验证',
+  '预览确认',
+  '架构与环境配置',
+  '满意交付',
+])
+
+/**
+ * 判定 AskUser header 是否为「阶段收口类」确认问句（F2-3：登记面收窄依据）。
+ * header 形态：「确认·{后缀}」（兼容无间隔符「确认{后缀}」形态）；后缀命中固定白名单
+ * ∨ 等于当前阶段 phase.title（通用收口）→ 收口类。
+ */
+function isPhaseClosureConfirmHeader(
+  project: NanjuProject,
+  stage: ProjectStage,
+  header: string,
+): boolean {
+  if (!header.startsWith('确认')) return false
+  const suffix = header.startsWith('确认·') ? header.slice('确认·'.length) : header.slice('确认'.length)
+  if (suffix === '') return false
+  if (CONFIRM_ASK_CLOSURE_SUFFIXES.has(suffix)) return true
+  try {
+    const { getPhaseNode } = require('./nanju-router') as typeof import('./nanju-router')
+    const title = getPhaseNode(project.mode, stage as import('./nanju-router').PhaseId)?.title
+    return typeof title === 'string' && title !== '' && suffix === title
+  } catch {
+    return false
+  }
+}
+
 /** AskUserQuestion 入参中的 question 结构（header 前缀路由判定的最小字段面） */
 interface AskUserQuestionItem {
   question: string
@@ -159,7 +207,7 @@ function checkNanjuAskUserRoute(
   try {
     recordTelemetry(
       workspaceSlug,
-      'router.gate.ask-deny' as never,
+      'router.gate.ask-deny',
       {
         sessionId: project.sessionId,
         projectId: project.projectId,
@@ -186,9 +234,10 @@ function checkNanjuAskUserRoute(
 /**
  * v2.4（D7 §1 I1-②b / §3）：AskUser 放行侧登记 activeConfirmAsk。
  *
- * 仅「确认」header 类问句登记（全部 question 的 header 均以「确认」开头——设计/转述类
- * 不是确认问句）；expectedTarget 由 harness 按阶段图从当前 stage 算唯一合法下一阶段
- * （L1 无法引导到非法目标）；无合法下一阶段（终态/路由缺失）不登记（防御性：
+ * F2-3（#3）收窄：仅「阶段收口类」确认问句登记（isPhaseClosureConfirmHeader：
+ * 白名单后缀 ∨ 通用收口「确认·{phase.title}」）——环境安装等中间确认不登记，
+ * 其横幅答案不构成推进授权。expectedTarget 由 harness 按阶段图从当前 stage 算
+ * 唯一合法下一阶段（L1 无法引导到非法目标）；无合法下一阶段（终态/路由缺失）不登记（防御性：
  * activeConfirmAsk.expectedTarget 永远非空）。不区分 auto 开关——auto 关闭项目的合规
  * 确认问句同样登记（话术 header 已全局统一加前缀，D7 §10），用户聊天框确认词同样
  * 需要活跃问句绑定（I1-②b 对全项目生效）。10min TTL 见 nanju-project。
@@ -202,7 +251,7 @@ function registerConfirmAskIfEligible(
   try {
     const questions = extractAskQuestions(input)
     if (questions.length === 0) return
-    if (!questions.every((q) => (q.header ?? '').startsWith('确认'))) return
+    if (!questions.every((q) => isPhaseClosureConfirmHeader(project, stage, q.header ?? ''))) return
     const { getNextPhase } = require('./nanju-router') as typeof import('./nanju-router')
     const expected = getNextPhase(project.mode, stage as import('./nanju-router').PhaseId)
     if (!expected) return
