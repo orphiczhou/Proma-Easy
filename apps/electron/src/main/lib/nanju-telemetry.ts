@@ -34,6 +34,11 @@ export type TelemetryEventType =
   | 'delivery.ack-recorded' | 'delivery.gate.blocked' | 'delivery.ack-rejected-freetext'
   // W19 缺陷A（v0.17.87）：未绑定会话直写项目目录拦截（E2E 6039a6af 续接直写事 Replay）
   | 'router.gate.unbound-write-deny'
+  // v2.4 自动补完需求（D7 §8）：clarify 代理链路五事件——代理委派/代答完成/转述真人/
+  // 类别门拒绝（含入参校验拒）/预算耗尽；payload 摘要 ≤80 字符，附 diversityDegraded
+  // 与确认词命中布尔（代答永不构成 I1 授权，命中仅作标记与取证）
+  | 'clarify.proxy-delegate' | 'clarify.proxy-answer' | 'clarify.relay-human'
+  | 'clarify.guard-deny' | 'clarify.budget-exhausted'
 
 export interface TelemetryEvent {
   eventId: string

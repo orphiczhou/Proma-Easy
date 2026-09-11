@@ -800,6 +800,12 @@ export interface AgentSessionMeta {
   delegationDepth?: number
   /** 委派目标摘要，便于 UI 展示和追溯 */
   delegationGoal?: string
+  /**
+   * v2.4 自动补完需求（D7 §4）：该会话是 nanju_clarify_proxy 创建的代理子会话。
+   * 仅 inline 代理委派写入（最小集，不写 sourceDelegationId）；路由门禁据此走
+   * 代理工具面白名单（无 AskUser/无 send_message/无写/无再委派——代理封闭 §1 I3）。
+   */
+  nanjuProxy?: boolean
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */

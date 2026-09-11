@@ -24,7 +24,25 @@ export interface WatchedDelegation {
   title: string
   startedAt: number
   hasPendingBlockedEvents: boolean
+  /** v2.4（D7 §4）：nanjuProxy 代理委派——独立时钟（软 5min/硬 10min 不因 blocked 重置）且不计熔断 */
+  isNanjuProxy?: boolean
 }
+
+/**
+ * v2.4（D7 §4）：nanjuProxy 代理委派独立时钟阈值。
+ *
+ * 与普通 L2 委派（20min/35min）分离：代理任务是短问答（无人工介入），长等待无意义；
+ * 且代理无真人应答 blocked 事件——blocked 不重置时钟（否则永不到期）；硬停不计
+ * phaseErrorBreakThreshold 熔断（代理失败由 nanju_clarify_proxy 工具 fallback:'human'
+ * 兑底，不能拖累主阶段熔断账户）。硬停不注入重派续接（L1 在工具调用内等待，工具
+ * 返回 fallback 后按协议转述真人）。
+ */
+export const NANJU_PROXY_GUARDS = {
+  /** 代理软超时（毫秒，默认 5 分钟）：注入提示（L1 侧可见），不强停 */
+  delegationSoftTimeoutMs: 5 * 60 * 1000,
+  /** 代理硬超时（毫秒，默认 10 分钟）：强停代理委派（不计熔断、不续接重派） */
+  delegationHardTimeoutMs: 10 * 60 * 1000,
+} as const
 
 /** 熔断计数写入结果（由 orchestrator 经 updatePhaseGuard 单一写入点产出） */
 export interface GuardErrorRecord {
@@ -157,6 +175,19 @@ export class NanjuDelegationWatcher {
       for (const d of running) {
         const tracked = watch.tracked.get(d.delegationId)
         if (!tracked) continue
+        if (d.isNanjuProxy === true) {
+          // v2.4：代理独立时钟——blocked 不重置（代理无真人应答），软/硬阈值取 NANJU_PROXY_GUARDS
+          const elapsed = this.now() - tracked.firstSeenAt
+          if (elapsed >= NANJU_PROXY_GUARDS.delegationHardTimeoutMs && !tracked.hardFired) {
+            tracked.hardFired = true
+            tracked.softFired = true
+            this.handleProxyHardTimeout(sessionId, d)
+          } else if (elapsed >= NANJU_PROXY_GUARDS.delegationSoftTimeoutMs && !tracked.softFired) {
+            tracked.softFired = true
+            this.handleProxySoftTimeout(sessionId, d)
+          }
+          continue
+        }
         if (d.hasPendingBlockedEvents) {
           // 等用户回答/权限是用户驱动循环（时长控制明确排除）：时钟重置，恢复后重新计时
           tracked.firstSeenAt = this.now()
@@ -174,6 +205,37 @@ export class NanjuDelegationWatcher {
         }
       }
     }
+  }
+
+  /**
+   * v2.4（D7 §4）：代理委派硬超时——强停 + 提示注入；不计熔断（代理失败由工具
+   * fallback:'human' 兑底，不拖累主阶段熔断账户）、不续接重派（L1 在工具调用内
+   * 等待，工具等待兑底后会返回 fallback，按协议转述真人）。
+   */
+  private handleProxyHardTimeout(sessionId: string, delegation: WatchedDelegation): void {
+    const hardMin = Math.round(NANJU_PROXY_GUARDS.delegationHardTimeoutMs / 60000)
+    let stopped = false
+    try {
+      stopped = this.deps.forceStopDelegation(sessionId, delegation.delegationId).stopped
+    } catch (e) {
+      this.log(`[南大护栏] 强停代理委派异常: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    this.log(`[南大护栏] nanjuProxy 代理委派硬超时（不计熔断）: ${delegation.delegationId} stopped=${stopped}`)
+    this.deps.injectMessage(
+      sessionId,
+      `⏹ 南大护栏·代理硬超时：自动补完需求代理「${delegation.title}」已 ${hardMin} 分钟未完成，已被系统强制停止。`
+      + `nanju_clarify_proxy 工具将返回 fallback:"human"，请按协议把问题转述给真人。`,
+    )
+  }
+
+  /** v2.4（D7 §4）：代理委派软超时——仅注入提示（代理无人工介入，不催办重派） */
+  private handleProxySoftTimeout(sessionId: string, delegation: WatchedDelegation): void {
+    const softMin = Math.round(NANJU_PROXY_GUARDS.delegationSoftTimeoutMs / 60000)
+    const hardMin = Math.round(NANJU_PROXY_GUARDS.delegationHardTimeoutMs / 60000)
+    this.deps.injectMessage(
+      sessionId,
+      `⏳ 南大护栏·代理软超时：自动补完需求代理「${delegation.title}」已 ${softMin} 分钟未完成（${hardMin} 分钟硬超时强停，不计熔断）。`,
+    )
   }
 
   /** 软超时：注入催办 + 续接催办（检查状态或重派） */

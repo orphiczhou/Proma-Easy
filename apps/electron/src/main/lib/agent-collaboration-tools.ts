@@ -37,7 +37,7 @@ import {
   resolveDelegationPermissionMode,
 } from './agent-collaboration-utils'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel, pickDefaultModelForChannel } from './agent-model-selection'
-import { findNanjuFallbackProject, getFallbackChain, recordModelFallbackUsed, type ModelEndpoint } from './nanju-model-fallback'
+import { findNanjuFallbackProject, getFallbackChain, recordModelFallbackUsed, shouldSkipFallbackChainForDelegation, type ModelEndpoint } from './nanju-model-fallback'
 
 interface CollaborationToolContext {
   sessionId: string
@@ -71,6 +71,8 @@ interface DelegationRecord {
   resultSummary?: string
   completion: Promise<void>
   resolveCompletion: () => void
+  /** v2.4：nanju_clarify_proxy 代理委派标记（独立时钟/渠道固定/工具面封闭的判定源） */
+  nanjuProxy?: boolean
 }
 
 
@@ -99,16 +101,25 @@ interface BlockedEvent {
   permissionToolName?: string
   resolved: boolean
   createdAt: number
+  /**
+   * v2.4 自动补完需求（D7 §4 类别门）：由 main 构造时按委派任务的 phase.role 固定映射
+   * 赋值（deriveBlockedEventCategory，nanju-clarify-proxy-tool）；L2 声明不参与赋值
+   * （AskUserRequest 无 category 位，L2 无写入载体）。未知/缺失 fail-closed 视为非 clarify。
+   */
+  category?: 'requirement-clarify' | 'design-preference' | 'other'
 }
 
 const blockedEvents = new Map<string, BlockedEvent>()
 
-let _eventBusRegistered = false
 let _eventBusRef: import('./agent-event-bus').AgentEventBus | null = null
 
+/**
+ * 注册 EventBus（per-bus 幂等：同一 bus 重复调用只挂一次监听；换新 bus 则挂新监听）。
+ * 生产环境 orchestrator 只调一次（同 bus → 行为不变）；测试环境各文件各自的假 bus
+ * 都能拿到监听（旧实现的模块级单次守卫会让后跑的测试文件拿到死 handler）。
+ */
 export function registerCollaborationEventBus(eventBus: import('./agent-event-bus').AgentEventBus): void {
-  if (_eventBusRegistered) return
-  _eventBusRegistered = true
+  if (_eventBusRef === eventBus) return
   _eventBusRef = eventBus
 
   eventBus.on((sessionId: string, payload: AgentStreamPayload) => {
@@ -119,6 +130,8 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
     const event = payload.event
     if (event.type === 'ask_user_request') {
       const req = event.request as AskUserRequest
+      // v2.4 类别门（D7 §4）：main 按 phase.role 固定映射赋值（懒加载避免静态环）
+      const { deriveBlockedEventCategory } = require('./nanju-clarify-proxy-tool') as typeof import('./nanju-clarify-proxy-tool')
       const blocked: BlockedEvent = {
         id: randomUUID(),
         delegationId: record.delegationId,
@@ -132,6 +145,7 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
         })),
         resolved: false,
         createdAt: Date.now(),
+        category: deriveBlockedEventCategory(record.goal, record.title),
       }
       blockedEvents.set(blocked.id, blocked)
 
@@ -249,6 +263,10 @@ export interface RunningDelegationView {
   startedAt: number
   /** 是否有未解决的阻塞事件（等用户回答/权限）：用户驱动的等待不计入烧钱超时 */
   hasPendingBlockedEvents: boolean
+  /** v2.4：nanjuProxy 代理委派（独立时钟：软 5min/硬 10min 不因 blocked 重置，不计熔断） */
+  isNanjuProxy?: boolean
+  /** v2.4 兼容视图：nanju-ipc 关闭处置按 meta.nanjuProxy 形态消费（B 域接线字段，D7 §7） */
+  meta?: { nanjuProxy?: boolean }
 }
 
 /** 列出父会话下全部运行中委派（内存 live Map；重启后的遗留委派不在内） */
@@ -262,6 +280,8 @@ export function listRunningDelegationsForParent(parentSessionId: string): Runnin
       role: item.role,
       startedAt: item.startedAt,
       hasPendingBlockedEvents: getPendingBlockedEvents(item.delegationId).length > 0,
+      isNanjuProxy: item.nanjuProxy === true,
+      meta: item.nanjuProxy === true ? { nanjuProxy: true } : undefined,
     }))
 }
 
@@ -276,6 +296,130 @@ export function forceStopDelegation(parentSessionId: string, delegationId: strin
   } catch (e) {
     return { stopped: false, note: e instanceof Error ? e.message : String(e) }
   }
+}
+
+// ===== v2.4 自动补完需求（D7 §4）：nanjuProxy 代理委派内部接口（nanju-clarify-proxy-tool 专用） =====
+
+/** 代理委派内部视图（提问方渠道直查/等待/答案提取；不暴露完整 DelegationRecord） */
+export interface NanjuProxyDelegationInternals {
+  delegationId: string
+  childSessionId: string
+  channelId: string
+  modelId?: string
+  title: string
+  status: AgentDelegationStatus
+  resultSummary?: string
+  /** settle 兑底 promise（任何终态都会 resolve；与委派记录同生命周期） */
+  completion: Promise<void>
+}
+
+/**
+ * 创建 nanjuProxy 代理委派（inline:true + 最小 meta{nanjuProxy:true} +
+ * allowSubDelegation:false + 渠道固定跳 fallback 链）。仅 nanju-clarify-proxy-tool
+ * 调用——不走 delegate_agent 工具面，L1/L2 无自报载体。
+ */
+export function startNanjuProxyDelegation(
+  ctx: CollaborationToolContext,
+  args: { channelId: string; modelId: string; task: string; title: string },
+): NanjuProxyDelegationInternals {
+  const parent = assertCanCreateDelegation(ctx)
+  const { record } = startDelegation(ctx, parent, {
+    task: args.task,
+    title: args.title,
+    channelId: args.channelId,
+    modelId: args.modelId,
+    inline: true,
+    allowSubDelegation: false,
+    nanjuProxy: true,
+  })
+  return {
+    delegationId: record.delegationId,
+    childSessionId: record.childSessionId,
+    channelId: record.channelId,
+    modelId: record.modelId,
+    title: record.title,
+    status: record.status,
+    resultSummary: record.resultSummary,
+    completion: record.completion,
+  }
+}
+
+/** 直查代理/普通委派内部视图（main 内部直查，不经导出视图；找不到/非本会话返回 undefined） */
+export function getNanjuProxyDelegationInternals(
+  parentSessionId: string,
+  delegationId: string,
+): NanjuProxyDelegationInternals | undefined {
+  const record = delegations.get(delegationId)
+  if (!record || record.parentSessionId !== parentSessionId) return undefined
+  return {
+    delegationId: record.delegationId,
+    childSessionId: record.childSessionId,
+    channelId: record.channelId,
+    modelId: record.modelId,
+    title: record.title,
+    status: record.status,
+    resultSummary: record.resultSummary,
+    completion: record.completion,
+  }
+}
+
+/** 类别门输入：取指定委派下指定 blocked 事件（含 category；不存在/已清理返回空） */
+export function getBlockedEventsForClarifyProxy(
+  delegationId: string,
+  blockedEventIds: readonly string[],
+): Array<{
+  id: string
+  category?: 'requirement-clarify' | 'design-preference' | 'other'
+  resolved: boolean
+  askUserRequestId?: string
+  questions?: Array<{ question: string; options: Array<{ label: string; description?: string }> }>
+}> {
+  const wanted = new Set(blockedEventIds)
+  return Array.from(blockedEvents.values())
+    .filter((be) => be.delegationId === delegationId && wanted.has(be.id))
+    .map((be) => ({
+      id: be.id,
+      category: be.category,
+      resolved: be.resolved,
+      askUserRequestId: be.askUserRequestId,
+      questions: be.askUserQuestions,
+    }))
+}
+
+/** 代答回注：与 answer_delegation_question 同链路（askUserService + ask_user_resolved 广播） */
+export function answerBlockedEventFromProxy(
+  parentSessionId: string,
+  blockedEventId: string,
+  answers: Record<string, string>,
+): { answered: boolean; note?: string } {
+  const blocked = getBlockedEventById(blockedEventId)
+  if (!blocked) return { answered: false, note: `阻塞事件不存在: ${blockedEventId}` }
+  if (blocked.resolved) return { answered: false, note: '该阻塞事件已被解决' }
+  const record = delegations.get(blocked.delegationId)
+  if (record && record.parentSessionId !== parentSessionId) {
+    throw new Error(`委派不属于当前父会话: ${blocked.delegationId}`)
+  }
+  if (blocked.type === 'ask_user' && blocked.askUserRequestId) {
+    // 动态 import：与 answer_delegation_question 保持同链路（服务惰性加载）
+    const { askUserService } = require('./agent-ask-user-service') as typeof import('./agent-ask-user-service')
+    const sessionId = askUserService.respondToAskUser(blocked.askUserRequestId, answers)
+    blocked.resolved = !!sessionId
+    if (blocked.resolved && _eventBusRef) {
+      _eventBusRef.emit(blocked.childSessionId, {
+        kind: 'proma_event',
+        event: { type: 'ask_user_resolved', requestId: blocked.askUserRequestId },
+      })
+    }
+    return { answered: blocked.resolved, note: blocked.resolved ? undefined : 'askUserService 未找到待答请求' }
+  }
+  return { answered: false, note: `无法匹配阻塞事件类型（${blocked.type}）——代理只代答 ask_user` }
+}
+
+/** 列出运行中的 nanjuProxy 代理委派 id（关闭/升级 in-flight 处置数据源，D7 §7） */
+export function listRunningNanjuProxyDelegations(parentSessionId: string): string[] {
+  return Array.from(delegations.values())
+    .filter((item) => item.parentSessionId === parentSessionId && item.status === 'running' && item.nanjuProxy === true)
+    .map((item) => item.delegationId)
 }
 
 // ===== 南大 R1（W1）：委派生命周期事件订阅（additive；nanju 等待 Toast 数据源） =====
@@ -327,6 +471,12 @@ interface DelegateAgentArgs {
   inline?: boolean
   /** 南大向导扩展：允许该子会话内部继续创建 inline 子会话（用于 AC 审计）。 */
   allowSubDelegation?: boolean
+  /**
+   * v2.4 自动补完需求（D7 §4，内部专用）：nanju_clarify_proxy 创建的代理委派。
+   * 不暴露在 delegate_agent 工具 schema（L1/L2 无自报载体）——仅 startNanjuProxyDelegation
+   * 内部通道传入：inline 最小 meta{nanjuProxy:true} + 渠道固定跳 fallback 链 + 独立时钟。
+   */
+  nanjuProxy?: boolean
 }
 
 interface StartDelegationResult {
@@ -469,6 +619,7 @@ function getDelegationSummary(record: DelegationRecord): Record<string, unknown>
     error: record.error,
     resultSummary: record.resultSummary,
     pendingBlockedEvents: getPendingBlockedEvents(record.delegationId),
+    nanjuProxy: record.nanjuProxy === true,
   }
 }
 
@@ -758,7 +909,11 @@ function startDelegation(
   // 只换执行模型——非「超范围」变更，不重复扣用户确认；全链失败走既有失败路径。
   // 范围限定：parent 会话必须是 nanju 项目绑定的 L1 调度员会话（findNanjuProjectBySession
   // 同模式）；普通 Proma 会话与 L2 内部 inline AC 委派不在保护范围（链为空 = 零行为变化）。
-  const fallbackProject = findNanjuFallbackProject(ctx.workspaceSlug, ctx.sessionId)
+  // v2.4（D7 §4）：nanjuProxy 代理委派渠道固定——跳过 fallback 链（shouldSkipFallbackChain
+  // ，代理价值在模型多样性，降级侵蚀；代理失败由工具 fallback:'human' 兑底）。
+  const fallbackProject = shouldSkipFallbackChainForDelegation(args.nanjuProxy)
+    ? undefined
+    : findNanjuFallbackProject(ctx.workspaceSlug, ctx.sessionId)
   const fallbackChain = fallbackProject
     ? getFallbackChain(effectiveChannelId, args.modelId?.trim())
     : []
@@ -834,6 +989,11 @@ function startDelegation(
       delegationGoal: goal,
       permissionMode,
     })
+  } else if (args.nanjuProxy === true) {
+    // v2.4（D7 §4）：inline 代理委派写最小 meta——仅 {nanjuProxy:true}，不写
+    // sourceDelegationId（避免 W19 未绑定写豁免扩散到普通 inline 会话）；路由门禁
+    // 首分支（isNanjuProxySession）据此走代理工具面白名单（思考/WebSearch/WebFetch/Read/LS）。
+    updateAgentSessionMeta(child.id, { nanjuProxy: true })
   }
 
   const record: DelegationRecord = {
@@ -850,6 +1010,7 @@ function startDelegation(
     startedAt: Date.now(),
     completion,
     resolveCompletion,
+    nanjuProxy: args.nanjuProxy === true ? true : undefined,
   }
   delegations.set(delegationId, record)
   pruneFinishedDelegations()
@@ -968,7 +1129,6 @@ export function buildPiCollaborationTools(
     expectedOutput: Type.Optional(Type.String({ description: '希望子 Agent 最终返回的格式或要点' })),
     modelId: Type.Optional(Type.String({ description: '可选目标模型 ID' })),
   })
-
   function piJsonResult(payload: unknown): { content: Array<{ type: 'text'; text: string }>; details: unknown } {
     return {
       content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
@@ -976,7 +1136,7 @@ export function buildPiCollaborationTools(
     }
   }
 
-  return [
+  const tools: unknown[] = [
     sdk.defineTool({
       name: 'mcp__collaboration__list_available_agent_models',
       label: '列出可用模型',
@@ -1301,4 +1461,22 @@ export function buildPiCollaborationTools(
       },
     }),
   ]
+
+  // v2.4（D7 §4）：快消型 + autoClarify 开启时，向 L1 动态注册 nanju_clarify_proxy
+  // （参照 harness 工具可见性控制模式：非 L1 会话/未开启项目零可见；懒加载避免静态环）。
+  try {
+    const { buildNanjuClarifyProxyTool } = require('./nanju-clarify-proxy-tool') as typeof import('./nanju-clarify-proxy-tool')
+    const clarifyTool = buildNanjuClarifyProxyTool(sdk, {
+      sessionId: ctx.sessionId,
+      channelId: ctx.channelId,
+      modelId: ctx.modelId,
+      workspaceId: ctx.workspaceId,
+      workspaceSlug: ctx.workspaceSlug,
+    })
+    if (clarifyTool) tools.push(clarifyTool)
+  } catch (error) {
+    console.warn('[协作工具] nanju_clarify_proxy 注册失败（不影响其余工具）:', error instanceof Error ? error.message : error)
+  }
+
+  return tools
 }

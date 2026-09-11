@@ -1,0 +1,830 @@
+/**
+ * v2.4「自动补完需求」代理工具（D7 §4：nanju_clarify_proxy 全链）
+ *
+ * 职责（L1 侧注册，快消型 + autoClarify 开启时）：
+ * - 子会话澄清：L1 传 delegationId + blockedEventIds → 类别门（全组 requirement-clarify
+ *   才进代理；design-preference/other/未知 fail-closed → fallback:'human'，L1 按协议转述真人）
+ * - 自身需求补充：L1 传 questions=[{id,question,options?}]（每题 ≤200 字、≤5 题）
+ * - 代理委派：inline:true + 最小 meta{nanjuProxy:true}（不写 sourceDelegationId）+
+ *   allowSubDelegation:false；渠道解析：硬≠提问方（渠道家族）+ 软避开本阶段 AC 攻/防，
+ *   无解时 diversityDegraded:true；代理渠道固定（shouldSkipFallbackChainForDelegation）
+ * - 预算：proxyBudget（cap=20/项目，getProjectAutoClarify 唯一读写点）耗尽 → fallback:'human'
+ * - 熔断：代答「无法判断」累计 3 次（同组一次不重复，按 _nanju-clarify-log.jsonl 计数）→ fallback:'human'
+ * - 回注：L2 blocked 答案经既有 askUserService.respondToAskUser 通道注入（与
+ *   answer_delegation_question 同链路），并广播 ask_user_resolved
+ * - 溯源：项目目录 _nanju-clarify-log.jsonl（qid/问题/答案/渠道/耗时/去向/来源标签）+
+ *   clarify.* 五事件遥测；答案确认词命中仅作标记——代答永不构成 I1 授权（非 humanOrigin）
+ *
+ * 安全边界（D7 §0/§1 I3）：
+ * - 类别门由 main 按 phase.role 固定映射赋值（BlockedEvent.category，本文件
+ *   deriveBlockedEventCategory），L2 无写入载体、不可自报；未知/缺失 fail-closed 为非 clarify
+ * - 设计偏好（design-preference）永不被代理——硬边界
+ * - 确认门禁与设计偏好交互永远真人：代理答案的确认词命中只标记不授权
+ */
+
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  NANJU_AUTO_CLARIFY_BUDGET_CAP,
+  getNanjuProjectDir,
+  getProjectAutoClarify,
+  isConfirmAdvanceText,
+  listNanjuProjects,
+  updateProjectAutoClarify,
+  type NanjuProject,
+} from './nanju-project'
+import { channelFamily, getPhaseNode, resolveACActors, type PhaseId } from './nanju-router'
+import { recordTelemetry } from './nanju-telemetry'
+import { assertEnabledModelForChannel } from './agent-model-selection'
+import {
+  answerBlockedEventFromProxy,
+  getBlockedEventsForClarifyProxy,
+  getNanjuProxyDelegationInternals,
+  listRunningNanjuProxyDelegations,
+  startNanjuProxyDelegation,
+} from './agent-collaboration-tools'
+
+// ===== 常量（D7 §4/§6） =====
+
+export const NANJU_CLARIFY_PROXY_TOOL_NAME = 'nanju_clarify_proxy'
+
+/** L1 自问每题字符上限（D7 §4） */
+export const CLARIFY_QUESTION_CHAR_LIMIT = 200
+/** L1 自问每次最多题数（D7 §4） */
+export const CLARIFY_MAX_QUESTIONS = 5
+/** 预算上限（与 NANJU_GUARDS.autoClarifyBudgetCap 同源；只读引用，消费走唯一写入点） */
+export const CLARIFY_PROXY_BUDGET_CAP = NANJU_AUTO_CLARIFY_BUDGET_CAP
+/** 「无法判断」熔断阈值：累计 3 次后一律 fallback:'human'（同组一次不重复） */
+export const CLARIFY_CANNOT_JUDGE_BREAK = 3
+/** 「无法判断」类答案识别词（设计原文词 + 就近变体，保守取小表防误伤） */
+const CANNOT_JUDGE_MARKERS: readonly string[] = ['无法判断', '无法确定']
+/** 工具内等待代理委派的上限（软 5min/硬 10min 独立时钟之外的工具侧兑底：观察哨硬停
+ *  在 10min 触发 completion 兜底；此处 11min 兜住轮询间隔滞后与极端场景） */
+export const CLARIFY_PROXY_WAIT_MS = 11 * 60 * 1000
+/** 代理答案每条字符上限（入参校验侧；超长截断入日志） */
+const CLARIFY_ANSWER_CHAR_LIMIT = 300
+
+/** 类别门三态（D7 §4；BlockedEvent.category 同构） */
+export type NanjuClarifyCategory = 'requirement-clarify' | 'design-preference' | 'other'
+
+/**
+ * phase.role → category 固定映射表（D7 §4/D6 收口 R6-01，覆盖全部六个角色）。
+ * 需求分析师/architect → requirement-clarify；ux-advisor（原型类）→ design-preference；
+ * 其余 → other。未知/缺失 fail-closed 为 other（非 clarify）。
+ */
+export const PHASE_ROLE_CATEGORY_MAP: Readonly<Record<string, NanjuClarifyCategory>> = Object.freeze({
+  'requirement-analyst': 'requirement-clarify',
+  architect: 'requirement-clarify',
+  'ux-advisor': 'design-preference',
+  'engineering-manager': 'other',
+  'fullstack-developer': 'other',
+  'test-engineer': 'other',
+})
+
+/** 委派任务模板的显式角色标记（供 main 从 task 文本取 phase.role；router-prompt 侧同步携带） */
+export const PHASE_ROLE_MARKER_RE = /(?:^|\n)[ \t]*(?:phase\.role|阶段角色)[ \t]*[:：][ \t]*([a-zA-Z][a-zA-Z-]*)/g
+
+/** 中文阶段头衔前缀（buildL2TaskWithAC 模板以「你是<title>。」起头；匹配锚定模板开头） */
+const PHASE_TITLE_PREFIXES: ReadonlyArray<{ title: string; category: NanjuClarifyCategory }> = [
+  { title: '需求分析师', category: 'requirement-clarify' },
+  { title: '架构师', category: 'requirement-clarify' },
+  { title: 'UX 顾问', category: 'design-preference' },
+  { title: 'UX顾问', category: 'design-preference' },
+]
+
+/** 代理渠道候选池（偏好序：快模型优先；minimax 是家族标记，运行时校验不通过自动跳过） */
+export const PROXY_CHANNEL_CANDIDATES: ReadonlyArray<{ channelId: string; modelId: string }> = Object.freeze([
+  { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
+  { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+  { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
+  { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
+  { channelId: 'minimax', modelId: 'MiniMax-M3' },
+])
+
+// ===== 类别门：委派 → category 派生（main 构造 BlockedEvent 时调用；L2 无自报载体） =====
+
+/**
+ * 从委派任务文本派生类别（main 按 phase.role 固定映射；fail-closed）。
+ * 优先级：显式 phase.role 标记 > 英文角色字面量（词边界） > 中文阶段头衔前缀（模板开头）。
+ * 多类别信号并存（歧义）→ other（fail-closed，宁可转述真人不误代理）。
+ */
+export function deriveBlockedEventCategory(taskText: string | undefined, title?: string): NanjuClarifyCategory {
+  const text = `${taskText ?? ''}\n${title ?? ''}`
+  if (!text.trim()) return 'other'
+
+  const signals = new Set<NanjuClarifyCategory>()
+
+  // ① 显式 phase.role 标记（router-prompt 委派任务模板携带；唯一权威信号）
+  for (const match of text.matchAll(PHASE_ROLE_MARKER_RE)) {
+    const role = (match[1] ?? '').toLowerCase()
+    signals.add(PHASE_ROLE_CATEGORY_MAP[role] ?? 'other')
+  }
+
+  // ② 英文角色字面量（词边界：architect 不误命中 architecture）
+  for (const role of Object.keys(PHASE_ROLE_CATEGORY_MAP)) {
+    const re = new RegExp(`\\b${role.replace(/-/g, '\\-')}\\b`, 'i')
+    if (re.test(text)) signals.add(PHASE_ROLE_CATEGORY_MAP[role]!)
+  }
+
+  // ③ 中文阶段头衔（锚定任务模板开头的「你是<title>」形态，避免正文中引用误命中）
+  const head = (taskText ?? '').trimStart().slice(0, 20)
+  for (const prefix of PHASE_TITLE_PREFIXES) {
+    if (head.startsWith(`你是${prefix.title}`)) signals.add(prefix.category)
+  }
+
+  // fail-closed：无信号 / 信号歧义（clarify 与非 clarify 并存）→ other
+  if (signals.has('requirement-clarify') && signals.size === 1) return 'requirement-clarify'
+  if (signals.has('design-preference') && signals.size === 1) return 'design-preference'
+  return 'other'
+}
+
+// ===== 渠道解析（纯函数；硬≠提问方家族 + 软避开 AC 攻/防家族） =====
+
+export interface ProxyChannelResolution {
+  channelId: string
+  modelId: string
+  /** true = 硬约束满足但软约束（AC 避让）无解（D7 §4 diversityDegraded） */
+  diversityDegraded: boolean
+}
+
+/**
+ * 解析代理渠道。硬约束：候选家族 ≠ 提问方家族；软约束：候选家族 ∉ AC 攻/防家族。
+ * 无硬约束解 → undefined（调用方 fallback:'human'，reason:'no-channel'）。
+ * 端点校验注入（assertEnabledModelForChannel）：不可用候选按序跳过。
+ */
+export function resolveProxyChannel(input: {
+  askerChannelId: string
+  acChannelIds: readonly string[]
+  candidates?: ReadonlyArray<{ channelId: string; modelId: string }>
+  validateEndpoint?: (endpoint: { channelId: string; modelId: string }) => boolean
+}): ProxyChannelResolution | undefined {
+  const candidates = input.candidates ?? PROXY_CHANNEL_CANDIDATES
+  const askerFamily = channelFamily(input.askerChannelId)
+  const acFamilies = new Set(input.acChannelIds.map((c) => channelFamily(c)))
+
+  let firstHardPass: { channelId: string; modelId: string } | undefined
+  for (const candidate of candidates) {
+    if (channelFamily(candidate.channelId) === askerFamily) continue // 硬：≠提问方
+    const validate = input.validateEndpoint ?? (() => true)
+    if (!validate(candidate)) continue
+    if (!acFamilies.has(channelFamily(candidate.channelId))) {
+      return { ...candidate, diversityDegraded: false } // 软约束满足：最优解
+    }
+    firstHardPass ??= candidate
+  }
+  // 硬约束满足但 AC 家族避让无解 → 降级可用（diversityDegraded:true）
+  return firstHardPass ? { ...firstHardPass, diversityDegraded: true } : undefined
+}
+
+// ===== L1 自问入参校验（纯函数） =====
+
+export interface ClarifyQuestionInput {
+  id: string
+  question: string
+  options?: Array<{ label: string; description?: string }>
+}
+
+/** questions 校验：非空数组、≤5 题、每题 {id,question,options?} 结构、每题 ≤200 字符 */
+export function validateClarifyQuestions(raw: unknown): { questions: ClarifyQuestionInput[] } | { error: string } {
+  if (!Array.isArray(raw) || raw.length === 0) return { error: 'questions 必须是非空数组' }
+  if (raw.length > CLARIFY_MAX_QUESTIONS) return { error: `questions 最多 ${CLARIFY_MAX_QUESTIONS} 题（收到 ${raw.length} 题）` }
+  const questions: ClarifyQuestionInput[] = []
+  const seenIds = new Set<string>()
+  for (const [index, item] of raw.entries()) {
+    if (!item || typeof item !== 'object') return { error: `questions[${index}] 必须是对象` }
+    const record = item as Record<string, unknown>
+    const id = typeof record.id === 'string' ? record.id.trim() : ''
+    const question = typeof record.question === 'string' ? record.question.trim() : ''
+    if (!id) return { error: `questions[${index}].id 不能为空` }
+    if (seenIds.has(id)) return { error: `questions[${index}].id 重复: ${id}` }
+    seenIds.add(id)
+    if (!question) return { error: `questions[${index}].question 不能为空` }
+    if (question.length > CLARIFY_QUESTION_CHAR_LIMIT) {
+      return { error: `questions[${index}].question 超过 ${CLARIFY_QUESTION_CHAR_LIMIT} 字符（当前 ${question.length}）` }
+    }
+    let options: ClarifyQuestionInput['options']
+    if (record.options !== undefined) {
+      if (!Array.isArray(record.options)) return { error: `questions[${index}].options 必须是数组` }
+      const parsed: Array<{ label: string; description?: string }> = []
+      for (const [optIndex, opt] of (record.options as unknown[]).entries()) {
+        if (!opt || typeof opt !== 'object') return { error: `questions[${index}].options[${optIndex}] 必须是对象` }
+        const optRecord = opt as Record<string, unknown>
+        if (typeof optRecord.label !== 'string' || !optRecord.label.trim()) {
+          return { error: `questions[${index}].options[${optIndex}].label 必须是非空字符串` }
+        }
+        parsed.push({
+          label: optRecord.label.trim(),
+          description: typeof optRecord.description === 'string' ? optRecord.description : undefined,
+        })
+      }
+      options = parsed
+    }
+    questions.push({ id, question, options })
+  }
+  return { questions }
+}
+
+// ===== 溯源日志（项目目录 _nanju-clarify-log.jsonl；渲染端代答卡片数据源） =====
+// 注：代理会话判定（isNanjuProxySession）不在本模块——router-gate 首分支按持久
+// meta.nanjuProxy 判定（单一真相源；本模块只负责创建时写该标记）。
+
+export interface ClarifyLogLine {
+  kind: 'proxy-answer' | 'proxy-delegate' | 'fallback' | 'cannot-judge'
+  qid?: string
+  /** 来源标签：subagent=L2 子会话提问 / l1=L1 自问（渲染端卡片「子会话提问·代理作答」等） */
+  source?: 'subagent' | 'l1'
+  channel?: string
+  question?: string
+  answer?: string
+  durationMs?: number
+  reason?: string
+  /** 类别门拦截时的组内类别清单（取证用） */
+  categories?: string[]
+  stage?: string
+  projectId: string
+  /** number 时间戳（渲染端卡片 ts 字段；兼容 at ISO 字符串写入方） */
+  ts?: number
+  at?: string
+}
+
+function getClarifyLogPath(workspaceSlug: string, projectId: string): string {
+  return join(getNanjuProjectDir(workspaceSlug, projectId), '_nanju-clarify-log.jsonl')
+}
+
+/** 追加一行溯源日志（IO 失败不阻断工具主流程，仅告警） */
+function appendClarifyLog(workspaceSlug: string, projectId: string, line: ClarifyLogLine): void {
+  try {
+    const dir = getNanjuProjectDir(workspaceSlug, projectId)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    appendFileSync(
+      getClarifyLogPath(workspaceSlug, projectId),
+      JSON.stringify({ ...line, at: line.at ?? new Date().toISOString() }) + '\n',
+      'utf-8',
+    )
+  } catch (err) {
+    console.warn('[nanju-clarify] 溯源日志写入失败（不阻断主流程）:', err instanceof Error ? err.message : err)
+  }
+}
+
+/** 读全部日志行（预算/熔断计数与关闭处置的数据源；坏行跳过） */
+export function readClarifyLog(workspaceSlug: string, projectId: string): ClarifyLogLine[] {
+  const path = getClarifyLogPath(workspaceSlug, projectId)
+  if (!existsSync(path)) return []
+  try {
+    return readFileSync(path, 'utf-8')
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => {
+        try {
+          return JSON.parse(line) as ClarifyLogLine
+        } catch {
+          return null
+        }
+      })
+      .filter((line): line is ClarifyLogLine => line !== null)
+  } catch {
+    return []
+  }
+}
+
+/** 「无法判断」累计次数（同组一次：proxy-answer 组行 kind='cannot-judge' 每组至多一行） */
+export function countCannotJudge(workspaceSlug: string, projectId: string): number {
+  return readClarifyLog(workspaceSlug, projectId).filter((line) => line.kind === 'cannot-judge').length
+}
+
+// ===== 工具结果形态 =====
+
+export interface ClarifyProxyOk {
+  status: 'answered'
+  answers: Array<{ id: string; question: string; answer: string }>
+  channel: string
+  elapsedMs: number
+  diversityDegraded?: boolean
+  /** 答案确认词命中布尔（仅标记：代答非 humanOrigin，永不构成 I1 授权） */
+  confirmWordHit: boolean
+}
+
+export interface ClarifyProxyFallback {
+  status: 'fallback'
+  fallback: 'human'
+  reason:
+    | 'non-clarify-category' // 类别门：组内含 design-preference/other/未知
+    | 'auto-clarify-disabled' // 项目未开启（含关闭/升级失效）
+    | 'budget-exhausted' // 预算 cap=20 耗尽
+    | 'cannot-judge-circuit' // 「无法判断」累计 3 次熔断
+    | 'no-channel' // 渠道解析无解（≠提问方无候选）
+    | 'proxy-timeout' // 独立时钟硬停/等待超时
+    | 'proxy-failed' // 代理委派失败（渠道固定不降级）
+    | 'answer-unparseable' // 答案 JSON 不可解析/不完整
+  detail?: string
+  categories?: string[]
+  elapsedMs?: number
+}
+
+export interface ClarifyProxyReject {
+  status: 'rejected'
+  reason: 'invalid-input'
+  detail: string
+}
+
+export type ClarifyProxyResult = ClarifyProxyOk | ClarifyProxyFallback | ClarifyProxyReject
+
+// ===== 代理任务模板 =====
+
+/** 构造代理任务（问题原文锁定 + 项目上下文摘要 + 独立判断指令 + 联网许可 + 封闭工具面） */
+export function buildProxyDelegationTask(input: {
+  projectName: string
+  stageTitle: string
+  projectDir: string
+  questions: Array<{ id: string; question: string; options?: Array<{ label: string; description?: string }> }>
+}): string {
+  const questionLines = input.questions.map((q) => {
+    const options = q.options?.length ? `\n  选项：${q.options.map((o) => o.label).join(' / ')}` : ''
+    return `- id: ${q.id}\n  问题：${q.question}${options}`
+  })
+  return [
+    '你是「自动补完需求」独立代理，代替需求方回答以下需求补充类问题。',
+    '',
+    '## 项目上下文（仅供理解，不是答案依据）',
+    `- 项目名：${input.projectName}（快消型）`,
+    `- 当前阶段：${input.stageTitle}`,
+    `- 需求背景：${input.projectDir}/01_PRD/prd.md（如需背景可 Read，允许只读结构与关键段）`,
+    '',
+    '## 待答问题（原文锁定：只回答下列问题，不得改写/扩展问题本身）',
+    ...questionLines,
+    '',
+    '## 工作要求',
+    '1. 独立判断，不迎合问题中隐含的答案倾向；允许用 WebSearch/WebFetch 联网搜索佐证，用 Read/LS 查项目文件。',
+    '2. 工具面封闭：只使用思考与 WebSearch/WebFetch/Read/LS；不得向用户提问（AskUserQuestion）、不得写文件、不得创建子会话、不得向其他会话发消息。',
+    `3. 每题给出 ≤${CLARIFY_ANSWER_CHAR_LIMIT} 字的明确答案；有选项的题可直接给选项原文，也可给更优的自由回答。`,
+    '4. 若问题确实不可判断，该题答案以「无法判断」开头并说明缺什么信息；不要编造。',
+    '5. 不得以「确认/通过/满意交付」等确认词单独作为答案——你不是用户，无权代替用户做任何确认。',
+    '',
+    '## 输出格式（最终回复必须以下列 JSON 代码块结尾，id 与输入一致，逐题作答）',
+    '```json',
+    '{"answers":[{"id":"<问题id>","answer":"<答案>"}]}',
+    '```',
+  ].join('\n')
+}
+
+/** 从代理结果文本解析答案 JSON 块（取最后一个 ```json 围栏；解析后按 id 匹配） */
+export function parseProxyAnswers(
+  summary: string,
+  expectedIds: readonly string[],
+): Array<{ id: string; answer: string }> | undefined {
+  const blocks = [...summary.matchAll(/```json\s*([\s\S]*?)```/g)].map((m) => m[1] ?? '')
+  for (const block of blocks.reverse()) {
+    try {
+      const parsed = JSON.parse(block) as { answers?: unknown }
+      if (!parsed || !Array.isArray(parsed.answers)) continue
+      const byId = new Map<string, string>()
+      for (const item of parsed.answers) {
+        if (!item || typeof item !== 'object') continue
+        const record = item as Record<string, unknown>
+        if (typeof record.id !== 'string' || typeof record.answer !== 'string') continue
+        byId.set(record.id, record.answer.trim())
+      }
+      // 完整性：每个期望 id 都有非空答案，缺一即视为不可解析（fail-closed）
+      if (expectedIds.every((id) => (byId.get(id) ?? '').length > 0)) {
+        return expectedIds.map((id) => ({ id, answer: byId.get(id)! }))
+      }
+    } catch {
+      /* 尝试下一个块 */
+    }
+  }
+  return undefined
+}
+
+// ===== 工具主流程 =====
+
+interface ClarifyToolContext {
+  sessionId: string
+  channelId: string
+  modelId?: string
+  workspaceId?: string
+  workspaceSlug?: string
+}
+
+/** Pi SDK 类型（与 adapters/pi-builtin-tools 同源；避免跨文件导入非导出类型） */
+type PiSdk = typeof import('@earendil-works/pi-coding-agent')
+
+/** 找当前会话绑定的快消型活跃项目（工具注册与执行的双重校验；L2/普通会话不注册） */
+export function findQuickProjectForClarify(ctx: ClarifyToolContext): NanjuProject | undefined {
+  if (!ctx.workspaceSlug) return undefined
+  try {
+    return listNanjuProjects(ctx.workspaceSlug).find(
+      (p) => p.sessionId === ctx.sessionId && p.status === 'active' && p.mode === 'quick',
+    )
+  } catch {
+    return undefined
+  }
+}
+
+function truncateSummary(text: string, limit = 80): string {
+  return text.length <= limit ? text : `${text.slice(0, limit)}…`
+}
+
+/**
+ * 构造 nanju_clarify_proxy 工具定义。
+ * 注册条件（D7 §4）：quick + autoClarify.enabled + 项目活跃绑定当前会话；
+ * 不满足返回 null（动态注册参照 harness 工具可见性控制模式——非 L1 会话零可见）。
+ */
+export function buildNanjuClarifyProxyTool(
+  sdk: PiSdk,
+  ctx: ClarifyToolContext,
+): ReturnType<PiSdk['defineTool']> | null {
+  const project = findQuickProjectForClarify(ctx)
+  if (!project) return null
+  // 注册门含开启校验（D7 §4：quick + autoClarify 开启；关闭/升级即失效零可见。
+  // 执行侧再校验一道——运行中关闭/升级时工具已注册但 fail-closed 转述真人）
+  if (getProjectAutoClarify(ctx.workspaceSlug ?? '', project.projectId)?.enabled !== true) return null
+  const { Type } = require('typebox') as typeof import('typebox')
+
+  const toolDef = sdk.defineTool({
+    name: NANJU_CLARIFY_PROXY_TOOL_NAME,
+    label: '自动补完需求（代理作答）',
+    description:
+      '需求补充类问题的独立模型代理作答（可联网）。两种用法：① 子会话澄清——传 delegationId + blockedEventIds（子会话 pendingBlockedEvents 的 id）；② 自身需求补充——传 questions=[{id,question,options?}]（每题≤200字，≤5题）。确认类/设计偏好类问题禁止使用本工具（类别门 fail-closed 会返回 fallback）。返回 fallback:"human" 时按协议转述真人（设计偏好用「设计」header，其余用「转述」header）。',
+    parameters: Type.Object({
+      delegationId: Type.Optional(Type.String({ description: '子会话澄清模式：提问委派的 ID' })),
+      blockedEventIds: Type.Optional(Type.Array(Type.String(), { description: '子会话澄清模式：待代答的阻塞事件 ID 列表' })),
+      questions: Type.Optional(Type.Array(Type.Object({
+        id: Type.String({ description: '问题唯一 id（回注对齐用）' }),
+        question: Type.String({ description: '问题原文（≤200 字符）' }),
+        options: Type.Optional(Type.Array(Type.Object({
+          label: Type.String({ description: '选项文案' }),
+          description: Type.Optional(Type.String({ description: '选项说明' })),
+        }))),
+      }), { description: '自身需求补充问题（≤5 题）' })),
+    }),
+    async execute(_toolCallId: string, params: unknown) {
+      const args = params as {
+        delegationId?: string
+        blockedEventIds?: string[]
+        questions?: unknown
+      }
+      const result = await executeClarifyProxy(ctx, args)
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        details: result,
+      }
+    },
+  })
+  return toolDef
+}
+
+/** 工具执行主链（纯逻辑编排；异常一律收敛为 fallback/rejected，不向 harness 抛错） */
+async function executeClarifyProxy(
+  ctx: ClarifyToolContext,
+  args: { delegationId?: string; blockedEventIds?: string[]; questions?: unknown },
+): Promise<ClarifyProxyResult> {
+  const workspaceSlug = ctx.workspaceSlug ?? ''
+  const project = findQuickProjectForClarify(ctx)
+  if (!project) return fallbackHuman('auto-clarify-disabled', '当前会话未绑定快消型活跃项目')
+  const projectId = project.projectId
+  const startedAt = Date.now()
+
+  // —— 开关核验（关闭/升级即失效，D7 §0）——
+  const autoClarify = getProjectAutoClarify(workspaceSlug, projectId)
+  if (!autoClarify?.enabled) {
+    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
+      project_id: projectId, reason: 'auto-clarify-disabled', summary: 'autoClarify 未开启，转述真人',
+    }, projectId)
+    return fallbackHuman('auto-clarify-disabled', '项目未开启自动补完需求（或已关闭/升级失效）')
+  }
+
+  // —— 模式与入参校验 ——
+  const hasBlockedMode = args.delegationId !== undefined || args.blockedEventIds !== undefined
+  const hasQuestionsMode = args.questions !== undefined
+  if (hasBlockedMode === hasQuestionsMode) {
+    return rejectInput('二选一：传 delegationId+blockedEventIds（子会话澄清）或 questions（自身需求补充），不可并存或全缺')
+  }
+
+  let mode: 'subagent' | 'l1'
+  let askerChannelId: string
+  let stageIdForLog: string
+  let questions: Array<{ id: string; question: string; options?: Array<{ label: string; description?: string }> }>
+  let blockedRefs: Array<{ id: string; requestId: string | undefined; questionsByQid: Array<{ qid: string; question: string }> }> = []
+
+  if (hasQuestionsMode) {
+    const validated = validateClarifyQuestions(args.questions)
+    if ('error' in validated) {
+      recordTelemetry(workspaceSlug, 'clarify.guard-deny', {
+        project_id: projectId, reason: 'invalid-questions', summary: truncateSummary(validated.error),
+      }, projectId)
+      return rejectInput(validated.error)
+    }
+    mode = 'l1'
+    questions = validated.questions
+    askerChannelId = ctx.channelId
+    stageIdForLog = project.currentStage
+  } else {
+    mode = 'subagent'
+    const delegationId = (args.delegationId ?? '').trim()
+    const blockedEventIds = args.blockedEventIds ?? []
+    if (!delegationId) return rejectInput('子会话澄清模式需要 delegationId')
+    if (!Array.isArray(blockedEventIds) || blockedEventIds.length === 0) {
+      return rejectInput('子会话澄清模式需要非空 blockedEventIds')
+    }
+    const internals = getNanjuProxyDelegationInternals(ctx.sessionId, delegationId)
+    if (!internals) {
+      return rejectInput(`未找到当前会话下的委派: ${delegationId}（提问委派须由当前会话创建）`)
+    }
+    askerChannelId = internals.channelId // 硬≠提问方：main 内部直查 delegations map
+    stageIdForLog = project.currentStage
+
+    // —— 类别门（D7 §4：全组 requirement-clarify 才进代理；L2 自报无效）——
+    const events = getBlockedEventsForClarifyProxy(delegationId, blockedEventIds)
+    const missing = blockedEventIds.filter((id) => !events.some((e) => e.id === id))
+    if (missing.length > 0) {
+      return rejectInput(`阻塞事件不存在或不属于该委派: ${missing.join(', ')}`)
+    }
+    const resolved = events.filter((e) => e.resolved)
+    if (resolved.length > 0) {
+      return rejectInput(`阻塞事件已被解决: ${resolved.map((e) => e.id).join(', ')}`)
+    }
+    const nonClarify = events.filter((e) => e.category !== 'requirement-clarify')
+    if (nonClarify.length > 0) {
+      const categories = events.map((e) => e.category ?? 'unknown')
+      appendClarifyLog(workspaceSlug, projectId, {
+        kind: 'fallback', reason: 'non-clarify-category', categories, stage: stageIdForLog, projectId,
+      })
+      recordTelemetry(workspaceSlug, 'clarify.relay-human', {
+        project_id: projectId, reason: 'non-clarify-category', categories,
+        summary: `类别门拦截（${categories.join(',')}），转述真人`, derivedCategories: categories,
+      }, projectId)
+      return {
+        status: 'fallback', fallback: 'human', reason: 'non-clarify-category',
+        detail: '组内含非 requirement-clarify 类别（设计偏好/其他/未知），按协议转述真人',
+        categories, elapsedMs: Date.now() - startedAt,
+      }
+    }
+
+    // 展开 blocked 问题（qid = `${blockedEventId}#${index}`；答案按问题原文键回注）
+    questions = []
+    blockedRefs = []
+    for (const event of events) {
+      const questionsByQid: Array<{ qid: string; question: string }> = []
+      const askQuestions = event.questions ?? []
+      if (askQuestions.length === 0) {
+        return rejectInput(`阻塞事件 ${event.id} 无可代答问题`)
+      }
+      askQuestions.forEach((q, index) => {
+        const qid = `${event.id}#${index}`
+        questionsByQid.push({ qid, question: q.question })
+        questions.push({
+          id: qid,
+          question: q.question,
+          options: q.options?.map((o) => ({ label: o.label, description: o.description })),
+        })
+      })
+      blockedRefs.push({ id: event.id, requestId: event.askUserRequestId, questionsByQid })
+    }
+    if (questions.length > CLARIFY_MAX_QUESTIONS * 2) {
+      return rejectInput(`单次代答问题过多（${questions.length} 题），请分批`)
+    }
+  }
+
+  // —— 预算（cap=20/项目；唯一写入点 updateProjectAutoClarify 递减）——
+  const budgetState = getProjectAutoClarify(workspaceSlug, projectId)
+  if (!budgetState?.enabled) return fallbackHuman('auto-clarify-disabled', 'autoClarify 已在处理过程中被关闭')
+  if (budgetState.proxyBudget <= 0) {
+    recordTelemetry(workspaceSlug, 'clarify.budget-exhausted', {
+      project_id: projectId, summary: `代理预算耗尽（cap=${CLARIFY_PROXY_BUDGET_CAP}），转述真人`,
+    }, projectId)
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'fallback', reason: 'budget-exhausted', stage: stageIdForLog, projectId,
+    })
+    return fallbackHuman('budget-exhausted', `代理预算已耗尽（cap=${CLARIFY_PROXY_BUDGET_CAP}/项目）`)
+  }
+
+  // —— 「无法判断」熔断（累计 3 次，同组一次不重复）——
+  if (countCannotJudge(workspaceSlug, projectId) >= CLARIFY_CANNOT_JUDGE_BREAK) {
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'fallback', reason: 'cannot-judge-circuit', stage: stageIdForLog, projectId,
+    })
+    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
+      project_id: projectId, reason: 'cannot-judge-circuit',
+      summary: `「无法判断」累计 ${CLARIFY_CANNOT_JUDGE_BREAK} 次熔断，转述真人`,
+    }, projectId)
+    return fallbackHuman('cannot-judge-circuit', `代答「无法判断」累计 ${CLARIFY_CANNOT_JUDGE_BREAK} 次，已熔断`)
+  }
+
+  // —— 渠道解析（硬≠提问方；软避开本阶段 AC 攻/防；代理渠道固定不降级）——
+  const phaseNode = getPhaseNode(project.mode, project.currentStage as PhaseId)
+  let acChannelIds: string[] = []
+  try {
+    const actors = phaseNode ? resolveACActors(phaseNode) : null
+    acChannelIds = actors ? [actors.attacker.channel, actors.defender.channel] : []
+  } catch { /* AC 解析失败不阻断：软约束退化为无避让（diversityDegraded 由硬约束单独判定） */ }
+
+  const endpointOk = (endpoint: { channelId: string; modelId: string }): boolean => {
+    try {
+      assertEnabledModelForChannel({ channelId: endpoint.channelId, modelId: endpoint.modelId, purpose: 'clarify 代理渠道校验' })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const channelResolution = resolveProxyChannel({ askerChannelId, acChannelIds, validateEndpoint: endpointOk })
+  if (!channelResolution) {
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'fallback', reason: 'no-channel', stage: stageIdForLog, projectId,
+    })
+    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
+      project_id: projectId, reason: 'no-channel', summary: '无可用异族代理渠道，转述真人',
+    }, projectId)
+    return fallbackHuman('no-channel', `无可与提问方（${askerChannelId}）异族的已启用代理渠道`)
+  }
+
+  // —— 消费预算（委派创建前扣减；失败不退还——代理调用已发生）——
+  updateProjectAutoClarify(workspaceSlug, projectId, { proxyBudget: budgetState.proxyBudget - 1 })
+
+  // —— 登记待回注问题 id（关闭处置的转述清单数据源；回注/终态后清除）——
+  const pendingQids = questions.map((q) => q.id)
+  updateProjectAutoClarify(workspaceSlug, projectId, {
+    pendingQuestionIds: Array.from(new Set([...(getProjectAutoClarify(workspaceSlug, projectId)?.pendingQuestionIds ?? []), ...pendingQids])),
+  })
+
+  // —— 生成代理委派（inline + 最小 meta{nanjuProxy:true} + allowSubDelegation:false + 渠道固定）——
+  const stageTitle = phaseNode?.title ?? project.currentStage
+  const task = buildProxyDelegationTask({
+    projectName: project.name,
+    stageTitle,
+    projectDir: getNanjuProjectDir(workspaceSlug, projectId),
+    questions,
+  })
+  let internals
+  try {
+    internals = startNanjuProxyDelegation(
+      {
+        sessionId: ctx.sessionId,
+        channelId: ctx.channelId,
+        modelId: ctx.modelId,
+        workspaceId: ctx.workspaceId,
+        workspaceSlug: ctx.workspaceSlug,
+      },
+      {
+        channelId: channelResolution.channelId,
+        modelId: channelResolution.modelId,
+        task,
+        title: `自动补完需求·代答（${mode === 'subagent' ? '子会话提问' : 'L1 提问'}）`,
+      },
+    )
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'fallback', reason: 'proxy-failed', stage: stageIdForLog, projectId,
+    })
+    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
+      project_id: projectId, reason: 'proxy-failed', summary: truncateSummary(`代理委派创建失败: ${detail}`),
+    }, projectId)
+    return fallbackHuman('proxy-failed', `代理委派创建失败: ${detail}`)
+  }
+  recordTelemetry(workspaceSlug, 'clarify.proxy-delegate', {
+    project_id: projectId,
+    channel: channelResolution.channelId,
+    model_id: channelResolution.modelId,
+    diversityDegraded: channelResolution.diversityDegraded,
+    asker_channel: askerChannelId,
+    question_count: questions.length,
+    source: mode,
+    summary: truncateSummary(`代理代答 ${questions.length} 题（${mode === 'subagent' ? '子会话' : 'L1'}提问，渠道 ${channelResolution.channelId}）`),
+  }, projectId)
+  appendClarifyLog(workspaceSlug, projectId, {
+    kind: 'proxy-delegate', channel: channelResolution.channelId, stage: stageIdForLog, projectId,
+    reason: mode, qid: pendingQids.join(','),
+  })
+
+  // —— 等待完成（独立时钟之外的工具侧兜底；观察哨 10min 硬停会让 completion 兑底）——
+  let waitResult: 'completed' | 'timeout'
+  try {
+    waitResult = await Promise.race([
+      internals.completion.then(() => 'completed' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLARIFY_PROXY_WAIT_MS)),
+    ])
+  } catch {
+    waitResult = 'timeout'
+  }
+  const settled = getNanjuProxyDelegationInternals(ctx.sessionId, internals.delegationId)
+  const elapsedMs = Date.now() - startedAt
+
+  if (waitResult === 'timeout' || settled?.status !== 'completed') {
+    // 兜底：等待超时但委派仍在运行 → 强停（不留孤儿代理）
+    const { forceStopDelegation } = require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
+    if (settled?.status === 'running') forceStopDelegation(ctx.sessionId, internals.delegationId)
+    const reason = waitResult === 'timeout' ? 'proxy-timeout' : 'proxy-failed'
+    const detail = settled ? `代理委派终态: ${settled.status}` : '代理委派记录已丢失'
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'fallback', reason, stage: stageIdForLog, projectId,
+    })
+    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
+      project_id: projectId, reason, summary: truncateSummary(`代理未完成（${detail}），转述真人`),
+    }, projectId)
+    clearPendingQids(workspaceSlug, projectId, pendingQids)
+    return {
+      status: 'fallback', fallback: 'human',
+      reason: reason === 'proxy-timeout' ? 'proxy-timeout' : 'proxy-failed',
+      detail, elapsedMs,
+    }
+  }
+
+  // —— 答案解析（fail-closed：JSON 块缺失/不完整 → 转述真人）——
+  const expectedIds = questions.map((q) => q.id)
+  const parsed = settled?.resultSummary ? parseProxyAnswers(settled.resultSummary, expectedIds) : undefined
+  if (!parsed) {
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'fallback', reason: 'answer-unparseable', stage: stageIdForLog, projectId,
+    })
+    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
+      project_id: projectId, reason: 'answer-unparseable', summary: '代理答案不可解析，转述真人',
+    }, projectId)
+    clearPendingQids(workspaceSlug, projectId, pendingQids)
+    return fallbackHuman('answer-unparseable', '代理回复未包含可解析的完整答案 JSON 块')
+  }
+
+  const answers = parsed.map((a) => ({
+    id: a.id,
+    question: questions.find((q) => q.id === a.id)?.question ?? a.id,
+    answer: a.answer.length > CLARIFY_ANSWER_CHAR_LIMIT * 2 ? a.answer.slice(0, CLARIFY_ANSWER_CHAR_LIMIT * 2) : a.answer,
+  }))
+  const confirmWordHit = answers.some((a) => isConfirmAdvanceText(a.answer))
+  const cannotJudge = answers.some((a) => CANNOT_JUDGE_MARKERS.some((m) => a.answer.includes(m)))
+
+  // —— 日志 + 遥测（每题一行 proxy-answer；「无法判断」组行一次不重复）——
+  for (const a of answers) {
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'proxy-answer', qid: a.id, source: mode, channel: channelResolution.channelId,
+      question: truncateSummary(a.question, 200), answer: truncateSummary(a.answer, 400),
+      durationMs: elapsedMs, stage: stageIdForLog, projectId, ts: Date.now(),
+    })
+  }
+  if (cannotJudge) {
+    appendClarifyLog(workspaceSlug, projectId, {
+      kind: 'cannot-judge', qid: answers.find((a) => CANNOT_JUDGE_MARKERS.some((m) => a.answer.includes(m)))?.id,
+      stage: stageIdForLog, projectId,
+    })
+  }
+  recordTelemetry(workspaceSlug, 'clarify.proxy-answer', {
+    project_id: projectId,
+    channel: channelResolution.channelId,
+    source: mode,
+    question_count: answers.length,
+    cannot_judge: cannotJudge,
+    confirm_word_hit: confirmWordHit,
+    diversity_degraded: channelResolution.diversityDegraded,
+    duration_ms: elapsedMs,
+    summary: truncateSummary(`代理代答完成 ${answers.length} 题（渠道 ${channelResolution.channelId}${cannotJudge ? '，含无法判断' : ''}）`),
+  }, projectId)
+
+  // —— 回注：L2 来源经既有 answer_delegation_question 通道（askUserService + ask_user_resolved 广播）——
+  if (mode === 'subagent') {
+    for (const ref of blockedRefs) {
+      const answersMap: Record<string, string> = {}
+      for (const { qid, question } of ref.questionsByQid) {
+        const answer = answers.find((a) => a.id === qid)?.answer
+        if (answer !== undefined) answersMap[question] = answer
+      }
+      try {
+        answerBlockedEventFromProxy(ctx.sessionId, ref.id, answersMap)
+      } catch (err) {
+        console.warn('[nanju-clarify] 回注失败（答案仍返回 L1，可人工补答）:', err instanceof Error ? err.message : err)
+      }
+    }
+  }
+  clearPendingQids(workspaceSlug, projectId, pendingQids)
+
+  return {
+    status: 'answered',
+    answers,
+    channel: `${channelResolution.channelId}:${channelResolution.modelId}`,
+    elapsedMs,
+    ...(channelResolution.diversityDegraded ? { diversityDegraded: true } : {}),
+    confirmWordHit,
+  }
+}
+
+/** 清除已处置的待回注问题 id（保持 pendingQuestionIds 只含 in-flight） */
+function clearPendingQids(workspaceSlug: string, projectId: string, qids: string[]): void {
+  try {
+    const current = getProjectAutoClarify(workspaceSlug, projectId)
+    if (!current) return
+    const remain = current.pendingQuestionIds.filter((id) => !qids.includes(id))
+    if (remain.length !== current.pendingQuestionIds.length) {
+      updateProjectAutoClarify(workspaceSlug, projectId, { pendingQuestionIds: remain })
+    }
+  } catch { /* 清理失败不影响主流程 */ }
+}
+
+function fallbackHuman(reason: ClarifyProxyFallback['reason'], detail?: string): ClarifyProxyFallback {
+  return { status: 'fallback', fallback: 'human', reason, detail }
+}
+
+function rejectInput(detail: string): ClarifyProxyReject {
+  return { status: 'rejected', reason: 'invalid-input', detail }
+}
+
+/** 列出运行中的代理委派 id（关闭/升级 in-flight 处置的数据源，D7 §7） */
+export function listRunningClarifyProxyDelegations(parentSessionId: string): string[] {
+  return listRunningNanjuProxyDelegations(parentSessionId)
+}

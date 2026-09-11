@@ -38,6 +38,9 @@ const ACTIVE_PHASE_TOOLS = new Set([
   'mcp__collaboration__stop_delegation', 'mcp__collaboration__get_delegation_results',
   'mcp__collaboration__answer_delegation_question', 'mcp__collaboration__continue_delegation',
   'mcp__collaboration__list_available_agent_models',
+  // v2.4（D7 §4）：自动补完需求代理工具（B 域注册给 L1；A 域 §3 deny 教育话术指向它，
+  // 白名单缺行则 L1 被自身门禁拒——代理链路断。代理子会话自身的工具面在 nanjuProxy 首分支单独管制）
+  'nanju_clarify_proxy', 'mcp__collaboration__nanju_clarify_proxy',
   // 只读工具
   'Read', 'LS', 'Glob', 'Grep',
   // 交互工具

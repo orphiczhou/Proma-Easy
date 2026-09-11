@@ -84,6 +84,17 @@ export function getFallbackChain(channelId: string, modelId: string | undefined)
 // ===== nanju 会话范围限定 =====
 
 /**
+ * v2.4 自动补完需求（D7 §4）：nanjuProxy 代理委派渠道固定——不参与模型 fallback 让步链。
+ *
+ * 代理的核心价值是模型多样性（渠道≠提问方 + AC 避让）；降级到同族快版会侵蚀这一价值，
+ * 且代理失败有 fallback:'human' 转述真人兑底，可用性损失可接受。代理渠道一旦解析
+ * 定，同步/运行失败都不降级（链为空 = 走既有失败路径 → 工具返回 fallback）。
+ */
+export function shouldSkipFallbackChainForDelegation(nanjuProxy: boolean | undefined): boolean {
+  return nanjuProxy === true
+}
+
+/**
  * 判定委派发起会话是否在 fallback 保护范围：parent 会话必须是 nanju 项目绑定的
  * L1 调度员会话（findNanjuProjectBySession 同模式）。返回项目（供埋点带 projectId），
  * 非保护范围返回 undefined。
