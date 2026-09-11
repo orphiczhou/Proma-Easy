@@ -870,3 +870,25 @@ function await_importProxyTool(): typeof import('./nanju-clarify-proxy-tool') {
   const mod = require('./nanju-clarify-proxy-tool') as typeof import('./nanju-clarify-proxy-tool')
   return mod
 }
+
+// ═══════════════ 架构师阶段两问题（dev 反馈 2026-09-11 22:04）：quick 工程模板参考补齐 ═══════════════
+
+describe('架构师阶段：quick 变体同样必读工程模板（与 iterative 前移契约对齐）', () => {
+  const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4' }
+
+  test('quick architecture L2 任务含「品类终判前 Read 00_ENGINEERING_TEMPLATE/template.md」指令', () => {
+    const phase = getPhaseNode('quick', 'architecture')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('00_ENGINEERING_TEMPLATE/template.md')
+    expect(task).toContain('初判')
+    // 模板缺失的降级容忍（与 iterative 同语义：无文件时按品类自行降级判定）
+    expect(task).toContain('降级')
+  })
+
+  test('iterative architecture L2 任务仍含既有模板前移契约（回归锁定）', () => {
+    const phase = getPhaseNode('iterative', 'architecture')!
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('品类终判前必读工程模板')
+    expect(task).toContain('00_ENGINEERING_TEMPLATE/template.md')
+  })
+})

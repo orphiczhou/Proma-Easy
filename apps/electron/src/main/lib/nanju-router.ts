@@ -365,6 +365,10 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       outputPath: '03_ARCHITECTURE/architecture.md',
       constraints: [
         '品类终判（必须）：' + CATEGORY_MARKER_GUIDE + '；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置',
+        // dev 反馈 2026-09-11：模板前移落位不分模式（architecture 推进钩子两变体都落位），
+        // 但 quick 无 Read 指令 → 架构师不参考模板（与 W7 v3 §五 iterative 前移契约不对齐）。
+        // 补齐：终判前必读初判模板（缺失容忍降级，与 iterative 同语义）。
+        '品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明',
         '架构精简为快消定位服务：不写长篇目录树/接口定义，技术选型与组件清单为主（长期演进细节交给工程模板参考）',
         ...ENV_PROBE_CONSTRAINTS,
       ],
