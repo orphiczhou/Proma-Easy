@@ -12,6 +12,7 @@ import { join } from 'node:path'
 const { resolveAutoClarifyAvailability } = await import('./ModeSelectView')
 const { stripRouteHeaderPrefix } = await import('../agent/AskUserBanner')
 const { isNanjuProxySession, buildAgentSessionTrees } = await import('../app-shell/LeftSidebar')
+const { buildClarifyNoticeText } = await import('./guide/GuidePanel')
 
 describe('v2.4：自动补完复选框可用性（仅快消型）', () => {
   test('quick → available（复选框可选）', () => {
@@ -119,5 +120,49 @@ describe('返工 F2-7（Defender #11 后半）：nanjuProxy 代理会话侧栏�
     const tree = buildAgentSessionTrees([parent, child] as never[])
     expect(tree.map((t: { session: { id: string } }) => t.session.id)).toEqual(['parent'])
     expect(JSON.stringify(tree)).toContain('deleg-child')
+  })
+})
+
+// ═══════════════ D8（v2.4.1）渲染域：文案与澄清态语义（R7-12/R7-13） ═══════════════
+
+const guidePanelSource = readFileSync(join(import.meta.dir, 'guide', 'GuidePanel.tsx'), 'utf-8')
+const modeSelectSource = readFileSync(join(import.meta.dir, 'ModeSelectView.tsx'), 'utf-8')
+
+describe('D8：ModeSelectView 复选框文案（§四 9）', () => {
+  test('说明文案含自动审核语义：环境安装除外 + 测试全绿自动交付', () => {
+    expect(modeSelectSource).toContain('环境安装除外')
+    expect(modeSelectSource).toContain('自动交付')
+    // 旧文案（仅代答语义）不再存在
+    expect(modeSelectSource).not.toContain('关键确认与设计偏好仍由你决定')
+  })
+})
+
+describe('D8：GuidePanel 徽标文案 + 代决标签', () => {
+  test('徽标改「自动进行中」（代答+代决+自动审核的全量语义）', () => {
+    expect(guidePanelSource).toContain('自动进行中')
+    expect(guidePanelSource).not.toContain('>自动补完中<')
+  })
+
+  test('代答卡片支持 kind 区分：decision 显示「代决」标签', () => {
+    expect(guidePanelSource).toContain('代决')
+  })
+})
+
+describe('D8：CLARIFY 澄清态文案分叉（R7-12：auto 下「代理澄清中」，off 下等用户）', () => {
+  test('auto on：{主节点}_CLARIFY → 「代理澄清中」（语义随代理而非等用户）', () => {
+    expect(buildClarifyNoticeText('PROTO_CLARIFY', true)).toContain('代理澄清中')
+    expect(buildClarifyNoticeText('PROTO_CLARIFY', true)).toContain('无需')
+  })
+
+  test('auto off：_CLARIFY → 等待用户回答语义', () => {
+    const text = buildClarifyNoticeText('PROTO_CLARIFY', false)
+    expect(text).toContain('澄清')
+    expect(text).not.toContain('代理澄清中')
+  })
+
+  test('非 CLARIFY 子步骤 → null（不渲染提示条；R7-13：auto 项目 UC 态由 autoConfirm 写入，渲染无需特判）', () => {
+    expect(buildClarifyNoticeText('PROTO', true)).toBeNull()
+    expect(buildClarifyNoticeText('PROTO_UC', true)).toBeNull()
+    expect(buildClarifyNoticeText('', false)).toBeNull()
   })
 })

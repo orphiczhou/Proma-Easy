@@ -78,6 +78,8 @@ function describeStageStatus(
 interface NanjuClarifyAnswerCardView {
   qid: string
   sourceLabel: string
+  /** D8（R7-10）：answer=代答 / decision=代决（「代决」标签区分） */
+  kind: 'answer' | 'decision'
   channel: string
   questionSummary: string
   answerSummary: string
@@ -99,6 +101,19 @@ interface NanjuClarifyStatusView {
 /** 代答卡片耗时展示（ms → 秒，保留 1 位；缺失 = 「—」） */
 function formatClarifyDuration(durationMs: number | null): string {
   return typeof durationMs === 'number' && durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : '—'
+}
+
+/**
+ * D8（R7-12）：澄清中 sentinel 文案分叉——auto on：「代理澄清中」（语义随代理，
+ * blocked 走 clarify-proxy 代答/代决）；auto off：等用户回答。
+ * 仅 {主节点}_CLARIFY 子步骤返回文案；其余（含 UC——R7-13：auto 项目由 autoConfirm
+ * 放行点写入，渲染无需特判）返回 null 不渲染。
+ */
+export function buildClarifyNoticeText(subStage: string | null | undefined, autoClarifyEnabled: boolean): string | null {
+  if (!subStage || !subStage.endsWith('_CLARIFY')) return null
+  return autoClarifyEnabled
+    ? '⏳ 代理澄清中：子会话的澄清问题正由 AI 代理作答/代决，无需你操作。'
+    : '⏳ 澄清中：子会话有澄清问题等待你回答。'
 }
 
 export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
@@ -299,6 +314,8 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
   /** 项目级开启态（宽类型访问：A 域 NanjuProject.autoClarify 字段投影随全量 JSON 到达） */
   const autoClarifyEnabled = data.project?.mode === 'quick'
     && (data.project as { autoClarify?: { enabled?: boolean } }).autoClarify?.enabled === true
+  // D8（R7-12）：澄清中 sentinel 文案（auto on=代理澄清中 / off=等用户；非 CLARIFY 态 null）
+  const clarifySentinelNotice = buildClarifyNoticeText(data.subStage, autoClarifyEnabled)
   const [clarifyOpen, setClarifyOpen] = React.useState(false)
   const [clarifyStatus, setClarifyStatus] = React.useState<NanjuClarifyStatusView | null>(null)
   /** 关闭/升级处置结果提示（主进程 D7 §7 处置计划的 notice） */
@@ -379,6 +396,9 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
         {!data.notice && viewMode === 'project' && stageRoleNotice && (
           <NoticeBar text={stageRoleNotice} tone="info" />
         )}
+        {viewMode === 'project' && clarifySentinelNotice && (
+          <NoticeBar text={clarifySentinelNotice} tone="info" />
+        )}
         {modeBubble && (
           <NoticeBar
             text={`两种模式：快消型 4 步（需求→原型→开发→测试）；长期迭代型 6 步（+架构+规划，AC 审计更强）。点右上「对照」查看另一种模式。`}
@@ -432,7 +452,7 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
                 clarifyOpen && 'ring-1 ring-amber-500/40',
               )}
             >
-              <Sparkles className="size-3" />自动补完中
+              <Sparkles className="size-3" />自动进行中
             </button>
           )}
           {data.abandoned && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已放弃</span>}
@@ -505,6 +525,9 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{card.channel}</span>
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{card.sourceLabel}</span>
+                    {card.kind === 'decision' && (
+                      <span className="rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] text-indigo-600 dark:text-indigo-400">代决</span>
+                    )}
                     {card.stage && <span className="text-[10px] text-muted-foreground">{card.stage}阶段</span>}
                     <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{formatClarifyDuration(card.durationMs)}</span>
                   </div>

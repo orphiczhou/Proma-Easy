@@ -77,6 +77,8 @@ export interface NanjuClarifyAnswerCard {
   qid: string
   /** 来源标签：「子会话提问·代理作答」（L2 blocked 澄清）/「L1 提问·代理作答」（L1 自问） */
   sourceLabel: '子会话提问·代理作答' | 'L1 提问·代理作答'
+  /** D8（R7-10）：answer=代答（需求澄清）/ decision=代决（设计偏好）——卡片区分「代决」标签 */
+  kind: 'answer' | 'decision'
   channel: string
   /** 问题要点（≤80 字） */
   questionSummary: string
@@ -102,6 +104,11 @@ interface NanjuClarifyLogEntry {
   ts?: number
   at?: string
   stage?: string
+  /** D8（R7-10）：代答/代决区分的宽字段面（B 域 ClarifyLogLine.clarifyKind 主字段 + 兼容宽面） */
+  clarifyKind?: string
+  decision?: boolean
+  answerKind?: string
+  category?: string
 }
 
 const CLARIFY_SUBAGENT_SOURCE_TOKENS = new Set(['subagent', 'blocked-event', 'l2'])
@@ -119,17 +126,26 @@ export function parseClarifyLogLine(raw: string): NanjuClarifyAnswerCard | null 
   } catch {
     return null
   }
-  if (entry.kind !== undefined && entry.kind !== 'proxy-answer') return null
+  if (entry.kind !== undefined && entry.kind !== 'proxy-answer' && entry.kind !== 'proxy-delegate') return null
   if (!entry.qid || typeof entry.qid !== 'string') return null
   if (!entry.answer) return null
   const ts = typeof entry.ts === 'number' ? entry.ts
     : typeof entry.at === 'string' ? Date.parse(entry.at)
     : 0
+  // D8（R7-10）：kind 判定（宽字段兼容）——clarifyKind（B 域 ClarifyLogLine 实际字段）/
+  // decision:true / answerKind:'decision' / 行类型 proxy-delegate（代决行）/ 类别
+  // design-preference（代决准则路径）→ decision
+  const isDecision = entry.clarifyKind === 'decision'
+    || entry.decision === true
+    || entry.answerKind === 'decision'
+    || entry.kind === 'proxy-delegate'
+    || entry.category === 'design-preference'
   return {
     qid: entry.qid,
     sourceLabel: entry.source !== undefined && CLARIFY_SUBAGENT_SOURCE_TOKENS.has(entry.source)
       ? '子会话提问·代理作答'
       : 'L1 提问·代理作答',
+    kind: isDecision ? 'decision' : 'answer',
     channel: entry.channel ?? 'unknown',
     questionSummary: (entry.question ?? '').slice(0, 80),
     answerSummary: entry.answer.slice(0, 120),

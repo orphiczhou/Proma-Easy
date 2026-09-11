@@ -107,6 +107,32 @@ describe('v2.4：代答卡片数据结构（parseClarifyLogLine）', () => {
     })) as NanjuClarifyAnswerCard
     expect(none!.ts).toBe(0)
   })
+
+  // ══ D8（R7-10）：代答/代决 kind 区分（design-preference 代决显示「代决」标签） ══
+
+  test('D8：kind 判定——宽字段兼容（B 域 clarifyKind / decision:true / answerKind:decision / proxy-delegate / design-preference 类别）→ kind=decision', () => {
+    for (const extra of [
+      { clarifyKind: 'decision' },
+      { decision: true },
+      { answerKind: 'decision' },
+      { kind: 'proxy-delegate' },
+      { category: 'design-preference' },
+    ]) {
+      const card = parseClarifyLogLine(JSON.stringify({
+        kind: 'proxy-answer', qid: 'q-d1', channel: 'c', question: 'q', answer: 'a', ts: 1, ...extra,
+      })) as NanjuClarifyAnswerCard
+      expect(card!.kind).toBe('decision')
+    }
+  })
+
+  test('D8：默认 kind=answer（requirement-clarify 代答）；fallback/cannot-judge 行仍不生成卡片', () => {
+    const card = parseClarifyLogLine(JSON.stringify({
+      kind: 'proxy-answer', qid: 'q-d2', channel: 'c', question: 'q', answer: 'a', ts: 1,
+      category: 'requirement-clarify',
+    })) as NanjuClarifyAnswerCard
+    expect(card!.kind).toBe('answer')
+    expect(parseClarifyLogLine(JSON.stringify({ kind: 'cannot-judge', qid: 'q-d3' }))).toBeNull()
+  })
 })
 
 describe('v2.4：关闭/升级处置计划（planAutoClarifyShutdown，D7 §7）', () => {

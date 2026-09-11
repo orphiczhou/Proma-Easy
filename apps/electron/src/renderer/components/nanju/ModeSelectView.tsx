@@ -135,7 +135,7 @@ export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.Rea
               />
               <span>
                 自动补完需求
-                <span className="text-muted-foreground/70">（需求补充类问题由 AI 代理自动作答，可联网检索；关键确认与设计偏好仍由你决定）</span>
+                <span className="text-muted-foreground/70">（需求补充与审核确认由 AI 代理自动处理，环境安装除外；测试全绿自动交付）</span>
               </span>
             </label>
           )}

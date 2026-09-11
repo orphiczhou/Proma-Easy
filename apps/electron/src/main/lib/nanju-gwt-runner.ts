@@ -957,6 +957,23 @@ export const GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE =
   + '修复完成后输出 <!-- PHASE_ADVANCE: testing --> 重跑自动测试（回炉预算 ≤2 次由系统计数，超限系统转人工）。'
   + '覆盖边界：自动测试在 file:// 上下文执行，预览协议 token 门控与注入差异不在覆盖内；场景语义等价与 PRD 遗漏项不由机器背书。'
 
+/**
+ * D8 §九 C′：auto 开启（快消型+autoClarify）交付验收续接指令——不再发起 AskUser，
+ * GWT-pass 后直接输出 delivered 标记（A2′ 交付门：verdict=pass + main 实跑 runId）。
+ * 与 router-prompt testing step5 自动交付分支双话术源同步（口径一致防漂移）。
+ */
+export const GWT_DELIVERY_ACCEPTANCE_AUTO_RESUME_MESSAGE =
+  '自动验收测试全部通过（GWT-pass：全场景通过 + 用户故事全覆盖，测试报告 verdict=pass）。'
+  + '本项目已开启自动审核（auto-clarify）：【自动交付】请立即输出 <!-- PHASE_ADVANCE: delivered --> 完成交付，'
+  + '不发起交付验收 AskUser、不询问用户——交付门禁 = verdict=pass + main 实跑 runId，系统自动确认。'
+  + '不要重新委派、不要重复产出、不要再询问；项目交付后无需再创建新阶段 Todo。'
+  + '用户如主动发消息要求调整，仍按意见收集轮处理并回炉重跑（回炉预算 ≤2 次由系统计数）。'
+
+/** 交付验收续接指令分发（D8）：auto on → 自动交付版；off → 既有真人验收版（逐字节不变） */
+export function resolveGwtDeliveryResumeMessage(autoClarifyEnabled: boolean): string {
+  return autoClarifyEnabled ? GWT_DELIVERY_ACCEPTANCE_AUTO_RESUME_MESSAGE : GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE
+}
+
 export async function runNanjuGwtAcceptance(input: {
   workspaceSlug: string
   projectId: string

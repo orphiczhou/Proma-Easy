@@ -366,31 +366,46 @@ export function buildL2TaskWithAC(
     parts.push('2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；')
     parts.push('3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。')
     parts.push('')
+    // D8 §九 A1′（R7-05）：auto 开启时 quick architecture 补轻量 AC 载体契约——
+    // ac-verdict.json 是 autoConfirmAuthorized 的第 6 条件（A 域已消费），缺失/red 拒自动确认。
+    if (autoClarifyEnabled) {
+      parts.push('## 自动审核·轻量 AC 契约（auto-clarify 已开启，硬性机器校验）')
+      parts.push('产出自查完成后必须执行单攻击者 1 轮对抗审查（不循环）：')
+      parts.push('- 用 delegate_agent(inline:true) 创建攻击者（与作者不同模型家族），审查：品类终判合理性、')
+      parts.push('  技术选型理由充分性、环境清单与探测结果一致性；')
+      parts.push('- 结论写入 ' + projectDir + '/03_ARCHITECTURE/ac-verdict.json：')
+      parts.push('  {verdict:\'green\'|\'yellow\'|\'red\', findings:[{severity,evidence}], attackerModel, ts}；')
+      parts.push('- 未写该文件视为未审查，系统将拒绝自动确认（不会推进）——这是硬性机器校验，不是建议；')
+      parts.push('- verdict=red → 修复产出后重审并重写该文件，不得带着 red 请求推进。')
+      parts.push('')
+    }
   }
 
   return parts.join('\n')
 }
 
 /**
- * v2.4（D7 §6 终版五条）：auto 开启时注入 L1 的「自动补完需求」协议段。
- * auto 关闭零注入（行为零变化）；auto 开启与否只影响本段与路由规则消费，
- * 确认/设计话术 header 前缀是全局话术约定（auto 关闭项目仅文案多一个前缀词）。
+ * v2.4.1（D8 §九 C′/B′）：auto 开启时注入 L1 的「自动补完+自动审核」协议段。
+ * auto 关闭零注入（行为零变化，off 态快照锁定 v0.17.97）。
  */
 function buildAutoClarifyProtocolLines(): string[] {
   return [
-    '### 自动补完需求（auto-clarify 协议，本项目已开启）',
-    '需求补充类问题优先由独立代理会话自动作答（可联网检索）；确认门禁与设计偏好交互永远由真人回答：',
-    "1. 子会话澄清：收到 pendingBlockedEvents → 调 nanju_clarify_proxy(delegationId, blockedEventIds)；",
-    "   工具返回 fallback:'human'（含 non-clarify-category：非需求澄清类不可代答）→ 用 AskUserQuestion",
-    "   转述问真人（header 规则：设计偏好类用「设计·」前缀，其余用「转述·」前缀）。",
+    '### 自动补完需求 + 自动审核（auto-clarify 已开启）',
+    '需求补充类问题由独立代理会话自动作答；确认类环节系统自动确认——用户不参与（环境安装除外）：',
+    '1. 子会话澄清：收到 pendingBlockedEvents → 调 nanju_clarify_proxy(delegationId, blockedEventIds)；',
+    '   代理对需求澄清与设计偏好均可代答/代决（auto 开启时不再转述真人）。',
     '2. 你自身的需求补充问题 → 调 nanju_clarify_proxy(questions=[{id,question,options?}])',
     '   （每题 ≤200 字，一次 ≤5 题；写清上下文与可选项，便于代理检索作答）。',
     '3. 采纳答案后在回复中输出「自动补完」报告卡片（渠道+问题要点+答案要点）；',
-    '   产物中相关决策处附标记 <!-- auto-clarify:qid,channel,ts -->。',
-    "4. 代理失败/超时/预算耗尽（fallback:'human'）→ 用 AskUserQuestion 向真人转述该问题并说明原因",
-    "   （header 用「转述·」前缀）。",
-    '5. 确认类 AskUserQuestion 的 header 必须以「确认」开头（验收/推进/交付/安装/合并/过渡）；',
-    '   设计类以「设计」开头；转述类以「转述」开头。',
+    '   产物中相关决策处附标记 <!-- auto-clarify:qid,channel,ts,kind:answer|decision -->',
+    '   （kind: answer=代答需求澄清 / decision=代决设计偏好）。',
+    "4. 代理降级（fallback:'auto-degrade'——处理中被关/预算尽/熔断/无通道）→ 登记 pendingQuestionIds",
+    '   + 继续本阶段工作，产物附 <!-- auto-clarify:skipped,reason,ts -->，不得转述真人',
+    '   （不因降级发起 AskUser 问用户）。',
+    '5. 确认类环节（PRD/US 验收/架构合并/轻过渡/交付）不询问用户：产出与 AC 审计通过后',
+    '   【直接输出推进标记】，系统自动确认（机器校验产出文件与 AC 结论，未达标会被拦下回炉）；',
+    '   环境安装例外——环境缺失时的「确认·安装缺失组件」仍必须 AskUser 问用户（真实系统副作用）。',
+    '6. 用户如主动发消息（提意见/要求调整）仍正常响应处理——自动审核只是不再等待用户，不是拒绝用户。',
     '',
   ]
 }
@@ -570,7 +585,20 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     '3. 子会话完成后，用 Read 检查产出文件：' + projectDir + '/' + phase.outputPath,
     '   子会话已经内部完成了 AC 审计，产出文件是 AC 通过的版本。',
     ...(stage === 'prototype'
-      ? [
+      ? (autoClarifyEnabled
+        ? [
+          '4. 【自动审核模式：原型验收全自动】（auto-clarify 已开启，用户不参与设计迭代）：',
+          '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示原型。',
+          '   b. Read ' + projectDir + '/01_PRD/prd.md 提取用户故事（US-xx）清单（对照基准）。',
+          '   c. 子会话内部已完成截图渲染自检 + AC 对抗审计 + 独立视觉裁决——用 Read 检查产出文件',
+          '      与审计结论，逐条核对用户故事覆盖（这是自动确认的机器前提，系统将校验产出文件）。',
+          '   d. 核对通过后【直接输出推进标记】<!-- PHASE_ADVANCE: coding -->——不邀请用户提意见、',
+          '      不发起原型交互验证 AskUser（系统自动确认）；不等待、不追问用户。',
+          '   e. 发现缺陷/red → continue_delegation 修复后重新走 c；不带着缺陷推进。',
+          '   f. 用户如主动发消息提修改意见（含【点选纠错】消息）仍正常响应处理：',
+          '      点选消息照旧弹「设计·快速修改」快速选项；用户意见进入修复循环，修完重新核对后再推进。',
+        ]
+        : [
         '4. 【对话式设计迭代 + 交互式确认】（原型阶段的核心环节，不是一次问答而是多轮共同设计）：',
         '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示原型。',
         '   b. Read ' + projectDir + '/01_PRD/prd.md 提取用户故事（US-xx）清单。',
@@ -613,9 +641,18 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   e. 用户表示满意后，AskUserQuestion 收口：header「确认·原型交互验证」，multiSelect=true，',
         '      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。',
         '   f. 全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。',
-      ]
+        ])
       : stage === 'coding'
-      ? [
+      ? (autoClarifyEnabled
+        ? [
+          '4. 【自动审核模式：应用验收全自动】（auto-clarify 已开启）：',
+          '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
+          '   b. 子会话产出已含内部 AC 对抗审计——用 Read 检查产出文件确认完整可用（机器前提）。',
+          '   c. 检查通过后【直接输出推进标记】<!-- PHASE_ADVANCE: testing -->（不发起预览确认',
+          '      AskUser，系统自动确认进入自动测试；用户故事的完整性由自动测试判定）。',
+          '   d. 用户如主动发消息提修改意见（含【点选纠错】消息）仍正常响应处理，修完重新检查后再推进。',
+        ]
+        : [
         '4. 【交互验证 + 轻过渡确认】（编码阶段核心环节：预览应用 → 收集意见 → 批量修复 → 确认进入自动测试）：',
         '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
         '   b. 向用户宣布代码已生成，邀请直接用自然语言提修改意见；同时告知：',
@@ -643,7 +680,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '      用户故事的完整性由自动测试判定，无需人工核对。回复确认即开始测试。」，',
         '      options：确认无误，开始自动测试 / 还有意见要提（回到 d 循环）。',
         '      用户确认 → 进入第 5 步（输出推进标记进入 testing，触发自动测试）；提意见 → d 循环修复后重新收口。',
-      ]
+        ])
       : stage === 'architecture'
       ? [
         '4. 【架构确认 + 环境配置环节】（W7，v0.17.69：架构师环节两模式必经；环境缺失时先收口再确认）：',
@@ -674,7 +711,14 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '      （在应用内测试标签中运行，每个场景独立重载页面，结果汇总为测试报告）。',
         '   c. 进入第 5 步收口（输出推进标记触发系统执行测试）。',
       ]
-      : [
+      // D8：auto 开启时通用收口（requirements/planning 等）不再问用户——直接推进
+      : autoClarifyEnabled
+        ? [
+        '4. 【自动审核模式】（auto-clarify 已开启）：先用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）',
+        '   确保右侧分屏展示产出文件，再 Read 检查产出完整（自动确认的机器前提），',
+        '   核对通过后【直接输出推进标记】<!-- PHASE_ADVANCE: ' + nextPhase + ' -->（不询问用户，系统自动确认）。',
+        ]
+        : [
         '4. 【必须】先调用 open_preview 工具（file_path=' + projectDir + '/' + phase.outputPath + '）',
         '   确保右侧分屏正在展示产出文件，然后用 AskUserQuestion 请求用户确认',
         '   （header「确认·' + phase.title + '」——确认类 header 以「确认」开头是路由放行约定）。',
@@ -689,11 +733,19 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
         '   再输出推进标记：<!-- PHASE_ADVANCE: testing -->（推进到自身 = 触发 Harness 自动执行 GWT 验收测试）。',
         '   测试结果由系统注入消息告知，按结果三态处理（W12：GWT 通过后的交付验收是唯一用户确认点，故事覆盖仍由机器裁判）：',
+        ...(autoClarifyEnabled
+          ? [
+        '   - ✅ 全部通过（GWT-pass）：【自动交付】直接输出 <!-- PHASE_ADVANCE: delivered --> 完成交付',
+        '     （auto-clarify 已开启：不发起交付验收 AskUser、不询问用户——交付门禁 = verdict=pass',
+        '      + main 实跑 runId，系统自动确认；不要重新委派、不要重复产出、不要再询问）。',
+          ]
+          : [
         '   - ✅ 全部通过（GWT-pass）：系统续接你发起【交付验收】——用 AskUserQuestion 弹问（header「确认·满意交付」）：',
         '     question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，',
         '     options：满意交付（可以交付使用）/ 需要调整（说明问题，回炉修复后重新测试）。',
         '     · 用户满意交付（或明确确认交付）→ 【立即】输出 <!-- PHASE_ADVANCE: delivered --> 完成交付',
         '       （交付门禁校验测试报告 verdict=pass 且系统已记录用户满意交付确认已满足——用户经 AskUserQuestion 选择「满意交付」后系统自动登记，直接推进——不要重新委派、不要重复产出、不要再询问）。',
+          ]),
         '     · 用户需要调整（或描述问题）→ 意见收集轮收集修改意见（可引导用户点选右侧预览元素精准定位，',
         '       复用编码阶段 c/d 的收集节奏：逐条确认理解、收齐后统一改），收齐后 continue_delegation',
         '       委派「全栈开发」修复 08_APP/ 下的代码（不动 06_TESTS/ 与 01_PRD/），修复完成后输出',
@@ -710,7 +762,9 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   项目交付后无需再创建新阶段 Todo。',
       ]
       : [
-        '5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
+        ...(autoClarifyEnabled
+          ? ['5. （auto-clarify 已开启）核对通过即可推进：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，']
+          : ['5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，']),
         '   再输出推进标记：<!-- PHASE_ADVANCE: ' + nextPhase + ' -->',
         '   （用户已确认通过后不得再以「再核实/再澄清」推迟推进——立即输出推进标记收口，无追加确认轮。）',
         ...(nextTodoPrefix

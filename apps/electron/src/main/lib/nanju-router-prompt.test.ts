@@ -712,23 +712,18 @@ describe('v2.4：L1 自动补完协议段（auto 开启时注入，D7 §6 终版
     return prompt as string
   }
 
-  test('auto on（quick + enabled:true）→ 注入协议段：代理调用/fallback 转述/自问规则/采纳标记/header 规则', () => {
+  test('auto on（quick + enabled:true）→ 注入协议段：代理调用/自问规则/采纳 kind 标记（D8 §九同步：auto-degrade 替代 human 转述）', () => {
     const prompt = buildAutoPrompt({ enabled: true })
-    // 第 1 条：子会话澄清 → nanju_clarify_proxy；fallback:'human'（含 non-clarify-category）→ 转述问真人
+    // 第 1-2 条：子会话澄清与自问均走 nanju_clarify_proxy
     expect(prompt).toContain('nanju_clarify_proxy(delegationId, blockedEventIds)')
-    expect(prompt).toContain("fallback:'human'")
-    expect(prompt).toContain('non-clarify-category')
-    // 设计偏好转述用「设计·」，其余用「转述·」
-    expect(prompt).toContain('「设计·」')
-    expect(prompt).toContain('「转述·」')
-    // 第 2 条：自问 questions 规则（≤200 字/题，≤5 题）
     expect(prompt).toContain('nanju_clarify_proxy(questions=[{id,question,options?}])')
     expect(prompt).toContain('≤200 字')
     expect(prompt).toContain('≤5 题')
-    // 第 3 条：答案采纳报告卡片 + 产物标记
-    expect(prompt).toContain('<!-- auto-clarify:qid,channel,ts -->')
-    // 第 5 条：确认类 header 必须以「确认」开头
-    expect(prompt).toContain('「确认」开头')
+    // 第 3 条：采纳卡片 + kind 标记（R7-10：answer|decision）
+    expect(prompt).toContain('<!-- auto-clarify:qid,channel,ts,kind:answer|decision -->')
+    // 第 4 条：D8 auto-degrade（不再 fallback:'human' 转述）
+    expect(prompt).toContain("fallback:'auto-degrade'")
+    expect(prompt).toContain('不得转述真人')
   })
 
   test('auto off（字段缺失 / enabled:false）→ 协议段不注入（行为零变化）', () => {
@@ -890,5 +885,121 @@ describe('架构师阶段：quick 变体同样必读工程模板（与 iterative
     const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
     expect(task).toContain('品类终判前必读工程模板')
     expect(task).toContain('00_ENGINEERING_TEMPLATE/template.md')
+  })
+})
+
+// ═══════════════ D8（v2.4.1）C 域：自动审核话术分叉 + ac-verdict 契约（§九终版） ═══════════════
+
+describe('D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade）', () => {
+  /** v2.4.1 fixture：autoClarify 可控；返回 prompt */
+  function buildPromptForD8(stage: string, autoOn: boolean, files?: Record<string, string>): string {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-d8-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pd8')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    for (const [name, content] of Object.entries(files ?? {})) {
+      mkdirSync(join(projectDir, name, '..'), { recursive: true })
+      writeFileSync(join(projectDir, name), content)
+    }
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n\n## 用户故事\n\n- US-01 添加笔记\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pd8', name: 'D8 项目', mode: 'quick', status: 'active',
+      currentStage: stage, createdAt: '', updatedAt: '', sessionId: 's-pd8', workspaceSlug: root,
+      ...(autoOn ? { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } } : {}),
+    }]))
+    const prompt = getNanjuRouterPrompt(fixtureRoot, 's-pd8')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  test('auto on：协议段含自动审核条款（不询问用户/直接推进标记/系统自动确认/环境安装例外）', () => {
+    const prompt = buildPromptForD8('requirements', true)
+    expect(prompt).toContain('自动审核')
+    expect(prompt).toContain('不询问用户')
+    expect(prompt).toContain('直接输出推进标记')
+    expect(prompt).toContain('系统自动确认')
+    expect(prompt).toContain('环境安装')
+    expect(prompt).toContain('确认·安装缺失组件')
+    // 通用收口（requirements/planning else 分支）同样分叉：不再请求用户确认
+    expect(prompt).not.toContain('请求用户确认')
+  })
+
+  test('auto on：auto-degrade 降级契约（登记 pending+继续+skipped 标记+不转述真人）', () => {
+    const prompt = buildPromptForD8('requirements', true)
+    expect(prompt).toContain("fallback:'auto-degrade'")
+    expect(prompt).toContain('pendingQuestionIds')
+    expect(prompt).toContain('<!-- auto-clarify:skipped,reason,ts -->')
+    expect(prompt).toContain('不得转述真人')
+    // auto on 协议段不再指导 fallback:'human' 转述（B 域已改降级返回）
+    expect(prompt).not.toContain("fallback:'human'（含 non-clarify-category")
+  })
+
+  test('auto on：溯源 kind 标记（R7-10：kind:answer|decision 区分代答/代决）', () => {
+    const prompt = buildPromptForD8('requirements', true)
+    expect(prompt).toContain('<!-- auto-clarify:qid,channel,ts,kind:answer|decision -->')
+  })
+
+  test('auto on：UX 意见收集轮整段替换（无邀请/收集轮，AC+视觉裁决后直接推进）', () => {
+    const prompt = buildPromptForD8('prototype', true)
+    expect(prompt).not.toContain('对话式设计迭代')
+    expect(prompt).not.toContain('意见收集轮')
+    expect(prompt).not.toContain('header「确认·原型交互验证」')
+    expect(prompt).toContain('视觉裁决')
+    expect(prompt).toContain('<!-- PHASE_ADVANCE: coding -->')
+  })
+
+  test('auto off：UX 意见收集轮与收口确认原样保留（回归锁定）', () => {
+    const prompt = buildPromptForD8('prototype', false)
+    expect(prompt).toContain('对话式设计迭代')
+    expect(prompt).toContain('意见收集轮')
+    expect(prompt).toContain('header「确认·原型交互验证」')
+  })
+
+  test('auto on：coding 轻过渡跳过（无预览确认 AskUser，直接推进 testing）', () => {
+    const prompt = buildPromptForD8('coding', true)
+    expect(prompt).not.toContain('header「确认·预览确认」')
+    expect(prompt).toContain('<!-- PHASE_ADVANCE: testing -->')
+    expect(prompt).toContain('自动')
+  })
+
+  test('auto on：testing 交付挑战自动交付（GWT-pass 直接 delivered，不发起 AskUser）', () => {
+    const prompt = buildPromptForD8('testing', true, {
+      '06_TESTS/features/index.feature': 'Feature: US-01\n  Scenario: 成功\n    Given 用户在页面\n',
+      '06_TESTS/features/us-01.feature': 'Feature: US-01\n  Scenario: 成功\n    Given 用户在页面\n',
+      '06_TESTS/features/us-01.steps.json': '{}',
+    })
+    expect(prompt).not.toContain('header「确认·满意交付」')
+    expect(prompt).toContain('自动交付')
+    expect(prompt).toContain('<!-- PHASE_ADVANCE: delivered -->')
+    expect(prompt).not.toContain('你用过了吗')
+  })
+
+  test('auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化）', () => {
+    const normalize = (p: string) => p.split(fixtureRoot).join('<FIXTURE_ROOT>')
+    expect(normalize(buildPromptForD8('requirements', false))).toMatchSnapshot('d8-auto-off-requirements')
+    expect(normalize(buildPromptForD8('prototype', false))).toMatchSnapshot('d8-auto-off-prototype')
+  })
+})
+
+describe('D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05）', () => {
+  const authorUuid = 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd'
+  const minimaxAuthor = { channel: authorUuid, model: 'MiniMax-M3' }
+
+  test('auto on：L2 任务含单攻击者 1 轮审查 + ac-verdict.json 必写指令 + 未写拒绝自动确认警告', () => {
+    const phase = getPhaseNode('quick', 'architecture')!
+    const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project', null, null, true)
+    expect(task).toContain('03_ARCHITECTURE/ac-verdict.json')
+    expect(task).toContain("verdict:'green'|'yellow'|'red'")
+    expect(task).toContain('attackerModel')
+    expect(task).toContain('单攻击者')
+    expect(task).toContain('不循环')
+    expect(task).toContain('拒绝自动确认')
+  })
+
+  test('auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定）', () => {
+    const phase = getPhaseNode('quick', 'architecture')!
+    const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project', null, null, false)
+    expect(task).not.toContain('ac-verdict')
+    expect(task).toMatchSnapshot('d8-auto-off-quick-arch-l2')
   })
 })
