@@ -37,6 +37,10 @@ export interface WatchedDelegation {
  * 兑底，不能拖累主阶段熔断账户）。硬停不注入重派续接（L1 在工具调用内等待，工具
  * 返回 fallback 后按协议转述真人）。
  */
+/** D8 F1-2（§十）：auto-degrade 后 blocked 悬空的硬停时限——degraded blocked 无应答方，
+ *  永久重置=永不到期；10 分钟兜底强停（L1 契约侧由 answer/stop 解除，watch 只兜底） */
+export const AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS = 10 * 60 * 1000
+
 export const NANJU_PROXY_GUARDS = {
   /** 代理软超时（毫秒，默认 5 分钟）：注入提示（L1 侧可见），不强停 */
   delegationSoftTimeoutMs: 5 * 60 * 1000,
@@ -192,8 +196,21 @@ export class NanjuDelegationWatcher {
           // 等用户回答/权限是用户驱动循环（时长控制明确排除）：时钟重置，恢复后重新计时
           // D8 S4′：L2 blocked → 澄清中 sentinel（{主节点}_CLARIFY；auto on 语义=
           // 「代理澄清中」（blocked 走 clarify-proxy），auto off = 等用户——渲染端
-          // 节点点亮由 C 域后续消费，主进程事实源先行；单调守卫按未知值处理不阻塞）
+          // 节点点亮由 C 域后续消费，主进程事实源先行）
           this.trySetClarifySentinel(watch.workspaceSlug, watch.projectId, stage)
+          // D8 F1-2（§十）：blocked ∧ auto on ∧ 已 auto-degrade（pendingQuestionIds
+          // 非空=B 域 fallback auto-degrade 登记在场）→ 有限时钟：不重置，10min 硬停
+          //（degrade 后 blocked 悬空无应答方，永久重置=永不到期）；其余维持用户驱动
+          // 重置语义（auto off 等真人 / 未 degrade 的 blocked 仍可能被应答解除）
+          if (this.isAutoDegradedBlocked(watch.workspaceSlug, watch.projectId)) {
+            const degradedElapsed = this.now() - tracked.firstSeenAt
+            if (degradedElapsed >= AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS && !tracked.hardFired) {
+              tracked.hardFired = true
+              tracked.softFired = true
+              this.handleAutoDegradedBlockedTimeout(watch, sessionId, stage, d, degradedElapsed)
+            }
+            continue
+          }
           tracked.firstSeenAt = this.now()
           tracked.softFired = false
           continue
@@ -227,7 +244,8 @@ export class NanjuDelegationWatcher {
     } catch { /* 向导图写入失败不影响超时观察 */ }
   }
 
-  /** D8 S4′：sentinel → 主节点恢复（blocked 全部解除后；单调守卫：主节点 0 ≥ sentinel -1 可写） */
+  /** D8 S4′：sentinel → 主节点恢复（blocked 全部解除后；F2-4 sentinel 序数 0.5 后主节点
+   *  为回退——走显式 force 重置通道，与「阶段切换推进点显式重置 bypass」同款纪律） */
   private tryRestoreMainFromClarify(workspaceSlug: string, projectId: string, stage: string): void {
     try {
       const { getClarifySentinelNodeId, getProjectSubStage, tryAdvanceGuideSubStage } =
@@ -236,8 +254,51 @@ export class NanjuDelegationWatcher {
       if (!sentinel || getProjectSubStage(workspaceSlug, projectId) !== sentinel) return
       const { getGuideStageMainNodeId } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
       const main = getGuideStageMainNodeId(stage)
-      if (main) tryAdvanceGuideSubStage(workspaceSlug, projectId, main)
+      if (main) tryAdvanceGuideSubStage(workspaceSlug, projectId, main, { force: true })
     } catch { /* 向导图写入失败不影响超时观察 */ }
+  }
+
+  /** D8 F1-2：判定「auto on ∧ 已 auto-degrade」（pendingQuestionIds 非空=B 域 fallback
+   *  auto-degrade 的登记事实——degraded 组的 blocked 无应答方，需有限时钟兜底） */
+  private isAutoDegradedBlocked(workspaceSlug: string, projectId: string): boolean {
+    try {
+      const { getProjectAutoClarify } = require('./nanju-project') as typeof import('./nanju-project')
+      const state = getProjectAutoClarify(workspaceSlug, projectId)
+      return state?.enabled === true && state.pendingQuestionIds.length > 0
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * D8 F1-2（§十）：auto-degrade blocked 硬停——强停 + 注入话术对齐 auto 语义
+   * （不指引「转述真人」：degrade 契约=登记 pending 继续；悬空 10min 属异常悬置，
+   * 指引 L1 按 stop/answer 契约收口并继续本阶段工作）。不计熔断（degraded 组失败
+   * 不拖累主阶段熔断账户——与代理超时同口径）。
+   */
+  private handleAutoDegradedBlockedTimeout(
+    watch: WatchEntry,
+    sessionId: string,
+    stage: NanjuGuardStage,
+    delegation: WatchedDelegation,
+    elapsedMs: number,
+  ): void {
+    let stopped = false
+    try {
+      stopped = this.deps.forceStopDelegation(sessionId, delegation.delegationId).stopped
+    } catch (e) {
+      this.log(`[南大护栏] auto-degrade blocked 强停异常: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    // 不计熔断：degraded 组 blocked 悬空是 fallback 兜底场景，不是阶段产出失败
+    const min = Math.round(elapsedMs / 60000)
+    this.deps.injectMessage(
+      sessionId,
+      `⚠️ 子会话「${delegation.title}」的需求澄清悬空已超 ${min} 分钟（自动补完已降级登记，无应答方），系统已强制停止该子会话。\n`
+      + '本项目已开启自动审核：请按降级契约收口——该问题已在 pendingQuestionIds 登记'
+      + '（产出附 <!-- auto-clarify:skipped,reason,ts --> 标记后继续本阶段工作）；'
+      + '如仍需该子会话结果，可重新 continue_delegation 委派。不要转述真人、不要等待用户应答。',
+    )
+    this.log(`[南大护栏] auto-degrade blocked 硬停: projectId=${watch.projectId} stage=${stage} delegation=${delegation.delegationId} stopped=${stopped}`)
   }
 
   /**

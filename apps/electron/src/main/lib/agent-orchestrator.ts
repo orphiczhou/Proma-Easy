@@ -779,7 +779,7 @@ export class AgentOrchestrator {
           //      confirmPending 清除/Todo 收尾/子步骤清空/完成富语）全部由该标准路径承载；
           //    · 需要调整 → 意见收集 → 回炉修复 08_APP/ → PHASE_ADVANCE: testing 重跑 GWT
           //      （回炉预算 ≤2 次既有约束不变，GWT_RETRY_LIMIT 未动）。
-          const { buildGwtDeliveryAcceptanceMessage, GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE } =
+          const { buildGwtDeliveryAcceptanceMessage, resolveGwtDeliveryResumeMessage, isAutoConfirmDeliveryProject } =
             require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
           // W18 Wave2（工单 §1.3 核心修正 1）：发起时登记 pending 挑战——先读刚落盘
           // report 的 runId，setProjectDeliveryChallenge(runId, sessionId) 再注入；注入前
@@ -812,7 +812,9 @@ export class AgentOrchestrator {
             runRegisteredHeadlessAgent(
               {
                 sessionId,
-                userMessage: GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE,
+                // D8 F2-3：auto on → 自动交付版续接指令（直接输出 delivered 标记）；
+                // off → 既有真人验收版（逐字节不变）。分发函数与话术由 gwt-runner 单一来源
+                userMessage: resolveGwtDeliveryResumeMessage(isAutoConfirmDeliveryProject(workspaceSlug, projectId)),
                 systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                 channelId: resume.channelId,
                 modelId: resume.modelId,

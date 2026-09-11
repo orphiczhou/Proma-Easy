@@ -55,6 +55,10 @@ const {
   setProjectSubStage: setSub, getProjectSubStage: getSub,
   tryAdvanceGuideSubStage, getClarifySentinelNodeId,
 } = await import('../nanju-project')
+// D8 F1-2：watcher 有限时钟行为测试（顶层 import：nanju-delegation-watch 仅依赖
+// nanju-project，无 electron 链；deps 全注入）
+const { NanjuDelegationWatcher, AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS } =
+  await import('../nanju-delegation-watch')
 
 /** 测试用 hooks：捕获注入消息 / GWT 触发 / Todo 收尾 */
 function buildTestHooks(): PhaseAdvanceHooks & {
@@ -901,6 +905,8 @@ describe('D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格�
 
 describe('D8 A2′：交付 main 实跑 provenance（R7-02）', () => {
   /** auto on testing fixture：达标 06_TESTS + 新 schema pass report + 08_APP 指纹一致 */
+  const DELIVERY_HTML = '<!DOCTYPE html><html><body><div data-ai-id="view-note-list">列表</div></body></html>'
+
   function setupAutoDeliveryFixture(): void {
     const dir = mkdtempSync(join(tmpdir(), 'nanju-d8-dlv-'))
     fixtureRoot = dir
@@ -910,7 +916,7 @@ describe('D8 A2′：交付 main 实跑 provenance（R7-02）', () => {
       sessionId: SESSION_ID, workspaceSlug: WS,
       autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] },
     }]))
-    const html = '<!DOCTYPE html><html><body><div data-ai-id="view-note-list">列表</div></body></html>'
+    const html = DELIVERY_HTML
     mkdirSync(join(dir, 'project-p1', '06_TESTS', 'features'), { recursive: true })
     mkdirSync(join(dir, 'project-p1', '08_APP'), { recursive: true })
     writeFileSync(join(dir, 'project-p1', '08_APP', 'index.html'), html)
@@ -941,8 +947,18 @@ describe('D8 A2′：交付 main 实跑 provenance（R7-02）', () => {
     expect(block?.message).toContain('伪造')
   })
 
+  /** 登记辅助：main 实测 facts（与 fixture report 指纹一致——html 内容哈希） */
+  function registerMainPassRun(html: string, runId = 'FAKE-R1', verdict = 'pass'): void {
+    recordMainGwtRun('p1', runId, {
+      verdict,
+      fingerprintSha: createHash('sha256').update(html, 'utf-8').digest('hex'),
+      size: Buffer.byteLength(html, 'utf-8'),
+      generatedAt: '2026-09-11T22:00:00.000Z',
+    })
+  }
+
   test('A2′ 主路径：main 实跑登记（recordMainGwtRun）+ 非运行中 → 四道过（放行交付，无需 deliveryAck）', () => {
-    recordMainGwtRun('p1', 'FAKE-R1')
+    registerMainPassRun(DELIVERY_HTML)
     expect(isGwtRunInProgress('p1')).toBe(false)
     const block = checkGwtDeliveryFacts({
       workspaceSlug: WS, projectId: 'p1',
@@ -954,7 +970,7 @@ describe('D8 A2′：交付 main 实跑 provenance（R7-02）', () => {
   })
 
   test('A2′ d′：GWT 运行中 → gwt-running 拒（旧报告不可交付）', () => {
-    recordMainGwtRun('p1', 'FAKE-R1')
+    registerMainPassRun(DELIVERY_HTML)
     // 运行中状态由 runNanjuGwtAcceptance 薄壳 try/finally 维护（模块私有不可直构）；
     // 等价语义验证：未运行+已登记放行（上例）+ 薄壳 finally 兜底源码断言（下方）
     expect(isGwtRunInProgress('p1')).toBe(false)
@@ -964,7 +980,7 @@ describe('D8 A2′：交付 main 实跑 provenance（R7-02）', () => {
   })
 
   test('A2′ consumer 链：auto on testing + delivered 标记 + main 登记 → 推进 delivered + challenge 终态清理', () => {
-    recordMainGwtRun('p1', 'FAKE-R1')
+    registerMainPassRun(DELIVERY_HTML)
     setProjectDeliveryChallenge(WS, 'p1', 'FAKE-R1', SESSION_ID)
     const base = buildTestHooks()
     const hooks = {
@@ -1030,15 +1046,13 @@ describe('D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回�
     expect(getSub(WS, 'p1')).toBe('') // 空串=已清空（现状语义：?? null 仅对字段缺失，空串保留）
   })
 
-  test('sentinel（未知值）不参与序数比较：主节点后可写 _CLARIFY，_CLARIFY 后可写回主节点/前进', () => {
+  test('sentinel 排序（F2-4 前基准行为保留）：主节点后可写 _CLARIFY，_CLARIFY 后前进子步骤不被阻塞', () => {
     setSub(WS, 'p1', 'REQ', { force: true })
     setSub(WS, 'p1', 'REQ_CLARIFY')
     expect(getSub(WS, 'p1')).toBe('REQ_CLARIFY')
-    setSub(WS, 'p1', 'REQ') // 恢复主节点（blocked 解除路径）
-    expect(getSub(WS, 'p1')).toBe('REQ')
-    setSub(WS, 'p1', 'REQ_CLARIFY') // 再次 blocked
     setSub(WS, 'p1', 'REQ_ATK') // sentinel 后前进不被阻塞
     expect(getSub(WS, 'p1')).toBe('REQ_ATK')
+    // 写回主节点（恢复）已被 F2-4 收紧为 force 通道——见 D8 F2-4 专测
   })
 
   test('getClarifySentinelNodeId：六阶段主节点 sentinel；未知阶段 null', () => {
@@ -1111,5 +1125,225 @@ describe('D8 S4′ 写入点源码断言（防退化）', () => {
     const consumerSource = readFileSync(new URL('../nanju-phase-advance-consumer.ts', import.meta.url), 'utf-8')
     expect(consumerSource).toContain('clearProjectDeliveryChallenge')
     expect(orchestratorSource).toContain("this.registerSystemAdvance(workspaceSlug, projectId, 'delivered')")
+  })
+})
+
+// ═══════════════ D8 R2′（§十）：F1-1 provenance 绑定 verdict+指纹 / F2-4 sentinel 排序 / F1-2 有限时钟 ═══════════════
+
+describe('D8 F1-1（§十方案 B）：provenance 绑定 verdict+登记指纹（不信任 report 自述）', () => {
+  const { recordMainGwtRun: regRun, __resetGwtProvenanceForTests: resetProv } = { recordMainGwtRun, __resetGwtProvenanceForTests }
+  const DELIVERY_HTML_R2 = '<!DOCTYPE html><html><body><div data-ai-id="v2">v2</div></body></html>'
+
+  function setupR2Fixture(): void {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-r2-'))
+    fixtureRoot = dir
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'p1', name: 'R2 项目', mode: 'quick', status: 'active',
+      currentStage: 'testing', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      sessionId: SESSION_ID, workspaceSlug: WS,
+      autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] },
+    }]))
+    mkdirSync(join(dir, 'project-p1', '06_TESTS', 'features'), { recursive: true })
+    mkdirSync(join(dir, 'project-p1', '08_APP'), { recursive: true })
+    writeFileSync(join(dir, 'project-p1', '08_APP', 'index.html'), DELIVERY_HTML_R2)
+    writeFileSync(join(dir, 'project-p1', '06_TESTS', 'features', 'index.feature'),
+      'Feature: f\nScenario: s\n内容行\n'.repeat(5))
+  }
+
+  /** 改写 report.json（伪造内容全可控——模拟 L2 篡改） */
+  function forgeReport(fields: Record<string, unknown>): void {
+    const reportPath = join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json')
+    const html = readFileSync(join(fixtureRoot, 'project-p1', '08_APP', 'index.html'), 'utf-8')
+    writeFileSync(reportPath, JSON.stringify({
+      generatedAt: '2026-09-12T00:30:00.000Z', runId: 'R',
+      entryFingerprint: { sha256: createHash('sha256').update(html, 'utf-8').digest('hex'), size: Buffer.byteLength(html, 'utf-8') },
+      executionContext: 'file://', coverageUnverified: [],
+      verdict: 'pass', scenariosTotal: 1, passed: 1, failed: 0, skipped: 0,
+      coveredUs: ['US-01'], uncoveredUs: [], retryCount: 0, scenarios: [],
+      ...fields,
+    }))
+  }
+
+  function runFacts(): { projectDir: string; reportJsonPath: string } {
+    return {
+      projectDir: join(fixtureRoot, 'project-p1'),
+      reportJsonPath: join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'),
+    }
+  }
+
+  beforeEach(() => { setupR2Fixture() })
+  afterEach(() => { resetProv() })
+
+  test('红测①（F1-1）：登记 fail 轮 R → L2 改写 report 为 verdict:pass+runId:R+重算指纹 → 必拒 no-main-run（main 登记事实为准）', () => {
+    // main 实跑登记 fail 轮（指纹=当时实测）
+    regRun('p1', 'R', {
+      verdict: 'fail',
+      fingerprintSha: createHash('sha256').update(DELIVERY_HTML_R2, 'utf-8').digest('hex'),
+      size: Buffer.byteLength(DELIVERY_HTML_R2, 'utf-8'),
+      generatedAt: '2026-09-12T00:00:00.000Z',
+    })
+    // L2 篡改：report 全字段伪造一致（pass+同 runId+指纹重算——文件层面完全自洽）
+    forgeReport({})
+    const block = checkGwtDeliveryFacts({
+      workspaceSlug: WS, projectId: 'p1', ...runFacts(), info: readProjectInfo(WS, 'p1'),
+    })
+    expect(block?.reason).toBe('no-main-run')
+    expect(block?.message).toContain('登记运行轮次结论为 fail')
+  })
+
+  test('红测②（F1-1）：登记 pass → 入口文件被改（report 自述指纹同步伪造成新实测使 b 道放行）→ d″ 登记指纹校验拒', () => {
+    regRun('p1', 'R', {
+      verdict: 'pass',
+      fingerprintSha: createHash('sha256').update(DELIVERY_HTML_R2, 'utf-8').digest('hex'),
+      size: Buffer.byteLength(DELIVERY_HTML_R2, 'utf-8'),
+      generatedAt: '2026-09-12T00:00:00.000Z',
+    })
+    // 文件被改
+    const tampered = '<!DOCTYPE html><html><body><div data-ai-id="v2">被篡改</div></body></html>'
+    writeFileSync(join(fixtureRoot, 'project-p1', '08_APP', 'index.html'), tampered)
+    // report 自述同步伪造成新指纹（b 道 report自述vs实测 通过——只有 d″ 登记指纹能拦）
+    forgeReport({})
+    const block = checkGwtDeliveryFacts({
+      workspaceSlug: WS, projectId: 'p1', ...runFacts(), info: readProjectInfo(WS, 'p1'),
+    })
+    expect(block?.reason).toBe('fingerprint-mismatch')
+    expect(block?.message).toContain('登记的通过轮指纹不一致')
+  })
+
+  test('对照：登记 pass+指纹未被改 → 放行（null）', () => {
+    regRun('p1', 'R', {
+      verdict: 'pass',
+      fingerprintSha: createHash('sha256').update(DELIVERY_HTML_R2, 'utf-8').digest('hex'),
+      size: Buffer.byteLength(DELIVERY_HTML_R2, 'utf-8'),
+      generatedAt: '2026-09-12T00:00:00.000Z',
+    })
+    forgeReport({})
+    expect(checkGwtDeliveryFacts({
+      workspaceSlug: WS, projectId: 'p1', ...runFacts(), info: readProjectInfo(WS, 'p1'),
+    })).toBeNull()
+  })
+})
+
+describe('D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位）', () => {
+  test('红测：已 UC 后 blocked 补问 → sentinel 写入被拦，图面保持 UC', () => {
+    setSub(WS, 'p1', 'REQ_UC', { force: true })
+    setSub(WS, 'p1', 'REQ_CLARIFY')
+    expect(getSub(WS, 'p1')).toBe('REQ_UC')
+  })
+
+  test('主节点 → sentinel 前进可写；sentinel → 子步骤前进可写', () => {
+    setSub(WS, 'p1', 'REQ', { force: true })
+    setSub(WS, 'p1', 'REQ_CLARIFY')
+    expect(getSub(WS, 'p1')).toBe('REQ_CLARIFY')
+    setSub(WS, 'p1', 'REQ_ATK')
+    expect(getSub(WS, 'p1')).toBe('REQ_ATK')
+  })
+
+  test('sentinel → 主节点恢复走显式 force（watch 恢复通道，S4′ 纪律同款）', () => {
+    setSub(WS, 'p1', 'REQ_CLARIFY', { force: true })
+    setSub(WS, 'p1', 'REQ') // 无 force：0 < 0.5 回退拦
+    expect(getSub(WS, 'p1')).toBe('REQ_CLARIFY')
+    setSub(WS, 'p1', 'REQ', { force: true })
+    expect(getSub(WS, 'p1')).toBe('REQ')
+  })
+
+  test('watch 恢复接线：tryRestoreMainFromClarify 用 force（源码断言）', () => {
+    const watchSource = readFileSync(new URL('../nanju-delegation-watch.ts', import.meta.url), 'utf-8')
+    expect(watchSource).toContain("tryAdvanceGuideSubStage(workspaceSlug, projectId, main, { force: true })")
+  })
+})
+
+describe('D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人）', () => {
+  interface MiniHarness {
+    watcher: NanjuDelegationWatcher
+    clock: { now: number }
+    stops: string[]
+    injections: string[]
+  }
+
+  function makeMiniHarness(): MiniHarness {
+    const clock = { now: 1_000_000 }
+    const stops: string[] = []
+    const injections: string[] = []
+    const deps = {
+      now: () => clock.now,
+      listRunningDelegations: () => [{
+        delegationId: 'dg-1', title: 'UX 顾问', parentSessionId: SESSION_ID,
+        status: 'running', hasPendingBlockedEvents: true,
+      } as never],
+      forceStopDelegation: (_s: string, id: string) => { stops.push(id); return { stopped: true } },
+      getActiveProjectStage: () => 'prototype' as never,
+      recordGuardError: () => ({ justOpened: false, failCount: 0, errorCount: 0 }),
+      injectMessage: (_s: string, text: string) => { injections.push(text) },
+      sendContinuation: () => {},
+    } as never
+    return { watcher: new NanjuDelegationWatcher(deps), clock, stops, injections }
+  }
+
+  /** fixture：auto on + pendingQuestionIds 非空（=已 auto-degrade） */
+  function setupDegradedFixture(pending: string[]): void {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-f12-'))
+    fixtureRoot = dir
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'p1', name: 'F12 项目', mode: 'quick', status: 'active',
+      currentStage: 'prototype', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      sessionId: SESSION_ID, workspaceSlug: WS,
+      autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: pending },
+    }]))
+    mkdirSync(join(dir, 'project-p1', '02_UX_DESIGN'), { recursive: true })
+    writeFileSync(join(dir, 'project-p1', '02_UX_DESIGN', 'prototype.html'),
+      '<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>t</title></head><body><div>p</div></body></html>')
+  }
+
+  test('红测：auto on ∧ pendingQuestionIds 非空 → blocked 不重置时钟，10min 后强停 + auto 语义话术 + 不计熔断', () => {
+    setupDegradedFixture(['q1'])
+    const h = makeMiniHarness()
+    h.watcher.register(WS, SESSION_ID, 'p1')
+    h.watcher.poll() // t=0：委派首次入账（firstSeenAt 基准）
+    h.clock.now += 9 * 60 * 1000
+    h.watcher.poll()
+    expect(h.stops.length).toBe(0) // 9min：未到硬停
+    h.clock.now += 2 * 60 * 1000
+    h.watcher.poll()
+    expect(h.stops).toEqual(['dg-1']) // 11min：强停
+    const msg = h.injections.find((t) => t.includes('需求澄清悬空'))
+    expect(msg).toBeTruthy()
+    expect(msg).toContain('自动审核')
+    expect(msg).toContain('pendingQuestionIds 登记')
+    expect(msg).toContain('不要转述真人')
+  })
+
+  test('对照：auto off（或 pending 空）→ blocked 维持用户驱动重置（不硬停）', () => {
+    setupDegradedFixture([]) // auto on 但未 degrade
+    const h = makeMiniHarness()
+    h.watcher.register(WS, SESSION_ID, 'p1')
+    h.watcher.poll() // t=0
+    h.clock.now += 11 * 60 * 1000 + 60 * 60 * 1000 // 远超 10min（时钟每轮被重置则永不停）
+    h.watcher.poll()
+    expect(h.stops.length).toBe(0) // 未 degrade：永久重置语义保持
+    expect(h.injections.some((t) => t.includes('需求澄清悬空'))).toBe(false)
+  })
+
+  test('常量契约：AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS = 10 分钟', () => {
+    expect(AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS).toBe(10 * 60 * 1000)
+  })
+})
+
+describe('D8 R2′ 源码断言：F2-3 接线 + F3 清理', () => {
+  test('F2-3：orchestrator 交付续接消息走 resolveGwtDeliveryResumeMessage 分发（1 行接线）', () => {
+    const orchSource = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
+    expect(orchSource).toContain('userMessage: resolveGwtDeliveryResumeMessage(isAutoConfirmDeliveryProject(workspaceSlug, projectId))')
+    expect(orchSource).not.toContain('userMessage: GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE,')
+  })
+
+  test('F3-4：未使用 NANJU_ASK_EXEMPT_PREFIXES 已删除', () => {
+    const gateSource = readFileSync(new URL('../nanju-router-gate.ts', import.meta.url), 'utf-8')
+    expect(gateSource).not.toContain('NANJU_ASK_EXEMPT_PREFIXES')
+  })
+
+  test('F3-5：gwt-runner auto 分支注释更正（delivered 质量由 GWT 门上游保证，非第四形态）', () => {
+    const gwtSource = readFileSync(new URL('../nanju-gwt-runner.ts', import.meta.url), 'utf-8')
+    expect(gwtSource).toContain('第四形态不参与交付路径')
+    expect(gwtSource).not.toContain('此处到达即 testing 产出（06_TESTS）已达标的 auto 项目')
   })
 })

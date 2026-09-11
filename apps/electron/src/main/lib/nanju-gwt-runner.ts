@@ -435,19 +435,38 @@ export function checkGwtDeliveryFacts(input: {
     return block('fingerprint-mismatch',
       '应用在测试通过后被修改（08_APP/index.html 与测试报告记录的入口指纹不一致）。请重跑测试（声明 <!-- PHASE_ADVANCE: testing -->）后重新交付验收。')
   }
-  // ── D8 A2′（R7-02）：auto on 项目的交付第二事实分叉 ──
-  // 「用户满意交付确认」（W18 c/d）整体替换为「autoConfirmAuthorized(testing) 的等价
-  // 机器事实」：report.runId ∈ main 进程 lastGwtRunIds（伪造 report 拒）∧ GWT 当前
-  // 不在运行中（运行中旧报告不可交付）。前置（enabled∧quick∧testing∧产出达标）由
-  // 推进门第四形态保证——此处到达即 testing 产出（06_TESTS）已达标的 auto 项目。
+  // ── D8 A2′（R7-02）+ F1-1（§十方案 B）：auto on 项目的交付第二事实分叉 ──
+  // 「用户满意交付确认」（W18 c/d）整体替换为 main 内存机器事实：report.runId∈
+  // lastGwtRunIds 登记集 ∧ 登记轮 verdict==='pass' ∧ 登记指纹===当前入口实测
+  // （不信任 report 文件自述）∧ GWT 当前不在运行中。注意：delivered 推进走
+  // isDeliverFromTesting 特判（不经推进门第四形态）——testing 阶段的产出质量由本门
+  // 上游的 GWT 裁判（verdict/schema/指纹校验）保证，第四形态不参与交付路径。
   // auto off（enabled≠true）路径逐字节保留 W18 c/d（D7 ack 机制不删）。
   if (isAutoConfirmDeliveryProject(input.workspaceSlug, input.projectId)) {
     if (!isGwtRunInProgress(input.projectId)) {
-      // c'. main 实跑 provenance：runId 必须是本进程 GWT 落盘登记值（伪造/外部写入拒）
-      if (!lastGwtRunIds.get(input.projectId)?.has(valid.runId)) {
+      // c'. main 实跑 provenance（§十方案 B）：runId∈登记集 ∧ 登记轮 verdict==='pass'
+      // ∧ 登记指纹===当前入口实测——verdict 与指纹均以 main 内存登记为准，不读 report
+      // 文件自述（fail 轮 runId 被改写成 pass 报告、或 pass 后文件被改，均拒）
+      const record = lastGwtRunIds.get(input.projectId)?.get(valid.runId)
+      if (!record) {
         return block('no-main-run',
           '测试报告不是本进程 GWT 实跑产物（runId 未经系统登记——伪造或外部写入不可用于自动交付）。'
           + '请声明 <!-- PHASE_ADVANCE: testing --> 触发系统自动验收测试，全部通过后系统自动交付。')
+      }
+      if (record.verdict !== 'pass') {
+        return block('no-main-run',
+          `测试报告对应的系统登记运行轮次结论为 ${record.verdict}（非 pass）——改写报告文件不改变系统登记事实。`
+          + '请声明 <!-- PHASE_ADVANCE: testing --> 重跑自动验收测试，全部通过后系统自动交付。')
+      }
+      // d''. 登记指纹 vs 当前实测（文件自述可伪造，登记值不可）——与 b 道独立：
+      // b 查 report 自述 vs 实测，d'' 查登记 vs 实测（同步改写文件两字段时 b 过 d'' 拦）
+      const provenanceFingerprint = computeGwtEntryFingerprint(join(input.projectDir, '08_APP', 'index.html'))
+      if (!provenanceFingerprint
+        || provenanceFingerprint.sha256 !== record.fingerprintSha
+        || provenanceFingerprint.size !== record.size) {
+        return block('fingerprint-mismatch',
+          '应用在登记的通过轮次之后被修改（当前入口指纹与系统登记的通过轮指纹不一致）。'
+          + '请声明 <!-- PHASE_ADVANCE: testing --> 重跑自动验收测试后系统自动交付。')
       }
       return null
     }
@@ -476,13 +495,19 @@ export function checkGwtDeliveryFacts(input: {
 // ===== D8 A2′（R7-02）：main 实跑 provenance（进程内存，重启即空=安全缺省） =====
 
 /** 本进程 GWT 实跑落盘登记的 runId（按项目累积；auto on 交付门 c' 消费） */
-const lastGwtRunIds = new Map<string, Set<string>>()
+/**
+ * D8 F1-1（§十方案 B）：main 实跑 provenance 登记——runId → 落盘轮次的 main 内存事实
+ * （verdict + 入口指纹 sha/size + generatedAt）。指纹取 GWT 运行时实测（report 内存
+ * 对象构造值），**不信任 report.json 文件自述**（L2 可改写文件，改不了本登记）。
+ */
+const lastGwtRunIds = new Map<string, Map<string, { verdict: string; fingerprintSha: string; size: number; generatedAt: string }>>()
 
 /** GWT 运行中项目（runNanjuGwtAcceptance 入口登记/finally 清除；auto on 交付门 d' 消费） */
 const runningGwtProjectIds = new Set<string>()
 
-/** 判定项目是否 auto on 交付适用（enabled ∧ quick ∧ testing——A1′ 前三条件在交付门的投影） */
-function isAutoConfirmDeliveryProject(workspaceSlug: string, projectId: string): boolean {
+/** 判定项目是否 auto on 交付适用（enabled ∧ quick ∧ testing——A1′ 前三条件在交付门的投影）。
+ *  D8 F2-3：导出供 orchestrator 交付续接消息分发（resolveGwtDeliveryResumeMessage）消费 */
+export function isAutoConfirmDeliveryProject(workspaceSlug: string, projectId: string): boolean {
   try {
     const { getNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
     const project = getNanjuProject(workspaceSlug, projectId)
@@ -497,14 +522,18 @@ export function isGwtRunInProgress(projectId: string): boolean {
   return runningGwtProjectIds.has(projectId)
 }
 
-/** 登记一次 main 实跑 runId（report 落盘点调用；进程内存，重启即空） */
-export function recordMainGwtRun(projectId: string, runId: string): void {
-  let set = lastGwtRunIds.get(projectId)
-  if (!set) {
-    set = new Set<string>()
-    lastGwtRunIds.set(projectId, set)
+/** 登记一次 main 实跑（report 落盘点调用，facts=main 内存实测值；进程内存，重启即空） */
+export function recordMainGwtRun(
+  projectId: string,
+  runId: string,
+  facts: { verdict: string; fingerprintSha: string; size: number; generatedAt: string },
+): void {
+  let map = lastGwtRunIds.get(projectId)
+  if (!map) {
+    map = new Map<string, { verdict: string; fingerprintSha: string; size: number; generatedAt: string }>()
+    lastGwtRunIds.set(projectId, map)
   }
-  set.add(runId)
+  map.set(runId, facts)
 }
 
 /** 测试专用：清空 provenance 状态（防跨用例污染） */
@@ -1146,8 +1175,15 @@ async function runNanjuGwtAcceptanceInner(input: {
   // 运行新发——伪造 report 无登记值即拒）。D8 S4′：report 落盘 = 测试执行+裁判完成
   // → 向导图写 TEST_JUDGE（testing 序列末位；归因+outputPath 匹配见 tryAdvanceGuideSubStage）
   try {
-    if (typeof report.runId === 'string' && report.runId !== '') {
-      recordMainGwtRun(input.projectId, report.runId)
+    if (typeof report.runId === 'string' && report.runId !== ''
+      && typeof report.entryFingerprint?.sha256 === 'string' && typeof report.entryFingerprint?.size === 'number') {
+      // F1-1：登记 main 内存实测（GWT 运行时实测入口指纹 + 本轮 verdict）
+      recordMainGwtRun(input.projectId, report.runId, {
+        verdict: report.verdict,
+        fingerprintSha: report.entryFingerprint.sha256,
+        size: report.entryFingerprint.size,
+        generatedAt: report.generatedAt,
+      })
     }
     const { tryAdvanceGuideSubStage } = require('./nanju-project') as typeof import('./nanju-project')
     tryAdvanceGuideSubStage(input.workspaceSlug, input.projectId, 'TEST_JUDGE')

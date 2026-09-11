@@ -565,10 +565,15 @@ export function setProjectSubStage(
   if (!opts?.force && subStage !== '') {
     try {
       const { GUIDE_SUBSTAGE_SEQUENCE } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+      // D8 F2-4（§十）：{主}_CLARIFY sentinel 纳入排序——序数=主节点后首位（0.5），
+      // 低于一切子步骤与 UC：已 UC 后的 blocked 补问不使图回退；主节点→sentinel→子步骤
+      // 均为前进；sentinel→主节点（blocked 解除恢复）走调用方显式 force 重置通道。
       const locate = (nodeId: string): { stage: string; index: number } | null => {
         for (const [stage, seq] of Object.entries(GUIDE_SUBSTAGE_SEQUENCE)) {
           const idx = seq.indexOf(nodeId)
           if (idx >= 0) return { stage, index: idx }
+          const main = seq[0]
+          if (main && nodeId === `${main}_CLARIFY`) return { stage, index: 0.5 }
         }
         return null
       }
@@ -619,6 +624,7 @@ export function tryAdvanceGuideSubStage(
   workspaceSlug: string,
   projectId: string,
   nodeId: string,
+  opts?: { force?: boolean },
 ): boolean {
   try {
     const { getPhaseNode } = require('./nanju-router') as typeof import('./nanju-router')
@@ -626,7 +632,7 @@ export function tryAdvanceGuideSubStage(
     if (!project) return false
     const stage = project.currentStage as import('./nanju-router').PhaseId
     if (!getPhaseNode(project.mode, stage)?.outputPath) return false
-    setProjectSubStage(workspaceSlug, projectId, nodeId)
+    setProjectSubStage(workspaceSlug, projectId, nodeId, opts)
     try {
       const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
       emitGuideProgress(project.sessionId ?? '', projectId, project.currentStage, nodeId)

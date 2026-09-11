@@ -174,9 +174,6 @@ function extractAskQuestions(input: Record<string, unknown>): AskUserQuestionIte
   )
 }
 
-/** AskUser 豁免 header 前缀（D7 §3：确认（六确认+交付挑战话术）/设计（点选五项+设计偏好转述）/转述（非 clarify blocked 转述）） */
-const NANJU_ASK_EXEMPT_PREFIXES = ['确认', '设计', '转述'] as const
-
 /**
  * v2.4（D7 §3）：L1 AskUserQuestion 路由（auto 开启时；非承重——承重在 §2 推进门）。
  *
