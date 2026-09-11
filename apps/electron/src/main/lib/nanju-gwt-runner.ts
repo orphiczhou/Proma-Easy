@@ -372,6 +372,8 @@ export function hasGwtDeliverySchemaFields(report: {
 /** 门禁拦截归因（delivery.gate.blocked 埋点 reason 口径） */
 export type GwtDeliveryBlockReason =
   | 'legacy-schema' | 'fingerprint-mismatch' | 'no-ack' | 'ack-run-mismatch' | 'ack-stale'
+  // D8 A2′（R7-02）：auto on 交付门第二事实（main 实跑 provenance）两分支
+  | 'no-main-run' | 'gwt-running'
 
 export interface GwtDeliveryFactBlock {
   reason: GwtDeliveryBlockReason
@@ -433,7 +435,26 @@ export function checkGwtDeliveryFacts(input: {
     return block('fingerprint-mismatch',
       '应用在测试通过后被修改（08_APP/index.html 与测试报告记录的入口指纹不一致）。请重跑测试（声明 <!-- PHASE_ADVANCE: testing -->）后重新交付验收。')
   }
-  // c. 无交付确认
+  // ── D8 A2′（R7-02）：auto on 项目的交付第二事实分叉 ──
+  // 「用户满意交付确认」（W18 c/d）整体替换为「autoConfirmAuthorized(testing) 的等价
+  // 机器事实」：report.runId ∈ main 进程 lastGwtRunIds（伪造 report 拒）∧ GWT 当前
+  // 不在运行中（运行中旧报告不可交付）。前置（enabled∧quick∧testing∧产出达标）由
+  // 推进门第四形态保证——此处到达即 testing 产出（06_TESTS）已达标的 auto 项目。
+  // auto off（enabled≠true）路径逐字节保留 W18 c/d（D7 ack 机制不删）。
+  if (isAutoConfirmDeliveryProject(input.workspaceSlug, input.projectId)) {
+    if (!isGwtRunInProgress(input.projectId)) {
+      // c'. main 实跑 provenance：runId 必须是本进程 GWT 落盘登记值（伪造/外部写入拒）
+      if (!lastGwtRunIds.get(input.projectId)?.has(valid.runId)) {
+        return block('no-main-run',
+          '测试报告不是本进程 GWT 实跑产物（runId 未经系统登记——伪造或外部写入不可用于自动交付）。'
+          + '请声明 <!-- PHASE_ADVANCE: testing --> 触发系统自动验收测试，全部通过后系统自动交付。')
+      }
+      return null
+    }
+    return block('gwt-running',
+      '验收测试正在运行中，当前报告为上一轮产物。请等待本轮测试完成后系统自动交付。')
+  }
+  // c. 无交付确认（auto off：W18 原文）
   const ack = input.info?.deliveryAck
   if (!ack) {
     return block('no-ack',
@@ -450,6 +471,46 @@ export function checkGwtDeliveryFacts(input: {
       '交付确认已过期（确认时间不晚于报告生成时间）。请重新发起交付验收。')
   }
   return null
+}
+
+// ===== D8 A2′（R7-02）：main 实跑 provenance（进程内存，重启即空=安全缺省） =====
+
+/** 本进程 GWT 实跑落盘登记的 runId（按项目累积；auto on 交付门 c' 消费） */
+const lastGwtRunIds = new Map<string, Set<string>>()
+
+/** GWT 运行中项目（runNanjuGwtAcceptance 入口登记/finally 清除；auto on 交付门 d' 消费） */
+const runningGwtProjectIds = new Set<string>()
+
+/** 判定项目是否 auto on 交付适用（enabled ∧ quick ∧ testing——A1′ 前三条件在交付门的投影） */
+function isAutoConfirmDeliveryProject(workspaceSlug: string, projectId: string): boolean {
+  try {
+    const { getNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
+    const project = getNanjuProject(workspaceSlug, projectId)
+    return project?.autoClarify?.enabled === true && project?.mode === 'quick' && project?.currentStage === 'testing'
+  } catch {
+    return false
+  }
+}
+
+/** GWT 是否运行中（projectId 维度） */
+export function isGwtRunInProgress(projectId: string): boolean {
+  return runningGwtProjectIds.has(projectId)
+}
+
+/** 登记一次 main 实跑 runId（report 落盘点调用；进程内存，重启即空） */
+export function recordMainGwtRun(projectId: string, runId: string): void {
+  let set = lastGwtRunIds.get(projectId)
+  if (!set) {
+    set = new Set<string>()
+    lastGwtRunIds.set(projectId, set)
+  }
+  set.add(runId)
+}
+
+/** 测试专用：清空 provenance 状态（防跨用例污染） */
+export function __resetGwtProvenanceForTests(): void {
+  lastGwtRunIds.clear()
+  runningGwtProjectIds.clear()
 }
 
 /** 人读报告（06_TESTS/report-YYYYMMDD-HHmmss.md） */
@@ -905,6 +966,25 @@ export async function runNanjuGwtAcceptance(input: {
   controller: GwtBrowserAdapter
   onProgress?: (event: GwtProgressEvent) => void
 }): Promise<NanjuGwtOutcome> {
+  // D8 A2′：GWT 运行中标记薄壳（交付门 d' 消费；finally 兜底清除——异常/提前 return
+  // 路径不残留，防「running 残留 → auto 交付门永拦」死锁）
+  runningGwtProjectIds.add(input.projectId)
+  try {
+    return await runNanjuGwtAcceptanceInner(input)
+  } finally {
+    runningGwtProjectIds.delete(input.projectId)
+  }
+}
+
+async function runNanjuGwtAcceptanceInner(input: {
+  workspaceSlug: string
+  projectId: string
+  projectName: string
+  projectMode: 'quick' | 'iterative'
+  sessionId: string
+  controller: GwtBrowserAdapter
+  onProgress?: (event: GwtProgressEvent) => void
+}): Promise<NanjuGwtOutcome> {
   const projectDir = getNanjuProjectDir(input.workspaceSlug, input.projectId)
   const featuresDir = join(projectDir, '06_TESTS', 'features')
   const reportJsonPath = join(projectDir, '06_TESTS', 'report.json')
@@ -1045,6 +1125,16 @@ export async function runNanjuGwtAcceptance(input: {
     })),
   }
   writeJsonFileAtomic(reportJsonPath, report)
+  // D8 A2′（R7-02）：main 实跑 provenance 登记（auto on 交付门 c' 消费；runId 每次
+  // 运行新发——伪造 report 无登记值即拒）。D8 S4′：report 落盘 = 测试执行+裁判完成
+  // → 向导图写 TEST_JUDGE（testing 序列末位；归因+outputPath 匹配见 tryAdvanceGuideSubStage）
+  try {
+    if (typeof report.runId === 'string' && report.runId !== '') {
+      recordMainGwtRun(input.projectId, report.runId)
+    }
+    const { tryAdvanceGuideSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+    tryAdvanceGuideSubStage(input.workspaceSlug, input.projectId, 'TEST_JUDGE')
+  } catch { /* provenance/向导图写入失败不影响测试主流程 */ }
   const stamp = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
   const stampText = `${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`

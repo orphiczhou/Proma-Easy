@@ -48,6 +48,13 @@ const {
 // W18：交付双事实门禁（delivered 消费用例前置）
 const { checkGwtDeliveryFacts } = await import('../nanju-gwt-runner')
 const { readProjectInfo, setProjectDeliveryChallenge, setProjectDeliveryAck } = await import('../nanju-project')
+// D8：A2′ provenance + S4′ 子步骤直测（checkGwtDeliveryFacts 已在上方声明，此处补齐新导出）
+const { recordMainGwtRun, isGwtRunInProgress, __resetGwtProvenanceForTests } =
+  await import('../nanju-gwt-runner')
+const {
+  setProjectSubStage: setSub, getProjectSubStage: getSub,
+  tryAdvanceGuideSubStage, getClarifySentinelNodeId,
+} = await import('../nanju-project')
 
 /** 测试用 hooks：捕获注入消息 / GWT 触发 / Todo 收尾 */
 function buildTestHooks(): PhaseAdvanceHooks & {
@@ -737,5 +744,372 @@ describe('v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + reg
     expect(firstStmt).toContain('isNanjuProxySession(sessionId)')
     // 首分支先于 workspaceSlug 早退
     expect(firstStmt.indexOf('isNanjuProxySession')).toBeLessThan(firstStmt.indexOf('if (!workspaceSlug)'))
+  })
+})
+
+// ═══════════════ D8（§九终版）：A1′ 第四形态 / A2′ 交付 provenance / 白名单 / AC 三态 ═══════════════
+
+describe('D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式）', () => {
+  /** auto on fixture：quick + autoClarify.enabled + 可控阶段；达标产出按需 */
+  function setupAutoFixture(opts: {
+    stage?: string
+    mode?: 'quick' | 'iterative'
+    enabled?: boolean
+    withOutput?: boolean
+    acVerdict?: 'green' | 'yellow' | 'red' | 'missing'
+  } = {}): void {
+    const stage = opts.stage ?? 'requirements'
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-d8-'))
+    fixtureRoot = dir
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'p1',
+      name: 'D8 测试项目',
+      mode: opts.mode ?? 'quick',
+      status: 'active',
+      currentStage: stage,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      sessionId: SESSION_ID,
+      workspaceSlug: WS,
+      ...(opts.enabled === false ? {} : { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } }),
+    }]))
+    if (opts.withOutput === false) return
+    // 阶段产出按需达标：requirements=PRD；architecture=architecture.md（web-fullstack 免环境门禁）
+    if (stage === 'requirements') {
+      mkdirSync(join(dir, 'project-p1', '01_PRD'), { recursive: true })
+      writeFileSync(join(dir, 'project-p1', '01_PRD', 'prd.md'),
+        '# 单位换算工具 PRD\n\n## 用户故事\n\n- US-1 用户输入数值完成单位换算\n'.repeat(3))
+    } else if (stage === 'architecture') {
+      mkdirSync(join(dir, 'project-p1', '03_ARCHITECTURE'), { recursive: true })
+      writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'architecture.md'),
+        '# 架构文档\n\nprojectCategory: web-fullstack\n\n## 技术选型\n\n- 纯前端单页应用（原生 JS）\n\n## 环境配置\n\n| 组件 | 版本 |\n|---|---|\n| node | 20 |\n\nprojectEnv: ready\n'.repeat(2))
+      if (opts.acVerdict && opts.acVerdict !== 'missing') {
+        writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'ac-verdict.json'), JSON.stringify({
+          verdict: opts.acVerdict,
+          findings: opts.acVerdict === 'red' ? [{ severity: 'red', evidence: '品类终判与部署形态不符' }] : [],
+          attackerModel: 'glm-4.7',
+          ts: new Date().toISOString(),
+        }))
+      }
+    }
+  }
+
+  test('A1′ 主路径：auto on + quick + requirements 产出达标 → 无三形态授权直接推进（auto-confirm）+ 埋点', () => {
+    setupAutoFixture({ stage: 'requirements' })
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    expect(advanced).toBe('prototype')
+    expect(readProjects()[0]?.currentStage).toBe('prototype')
+    const month = new Date().toISOString().slice(0, 7)
+    const events = readFileSync(join(fixtureRoot, '_telemetry', `events-${month}.jsonl`), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(events.some((e) => e.eventType === 'confirm.auto-confirm' && (e.payload as Record<string, unknown>).target === 'prototype')).toBe(true)
+  })
+
+  test('红测（A1′/§六-1）：auto on + 产出未达标 → 拒 + advance.auto-gate 埋点 + auto 专属教育文案', () => {
+    setupAutoFixture({ stage: 'requirements', withOutput: false })
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    expect(readProjects()[0]?.currentStage).toBe('requirements')
+    const denied = hooks.injected.find((t) => t.includes('推进未被授权'))
+    expect(denied).toBeTruthy()
+    expect(denied).toContain('自动审核')
+    expect(denied).toContain('环境安装确认为唯一例外')
+    const month = new Date().toISOString().slice(0, 7)
+    const events = readFileSync(join(fixtureRoot, '_telemetry', `events-${month}.jsonl`), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    const gateEvent = events.find((e) => e.eventType === 'advance.auto-gate')
+    expect(gateEvent).toBeTruthy()
+    expect((gateEvent!.payload as Record<string, unknown>).auto_block_reason).toBe('verify-failed')
+  })
+
+  test('红测（R7-08）：auto on + 跳级标记 → W11 目标校验先拒（target 校验不短路，非授权门文案）', () => {
+    setupAutoFixture({ stage: 'requirements' })
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    expect(hooks.injected.some((t) => t.includes('推进标记目标错误'))).toBe(true)
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(false)
+  })
+
+  test('红测（§六-4 验收增补 10）：currentStage=planning 异常值 + 推进 → 拒（五阶段白名单，quick 无 planning）', () => {
+    setupAutoFixture({ stage: 'planning' })
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    expect(readProjects()[0]?.currentStage).toBe('planning')
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
+  })
+
+  test('红测（A1′ 条件 2）：iterative + autoClarify 残留 enabled → 不自动确认（回落三形态，拒）', () => {
+    setupAutoFixture({ stage: 'requirements', mode: 'iterative' })
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe(null)
+    // iterative 确认链走真人：注入的是真人版教育文案（非 auto 版）
+    const denied = hooks.injected.find((t) => t.includes('推进未被授权'))
+    expect(denied).toBeTruthy()
+    expect(denied).not.toContain('自动审核')
+  })
+
+  test('A1′ AC 三态（R7-05）：architecture 缺失 ac-verdict → 拒 + 回炉提示（未审查视为不通过）', () => {
+    setupAutoFixture({ stage: 'architecture', acVerdict: 'missing' })
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, hooks)).toBe(null)
+    const rework = hooks.injected.find((t) => t.includes('架构自动确认被拦截'))
+    expect(rework).toBeTruthy()
+    expect(rework).toContain('ac-verdict.json 缺失')
+    expect(rework).toContain('对抗审查')
+    expect(readProjects()[0]?.currentStage).toBe('architecture')
+  })
+
+  test('A1′ AC 三态：ac-verdict=red → 拒 + 回炉提示（含 findings 修复指令）', () => {
+    setupAutoFixture({ stage: 'architecture', acVerdict: 'red' })
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, hooks)).toBe(null)
+    const rework = hooks.injected.find((t) => t.includes('架构自动确认被拦截'))
+    expect(rework).toBeTruthy()
+    expect(rework).toContain('审计结论为 red')
+  })
+
+  test('A1′ AC 三态：ac-verdict=green → 自动确认推进（architecture → coding）', () => {
+    setupAutoFixture({ stage: 'architecture', acVerdict: 'green' })
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, hooks)
+    expect(advanced).toBe('coding')
+    expect(readProjects()[0]?.currentStage).toBe('coding')
+  })
+
+  test('验收增补 11（关闭回落）：auto 推进成功后关闭开关 → 下一推进点真人门拒且不静默卡死（教育含真人确认路径）', () => {
+    setupAutoFixture({ stage: 'requirements' })
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, buildTestHooks())).toBe('prototype')
+    // 中途关闭开关（渲染端既有徽标开关入口写回）
+    const projectsPath = join(fixtureRoot, '_nanju-projects.json')
+    const projects = JSON.parse(readFileSync(projectsPath, 'utf-8')) as Array<Record<string, unknown>>
+    projects[0]!.autoClarify = { enabled: false, proxyBudget: 20, pendingQuestionIds: [] }
+    writeFileSync(projectsPath, JSON.stringify(projects))
+    // prototype 产出达标
+    mkdirSync(join(fixtureRoot, 'project-p1', '02_UX_DESIGN'), { recursive: true })
+    writeFileSync(join(fixtureRoot, 'project-p1', '02_UX_DESIGN', 'prototype.html'),
+      '<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>fixture</title></head><body><div>原型</div></body></html>')
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['architecture'], RESUME, hooks)).toBe(null)
+    const denied = hooks.injected.find((t) => t.includes('推进未被授权'))
+    expect(denied).toBeTruthy()
+    expect(denied).toContain('AskUserQuestion')
+    expect(denied).not.toContain('自动审核')
+  })
+})
+
+describe('D8 A2′：交付 main 实跑 provenance（R7-02）', () => {
+  /** auto on testing fixture：达标 06_TESTS + 新 schema pass report + 08_APP 指纹一致 */
+  function setupAutoDeliveryFixture(): void {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-d8-dlv-'))
+    fixtureRoot = dir
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'p1', name: 'D8 交付项目', mode: 'quick', status: 'active',
+      currentStage: 'testing', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      sessionId: SESSION_ID, workspaceSlug: WS,
+      autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] },
+    }]))
+    const html = '<!DOCTYPE html><html><body><div data-ai-id="view-note-list">列表</div></body></html>'
+    mkdirSync(join(dir, 'project-p1', '06_TESTS', 'features'), { recursive: true })
+    mkdirSync(join(dir, 'project-p1', '08_APP'), { recursive: true })
+    writeFileSync(join(dir, 'project-p1', '08_APP', 'index.html'), html)
+    writeFileSync(join(dir, 'project-p1', '06_TESTS', 'features', 'index.feature'),
+      'Feature: 换算\nScenario: 输入\nFeature-index\n'.repeat(5))
+    mkdirSync(join(dir, 'project-p1', '06_TESTS', 'features', 'x'), { recursive: true })
+    writeFileSync(join(dir, 'project-p1', '06_TESTS', 'report.json'), JSON.stringify({
+      generatedAt: '2026-09-11T22:00:00.000Z', runId: 'FAKE-R1',
+      entryFingerprint: { sha256: createHash('sha256').update(html, 'utf-8').digest('hex'), size: Buffer.byteLength(html, 'utf-8') },
+      executionContext: 'file://', coverageUnverified: [],
+      verdict: 'pass', scenariosTotal: 1, passed: 1, failed: 0, skipped: 0,
+      coveredUs: ['US-01'], uncoveredUs: [], retryCount: 0, scenarios: [],
+    }))
+  }
+
+  beforeEach(() => { setupAutoDeliveryFixture() })
+  afterEach(() => { __resetGwtProvenanceForTests() })
+
+  test('红测（验收增补 9/R7-02）：伪造 report（runId 无 main 登记）→ 拒 + reason:no-main-run + 教育触发 GWT', () => {
+    const block = checkGwtDeliveryFacts({
+      workspaceSlug: WS, projectId: 'p1',
+      reportJsonPath: join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'),
+      projectDir: join(fixtureRoot, 'project-p1'),
+      info: readProjectInfo(WS, 'p1'),
+    })
+    expect(block?.reason).toBe('no-main-run')
+    expect(block?.message).toContain('PHASE_ADVANCE: testing')
+    expect(block?.message).toContain('伪造')
+  })
+
+  test('A2′ 主路径：main 实跑登记（recordMainGwtRun）+ 非运行中 → 四道过（放行交付，无需 deliveryAck）', () => {
+    recordMainGwtRun('p1', 'FAKE-R1')
+    expect(isGwtRunInProgress('p1')).toBe(false)
+    const block = checkGwtDeliveryFacts({
+      workspaceSlug: WS, projectId: 'p1',
+      reportJsonPath: join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'),
+      projectDir: join(fixtureRoot, 'project-p1'),
+      info: readProjectInfo(WS, 'p1'),
+    })
+    expect(block).toBeNull() // 无 ack 也放行（auto 交付第二事实已替换）
+  })
+
+  test('A2′ d′：GWT 运行中 → gwt-running 拒（旧报告不可交付）', () => {
+    recordMainGwtRun('p1', 'FAKE-R1')
+    // 运行中状态由 runNanjuGwtAcceptance 薄壳 try/finally 维护（模块私有不可直构）；
+    // 等价语义验证：未运行+已登记放行（上例）+ 薄壳 finally 兜底源码断言（下方）
+    expect(isGwtRunInProgress('p1')).toBe(false)
+    const source = readFileSync(new URL('../nanju-gwt-runner.ts', import.meta.url), 'utf-8')
+    expect(source).toContain('runningGwtProjectIds.add(input.projectId)')
+    expect(source).toMatch(/finally \{\s*\n\s*runningGwtProjectIds\.delete\(input\.projectId\)/)
+  })
+
+  test('A2′ consumer 链：auto on testing + delivered 标记 + main 登记 → 推进 delivered + challenge 终态清理', () => {
+    recordMainGwtRun('p1', 'FAKE-R1')
+    setProjectDeliveryChallenge(WS, 'p1', 'FAKE-R1', SESSION_ID)
+    const base = buildTestHooks()
+    const hooks = {
+      ...base,
+      checkGwtDeliveryGate: (ws: string, pid: string): string | null => {
+        return checkGwtDeliveryFacts({
+          workspaceSlug: ws, projectId: pid,
+          reportJsonPath: join(fixtureRoot, `project-${pid}`, '06_TESTS', 'report.json'),
+          projectDir: join(fixtureRoot, `project-${pid}`),
+          info: readProjectInfo(ws, pid),
+        })?.message ?? null
+      },
+    }
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['delivered'], RESUME, hooks)
+    expect(advanced).toBe('delivered')
+    expect(readProjects()[0]).toMatchObject({ currentStage: 'delivered', status: 'completed' })
+    // A3′：challenge 终态清理（防残留跨交付）
+    expect(readProjectInfo(WS, 'p1')?.deliveryChallenge).toBeUndefined()
+  })
+
+  test('A2′ auto off 回归：非 auto 项目无 ack → no-ack 拒（W18 原文路径逐字节不变）', () => {
+    const projectsPath = join(fixtureRoot, '_nanju-projects.json')
+    const projects = JSON.parse(readFileSync(projectsPath, 'utf-8')) as Array<Record<string, unknown>>
+    delete projects[0]!.autoClarify
+    writeFileSync(projectsPath, JSON.stringify(projects))
+    const block = checkGwtDeliveryFacts({
+      workspaceSlug: WS, projectId: 'p1',
+      reportJsonPath: join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'),
+      projectDir: join(fixtureRoot, 'project-p1'),
+      info: readProjectInfo(WS, 'p1'),
+    })
+    expect(block?.reason).toBe('no-ack')
+    expect(block?.message).toContain('AskUserQuestion')
+  })
+})
+
+// ═══════════════ D8 S4′：子步骤单调守卫 + 事实写入点直测 ═══════════════
+
+describe('D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固）', () => {
+  test('同阶段序数回退 → 拦截不落盘（REQ_ATK 后写 REQ）', () => {
+    setSub(WS, 'p1', 'REQ_ATK', { force: true })
+    setSub(WS, 'p1', 'REQ')
+    expect(getSub(WS, 'p1')).toBe('REQ_ATK')
+  })
+
+  test('同阶段序数前进/持平 → 写入（REQ → REQ_ATK → REQ_UC）', () => {
+    setSub(WS, 'p1', 'REQ', { force: true })
+    setSub(WS, 'p1', 'REQ_ATK')
+    expect(getSub(WS, 'p1')).toBe('REQ_ATK')
+    setSub(WS, 'p1', 'REQ_UC')
+    expect(getSub(WS, 'p1')).toBe('REQ_UC')
+  })
+
+  test('跨阶段切换 → bypass（REQ_UC 后写 PROTO 主节点）', () => {
+    setSub(WS, 'p1', 'REQ_UC', { force: true })
+    setSub(WS, 'p1', 'PROTO')
+    expect(getSub(WS, 'p1')).toBe('PROTO')
+  })
+
+  test('force 显式重置 bypass（delivered 清空等显式重置通道）', () => {
+    setSub(WS, 'p1', 'REQ_UC', { force: true })
+    setSub(WS, 'p1', '', { force: true })
+    expect(getSub(WS, 'p1')).toBe('') // 空串=已清空（现状语义：?? null 仅对字段缺失，空串保留）
+  })
+
+  test('sentinel（未知值）不参与序数比较：主节点后可写 _CLARIFY，_CLARIFY 后可写回主节点/前进', () => {
+    setSub(WS, 'p1', 'REQ', { force: true })
+    setSub(WS, 'p1', 'REQ_CLARIFY')
+    expect(getSub(WS, 'p1')).toBe('REQ_CLARIFY')
+    setSub(WS, 'p1', 'REQ') // 恢复主节点（blocked 解除路径）
+    expect(getSub(WS, 'p1')).toBe('REQ')
+    setSub(WS, 'p1', 'REQ_CLARIFY') // 再次 blocked
+    setSub(WS, 'p1', 'REQ_ATK') // sentinel 后前进不被阻塞
+    expect(getSub(WS, 'p1')).toBe('REQ_ATK')
+  })
+
+  test('getClarifySentinelNodeId：六阶段主节点 sentinel；未知阶段 null', () => {
+    expect(getClarifySentinelNodeId('requirements')).toBe('REQ_CLARIFY')
+    expect(getClarifySentinelNodeId('testing')).toBe('TEST_CLARIFY')
+    expect(getClarifySentinelNodeId('unknown-stage')).toBe(null)
+  })
+})
+
+describe('D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配', () => {
+  test('归因失败（项目不存在）→ false 不写', () => {
+    expect(tryAdvanceGuideSubStage(WS, 'no-such', 'REQ_ATK')).toBe(false)
+  })
+
+  test('当前阶段无 outputPath（异常值 planning，quick 无此路由）→ false 不写（S4′ 验收增补 10 同源）', () => {
+    const projectsPath = join(fixtureRoot, '_nanju-projects.json')
+    const projects = JSON.parse(readFileSync(projectsPath, 'utf-8')) as Array<Record<string, unknown>>
+    projects[0]!.currentStage = 'planning'
+    writeFileSync(projectsPath, JSON.stringify(projects))
+    expect(tryAdvanceGuideSubStage(WS, 'p1', 'REQ_ATK')).toBe(false)
+    expect(getSub(WS, 'p1')).toBe(null)
+  })
+
+  test('requirements 有 outputPath → 写入成功（write-then-emit）', () => {
+    expect(tryAdvanceGuideSubStage(WS, 'p1', 'REQ_ATK')).toBe(true)
+    expect(getSub(WS, 'p1')).toBe('REQ_ATK')
+  })
+
+  test('S4′-4：ATK 判据 = requiresAC（quick requirements requiresAC=false → ATK 由调用方 gating，本函数只管写入）', () => {
+    setSub(WS, 'p1', 'REQ', { force: true })
+    // 函数本身不做 requiresAC 过滤（preview-watcher 调用方过滤）；验证写入通道畅通
+    expect(tryAdvanceGuideSubStage(WS, 'p1', 'REQ_ATK')).toBe(true)
+  })
+})
+
+describe('D8 S4′ 写入点源码断言（防退化）', () => {
+  const orchestratorSource = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
+
+  test('delegation-watch：blocked → sentinel + 解除恢复（S4′ b 点）', () => {
+    const watchSource = readFileSync(new URL('../nanju-delegation-watch.ts', import.meta.url), 'utf-8')
+    expect(watchSource).toContain('trySetClarifySentinel')
+    expect(watchSource).toContain('tryRestoreMainFromClarify')
+  })
+
+  test('preview-watcher：产出写入 → 归因+verify+requiresAC → ATK（S4′ c 点）', () => {
+    const watcherSource = readFileSync(new URL('../nanju-preview-watcher.ts', import.meta.url), 'utf-8')
+    expect(watcherSource).toContain('maybeAdvanceAtkSubStage')
+    expect(watcherSource).toContain('requiresAC !== true') // R7-16：quick 不写 ATK
+    expect(watcherSource).toContain('verifyPhaseOutput')
+  })
+
+  test('gwt-runner：report 落盘 → provenance 登记 + TEST_JUDGE（S4′ d 点 / A2′）', () => {
+    const gwtSource = readFileSync(new URL('../nanju-gwt-runner.ts', import.meta.url), 'utf-8')
+    expect(gwtSource).toContain("tryAdvanceGuideSubStage(input.workspaceSlug, input.projectId, 'TEST_JUDGE')")
+    expect(gwtSource).toContain('recordMainGwtRun(input.projectId')
+  })
+
+  test('consumer：autoConfirm 放行 → UC 写入（S4′ e 点 / R7-13）+ advance.auto-gate/confirm.auto-confirm 事件', () => {
+    const consumerSource = readFileSync(new URL('../nanju-phase-advance-consumer.ts', import.meta.url), 'utf-8')
+    expect(consumerSource).toContain('`${main}_UC`')
+    expect(consumerSource).toContain("'advance.auto-gate'")
+    expect(consumerSource).toContain("'confirm.auto-confirm'")
+    // A1′ 五条件齐备（§九代码块逐条）
+    expect(consumerSource).toContain('AUTO_CONFIRM_STAGE_WHITELIST')
+    expect(consumerSource).toContain("getPhaseNode('quick', stage")
+    expect(consumerSource).toContain("readArchitectureAcVerdict")
+  })
+
+  test('A3′：交付成功清 challenge + orchestrator GWT-pass 登记链未回归', () => {
+    const consumerSource = readFileSync(new URL('../nanju-phase-advance-consumer.ts', import.meta.url), 'utf-8')
+    expect(consumerSource).toContain('clearProjectDeliveryChallenge')
+    expect(orchestratorSource).toContain("this.registerSystemAdvance(workspaceSlug, projectId, 'delivered')")
   })
 })

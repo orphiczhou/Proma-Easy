@@ -769,11 +769,10 @@ describe('v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先
   })
 })
 
-describe('v2.4 §3：L1 AskUserQuestion 路由（auto 开启时按 header 前缀）', () => {
+describe('D8 A3′：auto on AskUser 路由 install-only（R7-03）', () => {
   /** AskUser 路由 fixture：requirements 阶段 + autoClarify 可控 + 达标 PRD */
-  function setupAskFixture(autoClarify?: { enabled: boolean; proxyBudget: number; pendingQuestionIds: string[] }): void {
+  function setupAskFixture(autoClarify?: { enabled: boolean; proxyBudget?: number; pendingQuestionIds?: string[] }): void {
     setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
-    // requirements 阶段更贴合推进语义（expectedTarget=prototype）；重写项目元数据
     const projectsPath = join(fixtureRoot, '_nanju-projects.json')
     const projects = JSON.parse(readFileSync(projectsPath, 'utf-8')) as Array<Record<string, unknown>>
     const p = projects[0]!
@@ -788,106 +787,76 @@ describe('v2.4 §3：L1 AskUserQuestion 路由（auto 开启时按 header 前缀
     __resetNanjuAdvanceAuthStoresForTests()
   })
 
-  test('auto 开启 + 通用收口 header「确认·{phase.title}」→ 放行 + 登记 activeConfirmAsk（expectedTarget=阶段图唯一下一阶段）', () => {
+  test('红测（A3′）：auto on + 六确认收口 header（通用/原型交互验证/预览确认/架构与环境配置/满意交付）→ 一律 deny + 教育指向直接推进/调代理', () => {
     setupAskFixture(AUTO_ON)
-    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: 'PRD 已产出，是否确认进入下一阶段？', header: '确认·需求分析师', options: [{ label: '确认' }, { label: '需要修改' }] }],
-    })
-    expect(result).toBeNull()
-    const ask = getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
-    expect(ask).toBeTruthy()
-    expect(ask!.expectedTarget).toBe('prototype') // quick: requirements → prototype
-  })
-
-  test('F2-3① 收口白名单：原型交互验证/预览确认/架构与环境配置/满意交付 均登记（直接门控 PHASE_ADVANCE 类）', () => {
-    setupAskFixture(AUTO_ON)
-    for (const header of ['确认·原型交互验证', '确认·预览确认', '确认·架构与环境配置', '确认·满意交付']) {
-      expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+    for (const header of ['确认·需求分析师', '确认·原型交互验证', '确认·预览确认', '确认·架构与环境配置', '确认·满意交付']) {
+      const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
         questions: [{ question: '收口确认', header, options: [] }],
-      })).toBeNull()
-      expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeTruthy()
-      __resetNanjuAdvanceAuthStoresForTests()
+      })
+      expect(result?.behavior).toBe('deny')
+      expect(result?.message).toContain('自动审核')
+      expect(result?.message).toContain('直接输出推进标记')
+      expect(result?.message).toContain('nanju_clarify_proxy')
     }
   })
 
-  test('红测（F2-3①/#3）：中间确认 header「确认·安装缺失组件」→ 路由放行（「确认」前缀合法）但不登记 activeConfirmAsk', () => {
+  test('红测（A3′）：auto on + 设计/转述 header → deny（D7 三前缀放行面整体收窄）', () => {
+    setupAskFixture(AUTO_ON)
+    for (const header of ['设计·导航布局偏好', '转述·环境依赖确认', '需求澄清']) {
+      expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+        questions: [{ question: 'q', header, options: [] }],
+      })?.behavior).toBe('deny')
+    }
+  })
+
+  test('A3′ 唯一放行：精确「确认·安装缺失组件」→ 放行且不登记 activeConfirmAsk（环境安装=唯一人工点）', () => {
     setupAskFixture(AUTO_ON)
     const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: '环境缺失 Rust 工具链，确认安装？', header: '确认·安装缺失组件', options: [{ label: '确认安装' }, { label: '换技术栈' }] }],
+      questions: [{ question: '环境缺失 Rust 工具链，确认安装？', header: '确认·安装缺失组件', options: [{ label: '确认安装' }] }],
     })
-    expect(result).toBeNull() // 路由层放行（确认前缀）
-    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull() // 但不登记（中间确认不构成推进授权问句）
+    expect(result).toBeNull()
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull() // 登记整体跳过
   })
 
-  test('红测（F2-3①）：非收口确认 header（白名单外后缀）→ 放行但不登记', () => {
-    setupAskFixture(AUTO_ON)
-    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: '某个自定义确认交互', header: '确认·自定义事项', options: [] }],
-    })).toBeNull()
-    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
-  })
-
-  test('auto 开启 + header「设计…」/「转述…」前缀 → 放行 + 不登记 activeConfirmAsk（非确认问句）', () => {
-    setupAskFixture(AUTO_ON)
-    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: '导航放顶部还是侧边？', header: '设计·导航布局偏好', options: [] }],
-    })).toBeNull()
-    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: '这个问题需要转述真人确认', header: '转述·环境依赖确认', options: [] }],
-    })).toBeNull()
-    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
-  })
-
-  test('红测：auto 开启 + 无豁免前缀 header → deny + 教育话术（含「确认必须由真人给出」与「nanju_clarify_proxy」，Defender #9）', () => {
+  test('红测（A3′）：安装 + 其他混合 question → 整体 deny（fail-closed）', () => {
     setupAskFixture(AUTO_ON)
     const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: '这个工具的目标用户是谁？使用频率多高？', header: '需求澄清', options: [] }],
+      questions: [
+        { question: '确认安装？', header: '确认·安装缺失组件', options: [] },
+        { question: '顺便确认收口？', header: '确认·需求分析师', options: [] },
+      ],
     })
     expect(result?.behavior).toBe('deny')
-    expect(result?.message).toContain('确认必须由真人给出')
-    expect(result?.message).toContain('nanju_clarify_proxy')
   })
 
-  test('交付挑战机器豁免（Defender #7）：auto 开启 + deliveryChallenge 在场 → 无前缀 header 也放行', () => {
+  test('红测（A3′/§九）：auto on 交付挑战机器豁免禁用（challenge 在场 + 无前缀 → deny；交付走 A2′ main 实跑 provenance）', () => {
     setupAskFixture(AUTO_ON)
     setProjectDeliveryChallenge(WORKSPACE_SLUG, PROJECT_ID, 'run-1', 'session-1')
     expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
       questions: [{ question: '验收全部通过，是否满意交付？', header: '交付验收', options: [] }],
-    })).toBeNull()
+    })?.behavior).toBe('deny')
   })
 
-  test('auto 关闭（autoClarify 缺失 / enabled:false）→ 全放行（现状零变化回归）', () => {
+  test('auto off（缺失 / enabled:false）→ 全放行 + D7 登记逻辑恢复（收口 header 登记 activeConfirmAsk）', () => {
     setupAskFixture(undefined)
     expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: '需求澄清问题', header: '需求澄清', options: [] }],
+      questions: [{ question: 'PRD 已产出，是否确认进入下一阶段？', header: '确认·需求分析师', options: [] }],
     })).toBeNull()
+    const ask = getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
+    expect(ask).toBeTruthy()
+    expect(ask!.expectedTarget).toBe('prototype')
+    __resetNanjuAdvanceAuthStoresForTests()
     setupAskFixture({ enabled: false, proxyBudget: 20, pendingQuestionIds: [] })
     expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: '需求澄清问题', header: '需求澄清', options: [] }],
+      questions: [{ question: 'q', header: '需求澄清', options: [] }],
+    })).toBeNull() // auto off 全放行（无前缀也不拦——D7 现状）
+  })
+
+  test('auto off 中间确认不登记（F2-3① 回归保持）：「确认·安装缺失组件」放行且不登记', () => {
+    setupAskFixture(undefined)
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '环境缺失，确认安装？', header: '确认·安装缺失组件', options: [] }],
     })).toBeNull()
-  })
-
-  test('多 question 混合 header：任一非豁免前缀 → 整体 deny（fail-closed，Defender #17①）', () => {
-    setupAskFixture(AUTO_ON)
-    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [
-        { question: '确认进入下一阶段？', header: '确认·收口', options: [] },
-        { question: '顺便问下目标用户是谁？', header: '需求澄清', options: [] },
-      ],
-    })
-    expect(result?.behavior).toBe('deny')
-    // 混合调用不登记确认问句
     expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
-  })
-
-  test('收口问句重复放行覆盖登记（新问句替代旧问句，10min TTL 语义不变）', () => {
-    setupAskFixture(AUTO_ON)
-    checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: 'A', header: '确认·需求分析师', options: [] }],
-    })
-    checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
-      questions: [{ question: 'B', header: '确认·需求分析师', options: [] }],
-    })
-    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeTruthy() // 后到者胜（覆盖式）
   })
 })

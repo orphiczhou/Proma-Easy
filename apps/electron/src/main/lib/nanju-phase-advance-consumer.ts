@@ -267,6 +267,69 @@ function checkDeliveryConfirmation(
   }
 }
 
+// ═══ D8 A1′（§九终版）：autoConfirmAuthorized 第四形态（纯评估，无副作用） ═══
+
+/** A1′ 阶段白名单（quick 五活跃阶段；planning 等 quick 无此阶段的异常值不通过） */
+const AUTO_CONFIRM_STAGE_WHITELIST = ['requirements', 'prototype', 'architecture', 'coding', 'testing'] as const
+
+/** 读取 architecture 轻量 AC 结论（03_ARCHITECTURE/ac-verdict.json）；
+ *  缺失/不可解析/非法值一律 'missing'（R7-05：fail-closed 视为 red） */
+function readArchitectureAcVerdict(workspaceSlug: string, projectId: string): 'green' | 'yellow' | 'red' | 'missing' {
+  try {
+    const { existsSync, readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const { getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
+    const verdictPath = join(getNanjuProjectDir(workspaceSlug, projectId), '03_ARCHITECTURE', 'ac-verdict.json')
+    if (!existsSync(verdictPath)) return 'missing'
+    const parsed = JSON.parse(readFileSync(verdictPath, 'utf-8')) as { verdict?: unknown }
+    const v = parsed?.verdict
+    if (v === 'green' || v === 'yellow' || v === 'red') return v
+    return 'missing'
+  } catch {
+    return 'missing'
+  }
+}
+
+/**
+ * D8 A1′（§九终版，五条件严格式）：
+ * enabled ∧ quick ∧ currentStage∈五阶段白名单 ∧ getPhaseNode('quick',stage)?.outputPath
+ * 存在（R7-06：不复用 verifyPhaseOutput 的 null 双语义）∧ verifyPhaseOutput===null（严格
+ * === null）∧（非 architecture ∨ acVerdict≠'red'——缺失/不可解析 fail-closed 视 red）。
+ *
+ * target 校验不短路（R7-08）：本函数仅判「当前阶段可自动确认」；标记目标仍须先过
+ * validateAdvanceTarget（调用顺序保证——授权门位于 W11 校验之后）。
+ * @returns ok / reason（ac-red 含缺失形态；供回炉提示与遥测归因）
+ */
+function evaluateAutoConfirmAuthorized(
+  workspaceSlug: string,
+  project: { projectId: string; mode: string; currentStage: string; autoClarify?: { enabled?: boolean } },
+): { ok: boolean; reason?: string } {
+  if (project.autoClarify?.enabled !== true) return { ok: false, reason: 'disabled' }
+  if (project.mode !== 'quick') return { ok: false, reason: 'not-quick' }
+  const stage = project.currentStage
+  if (!(AUTO_CONFIRM_STAGE_WHITELIST as readonly string[]).includes(stage)) {
+    return { ok: false, reason: 'stage-not-whitelisted' }
+  }
+  try {
+    const { getPhaseNode } = require('./nanju-router') as typeof import('./nanju-router')
+    if (!getPhaseNode('quick', stage as import('./nanju-router').PhaseId)?.outputPath) {
+      return { ok: false, reason: 'no-output-path' }
+    }
+  } catch {
+    return { ok: false, reason: 'no-output-path' }
+  }
+  if (verifyPhaseOutput(workspaceSlug, project.projectId, stage as import('./nanju-router').PhaseId) !== null) {
+    return { ok: false, reason: 'verify-failed' }
+  }
+  if (stage === 'architecture') {
+    const verdict = readArchitectureAcVerdict(workspaceSlug, project.projectId)
+    if (verdict === 'red' || verdict === 'missing') {
+      return { ok: false, reason: verdict === 'red' ? 'ac-red' : 'ac-red-missing' }
+    }
+  }
+  return { ok: true }
+}
+
 export function consumePhaseAdvanceMarks(
 sessionId: string,
 workspaceSlug: string,
@@ -347,6 +410,12 @@ hooks: PhaseAdvanceHooks,
               const { clearProjectDeliveryAck } = require('./nanju-project') as typeof import('./nanju-project')
               clearProjectDeliveryAck(workspaceSlug, project.projectId)
             } catch { /* 清理失败不影响交付（ack 随项目删除兑底） */ }
+            // D8 A3′：challenge 终态清理同步追加（auto on 自动交付不经 ask-answer 消费
+            // challenge——防残留跨交付被后续判定误读；幂等，auto off 路径 ack 消费时已清，此处空操作）
+            try {
+              const { clearProjectDeliveryChallenge } = require('./nanju-project') as typeof import('./nanju-project')
+              clearProjectDeliveryChallenge(workspaceSlug, project.projectId)
+            } catch { /* 清理失败不影响交付 */ }
             // W10：推进成功——消费清除确认待推进（幂等，工单 §2.1 消费侧）
             try {
               const { clearProjectConfirmPending } = require('./nanju-project') as typeof import('./nanju-project')
@@ -405,17 +474,21 @@ hooks: PhaseAdvanceHooks,
             console.warn('[南大路由] 推进目标校验异常（放行，不阻断推进）:', e instanceof Error ? e.message : String(e))
           }
           if (advanceTargetOk) {
-            // ── v2.4（D7 §2）：推进硬门（承重）──
+            // ── v2.4（D7 §2）+ D8 A1′：推进硬门（承重，四形态）──
             // PHASE_ADVANCE:<target> 消费前授权校验（特判分支 isTestingSelfAdvance /
             // isDeliverFromTesting 在上方分流，原样保留不走本门）：
             //   合法 ⇔ confirmAuthorization（source∈{ask-answer,user-message} ∧
             //          expectedTarget===target，TTL 10min，消费即清）
-            //          ∨ systemAdvanceAuthorized.target===target（I2，消费即清）。
-            // 不满足 → 拒 + 教育（发起确认问句或等待系统指令），不推进。授权状态读取
-            // 异常时按无授权处理（fail-closed：拒绝代价=用户重新确认，远小于未授权推进）。
+            //          ∨ systemAdvanceAuthorized.target===target（I2，消费即清）
+            //          ∨ autoConfirmAuthorized（D8 A1′ §九五条件严格式——机器事实，
+            //            L1 无伪造面；target 校验不短路：本门位于 W11 之后）。
+            // 不满足 → 拒 + 教育（auto 项目专用文案/AC red 回炉指令），不推进。授权状态
+            // 读取异常时按无授权处理（fail-closed：拒绝代价=用户重新确认，远小于未授权推进）。
             {
               let advanceAuthorized = false
               let authSource = ''
+              let autoConfirmPassed = false
+              let autoBlockReason = ''
               try {
                 const {
                   getConfirmAuthorization, consumeConfirmAuthorization,
@@ -439,27 +512,87 @@ hooks: PhaseAdvanceHooks,
                 console.warn('[南大路由] 推进授权读取异常（按无授权拒绝）:', authReadErr instanceof Error ? (authReadErr as Error).message : String(authReadErr))
               }
               if (!advanceAuthorized) {
-                console.log(`[南大路由] 推进硬门拒绝：无授权（${project.currentStage} → ${newStage}，${project.name}）`)
+                // D8 A1′：第四形态（机器事实五联——enabled/quick/白名单/outputPath/
+                // verify 严格 null + architecture AC≠red fail-closed）
+                const autoVerdict = evaluateAutoConfirmAuthorized(workspaceSlug, project)
+                if (autoVerdict.ok) {
+                  advanceAuthorized = true
+                  authSource = 'auto-confirm'
+                  autoConfirmPassed = true
+                } else {
+                  autoBlockReason = autoVerdict.reason ?? ''
+                }
+              }
+              if (!advanceAuthorized) {
+                const isAutoProject = project.autoClarify?.enabled === true && project.mode === 'quick'
+                console.log(`[南大路由] 推进硬门拒绝：无授权（${project.currentStage} → ${newStage}，${project.name}${isAutoProject ? `，auto 拒因=${autoBlockReason}` : ''}）`)
                 try {
                   const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
-                  recordTelemetry(workspaceSlug, 'advance.gate-deny', {
+                  // D8：auto 项目埋 advance.auto-gate（R7-14 union 由 B 域收口），非 auto 维持 gate-deny
+                  recordTelemetry(workspaceSlug, (isAutoProject ? 'advance.auto-gate' : 'advance.gate-deny') as Parameters<typeof recordTelemetry>[1], {
+                    project_id: project.projectId,
+                    from_stage: project.currentStage,
+                    target: newStage,
+                    mode: project.mode,
+                    ...(isAutoProject ? { auto_block_reason: autoBlockReason } : {}),
+                  }, project.projectId)
+                } catch { /* 埋点失败不影响拒绝 */ }
+                if (isAutoProject && (autoBlockReason === 'ac-red' || autoBlockReason === 'ac-red-missing')) {
+                  // §九 A1′：architecture AC red/未审查 → 不自动确认 + 回炉提示（可见指令）
+                  hooks.injectAssistantMessage(
+                    sessionId,
+                    '⚠️ 架构自动确认被拦截：轻量 AC 对抗审计未通过'
+                    + (autoBlockReason === 'ac-red-missing'
+                      ? '（03_ARCHITECTURE/ac-verdict.json 缺失或不可解析——未审查视为不通过）'
+                      : '（审计结论为 red）')
+                    + '。\n\n'
+                    + '请 continue_delegation 委派「架构师」按审计 findings 修复架构文档'
+                    + '（品类终判 / 技术选型理由 / 环境清单一致性），修复后重新执行单攻击者 1 轮对抗审查（不循环），'
+                    + '并将结论写入 03_ARCHITECTURE/ac-verdict.json'
+                    + '（格式 {verdict:"green"|"yellow"|"red", findings:[{severity,evidence}], attackerModel, ts}），'
+                    + '然后再重新声明推进。环境安装确认仍需用户横幅应答（唯一例外）。',
+                  )
+                } else if (isAutoProject) {
+                  hooks.injectAssistantMessage(
+                    sessionId,
+                    '⚠️ 推进未被授权：本项目已开启自动审核，推进条件 = 当前阶段产出校验通过'
+                    + '（architecture 阶段另需 AC 审计非 red）+ 标记目标为唯一合法下一阶段。\n\n'
+                    + '请先 continue_delegation 委派本阶段角色完成产出（产出达标后系统自动确认推进，无需询问用户；'
+                    + '环境安装确认为唯一例外，仍需用户横幅应答）。当前拒因：'
+                    + (autoBlockReason === 'verify-failed' ? '阶段产出未达标' : autoBlockReason) + '。',
+                  )
+                } else {
+                  hooks.injectAssistantMessage(
+                    sessionId,
+                    '⚠️ 推进未被授权：阶段推进需要真人确认（或系统指令）才能生效。\n\n'
+                    + '请先用 AskUserQuestion（header 以「确认」开头）向用户发起本阶段收口确认，'
+                    + '待用户横幅答复确认（或聊天框回复确认词）后，再重新声明推进；系统自动续接场景由系统指令驱动，无需自行声明。\n'
+                    + '在未获得授权前，不要重复输出推进标记——重复声明同样会被拒绝。',
+                  )
+                }
+                continue
+              }
+              console.log(`[南大路由] 推进硬门通过：${authSource}（${project.currentStage} → ${newStage}）`)
+              if (autoConfirmPassed) {
+                // D8 §九 C′ R7-13：auto 项目 UC 态事实源 = autoConfirm 放行点（非 AskUser 放行点）
+                try {
+                  const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+                  recordTelemetry(workspaceSlug, 'confirm.auto-confirm' as Parameters<typeof recordTelemetry>[1], {
                     project_id: project.projectId,
                     from_stage: project.currentStage,
                     target: newStage,
                     mode: project.mode,
                   }, project.projectId)
-                } catch { /* 埋点失败不影响拒绝 */ }
-                hooks.injectAssistantMessage(
-                  sessionId,
-                  '⚠️ 推进未被授权：阶段推进需要真人确认（或系统指令）才能生效。\n\n'
-                  + '请先用 AskUserQuestion（header 以「确认」开头）向用户发起本阶段收口确认，'
-                  + '待用户横幅答复确认（或聊天框回复确认词）后，再重新声明推进；系统自动续接场景由系统指令驱动，无需自行声明。\n'
-                  + '在未获得授权前，不要重复输出推进标记——重复声明同样会被拒绝。',
-                )
-                continue
+                } catch { /* 埋点失败不影响推进 */ }
+                try {
+                  const { tryAdvanceGuideSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+                  const { getGuideStageMainNodeId } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+                  const main = getGuideStageMainNodeId(project.currentStage)
+                  if (main) tryAdvanceGuideSubStage(workspaceSlug, project.projectId, `${main}_UC`)
+                } catch { /* 向导图写入失败不影响推进 */ }
               }
-              console.log(`[南大路由] 推进硬门通过：${authSource}（${project.currentStage} → ${newStage}）`)
             }
+
             // W7（v0.17.69 + AC 审计 M3/M4）：architecture 产出验证前置位——解析
             // architecture.md 的 projectEnv 标记行写 envReady（write-then-gate：先置位
             // 再跑含 envReady 门禁的 verifyPhaseOutput，避免首推进被自己未置位的门禁

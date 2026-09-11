@@ -190,6 +190,10 @@ export class NanjuDelegationWatcher {
         }
         if (d.hasPendingBlockedEvents) {
           // 等用户回答/权限是用户驱动循环（时长控制明确排除）：时钟重置，恢复后重新计时
+          // D8 S4′：L2 blocked → 澄清中 sentinel（{主节点}_CLARIFY；auto on 语义=
+          // 「代理澄清中」（blocked 走 clarify-proxy），auto off = 等用户——渲染端
+          // 节点点亮由 C 域后续消费，主进程事实源先行；单调守卫按未知值处理不阻塞）
+          this.trySetClarifySentinel(watch.workspaceSlug, watch.projectId, stage)
           tracked.firstSeenAt = this.now()
           tracked.softFired = false
           continue
@@ -204,7 +208,36 @@ export class NanjuDelegationWatcher {
           this.handleSoftTimeout(sessionId, d)
         }
       }
+      // D8 S4′：blocked 解除（本轮无任何运行中委派处于 blocked）且现值为 sentinel
+      // → 写回主节点 current（澄清收口，恢复产出节奏）
+      if (!running.some((d) => d.hasPendingBlockedEvents)) {
+        this.tryRestoreMainFromClarify(watch.workspaceSlug, watch.projectId, stage)
+      }
     }
+  }
+
+  /** D8 S4′：写澄清中 sentinel（幂等：现值已是 sentinel 不重写；归因+outputPath 校验见 tryAdvanceGuideSubStage） */
+  private trySetClarifySentinel(workspaceSlug: string, projectId: string, stage: string): void {
+    try {
+      const { getClarifySentinelNodeId, getProjectSubStage, tryAdvanceGuideSubStage } =
+        require('./nanju-project') as typeof import('./nanju-project')
+      const sentinel = getClarifySentinelNodeId(stage)
+      if (!sentinel || getProjectSubStage(workspaceSlug, projectId) === sentinel) return
+      tryAdvanceGuideSubStage(workspaceSlug, projectId, sentinel)
+    } catch { /* 向导图写入失败不影响超时观察 */ }
+  }
+
+  /** D8 S4′：sentinel → 主节点恢复（blocked 全部解除后；单调守卫：主节点 0 ≥ sentinel -1 可写） */
+  private tryRestoreMainFromClarify(workspaceSlug: string, projectId: string, stage: string): void {
+    try {
+      const { getClarifySentinelNodeId, getProjectSubStage, tryAdvanceGuideSubStage } =
+        require('./nanju-project') as typeof import('./nanju-project')
+      const sentinel = getClarifySentinelNodeId(stage)
+      if (!sentinel || getProjectSubStage(workspaceSlug, projectId) !== sentinel) return
+      const { getGuideStageMainNodeId } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+      const main = getGuideStageMainNodeId(stage)
+      if (main) tryAdvanceGuideSubStage(workspaceSlug, projectId, main)
+    } catch { /* 向导图写入失败不影响超时观察 */ }
   }
 
   /**

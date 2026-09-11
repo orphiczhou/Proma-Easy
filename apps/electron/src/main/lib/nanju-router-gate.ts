@@ -194,16 +194,17 @@ function checkNanjuAskUserRoute(
   input: Record<string, unknown>,
 ): { behavior: 'deny'; message: string } | null {
   if (project.autoClarify?.enabled !== true) return null
-  // 交付挑战机器豁免（机器事实，非 header 判定）
-  try {
-    if (getProjectDeliveryChallenge(workspaceSlug, project.projectId) !== null) return null
-  } catch { /* 读取失败按无挑战处理，继续前缀判定 */ }
+  // ── D8 A3′（R7-03）：auto on 时 AskUser 路由收窄 install-only ──
+  // 用户裁决（D8 §〇）：auto = 「代替审核」——六确认话术全部自动确认，AskUser 唯一
+  // 例外 = 环境安装（真实系统副作用）。header 前缀「确认/设计/转述」且非精确
+  // 「确认·安装缺失组件」→ 一律 deny + 教育（指向直接推进/调代理）。
+  // 交付挑战机器豁免（D7 §3②）追加谓词 ∧ enabled!==true：auto on 禁用（交付走
+  // A2′ main 实跑 provenance，横幅链路整体不出现）。
   const questions = extractAskQuestions(input)
   if (questions.length === 0) return null
-  const offending = questions.find(
-    (q) => !NANJU_ASK_EXEMPT_PREFIXES.some((p) => (q.header ?? '').startsWith(p)),
-  )
-  if (!offending) return null
+  const allInstallOnly = questions.every((q) => (q.header ?? '') === NANJU_ASK_INSTALL_HEADER)
+  if (allInstallOnly) return null // 安装唯一放行（且不登记 activeConfirmAsk——下方整体跳过）
+  const offending = questions.find((q) => q.header ?? q.question)
   try {
     recordTelemetry(
       workspaceSlug,
@@ -211,9 +212,10 @@ function checkNanjuAskUserRoute(
       {
         sessionId: project.sessionId,
         projectId: project.projectId,
-        offendingHeader: offending.header ?? '',
-        questionPreview: offending.question.slice(0, 60),
+        offendingHeader: offending?.header ?? '',
+        questionPreview: offending?.question.slice(0, 60) ?? '',
         questionCount: questions.length,
+        reason: 'auto-install-only',
       },
       project.projectId,
     )
@@ -221,15 +223,16 @@ function checkNanjuAskUserRoute(
   return {
     behavior: 'deny',
     message:
-      '🔒 南大向导交互路由（自动补完需求已开启）：AskUserQuestion 仅限三类交互——\n'
-      + '① 确认类：header 以「确认」开头（阶段收口/验收/交付/安装/合并/过渡确认）。确认必须由真人给出，不可代理；\n'
-      + '② 设计类：header 以「设计」开头（设计偏好点选/转述）；\n'
-      + '③ 转述类：header 以「转述」开头（非需求类问题转述真人）。\n\n'
-      + '需求补充类问题不要问真人——请改调 nanju_clarify_proxy 工具由独立模型代理作答（可联网检索），\n'
-      + '采纳后向用户报告「自动补完」卡片。本次问题「' + (offending.header ?? offending.question.slice(0, 20))
-      + '」不匹配前缀规则，已拒绝：请按上述话术 header 重新组织交互，或改调代理工具。',
+      '🔒 南大向导交互路由（已开启自动审核）：确认类环节不再询问用户——产出与 AC 审计通过后'
+      + '【直接输出推进标记】，系统自动确认；需求补充类问题请调 nanju_clarify_proxy 由代理作答。\n\n'
+      + '唯一例外：环境安装确认（header 精确为「' + NANJU_ASK_INSTALL_HEADER + '」）仍需用户横幅应答。\n'
+      + '本次问题「' + (offending?.header ?? offending?.question.slice(0, 20) ?? '')
+      + '」不在放行范围，已拒绝。请直接推进（产出达标时）或改调代理工具。',
   }
 }
+
+/** D8 A3′：auto on 唯一放行的 AskUser header（环境安装——真实系统副作用，唯一人工点） */
+const NANJU_ASK_INSTALL_HEADER = '确认·安装缺失组件'
 
 /**
  * v2.4（D7 §1 I1-②b / §3）：AskUser 放行侧登记 activeConfirmAsk。
@@ -320,10 +323,15 @@ export function checkNanjuRouterGate(
     if (toolName === 'AskUserQuestion') {
       const askGate = checkNanjuAskUserRoute(workspaceSlug, project, toolName, input)
       if (askGate) {
-        console.log(`[南大路由门禁] AskUser 路由拒绝（自动补完需求开启）: ${project.name}`)
+        console.log(`[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: ${project.name}`)
         return askGate
       }
-      registerConfirmAskIfEligible(workspaceSlug, project, stage, input)
+      // D8 A3′：auto on 时整体跳过登记——自动审核项目不产生「等待用户确认」问句
+      //（activeConfirmAsk 是 I1-② 授权的上下文源，auto 项目推进走第四形态）；
+      // 环境安装问句同样不登记（安装应答不构成推进授权）
+      if (project.autoClarify?.enabled !== true) {
+        registerConfirmAskIfEligible(workspaceSlug, project, stage, input)
+      }
     }
     // W8：白名单放行委派工具后，追加参数级三层强制（非委派工具零变化）。
     // automation/triggeredBy 豁免由调用方（agent-orchestrator canUseTool）既有守卫保证。

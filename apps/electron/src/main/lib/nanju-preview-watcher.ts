@@ -12,10 +12,43 @@
  */
 
 import { watch, type FSWatcher } from 'node:fs'
-import { join, basename } from 'node:path'
+import { join, basename, sep } from 'node:path'
 import { readdirSync, existsSync } from 'node:fs'
 import { getWorkspaceFilesDir } from './config-paths'
 import { getMainWindow as getStoredMainWindow } from './main-window-store'
+
+/**
+ * D8 S4′（R7-04）：产出文件写入 → 向导图「AC 审计中」（{主节点}_ATK）事实写入。
+ *
+ * 判据链（全部满足才写）：文件归因到 project-<id> → 路径精确等于当前阶段
+ * PhaseNode.outputPath（S4′-2 stage/outputPath 匹配，防旧文件/他文件误触发）→
+ * verifyPhaseOutput === null（S4′-4「首次达标」判据，复用同一函数勿自造）→
+ * 阶段 requiresAC === true（R7-16：quick 全阶段 requiresAC=false 不写 ATK——ATK
+ * 节点着色由序列推导兜底；iterative architecture 等写）→ tryAdvanceGuideSubStage
+ * （内含 S4′-1 单调守卫 + write-then-emit）。lazy require 防模块初始化环。
+ */
+function maybeAdvanceAtkSubStage(workspaceSlug: string, fullPath: string): void {
+  try {
+    const { listNanjuProjects, tryAdvanceGuideSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+    const { getPhaseNode } = require('./nanju-router') as typeof import('./nanju-router')
+    const { verifyPhaseOutput } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
+    const { getGuideStageMainNodeId } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+    const filesRoot = getWorkspaceFilesDir(workspaceSlug)
+    if (!fullPath.startsWith(filesRoot + sep)) return
+    for (const project of listNanjuProjects(workspaceSlug)) {
+      const projectDir = join(filesRoot, `project-${project.projectId}`)
+      const node = getPhaseNode(project.mode, project.currentStage as import('./nanju-router').PhaseId)
+      if (!node?.outputPath) continue
+      if (join(projectDir, node.outputPath) !== fullPath) continue
+      if (node.requiresAC !== true) continue
+      if (verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage as import('./nanju-router').PhaseId) !== null) continue
+      const main = getGuideStageMainNodeId(project.currentStage)
+      if (!main) continue
+      tryAdvanceGuideSubStage(workspaceSlug, project.projectId, `${main}_ATK`)
+      return
+    }
+  } catch { /* 向导图写入失败不影响预览通知 */ }
+}
 
 const NANJU_PREVIEW_CHANNEL = 'nanju:html-preview-detected'
 
@@ -98,6 +131,9 @@ export function startNanjuHtmlWatcher(workspaceSlug: string): void {
 
           // 验证文件确实存在（可能收到删除事件）
           if (!existsSync(fullPath)) return
+
+          // D8 S4′：产出写入 → 归因+达标+requiresAC → ATK（失败不影响下方预览通知）
+          maybeAdvanceAtkSubStage(workspaceSlug, fullPath)
 
           const ext = filename.toLowerCase().endsWith('.md') ? '文档' : 'HTML'
           console.log(`[南大预览] 检测到${ext}文件变更: ${filename}（完整路径: ${fullPath}）`)

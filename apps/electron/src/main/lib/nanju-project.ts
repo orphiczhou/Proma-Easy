@@ -555,7 +555,34 @@ export function setProjectSubStage(
   workspaceSlug: string,
   projectId: string,
   subStage: string,
+  opts?: { force?: boolean },
 ): void {
+  // D8 S4′-1（R7-04）：阶段序数单调守卫——同阶段内仅允许序数前进（新序 ≥ 现序），
+  // 防写入点乱序回退向导图（如 blocked→CLARIFY 之后又被旧事件拉回主节点以下）。
+  // 规则：空串（清空/重置）与未知值（不在任何阶段序列，如 ${主节点}_CLARIFY sentinel，
+  // 视为 -1）不参与拦截；跨阶段（新值与现值属于不同阶段序列，阶段切换）bypass——
+  // 推进点写入新阶段主节点天然满足；opts.force 显式 bypass（delivered 清空等显式重置）。
+  if (!opts?.force && subStage !== '') {
+    try {
+      const { GUIDE_SUBSTAGE_SEQUENCE } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+      const locate = (nodeId: string): { stage: string; index: number } | null => {
+        for (const [stage, seq] of Object.entries(GUIDE_SUBSTAGE_SEQUENCE)) {
+          const idx = seq.indexOf(nodeId)
+          if (idx >= 0) return { stage, index: idx }
+        }
+        return null
+      }
+      const current = getProjectSubStage(workspaceSlug, projectId)
+      if (current && current !== '') {
+        const next = locate(subStage)
+        const prev = locate(current)
+        if (next && prev && next.stage === prev.stage && next.index < prev.index) {
+          console.warn(`[南大向导图] 子步骤单调守卫拦截回退写入: ${current} → ${subStage}（同阶段序数回退，不落盘）`)
+          return
+        }
+      }
+    } catch { /* 序列解析失败（模块环等）不阻断写入——守卫是加固不是硬门 */ }
+  }
   const info = readProjectInfo(workspaceSlug, projectId)
   const base: NanjuProjectInfoFile = info ?? {
     projectId,
@@ -576,6 +603,56 @@ export function getProjectSubStage(
   projectId: string,
 ): string | null {
   return readProjectInfo(workspaceSlug, projectId)?.subStage ?? null
+}
+
+// ===== D8 S4′：向导图子步骤事实写入点（归因+阶段产出匹配版） =====
+
+/**
+ * D8 S4′-2：带归因与阶段校验的子步骤写入（watch/gwt-runner/consumer 四写入点共用）。
+ *
+ * 校验链：项目存在 → 当前阶段在路由中有显式 outputPath（写入点语义绑定「作者产出
+ * 阶段」——planning 等 quick 无此阶段的异常值自然不写）→ setProjectSubStage（含
+ * S4′-1 单调守卫）→ write-then-emit 广播（失败不影响落盘，渲染端 10s 轮询兜底）。
+ * @returns 是否实际写入（false = 归因失败/阶段无产出路径/单调守卫拦截）
+ */
+export function tryAdvanceGuideSubStage(
+  workspaceSlug: string,
+  projectId: string,
+  nodeId: string,
+): boolean {
+  try {
+    const { getPhaseNode } = require('./nanju-router') as typeof import('./nanju-router')
+    const project = getNanjuProject(workspaceSlug, projectId)
+    if (!project) return false
+    const stage = project.currentStage as import('./nanju-router').PhaseId
+    if (!getPhaseNode(project.mode, stage)?.outputPath) return false
+    setProjectSubStage(workspaceSlug, projectId, nodeId)
+    try {
+      const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+      emitGuideProgress(project.sessionId ?? '', projectId, project.currentStage, nodeId)
+    } catch { /* 广播失败不影响落盘 */ }
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * D8 S4′：L2 blocked「澄清中」sentinel 节点 id（{主节点}_CLARIFY）。
+ *
+ * 跨进程契约：渲染端 guide-dsl 当前无 CLARIFY 结构节点——sentinel 写入后 derive 按
+ * 未知值回退（主节点 current，无害不破坏图）；渲染端点亮（DSL 加节点或 derive 识别
+ * sentinel→CLARIFY 态）由 C 域后续消费，主进程事实源先行（D8 A 域先行精神）。
+ * 单调守卫按未知值（-1）处理：不阻塞后续 ATK/UC 写入。
+ */
+export function getClarifySentinelNodeId(stage: string): string | null {
+  try {
+    const { getGuideStageMainNodeId } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
+    const main = getGuideStageMainNodeId(stage)
+    return main ? `${main}_CLARIFY` : null
+  } catch {
+    return null
+  }
 }
 
 // ===== 工程环境就绪状态（W7，v0.17.69：architecture 阶段环境配置主进程置位） =====
