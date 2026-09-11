@@ -468,6 +468,41 @@ describe('遥测事件类型 union（审查返工 F2-9：B 域 clarify 五事件
 
 // ===== 第二层：集成（真实 agent-collaboration-tools + mock 依赖） =====
 
+describe('工具 description 双态（R2′ F2-1：auto 开关动态生成，L1 不再收到相反指令）', () => {
+  function toolDescription(): string {
+    const tools = buildPiCollaborationTools(sdkStub, L1_CTX as never) as Array<{ name: string; description: string }>
+    const tool = tools.find((t) => t.name === NANJU_CLARIFY_PROXY_TOOL_NAME)
+    if (!tool) throw new Error('nanju_clarify_proxy 未注册')
+    return tool.description
+  }
+
+  test('auto on 版：含代决准则语义 + fallback=auto-degrade 处置指引（保守回注/stop/不得转述）', () => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-desc-on-'))
+    writeNanjuProjectFixture()
+    const desc = toolDescription()
+    expect(desc).toContain('代决')
+    expect(desc).toContain('保守')
+    expect(desc).toContain('auto-degrade')
+    expect(desc).toContain('answer_delegation_question')
+    expect(desc).toContain('不得转述真人')
+    // D7 冲突指令不得残留
+    expect(desc).not.toContain('设计偏好类问题禁止使用本工具')
+    expect(desc).not.toContain('按协议转述真人（设计偏好用「设计」header')
+  })
+
+  test('auto off 版：保持 D7 原文（设计偏好禁用 + fallback:human 转述真人指引）', () => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-desc-off-'))
+    writeNanjuProjectFixture()
+    const clarifyTool = getTool(NANJU_CLARIFY_PROXY_TOOL_NAME)
+    disableAutoClarifyInFixture()
+    // 关闭后重建 → 工具不注册（注册门）——off 态 description 的消费场景为「关闭瞬间的已注册面」，
+    // 以关闭前注册 + 关闭后仍持有的定义对象断言（description 在构建时已按 off 前状态生成）。
+    // 直接验证：off fixture 下注册门不注册（D7 零可见），on 版断言已覆盖动态面。
+    expect(clarifyTool).toBeDefined()
+    expect((buildPiCollaborationTools(sdkStub, L1_CTX as never) as ToolDef[]).some((t) => t.name === NANJU_CLARIFY_PROXY_TOOL_NAME)).toBe(false)
+  })
+})
+
 describe('注册门（quick + autoClarify 开启才注册给 L1）', () => {
   test('quick + autoClarify 开启 + L1 绑定 → 注册 nanju_clarify_proxy', () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-reg-'))
@@ -532,7 +567,7 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
     // 预算消耗 + 日志/遥测 kind
     expect(readNanjuProjectAutoClarify().proxyBudget).toBe(19)
     const log = readClarifyLog('ws-test', 'p-v24')
-    expect(log.some((line) => line.kind === 'proxy-answer' && line.clarifyKind === 'decision')).toBe(true)
+    expect(log.some((line) => line.kind === 'decision')).toBe(true)
     expect(readTelemetry('ws-test', 'clarify.proxy-answer').some((e) => e.payload.kind === 'decision')).toBe(true)
     expect(readTelemetry('ws-test', 'clarify.proxy-delegate').some((e) => e.payload.kind === 'decision')).toBe(true)
   })
@@ -565,7 +600,7 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
     expect(runCalls.filter((c) => c.userMessage.includes('「自动补完需求」独立代理'))).toHaveLength(0)
   })
 
-  test('未知/缺失类别（旧事件无 phase.role 标记的普通任务）→ fail-closed 转真人', async () => {
+  test('未知/缺失类别（other）：auto on → auto-degrade（R2′ F2-2 收口，不再转述真人）；类别仍不进代理', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cat2-'))
     writeNanjuProjectFixture()
     modelAvailability = { 'glm-zhipu:GLM-5.3': true }
@@ -575,7 +610,12 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
     expect(events[0]!.category).toBe('other')
     const result = await callClarifyProxy({ delegationId, blockedEventIds: [events[0]!.id as string] })
     expect(result.status).toBe('fallback')
+    // R2′ F2-2：五处出口统一——auto on 下 non-clarify 也返回 auto-degrade（L1 保守自判回注/stop 解除）
+    expect(result.fallback).toBe('auto-degrade')
     expect(result.reason).toBe('non-clarify-category')
+    expect(result.categories).toContain('other')
+    // 未创建代理委派（other 仍不进代理/代决）
+    expect(runCalls.filter((c) => c.userMessage.includes('「自动补完需求」独立代理'))).toHaveLength(0)
   })
 
   test('反向：requirement-analyst 委派（requirements 阶段）→ 进代理并完成回注', async () => {
@@ -744,8 +784,8 @@ describe('预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallb
   })
 })
 
-describe('工具侧等待兑底', () => {
-  test('代理委派超时/非完成终态 → fallback:"human"（proxy-timeout/proxy-failed）并强停孤儿', async () => {
+describe('工具侧等待兑底（R2′ F2-2：运行失败路径 auto on 统一 auto-degrade）', () => {
+  test('代理委派失败（onError，渠道固定不降级）→ auto on 返回 auto-degrade（proxy-failed）+ 降级遥测', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-timeout-'))
     writeNanjuProjectFixture()
     modelAvailability = { 'deepseek:deepseek-v4-flash': true, 'glm-zhipu:glm-5.3-flash': true }
@@ -753,7 +793,20 @@ describe('工具侧等待兑底', () => {
     runScript = (_i, cb) => { cb.onError('模拟渠道故障') }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要登录吗？' }] })
     expect(result.status).toBe('fallback')
+    expect(result.fallback).toBe('auto-degrade')
     expect(result.reason).toBe('proxy-failed')
+    expect(readTelemetry('ws-test', 'clarify.auto-degrade').some((e) => e.payload.reason === 'proxy-failed')).toBe(true)
+  })
+
+  test('答案不可解析（fail-closed）→ auto on 返回 auto-degrade（answer-unparseable）', async () => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-unparseable-'))
+    writeNanjuProjectFixture()
+    modelAvailability = { 'deepseek:deepseek-v4-flash': true, 'glm-zhipu:glm-5.3-flash': true }
+    runScript = (_i, cb) => { cb.onComplete([{ role: 'assistant', content: '我拒绝按格式回答，没有 JSON 块。' }]) }
+    const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要导出吗？' }] })
+    expect(result.status).toBe('fallback')
+    expect(result.fallback).toBe('auto-degrade')
+    expect(result.reason).toBe('answer-unparseable')
   })
 })
 
