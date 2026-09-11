@@ -39,6 +39,11 @@ export type TelemetryEventType =
   // 与确认词命中布尔（代答永不构成 I1 授权，命中仅作标记与取证）
   | 'clarify.proxy-delegate' | 'clarify.proxy-answer' | 'clarify.relay-human'
   | 'clarify.guard-deny' | 'clarify.budget-exhausted'
+  // v2.4（D7 §8 审查返工 F2-9）：守卫/门禁域（A）四事件 + 渲染程序化重放观测——
+  // union 收口后 A 域去除 recordTelemetry 调用点的 `as never`（类型安全收口）。
+  // confirm.replay-origin 当前无消费点（Defender #2 可选埋点），预置入表供 A/C 接线。
+  | 'advance.gate-deny' | 'confirm.scatter-no-auth' | 'router.gate.ask-deny'
+  | 'clarify.suspect-fake-confirm' | 'confirm.replay-origin'
 
 export interface TelemetryEvent {
   eventId: string

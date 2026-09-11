@@ -124,6 +124,7 @@ const {
 } = await import('./nanju-clarify-proxy-tool')
 const { shouldSkipFallbackChainForDelegation } = await import('./nanju-model-fallback')
 const { readTelemetry } = await import('./nanju-telemetry')
+import type { TelemetryEventType } from './nanju-telemetry'
 
 // 独立时钟测试用真实 nanju-delegation-watch（纯逻辑依赖注入，不需额外 mock；
 // 静态导入同既有 nanju-delegation-watch.test.ts 模式——模块顶层无副作用，与 mocks 无依赖冲突）
@@ -423,6 +424,30 @@ describe('模型 fallback 跳过（shouldSkipFallbackChainForDelegation：代理
     expect(shouldSkipFallbackChainForDelegation(true)).toBe(true)
     expect(shouldSkipFallbackChainForDelegation(undefined)).toBe(false)
     expect(shouldSkipFallbackChainForDelegation(false)).toBe(false)
+  })
+})
+
+describe('遥测事件类型 union（审查返工 F2-9：B 域 clarify 五事件 + A 域四事件入表）', () => {
+  test('clarify 五事件均为合法 TelemetryEventType（B 域）', () => {
+    const clarifyEvents = [
+      'clarify.proxy-delegate', 'clarify.proxy-answer', 'clarify.relay-human',
+      'clarify.guard-deny', 'clarify.budget-exhausted',
+    ] as const
+    for (const eventType of clarifyEvents) {
+      const _typeCheck: TelemetryEventType = eventType
+      expect(_typeCheck).toBe(eventType)
+    }
+  })
+
+  test('A 域四事件 + replay-origin 预置均为合法 TelemetryEventType（union 收口，去 as never 的前提）', () => {
+    const guardEvents = [
+      'advance.gate-deny', 'confirm.scatter-no-auth', 'router.gate.ask-deny',
+      'clarify.suspect-fake-confirm', 'confirm.replay-origin',
+    ] as const
+    for (const eventType of guardEvents) {
+      const _typeCheck: TelemetryEventType = eventType
+      expect(_typeCheck).toBe(eventType)
+    }
   })
 })
 
