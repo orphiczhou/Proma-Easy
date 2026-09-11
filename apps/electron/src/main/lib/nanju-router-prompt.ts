@@ -139,6 +139,9 @@ function getPrdSummary(workspaceSlug: string, projectId: string): string {
  * @param acDefenderRuntime W13：AC 防御者运行时解析值（testing 阶段=minimax UUID 渠道）。
  *   提供时覆盖 resolveACActors 解析出的防御者渠道/模型（家族断言用解析后的渠道判定）；
  *   null/缺省 = 用节点解析值（字面家族标记，向后兼容）
+ * @param autoClarifyEnabled v2.4（D7）：auto 开启时 AC 攻击者模板增补两条——代答清单披露
+ *   （产物 auto-clarify 标记→代答决策重点审查）+ 同族加倍攻击（diversityDegraded 时双倍怀疑）；
+ *   缺省/false = 零注入（既有 AC 指令不变）
  */
 export function buildL2TaskWithAC(
   phase: PhaseNode,
@@ -148,6 +151,7 @@ export function buildL2TaskWithAC(
   projectDir: string,
   categoryInfo?: { category: ProjectCategory; source: ProjectCategorySource } | null,
   acDefenderRuntime?: { channel: string; model: string } | null,
+  autoClarifyEnabled?: boolean,
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
@@ -314,6 +318,14 @@ export function buildL2TaskWithAC(
   parts.push('   让它严格审查你的产出文件，找出逻辑漏洞、遗漏、不一致、可执行性问题。')
   parts.push('   审查维度：' + auditDimensions + '。')
   parts.push('   攻击者必须给出 red/yellow/green 级别的 finding（带证据）。')
+  // v2.4（D7 §4/§9）：auto 开启时攻击者模板增补——代答决策是新增信任面，攻击者必须披露并重点攻击
+  if (autoClarifyEnabled) {
+    parts.push('   【代答清单披露（auto-clarify）】本项目开启自动补完需求：审查时先检查产物中的')
+    parts.push('   <!-- auto-clarify:qid,channel,ts --> 标记，在报告中列出本阶段哪些问题被代理作答及渠道')
+    parts.push('   （代答清单）；被代答结论采纳的决策一律列为重点审查对象（检索偏见/幻觉转写/选项窄化）。')
+    parts.push('   【同族加倍攻击】若代答渠道与提问方同族或系统标记 diversityDegraded，')
+    parts.push('   对代答过的决策加倍攻击（双倍怀疑强度，逐条索证）。')
+  }
   parts.push('2. 用 delegate_agent(inline:true, channel=' + defenderCh + ', model=' + defenderModel + ') 创建防御者，')
   parts.push('   让它对照攻击者的发现，用证据反驳或确认。')
   parts.push('   注意：攻击者和防御者是不同模型家族，不能串通。')
@@ -353,6 +365,30 @@ export function buildL2TaskWithAC(
   }
 
   return parts.join('\n')
+}
+
+/**
+ * v2.4（D7 §6 终版五条）：auto 开启时注入 L1 的「自动补完需求」协议段。
+ * auto 关闭零注入（行为零变化）；auto 开启与否只影响本段与路由规则消费，
+ * 确认/设计话术 header 前缀是全局话术约定（auto 关闭项目仅文案多一个前缀词）。
+ */
+function buildAutoClarifyProtocolLines(): string[] {
+  return [
+    '### 自动补完需求（auto-clarify 协议，本项目已开启）',
+    '需求补充类问题优先由独立代理会话自动作答（可联网检索）；确认门禁与设计偏好交互永远由真人回答：',
+    "1. 子会话澄清：收到 pendingBlockedEvents → 调 nanju_clarify_proxy(delegationId, blockedEventIds)；",
+    "   工具返回 fallback:'human'（含 non-clarify-category：非需求澄清类不可代答）→ 用 AskUserQuestion",
+    "   转述问真人（header 规则：设计偏好类用「设计·」前缀，其余用「转述·」前缀）。",
+    '2. 你自身的需求补充问题 → 调 nanju_clarify_proxy(questions=[{id,question,options?}])',
+    '   （每题 ≤200 字，一次 ≤5 题；写清上下文与可选项，便于代理检索作答）。',
+    '3. 采纳答案后在回复中输出「自动补完」报告卡片（渠道+问题要点+答案要点）；',
+    '   产物中相关决策处附标记 <!-- auto-clarify:qid,channel,ts -->。',
+    "4. 代理失败/超时/预算耗尽（fallback:'human'）→ 用 AskUserQuestion 向真人转述该问题并说明原因",
+    "   （header 用「转述·」前缀）。",
+    '5. 确认类 AskUserQuestion 的 header 必须以「确认」开头（验收/推进/交付/安装/合并/过渡）；',
+    '   设计类以「设计」开头；转述类以「转述」开头。',
+    '',
+  ]
 }
 
 /**
@@ -441,8 +477,14 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     }
   }
 
-  // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导）
-  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo, acDefenderEndpoint)
+  // v2.4（D7 §0/§3）：auto 开启判定——仅快消型（升级即失效硬边界）；字段由
+  // nanju-project（autoClarify{enabled,...}）提供，宽类型访问兼容并行域类型未合入期。
+  const autoClarifyEnabled = project.mode === 'quick'
+    && ((project as { autoClarify?: { enabled?: boolean } }).autoClarify?.enabled === true)
+
+  // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导；
+  // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击）
+  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo, acDefenderEndpoint, autoClarifyEnabled)
 
   // M7（AC 审计 A9-timing，v0.17.69）：主进程预校验——architecture 阶段构建 L1 指令时
   // 现场对 architecture.md 环境清单跑 validateEnvChecklist（§九「清单执行前过确定性规则
@@ -499,6 +541,8 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     '你是调度员。当前阶段你需要委派「' + phase.title + '」角色子会话完成工作。',
     '子会话内部会自行完成 AC 对抗审计（异构模型）并修复 red 级问题。',
     '',
+    // v2.4（D7 §6）：auto 开启时注入协议段（auto 关闭零注入）
+    ...(autoClarifyEnabled ? buildAutoClarifyProtocolLines() : []),
     '### 具体操作步骤',
     '1. 用 delegate_agent 委派「' + phase.title + '」子会话：',
     '   - channelId: ' + authorChannel,
@@ -537,7 +581,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '       这是用户已点「接受本轮改动」的收齐清单，【直接】把清单整体转成 continue_delegation',
         '       委派 UX 顾问执行，【不得】再追问「还有其他意见吗」，不得再进收集轮。',
         '      当收到【点选纠错】消息（用户在原型上点击了元素，含 data-ai-id 与类型）：',
-        '      - 立即用 AskUserQuestion 弹快速选项（模拟设计规范的快速选项面板）：',
+        '      - 立即用 AskUserQuestion 弹快速选项（模拟设计规范的快速选项面板，header「设计·快速修改」）：',
         '        options 固定五项：换个颜色🎨/改文字🖊/换个位置📐/删掉它🗑/其他💬（用户自描述）；',
         '        question 写明「你点击了[元素类型]「[文本摘要]」，想怎么改？」（类型与摘要来自点选消息）。',
         '      - 用户选了预设项或描述后，与文字意见一样进入意见收集轮（见 d，批量改而非立即改）。',
@@ -562,7 +606,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   e. 用户意见若涉及需求变更（新增/删除功能、改验收标准）：先与用户确认需求变化，',
         '        用 continue_delegation 要求 UX 顾问同步更新 PRD（01_PRD/prd.md 对应 US 条目），再改原型。',
         '        需求澄清后重新提取用户故事清单。',
-        '   e. 用户表示满意后，AskUserQuestion 收口：header「原型交互验证」，multiSelect=true，',
+        '   e. 用户表示满意后，AskUserQuestion 收口：header「确认·原型交互验证」，multiSelect=true，',
         '      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。',
         '   f. 全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。',
       ]
@@ -574,7 +618,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '      「也可以直接在右侧预览上【点击】想改的元素，点选后元素会出现在输入框，',
         '        你接着打字描述想怎么改（如“这个按钮改大”），一起发送即可精准修改」。',
         '   c. 收到【点选纠错】消息（用户在预览上点击了元素，含 data-ai-id 与类型）：',
-        '      - 立即用 AskUserQuestion 弹快速选项：options 固定五项：换个颜色🎨/改文字🖊/换个位置📐/删掉它🗑/其他💬（用户自描述）；',
+        '      - 立即用 AskUserQuestion 弹快速选项（header「设计·快速修改」）：options 固定五项：换个颜色🎨/改文字🖊/换个位置📐/删掉它🗑/其他💬（用户自描述）；',
         '        question 写明「你点击了[元素类型]「[文本摘要]」，想怎么改？」（类型与摘要来自点选消息）。',
         '      - 用户选了预设项或描述后，与文字意见一样进入意见收集轮（见 d，批量改而非立即改）。',
         '   d. 【意见收集轮】（核心节奏：多轮沟通攒一批，再统一修改——【绝不】一条意见就立即改）：',
@@ -590,7 +634,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '      - 修复完成 → 重新 open_preview 展示新版 → 逐条报告改了什么，再次进入意见收集轮；',
         '      - 此循环直到用户对结果表示满意（不再有新意见且说满意/交付）。',
         '   e. 【轻过渡收口】（W12：用户故事覆盖交还 GWT 机器裁判，coding 收口不再让用户逐条背书故事实现）：',
-        '      用户表示满意（或无修改意见直接确认）后，用 AskUserQuestion 弹轻过渡确认：header「预览确认」，',
+        '      用户表示满意（或无修改意见直接确认）后，用 AskUserQuestion 弹轻过渡确认：header「确认·预览确认」，',
         '      question「应用已生成（右侧预览）。确认无误我将启动自动测试（GWT 场景验收）——',
         '      用户故事的完整性由自动测试判定，无需人工核对。回复确认即开始测试。」，',
         '      options：确认无误，开始自动测试 / 还有意见要提（回到 d 循环）。',
@@ -603,7 +647,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '      确认三要素齐全：品类终判标记（projectCategory:）、「## 环境配置」清单表、结尾 projectEnv: 标记行。',
         '   b. 若结尾标记为 projectEnv: missing:<组件清单>（环境有缺失）：',
         ...envPrecheckLines,
-        '      - 先用 AskUserQuestion 向用户确认：「环境缺失 {组件清单}，安装约需 X 分钟（按组件估算，',
+        '      - 先用 AskUserQuestion 向用户确认（header「确认·安装缺失组件」）：「环境缺失 {组件清单}，安装约需 X 分钟（按组件估算，',
         '        如 Rust 工具链约 5-15 分钟，node/bun 秒级），确认安装？」options：确认安装 / 换技术栈 / 暂停；',
         '      - 用户确认安装 → 用 continue_delegation 向架构师子会话追加安装指令：',
         '        【仅安装清单内缺失组件】，限用户级标准安装目录（~/.cargo、~/.local、项目内 node_modules 等，',
@@ -612,7 +656,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '      - ⚠️ 环境未就绪（仍为 missing）时【不要】输出推进标记——系统会拦截非 web 品类的未就绪推进。',
         '   c. 标记为 ready（或安装后已改 ready）→ 【必须】先 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）',
         '      展示架构文档，然后用【一条消息】向用户合并确认：架构摘要（品类终判 + 技术选型要点）',
-        '      + 环境清单（各组件就绪状态）；AskUserQuestion「确认架构与环境配置？」（quick 与 iterative 同构，',
+        '      + 环境清单（各组件就绪状态）；AskUserQuestion（header「确认·架构与环境配置」）确认架构与环境配置（quick 与 iterative 同构，',
         '      quick 免 AC 攻防，本次合并确认即最终确认）。',
         '   d. 用户确认通过 → 进入第 5 步；有修改意见 → continue_delegation 转架构师修改后重新确认。',
       ]
@@ -628,7 +672,8 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ]
       : [
         '4. 【必须】先调用 open_preview 工具（file_path=' + projectDir + '/' + phase.outputPath + '）',
-        '   确保右侧分屏正在展示产出文件，然后用 AskUserQuestion 请求用户确认。',
+        '   确保右侧分屏正在展示产出文件，然后用 AskUserQuestion 请求用户确认',
+        '   （header「确认·' + phase.title + '」——确认类 header 以「确认」开头是路由放行约定）。',
         '   确认时提醒用户：「右侧预览面板已展示产出文件，请查看后确认。」',
       ]),
     ...(stage === 'testing'
@@ -640,7 +685,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         '   【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，',
         '   再输出推进标记：<!-- PHASE_ADVANCE: testing -->（推进到自身 = 触发 Harness 自动执行 GWT 验收测试）。',
         '   测试结果由系统注入消息告知，按结果三态处理（W12：GWT 通过后的交付验收是唯一用户确认点，故事覆盖仍由机器裁判）：',
-        '   - ✅ 全部通过（GWT-pass）：系统续接你发起【交付验收】——用 AskUserQuestion 弹问：',
+        '   - ✅ 全部通过（GWT-pass）：系统续接你发起【交付验收】——用 AskUserQuestion 弹问（header「确认·满意交付」）：',
         '     question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，',
         '     options：满意交付（可以交付使用）/ 需要调整（说明问题，回炉修复后重新测试）。',
         '     · 用户满意交付（或明确确认交付）→ 【立即】输出 <!-- PHASE_ADVANCE: delivered --> 完成交付',

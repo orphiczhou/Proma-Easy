@@ -91,7 +91,7 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
         )}
         <div className="min-h-0 flex-1">
           <ModeSelectView
-            onSelectMode={(mode: 'quick' | 'iterative', name: string) => {
+            onSelectMode={(mode: 'quick' | 'iterative', name: string, options?: { autoClarify?: { enabled: boolean } }) => {
               if (nanjuCreating) return // 双击/连点守卫：避免重复建会话与重复建项目
               setNanjuCreating(true)
               setNanjuCreateError(null)
@@ -116,11 +116,13 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
 
                   // 3. 创建南大项目元数据
                   try {
+                    // v2.4：透传自动补完需求勾选态（仅快消型可达 true；ModeSelectView 复选框）
                     await window.electronAPI.nanjuCreateProject({
                       name,
                       mode,
                       workspaceSlug: ws.slug,
                       sessionId,
+                      ...(options?.autoClarify ? { autoClarify: options.autoClarify } : {}),
                     })
                   } catch (e) {
                     console.error('[南大向导] 创建项目元数据失败:', e)

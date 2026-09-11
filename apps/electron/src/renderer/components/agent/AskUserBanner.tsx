@@ -31,6 +31,23 @@ import type { AskUserQuestion } from '@proma/shared'
 
 const EMPTY_ANSWER: AskUserQuestionDraft = { selected: [], customText: '', showCustom: false }
 
+// ===== v2.4：路由 header 前缀剥离（展示层） =====
+
+/**
+ * v2.4（D7 §3/§10）：南大向导 auto 路由话术的 header 前缀约定（存储带前缀：「确认·」/「设计·」/「转述·」）
+ * ——存储侧前缀是路由规则的消费依据（auto 开启时按前缀放行），展示侧剥前缀保持美观。
+ * 仅剥首个匹配前缀（不重复剥，嵌套不误伤）；无前缀原样返回（普通会话/历史 header 不受影响）。
+ */
+const ROUTE_HEADER_PREFIXES = ['确认·', '设计·', '转述·'] as const
+
+export function stripRouteHeaderPrefix(header: string | undefined | null): string {
+  if (!header) return ''
+  for (const prefix of ROUTE_HEADER_PREFIXES) {
+    if (header.startsWith(prefix)) return header.slice(prefix.length)
+  }
+  return header
+}
+
 const PREVIEW_REMARK_PLUGINS = [remarkGfm]
 
 function safeUrlTransform(url: string): string {
@@ -324,7 +341,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
                   `}
                   onClick={() => setActiveTabByState(idx)}
                 >
-                  {`${idx + 1}-${q.multiSelect ? '多选' : '单选'}：${q.header || `问题 ${idx + 1}`}`}
+                  {`${idx + 1}-${q.multiSelect ? '多选' : '单选'}：${stripRouteHeaderPrefix(q.header) || `问题 ${idx + 1}`}`}
                 </button>
               )
             })}
@@ -538,13 +555,11 @@ function QuestionCard({
       <div className="space-y-1">
         {showBadge && (
           <span className="shrink-0 inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-primary text-primary-foreground shadow-sm">
-            {`${questionIndex + 1}-${question.multiSelect ? '多选' : '单选'}${question.header ? `：${question.header}` : ''}`}
+            {`${questionIndex + 1}-${question.multiSelect ? '多选' : '单选'}${question.header ? `：${stripRouteHeaderPrefix(question.header)}` : ''}`}
           </span>
         )}
         <p className="text-sm text-foreground">{question.question}</p>
       </div>
-
-      {/* 竖向选项 */}
       <div className="flex flex-col gap-1">
         {question.options.map((option, idx) => {
           const isSelected = answer.selected.includes(option.label)

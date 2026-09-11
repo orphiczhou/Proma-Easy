@@ -1281,8 +1281,12 @@ export interface ElectronAPI {
 
   /** 南大项目：获取当前阶段 */
   nanjuGetProjectStage: (input: { workspaceSlug: string; sessionId: string }) => Promise<unknown>
-  /** 南大项目：推进阶段 */
-  nanjuAdvanceStage: (input: { workspaceSlug: string; sessionId: string; stage: string }) => Promise<boolean>
+
+  /** 南大项目：自动补完需求（v2.4）状态读/写（读：enabled+代答卡片；写：关闭即 D7 §7 处置） */
+  nanjuGetAutoClarify: (input: { workspaceSlug: string; projectId: string }) => Promise<unknown>
+  nanjuSetAutoClarify: (input: { workspaceSlug: string; projectId: string; enabled: boolean }) => Promise<unknown>
+  /** 代答事件流（主进程推送：代答完成/回退真人/开关变化；返回取消订阅函数） */
+  onNanjuClarifyEvent: (callback: (payload: unknown) => void) => () => void
 
   /** 南大项目：确保南大工作区存在 */
   nanjuEnsureWorkspace: () => Promise<unknown>
@@ -3042,8 +3046,19 @@ const electronAPI: ElectronAPI = {
   nanjuGetProjectStage: (input) =>
     ipcRenderer.invoke('nanju:get-project-stage', input),
 
-  nanjuAdvanceStage: (input) =>
-    ipcRenderer.invoke('nanju:advance-stage', input),
+  // v2.4：nanju:advance-stage 死通道已移除（D7 §8 / Defender #20：绕过推进硬门，renderer 零调用）
+
+  nanjuGetAutoClarify: (input) =>
+    ipcRenderer.invoke('nanju:get-auto-clarify', input),
+
+  nanjuSetAutoClarify: (input) =>
+    ipcRenderer.invoke('nanju:set-auto-clarify', input),
+
+  onNanjuClarifyEvent: (callback) => {
+    const listener = (_event: unknown, payload: unknown) => callback(payload)
+    ipcRenderer.on('nanju:clarify-event', listener as never)
+    return () => { ipcRenderer.removeListener('nanju:clarify-event', listener as never) }
+  },
 
   nanjuEnsureWorkspace: () =>
     ipcRenderer.invoke('nanju:ensure-workspace'),

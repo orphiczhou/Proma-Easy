@@ -862,4 +862,18 @@ describe('W12：GWT-pass 交付验收两段化（不直接 delivered）', () => 
   test('回炉预算未动：GWT_RETRY_LIMIT 仍为 2（交付验收不烧回炉次数）', () => {
     expect(GWT_RETRY_LIMIT).toBe(2)
   })
+
+  // ══ v2.4（自动补完需求）：交付验收问句补 header「确认·满意交付」══
+  // Defender #8：交付话术单一来源——RESUME_MESSAGE 与 router-prompt :643 两处同时带
+  // header「确认」指令（口径一致防漂移）；auto 开启时六确认 header 前缀是路由放行依据。
+  test('v2.4：交付验收 AskUser 问句带 header「确认·满意交付」（router-gate 路由豁免依据）', () => {
+    expect(GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE).toContain('header「确认·满意交付」')
+  })
+
+  test('v2.4：注入消息与续接指令的交付验收语义一致（都含满意交付两选项，无旧无 header 话术）', () => {
+    const msg = buildGwtDeliveryAcceptanceMessage('摘要')
+    expect(msg).toContain('满意交付 / 需要调整')
+    // 旧形态反断言：续接指令中不存在缺 header 说明的交付弹问话术
+    expect(GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE).not.toMatch(/弹问，question「应用已完成/)
+  })
 })

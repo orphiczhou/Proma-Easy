@@ -590,3 +590,173 @@ describe('W12：coding L1 轻过渡收口（故事覆盖交还 GWT 机器裁判�
     expect(prompt).not.toContain('项目自动交付')
   })
 })
+
+// ═══════════════ v2.4（自动补完需求）：六确认 header 前缀 + L1 协议段 + AC 攻击者模板 ═══════════════
+// channel-manager mock：prototype 阶段 getNanjuRouterPrompt 会运行时 require 解析
+// MiniMax 作者渠道（resolvePrototypeAuthor），测试环境无 electron——mock listChannels
+// 返回可解析的 minimax 渠道（工厂惰性调用，makeChannel 函数声明提升后可用）。
+mock.module('./channel-manager', () => ({
+  listChannels: () => [makeChannel()],
+}))
+
+describe('v2.4：六确认话术 header「确认·」前缀改造（Defender #26：漏改则横幅被 deny）', () => {
+  /** v2.4 fixture：支持 mode 与 project 字段覆写（autoClarify 等） */
+  function buildPromptForV24(
+    stage: string,
+    files: Record<string, string> | undefined,
+    projectOverrides: Record<string, unknown>,
+  ): string {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-v24-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pv24')
+    mkdirSync(projectDir, { recursive: true })
+    for (const [name, content] of Object.entries(files ?? {})) {
+      const full = join(projectDir, name)
+      mkdirSync(join(full, '..'), { recursive: true })
+      writeFileSync(full, content)
+    }
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pv24', name: 'v2.4 测试项目', mode: 'quick', status: 'active',
+      currentStage: stage, createdAt: '', updatedAt: '', sessionId: 's-pv24', workspaceSlug: root,
+      ...projectOverrides,
+    }]))
+    const prompt = getNanjuRouterPrompt(fixtureRoot, 's-pv24')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  test('requirements（PRD 等）通用收口补 header 指令：header「确认·{阶段标题}」', () => {
+    const prompt = buildPromptForV24('requirements', undefined, {})
+    expect(prompt).toContain('header「确认·')
+    // auto 关闭项目行为零变化：仅文案多一个前缀词（§10）
+    expect(prompt).toContain('AskUserQuestion')
+  })
+
+  test('prototype 收口 header「确认·原型交互验证」；点选五项加「设计·快速修改」header', () => {
+    const prompt = buildPromptForV24('prototype', {
+      '01_PRD/prd.md': '# PRD\n\n## 用户故事\n\n- US-01 添加笔记\n',
+    }, {})
+    expect(prompt).toContain('header「确认·原型交互验证」')
+    expect(prompt).toContain('header「设计·快速修改」')
+    expect(prompt).not.toContain('header「原型交互验证」')
+  })
+
+  test('architecture 环境安装与合并确认 header 均带「确认·」前缀', () => {
+    const prompt = buildPromptForV24('architecture', {
+      '03_ARCHITECTURE/architecture.md':
+        '# 架构文档（v2.4 用例）\n\nprojectCategory: web-fullstack\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| node | 20 | 前端 |\n\nprojectEnv: ready\n',
+    }, { mode: 'iterative' })
+    expect(prompt).toContain('header「确认·安装缺失组件」')
+    expect(prompt).toContain('header「确认·架构与环境配置」')
+    // 旧形态（无前缀 header）反断言
+    expect(prompt).not.toContain('AskUserQuestion「确认架构与环境配置？」')
+  })
+
+  test('coding 轻过渡 header「确认·预览确认」；点选五项加「设计·快速修改」header', () => {
+    const prompt = buildPromptForV24('coding', undefined, {})
+    expect(prompt).toContain('header「确认·预览确认」')
+    expect(prompt).toContain('header「设计·快速修改」')
+    expect(prompt).not.toContain('header「预览确认」')
+  })
+
+  test('testing 交付验收问句 header「确认·满意交付」（与 gwt-runner 双话术源一致）', () => {
+    const prompt = buildPromptForV24('testing', {
+      '06_TESTS/features/index.feature': 'Feature: US-01\n  Scenario: US-01 成功\n    Given 用户在页面\n',
+      '06_TESTS/features/us-01.feature': 'Feature: US-01\n  Scenario: US-01 成功\n    Given 用户在页面\n',
+      '06_TESTS/features/us-01.steps.json': '{}',
+    }, {})
+    expect(prompt).toContain('header「确认·满意交付」')
+  })
+})
+
+describe('v2.4：L1 自动补完协议段（auto 开启时注入，D7 §6 终版五条）', () => {
+  function buildAutoPrompt(autoClarify: Record<string, unknown> | undefined): string {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-v24a-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pv24a')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pv24a', name: '协议段项目', mode: 'quick', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-pv24a', workspaceSlug: root,
+      ...(autoClarify ? { autoClarify } : {}),
+    }]))
+    const prompt = getNanjuRouterPrompt(fixtureRoot, 's-pv24a')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  test('auto on（quick + enabled:true）→ 注入协议段：代理调用/fallback 转述/自问规则/采纳标记/header 规则', () => {
+    const prompt = buildAutoPrompt({ enabled: true })
+    // 第 1 条：子会话澄清 → nanju_clarify_proxy；fallback:'human'（含 non-clarify-category）→ 转述问真人
+    expect(prompt).toContain('nanju_clarify_proxy(delegationId, blockedEventIds)')
+    expect(prompt).toContain("fallback:'human'")
+    expect(prompt).toContain('non-clarify-category')
+    // 设计偏好转述用「设计·」，其余用「转述·」
+    expect(prompt).toContain('「设计·」')
+    expect(prompt).toContain('「转述·」')
+    // 第 2 条：自问 questions 规则（≤200 字/题，≤5 题）
+    expect(prompt).toContain('nanju_clarify_proxy(questions=[{id,question,options?}])')
+    expect(prompt).toContain('≤200 字')
+    expect(prompt).toContain('≤5 题')
+    // 第 3 条：答案采纳报告卡片 + 产物标记
+    expect(prompt).toContain('<!-- auto-clarify:qid,channel,ts -->')
+    // 第 5 条：确认类 header 必须以「确认」开头
+    expect(prompt).toContain('「确认」开头')
+  })
+
+  test('auto off（字段缺失 / enabled:false）→ 协议段不注入（行为零变化）', () => {
+    for (const autoClarify of [undefined, { enabled: false }]) {
+      const prompt = buildAutoPrompt(autoClarify)
+      expect(prompt).not.toContain('nanju_clarify_proxy')
+      expect(prompt).not.toContain('auto-clarify 协议')
+    }
+  })
+
+  test('iterative + enabled:true（升级残留非法态防御）→ 协议段不注入（仅快消型）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-v24i-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pv24i')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pv24i', name: '升级项目', mode: 'iterative', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-pv24i', workspaceSlug: root,
+      autoClarify: { enabled: true },
+    }]))
+    const prompt = getNanjuRouterPrompt(fixtureRoot, 's-pv24i')
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('nanju_clarify_proxy')
+  })
+})
+
+describe('v2.4：AC 攻击者模板增补（代答清单披露 + 同族加倍攻击）', () => {
+  // 与既有 AC 测试同构（:85）：prototype + minimax 作者（家族多样性断言可通过；
+  // AC 增补注入与阶段无关，仅验证 autoClarifyEnabled 开关）
+  const authorUuid = 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd'
+  const minimaxAuthor = { channel: authorUuid, model: 'MiniMax-M3' }
+
+  test('autoClarifyEnabled=true → L2 攻击者指令含代答清单披露与同族加倍攻击条款', () => {
+    const phase = getPhaseNode('quick', 'prototype')!
+    const task = buildL2TaskWithAC(
+      phase, minimaxAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project',
+      null, null, true,
+    )
+    expect(task).toContain('代答清单披露')
+    expect(task).toContain('auto-clarify:')
+    expect(task).toContain('同族加倍攻击')
+    expect(task).toContain('diversityDegraded')
+  })
+
+  test('autoClarifyEnabled 缺省/false → 不注入（既有 AC 指令零变化）', () => {
+    const phase = getPhaseNode('quick', 'prototype')!
+    for (const flag of [undefined, false]) {
+      const task = buildL2TaskWithAC(
+        phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project',
+        null, null, flag,
+      )
+      expect(task).not.toContain('代答清单披露')
+      expect(task).not.toContain('同族加倍攻击')
+    }
+  })
+})

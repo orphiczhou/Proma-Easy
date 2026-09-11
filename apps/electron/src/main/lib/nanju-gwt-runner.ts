@@ -887,7 +887,7 @@ export function buildGwtDeliveryAcceptanceMessage(summaryText: string): string {
  */
 export const GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE =
   '自动验收测试全部通过（GWT-pass：全场景通过 + 用户故事全覆盖，测试报告 verdict=pass）。'
-  + '请向用户发起【交付验收】询问：用 AskUserQuestion 弹问，question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，'
+  + '请向用户发起【交付验收】询问：用 AskUserQuestion 弹问（header「确认·满意交付」），question「应用已完成并通过自动测试，可以交付使用。你用过了吗？」，'
   + 'options 两项：「满意交付」（可以交付使用）/「需要调整」（说明问题，回炉修复后重新测试）。'
   + '用户选满意交付 → 立即输出 <!-- PHASE_ADVANCE: delivered --> 完成交付'
   + '（交付门禁校验 verdict=pass 且系统已记录用户满意交付确认已满足——用户经上方 AskUserQuestion 选择「满意交付」后系统自动登记，不要重新委派、不要重复产出、不要再询问）。'

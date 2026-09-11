@@ -9,7 +9,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { ArrowLeftRight, Eye, RotateCcw } from 'lucide-react'
+import { ArrowLeftRight, Eye, RotateCcw, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { GuideRoutePhase } from '@proma/shared'
 import { currentAgentWorkspaceIdAtom, agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
@@ -70,6 +70,35 @@ function describeStageStatus(
     total,
     currentTitle,
   }
+}
+
+// ===== v2.4「自动补完需求」（auto-clarify）渲染面 =====
+
+/** 代答卡片（主进程 nanju:get-auto-clarify 返回的 answers 元素；与 nanju-ipc NanjuClarifyAnswerCard 同构） */
+interface NanjuClarifyAnswerCardView {
+  qid: string
+  sourceLabel: string
+  channel: string
+  questionSummary: string
+  answerSummary: string
+  durationMs: number | null
+  ts: number
+  stage: string | null
+}
+
+/** auto-clarify 状态视图（nanju:get-auto-clarify 返回） */
+interface NanjuClarifyStatusView {
+  enabled: boolean
+  mode: 'quick' | 'iterative'
+  proxyBudget: number | null
+  pendingQuestionIds: string[]
+  answers: NanjuClarifyAnswerCardView[]
+  disabledReason: 'iterative-upgraded' | null
+}
+
+/** 代答卡片耗时展示（ms → 秒，保留 1 位；缺失 = 「—」） */
+function formatClarifyDuration(durationMs: number | null): string {
+  return typeof durationMs === 'number' && durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : '—'
 }
 
 export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
@@ -266,6 +295,48 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
     [data.phases, data.stageStates],
   )
 
+  // ===== v2.4：自动补完需求（auto-clarify）状态面 =====
+  /** 项目级开启态（宽类型访问：A 域 NanjuProject.autoClarify 字段投影随全量 JSON 到达） */
+  const autoClarifyEnabled = data.project?.mode === 'quick'
+    && (data.project as { autoClarify?: { enabled?: boolean } }).autoClarify?.enabled === true
+  const [clarifyOpen, setClarifyOpen] = React.useState(false)
+  const [clarifyStatus, setClarifyStatus] = React.useState<NanjuClarifyStatusView | null>(null)
+  /** 关闭/升级处置结果提示（主进程 D7 §7 处置计划的 notice） */
+  const [clarifyNotice, setClarifyNotice] = React.useState<string | null>(null)
+
+  const refreshClarify = React.useCallback(() => {
+    if (!workspaceSlug || !data.project) return
+    void window.electronAPI.nanjuGetAutoClarify({ workspaceSlug, projectId: data.project.projectId })
+      .then((status) => { setClarifyStatus((status as NanjuClarifyStatusView) ?? null) })
+      .catch((e: unknown) => console.warn('[向导图] auto-clarify 状态拉取失败:', e))
+  }, [workspaceSlug, data.project])
+
+  // 展开时拉取 + 代答事件流实时刷新 + 10s 轮询兑底（页面隐藏容忍：轻量状态面）
+  React.useEffect(() => {
+    if (!clarifyOpen) return
+    refreshClarify()
+    const offEvent = window.electronAPI.onNanjuClarifyEvent(() => { refreshClarify() })
+    const timer = window.setInterval(() => { refreshClarify() }, 10_000)
+    return () => { offEvent(); window.clearInterval(timer) }
+  }, [clarifyOpen, refreshClarify])
+
+  /** 关闭自动补完（D7 §7：in-flight stop + pending 转述 + 字段处置，主进程执行） */
+  const handleDisableAutoClarify = React.useCallback(() => {
+    if (!workspaceSlug || !data.project) return
+    void window.electronAPI.nanjuSetAutoClarify({ workspaceSlug, projectId: data.project.projectId, enabled: false })
+      .then((result) => {
+        const r = result as { ok?: boolean; notice?: string | null; error?: string }
+        if (r?.notice) setClarifyNotice(r.notice)
+        else if (r?.ok === false && r?.error) setClarifyNotice(`关闭失败：${r.error}`)
+        refreshClarify()
+        data.refresh()
+      })
+      .catch((e: unknown) => {
+        console.error('[向导图] 关闭自动补完失败:', e)
+        setClarifyNotice('关闭失败，请稍后重试。')
+      })
+  }, [workspaceSlug, data.project, refreshClarify, data.refresh])
+
   // ===== 空态 / 骨架 / 错误切换（PRD §九） =====
   let body: React.ReactElement
   if (!workspaceSlug) {
@@ -349,6 +420,21 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
               {data.project.mode === 'quick' ? '快消型' : '长期迭代型'}
             </span>
           )}
+          {/* v2.4：auto 开启徽标（仅快消型；点击展开代答卡片与开关） */}
+          {autoClarifyEnabled && (
+            <button
+              type="button"
+              onClick={() => { setClarifyOpen((prev) => !prev); setClarifyNotice(null) }}
+              title="自动补完需求已开启：点击查看代答记录与开关"
+              className={cn(
+                'shrink-0 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px]',
+                'bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25',
+                clarifyOpen && 'ring-1 ring-amber-500/40',
+              )}
+            >
+              <Sparkles className="size-3" />自动补完中
+            </button>
+          )}
           {data.abandoned && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已放弃</span>}
           <button
             type="button"
@@ -377,6 +463,59 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
       </div>
 
       {body}
+
+      {/* v2.4：自动补完需求面板（徽标点击展开；代答卡片 + 开关 + 升级禁用提示） */}
+      {clarifyOpen && data.project && workspaceSlug && (
+        <div className="border-t border-border/50 px-3 py-2 space-y-2 shrink-0 max-h-64 overflow-y-auto text-[11px]">
+          <div className="flex items-center gap-2">
+            <span className="font-medium inline-flex items-center gap-1"><Sparkles className="size-3 text-amber-500" />自动补完需求</span>
+            {clarifyStatus?.disabledReason === 'iterative-upgraded' ? (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已停用（升级长期迭代型）</span>
+            ) : clarifyStatus?.enabled ? (
+              <>
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">运行中</span>
+                <button
+                  type="button"
+                  onClick={handleDisableAutoClarify}
+                  className="ml-auto shrink-0 rounded border border-border px-1.5 py-0.5 hover:bg-muted/70"
+                >
+                  关闭
+                </button>
+              </>
+            ) : (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已关闭</span>
+            )}
+          </div>
+          {clarifyStatus?.disabledReason === 'iterative-upgraded' && (
+            <p className="text-muted-foreground">
+              已升级为长期迭代型，自动补完需求已停用；代答日志已归档（_nanju-clarify-log.archived.jsonl），后续问题由子会话直接问你。
+            </p>
+          )}
+          {clarifyNotice && <p className="rounded bg-primary/10 px-2 py-1 text-primary break-all">{clarifyNotice}</p>}
+          {clarifyStatus && clarifyStatus.pendingQuestionIds.length > 0 && (
+            <p className="text-muted-foreground">待处理问题 {clarifyStatus.pendingQuestionIds.length} 个（代理处理中或待转述）</p>
+          )}
+          {/* 代答卡片：渠道 + 问题要点 + 答案要点 + 来源标签 + 耗时 */}
+          {(clarifyStatus?.answers ?? []).length === 0 ? (
+            <p className="text-muted-foreground">暂无代答记录。</p>
+          ) : (
+            <div className="space-y-1.5">
+              {(clarifyStatus?.answers ?? []).map((card) => (
+                <div key={card.qid} className="rounded border border-border/60 px-2 py-1.5 space-y-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">{card.channel}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{card.sourceLabel}</span>
+                    {card.stage && <span className="text-[10px] text-muted-foreground">{card.stage}阶段</span>}
+                    <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">{formatClarifyDuration(card.durationMs)}</span>
+                  </div>
+                  <p className="text-foreground/90 break-all">问：{card.questionSummary || '—'}</p>
+                  <p className="text-muted-foreground break-all">答：{card.answerSummary}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 阶段详情浮层：面板底部上滑 sheet */}
       {selectedPhase && viewMode === 'project' && (

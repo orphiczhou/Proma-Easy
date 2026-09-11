@@ -11,18 +11,37 @@ import { Button } from '@/components/ui/button'
 
 type ProjectMode = 'quick' | 'iterative'
 
+/**
+ * v2.4（D7 §0 硬边界）：「自动补完需求」复选框仅快消型可选。
+ * quick → available（复选框可选）；iterative → hidden（长期迭代型隐藏——升级即失效）。
+ */
+export function resolveAutoClarifyAvailability(mode: ProjectMode): 'available' | 'hidden' {
+  return mode === 'quick' ? 'available' : 'hidden'
+}
+
 interface ModeSelectViewProps {
-  onSelectMode: (mode: ProjectMode, projectName: string) => void
+  onSelectMode: (mode: ProjectMode, projectName: string, options?: { autoClarify?: { enabled: boolean } }) => void
 }
 
 export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.ReactElement {
   const [selectedMode, setSelectedMode] = React.useState<ProjectMode | null>(null)
   const [projectName, setProjectName] = React.useState('')
+  /** v2.4：自动补完需求勾选态（仅快消型可选；切模式时重置，防跨模式残留） */
+  const [autoClarify, setAutoClarify] = React.useState(false)
+  const autoClarifyAvailability = selectedMode ? resolveAutoClarifyAvailability(selectedMode) : 'hidden'
+
+  const handleSelectMode = (mode: ProjectMode) => {
+    setSelectedMode(mode)
+    if (mode !== 'quick') setAutoClarify(false)
+  }
 
   const handleConfirm = () => {
     if (!selectedMode) return
     const name = projectName.trim() || (selectedMode === 'quick' ? '我的快速工具' : '我的长期项目')
-    onSelectMode(selectedMode, name)
+    // v2.4：勾选态存入项目创建参数 autoClarify.enabled（仅快消型可达 true）
+    onSelectMode(selectedMode, name, {
+      autoClarify: { enabled: autoClarify && autoClarifyAvailability === 'available' },
+    })
   }
 
   return (
@@ -36,7 +55,7 @@ export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.Rea
         {/* 快消型 */}
         <button
           type="button"
-          onClick={() => setSelectedMode('quick')}
+          onClick={() => handleSelectMode('quick')}
           className={cn(
             'flex-1 flex flex-col items-center gap-4 p-8 rounded-2xl border-2 transition-all duration-200 text-left',
             selectedMode === 'quick'
@@ -65,7 +84,7 @@ export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.Rea
         {/* 长期迭代型 */}
         <button
           type="button"
-          onClick={() => setSelectedMode('iterative')}
+          onClick={() => handleSelectMode('iterative')}
           className={cn(
             'flex-1 flex flex-col items-center gap-4 p-8 rounded-2xl border-2 transition-all duration-200 text-left',
             selectedMode === 'iterative'
@@ -105,6 +124,21 @@ export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.Rea
             maxLength={50}
             autoFocus
           />
+          {/* v2.4：自动补完需求复选框（仅快消型；长期型隐藏——升级即失效硬边界） */}
+          {autoClarifyAvailability === 'available' && (
+            <label className="flex items-center justify-center gap-2 text-xs text-muted-foreground cursor-pointer select-none max-w-[420px]">
+              <input
+                type="checkbox"
+                checked={autoClarify}
+                onChange={(e) => setAutoClarify(e.target.checked)}
+                className="size-3.5 accent-primary"
+              />
+              <span>
+                自动补完需求
+                <span className="text-muted-foreground/70">（需求补充类问题由 AI 代理自动作答，可联网检索；关键确认与设计偏好仍由你决定）</span>
+              </span>
+            </label>
+          )}
           <Button
             type="button"
             onClick={handleConfirm}

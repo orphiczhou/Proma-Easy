@@ -11,13 +11,15 @@ import {
   updateNanjuProject,
   getNanjuProject,
   deleteNanjuProject,
+  getNanjuProjectDir,
 } from './nanju-project'
+import type { NanjuAutoClarifyState, NanjuProject } from './nanju-project'
 import { recordTelemetry, readTelemetry } from './nanju-telemetry'
 import type { ProjectMode } from './nanju-project'
 import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import { createSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
 import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
-import { findNanjuProjectBySession, advanceNanjuStage, getNanjuPhaseGatePrompt } from './nanju-phase-gate'
+import { findNanjuProjectBySession, getNanjuPhaseGatePrompt } from './nanju-phase-gate'
 import { getGuideProgressSnapshot } from './nanju-guide-progress'
 
 /** 点选纠错批量提交清单的单条项（宿主 ClickToFixPanel reportItems 的 JSON 形状） */
@@ -62,6 +64,155 @@ import { loadRoleConfig, loadRoleSequence, createRoleSession, getRoleSequence } 
 import { getGuideRoute } from './nanju-router'
 import type { TelemetryEventType } from './nanju-telemetry'
 import type { ProjectSnapshot } from './nanju-snapshot'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+// ===== v2.4「自动补完需求」（auto-clarify）：渲染/IPC 域契约 =====
+
+/**
+ * 代答卡片（渲染端 view model）：GuidePanel 代答卡片展示的最小字段面。
+ * 溯源诚实（D7 §5）：渠道+问题要点+答案要点+来源标签+耗时全部来自代理日志原文。
+ */
+export interface NanjuClarifyAnswerCard {
+  qid: string
+  /** 来源标签：「子会话提问·代理作答」（L2 blocked 澄清）/「L1 提问·代理作答」（L1 自问） */
+  sourceLabel: '子会话提问·代理作答' | 'L1 提问·代理作答'
+  channel: string
+  /** 问题要点（≤80 字） */
+  questionSummary: string
+  /** 答案要点（≤120 字） */
+  answerSummary: string
+  /** 耗时（毫秒）；缺失 = null */
+  durationMs: number | null
+  /** 完成时间戳（ms）；日志缺失时间戳时为 0 */
+  ts: number
+  /** 发生阶段；缺失 = null */
+  stage: string | null
+}
+
+/** _nanju-clarify-log.jsonl 单行的宽松入口类型（代理工具域写入；未知字段容忍） */
+interface NanjuClarifyLogEntry {
+  kind?: string
+  qid?: string
+  source?: string
+  channel?: string
+  question?: string
+  answer?: string
+  durationMs?: number
+  ts?: number
+  at?: string
+  stage?: string
+}
+
+const CLARIFY_SUBAGENT_SOURCE_TOKENS = new Set(['subagent', 'blocked-event', 'l2'])
+
+/**
+ * 代答日志行 → 代答卡片（S 级纯函数，红测锁定数据结构）。
+ * 非代答完成行（fallback/缺 qid/坏 JSON）不生成卡片（fallback 走转述提示，不是代答成果）。
+ */
+export function parseClarifyLogLine(raw: string): NanjuClarifyAnswerCard | null {
+  let entry: NanjuClarifyLogEntry
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    entry = parsed as NanjuClarifyLogEntry
+  } catch {
+    return null
+  }
+  if (entry.kind !== undefined && entry.kind !== 'proxy-answer') return null
+  if (!entry.qid || typeof entry.qid !== 'string') return null
+  if (!entry.answer) return null
+  const ts = typeof entry.ts === 'number' ? entry.ts
+    : typeof entry.at === 'string' ? Date.parse(entry.at)
+    : 0
+  return {
+    qid: entry.qid,
+    sourceLabel: entry.source !== undefined && CLARIFY_SUBAGENT_SOURCE_TOKENS.has(entry.source)
+      ? '子会话提问·代理作答'
+      : 'L1 提问·代理作答',
+    channel: entry.channel ?? 'unknown',
+    questionSummary: (entry.question ?? '').slice(0, 80),
+    answerSummary: entry.answer.slice(0, 120),
+    durationMs: typeof entry.durationMs === 'number' ? entry.durationMs : null,
+    ts: Number.isFinite(ts) ? ts : 0,
+    stage: typeof entry.stage === 'string' ? entry.stage : null,
+  }
+}
+
+/** 关闭/升级处置计划输入（已按 nanjuProxy 过滤后的委派 id 列表） */
+export interface AutoClarifyShutdownPlanInput {
+  enabled: boolean
+  mode: 'quick' | 'iterative'
+  runningProxyDelegationIds: string[]
+  pendingQuestionIds: string[]
+}
+
+/** 处置计划（D7 §7：in-flight stop + pending 转述 + 字段处置 + 升级归档） */
+export interface AutoClarifyShutdownPlan {
+  shouldDisable: boolean
+  stopDelegationIds: string[]
+  relayQuestionIds: string[]
+  /** 升级长期型时归档代答日志（渲染端提示「日志已归档」） */
+  archiveLog: boolean
+  notice: string | null
+}
+
+/**
+ * 关闭/升级处置计划（S 级纯函数，红测锁定）：
+ * - 常规关闭：停 in-flight 代理委派 + pending 问题转述 + 提示文案；
+ * - 升级长期型（mode:iterative）：同上 + 归档日志 + 升级提示；
+ * - 幂等：enabled=false（已关闭）→ 无动作无提示。
+ */
+export function planAutoClarifyShutdown(input: AutoClarifyShutdownPlanInput): AutoClarifyShutdownPlan {
+  if (!input.enabled) {
+    return { shouldDisable: false, stopDelegationIds: [], relayQuestionIds: [], archiveLog: false, notice: null }
+  }
+  const upgraded = input.mode !== 'quick'
+  const base: AutoClarifyShutdownPlan = {
+    shouldDisable: true,
+    stopDelegationIds: [...input.runningProxyDelegationIds],
+    relayQuestionIds: [...input.pendingQuestionIds],
+    archiveLog: upgraded,
+    notice: null,
+  }
+  const stopNote = input.runningProxyDelegationIds.length > 0
+    ? `已停止 ${input.runningProxyDelegationIds.length} 个进行中的代理会话；`
+    : ''
+  const relayNote = input.pendingQuestionIds.length > 0
+    ? `${input.pendingQuestionIds.length} 个未答问题将转述给你回答；`
+    : ''
+  base.notice = upgraded
+    ? `已升级为长期迭代型，自动补完需求已停用；${stopNote}${relayNote}代答日志已归档（_nanju-clarify-log.archived.jsonl）。`
+    : `已关闭自动补完需求；${stopNote}${relayNote}后续问题由子会话直接问你。`
+  return base
+}
+
+/** 代答事件流载荷（主进程 → 渲染端 webContents.send('nanju:clarify-event')） */
+export interface NanjuClarifyEventPayload {
+  workspaceSlug: string
+  projectId: string
+  type: 'proxy-answer' | 'fallback-human' | 'enabled' | 'disabled'
+  card?: NanjuClarifyAnswerCard
+  ts: number
+}
+
+/**
+ * 代答事件广播（代理工具域调用入口：代答完成/回退/开关变化时推渲染端）。
+ * 主窗口不可用时静默丢弃（渲染端轮询兑底）。
+ */
+export function broadcastNanjuClarifyEvent(payload: NanjuClarifyEventPayload): void {
+  try {
+    const { getMainWindow } = require('./main-window-store') as typeof import('./main-window-store')
+    const win = getMainWindow()
+    if (!win || win.isDestroyed()) return
+    win.webContents.send('nanju:clarify-event', payload)
+  } catch { /* 广播失败不阻断主链（渲染端轮询兑底） */ }
+}
+
+/** 项目元数据上的 autoClarify 读取（A 域 NanjuProject.autoClarify；缺失 = 未开启） */
+function readAutoClarifyField(project: NanjuProject): NanjuAutoClarifyState | undefined {
+  return project.autoClarify
+}
 
 export function registerNanjuIpc(ipcMain: IpcMain): void {
   // ===== 项目元数据 =====
@@ -74,8 +225,19 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     mode: ProjectMode
     workspaceSlug: string
     sessionId?: string
+    /** v2.4：勾选态存入项目创建参数（仅快消型；渲染端 ModeSelectView 复选框） */
+    autoClarify?: { enabled: boolean }
   }) => {
-    return createNanjuProject(input)
+    const { autoClarify, ...base } = input
+    const project = createNanjuProject(base)
+    // autoClarify 经 updateNanjuProject 独立写入（spread 合并持久化；proxyBudget 初始 = D7 §4 cap=20）
+    if (autoClarify?.enabled) {
+      const updated = updateNanjuProject(input.workspaceSlug, project.projectId, {
+        autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] },
+      })
+      return updated ?? project
+    }
+    return project
   })
 
   ipcMain.handle('nanju:update-project', async (_event, input: {
@@ -129,9 +291,98 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     return project ? { stage: project.currentStage, project } : null
   })
 
-  ipcMain.handle('nanju:advance-stage', async (_event, input: { workspaceSlug: string; sessionId: string; stage: string }) => {
-    advanceNanjuStage(input.workspaceSlug, input.sessionId, input.stage as any)
-    return true
+  // v2.4（D7 §8）：移除 nanju:advance-stage 死通道（曾 :132，绕过 §2 推进硬门；
+  // preload 已暴露但 renderer 零调用——Defender #20）。阶段推进唯一合法入口 = 推进门。
+
+  // ===== v2.4 自动补完需求（auto-clarify）状态面 =====
+  ipcMain.handle('nanju:get-auto-clarify', async (_event, input: {
+    workspaceSlug: string
+    projectId: string
+  }) => {
+    const project = getNanjuProject(input.workspaceSlug, input.projectId)
+    if (!project) return null
+    const auto = readAutoClarifyField(project)
+    const effectiveEnabled = project.mode === 'quick' && auto?.enabled === true
+    // 代答日志（代理工具域写入 _nanju-clarify-log.jsonl；缺失 = 空卡片列表）
+    let answers: NanjuClarifyAnswerCard[] = []
+    try {
+      const logPath = join(getNanjuProjectDir(input.workspaceSlug, input.projectId), '_nanju-clarify-log.jsonl')
+      if (existsSync(logPath)) {
+        answers = readFileSync(logPath, 'utf-8')
+          .split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
+          .map(parseClarifyLogLine)
+          .filter((card): card is NanjuClarifyAnswerCard => card !== null)
+          .slice(-20)
+          .reverse()
+      }
+    } catch { /* 日志读取失败不阻断（渲染端空列表 + 轮询兑底） */ }
+    return {
+      enabled: effectiveEnabled,
+      mode: project.mode,
+      proxyBudget: auto?.proxyBudget ?? null,
+      pendingQuestionIds: auto?.pendingQuestionIds ?? [],
+      answers,
+      disabledReason: project.mode !== 'quick' && auto?.enabled === true ? 'iterative-upgraded' : null,
+    }
+  })
+
+  ipcMain.handle('nanju:set-auto-clarify', async (_event, input: {
+    workspaceSlug: string
+    projectId: string
+    enabled: boolean
+  }) => {
+    const project = getNanjuProject(input.workspaceSlug, input.projectId)
+    if (!project) return { ok: false, error: '项目不存在' }
+    if (input.enabled && project.mode !== 'quick') {
+      return { ok: false, error: '仅快消型支持自动补完需求' }
+    }
+    const auto = readAutoClarifyField(project)
+    if (input.enabled) {
+      updateNanjuProject(input.workspaceSlug, input.projectId, {
+        autoClarify: { enabled: true, proxyBudget: auto?.proxyBudget ?? 20, pendingQuestionIds: auto?.pendingQuestionIds ?? [] },
+      })
+      broadcastNanjuClarifyEvent({ workspaceSlug: input.workspaceSlug, projectId: input.projectId, type: 'enabled', ts: Date.now() })
+      return { ok: true, stopped: 0, relayed: 0, notice: null }
+    }
+    // 关闭（D7 §7）：in-flight 代理委派 stop + pending 转述 + 字段处置 + 升级归档
+    const plan = planAutoClarifyShutdown({
+      enabled: auto?.enabled === true,
+      mode: project.mode,
+      runningProxyDelegationIds: [],
+      pendingQuestionIds: auto?.pendingQuestionIds ?? [],
+    })
+    if (!plan.shouldDisable) return { ok: true, stopped: 0, relayed: 0, notice: null }
+    let stopped = 0
+    try {
+      // 识别 in-flight 代理委派：nanjuProxy meta（B 域字段，接线后生效）+ 标题宽匹配兑底
+      const { listRunningDelegationsForParent, forceStopDelegation } =
+        require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
+      if (project.sessionId) {
+        const running = listRunningDelegationsForParent(project.sessionId) as Array<{
+          delegationId: string
+          title: string
+          meta?: { nanjuProxy?: boolean }
+        }>
+        for (const d of running) {
+          const isProxy = d.meta?.nanjuProxy === true || /clarify|澄清代理|auto-clarify/i.test(d.title)
+          if (isProxy && forceStopDelegation(project.sessionId, d.delegationId).stopped) stopped += 1
+        }
+      }
+    } catch { /* 委派停止失败不阻断字段处置（代理超时兑底由 watch 域负责） */ }
+    if (plan.archiveLog) {
+      try {
+        const { renameSync } = require('node:fs') as typeof import('node:fs')
+        const logPath = join(getNanjuProjectDir(input.workspaceSlug, input.projectId), '_nanju-clarify-log.jsonl')
+        if (existsSync(logPath)) renameSync(logPath, logPath.replace(/\.jsonl$/, '.archived.jsonl'))
+      } catch { /* 归档失败不阻断 */ }
+    }
+    updateNanjuProject(input.workspaceSlug, input.projectId, {
+      // 字段处置（D7 §7）：enabled=false；待转述问题 id 保留在 pendingQuestionIds，
+      // 由推进链（A 域 advance-consumer）按转述语义消费，渲染端 notice 同步告知用户。
+      autoClarify: { enabled: false, proxyBudget: auto?.proxyBudget ?? 20, pendingQuestionIds: plan.relayQuestionIds },
+    })
+    broadcastNanjuClarifyEvent({ workspaceSlug: input.workspaceSlug, projectId: input.projectId, type: 'disabled', ts: Date.now() })
+    return { ok: true, stopped, relayed: plan.relayQuestionIds.length, notice: plan.notice }
   })
 
   // ===== 点选纠错（Click-to-Fix，interaction-spec 交互1）=====
