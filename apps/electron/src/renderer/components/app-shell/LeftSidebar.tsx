@@ -491,12 +491,26 @@ function isDelegatedChildSession(session: AgentSessionMeta): boolean {
   return !!session.parentSessionId && !!session.sourceDelegationId
 }
 
-function buildAgentSessionTrees(sessions: AgentSessionMeta[]): AgentSessionTreeItem[] {
+/**
+ * v2.4 返工 F2-7（Defender #11 后半）：南大向导自动补完代理会话（meta 仅含 nanjuProxy，
+ * 无 parentSessionId/sourceDelegationId → 不命中 isDelegatedChildSession）——独立隐藏谓词，
+ * 与既有谓词 OR 消费；不改 isDelegatedChildSession 语义（避免 W19 未绑定写豁免扩散）。
+ */
+export function isNanjuProxySession(session: AgentSessionMeta): boolean {
+  return session.nanjuProxy === true
+}
+
+/**
+ * 会话树构建（v2.4 F2-7 导出供测试）：委派子会话归树；nanjuProxy 代理会话不进树
+ * （根与子节点都不出现——幽灵会话侧栏不可见）。
+ */
+export function buildAgentSessionTrees(sessions: AgentSessionMeta[]): AgentSessionTreeItem[] {
   const sessionIds = new Set(sessions.map((session) => session.id))
   const childrenByParentId = new Map<string, AgentSessionMeta[]>()
   const roots: AgentSessionMeta[] = []
 
   for (const session of sessions) {
+    if (isNanjuProxySession(session)) continue
     if (
       isDelegatedChildSession(session)
       && session.parentSessionId
@@ -1042,6 +1056,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         !child.archived
         && !draftSessionIds.has(child.id)
         && !isHiddenAutomationSession(child)
+        // v2.4 F2-7：置顶母会话收纳的子会话不含代理会话（幽灵会话不露出）
+        && !isNanjuProxySession(child)
       )),
     })),
     [agentSessions, draftSessionIds, pinnedAgentSessions],
@@ -2217,6 +2233,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           && !draftSessionIds.has(session.id)
           // 自动任务会话不进入项目列表，统一归到「自动任务」视图
           && !isHiddenAutomationSession(session)
+          // v2.4 F2-7：自动补完代理会话不进入项目列表（幽灵会话隐藏）
+          && !isNanjuProxySession(session)
           // 南大向导工作区的会话不进入普通项目列表
           && !nanjuWorkspaceIds.has(session.workspaceId ?? '')
           // 已被置顶母会话收纳的子会话留在置顶区的母会话下面，避免重复显示为项目根会话
@@ -2375,6 +2393,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         && (!currentWorkspaceId || session.workspaceId === currentWorkspaceId)
         // 自动任务会话不出现在收起态 Rail，与展开态列表保持一致
         && !isHiddenAutomationSession(session)
+        // v2.4 F2-7：自动补完代理会话不出现在收起态 Rail（与展开态一致）
+        && !isNanjuProxySession(session)
       )
       .sort((a, b) => {
         const statusA = agentIndicatorMap.get(a.id) ?? (unviewedCompletedSessionIds.has(a.id) ? 'completed' : 'idle')

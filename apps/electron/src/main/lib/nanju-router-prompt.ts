@@ -159,6 +159,10 @@ export function buildL2TaskWithAC(
   const parts: string[] = [
     '你是' + phase.title + '。' + phase.task,
     '',
+    // v2.4 返工 F2-8：显式角色标记（类别派生唯一权威信号——B 域 PHASE_ROLE_MARKER_RE 消费，
+    // 中文头衔启发式保留兑底；行首独立一行，不与正文混淆）
+    'phase.role: ' + phase.role,
+    '',
   ]
 
   // 前序上下文
@@ -723,11 +727,11 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     '### 你绝对不能做的',
     '- 自己写代码或文档（系统会拦截 Write/Edit/Bash）',
     '- 自己做 AC 审计（那是子会话的职责）',
-    '- 跳过用户确认直接推进',
+    '- 未经用户确认直接推进（"跳过"也是确认形式之一，须经确认通道授权，不得绕过）',
     '- 同时委派多个阶段的角色',
     '',
     '### 用户指令处理',
-    '- 用户说"跳过" → 直接推进到下一阶段',
+    '- 用户说"跳过" → 视为对当前阶段的确认（"跳过"在确认词表内，经横幅/消息确认通道授权推进）→ 推进到下一阶段',
     '- 用户说"取消" → 终止项目',
     '- 用户说"重做" → 重新委派当前阶段角色',
     '',

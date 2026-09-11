@@ -6,9 +6,12 @@
  *    （存储带前缀——auto 开启时路由规则消费；显示美观剥前缀，D7 §10）
  */
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const { resolveAutoClarifyAvailability } = await import('./ModeSelectView')
 const { stripRouteHeaderPrefix } = await import('../agent/AskUserBanner')
+const { isNanjuProxySession, buildAgentSessionTrees } = await import('../app-shell/LeftSidebar')
 
 describe('v2.4：自动补完复选框可用性（仅快消型）', () => {
   test('quick → available（复选框可选）', () => {
@@ -40,5 +43,81 @@ describe('v2.4：横幅 header 前缀剥离（stripRouteHeaderPrefix）', () => 
 
   test('仅剥首个前缀，不重复剥（嵌套前缀不误伤）', () => {
     expect(stripRouteHeaderPrefix('确认·设计·双前缀')).toBe('设计·双前缀')
+  })
+})
+
+// ═══════════════ v2.4 返工（DeepSeek 工程审查 F1-1/F2-7） ═══════════════
+
+const agentViewSource = readFileSync(join(import.meta.dir, '..', 'agent', 'AgentView.tsx'), 'utf-8')
+
+/** 从锚点第 occurrence 次出现的行向后取窗口，断言窗口内含 humanOrigin: false（程序化路径显式非真人） */
+function assertWindowHasHumanOriginFalse(anchor: string, windowLines = 40, occurrence = 1): void {
+  const lines = agentViewSource.split('\n')
+  let seen = 0
+  let idx = -1
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line !== undefined && line.includes(anchor)) {
+      seen += 1
+      if (seen === occurrence) { idx = i; break }
+    }
+  }
+  expect(idx).toBeGreaterThanOrEqual(0)
+  const window = lines.slice(idx, idx + windowLines).join('\n')
+  expect(window).toContain('humanOrigin: false')
+}
+
+describe('返工 F1-1（Defender #2 red）：四处程序化 sendAgentMessage 显式 humanOrigin:false', () => {
+  test('pendingPrompt 自动配置（snapshot.sdkMessage → AgentSendInput）置 humanOrigin:false', () => {
+    assertWindowHasHumanOriginFalse('userMessage: snapshot.sdkMessage')
+  })
+
+  test('队列重放 sendAgentMessage（sdkText 第二次出现处）置 humanOrigin:false', () => {
+    // 'userMessage: sdkText' 首现 = queueAgentMessage 入队（非发送通道）；
+    // 第二次 = 队列重放 dequeue 后的 sendAgentMessage 块（Defender #2 点名的 :1111 路径）
+    assertWindowHasHumanOriginFalse('userMessage: sdkText', 40, 2)
+  })
+
+  test('/compact 合成消息置 humanOrigin:false', () => {
+    assertWindowHasHumanOriginFalse("userMessage: '/compact'")
+  })
+
+  test('retry 重放（lastUserMessage）置 humanOrigin:false（与队列重放同构，不保留真人语义）', () => {
+    assertWindowHasHumanOriginFalse('userMessage: lastUserMessage')
+  })
+
+  test('总计至少 4 处显式置值（防御后续新增程序化路径时误删既有防护）', () => {
+    const count = (agentViewSource.match(/humanOrigin: false/g) ?? []).length
+    expect(count).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('返工 F2-7（Defender #11 后半）：nanjuProxy 代理会话侧栏隐藏谓词', () => {
+  /** 最小会话元（字段面宽松：只填谓词消费的字段） */
+  function makeSession(id: string, extra: Record<string, unknown> = {}): never {
+    return { id, title: id, createdAt: 0, updatedAt: 0, ...extra } as never
+  }
+
+  test('isNanjuProxySession：meta.nanjuProxy=true → true；普通/委派子会话 → false', () => {
+    expect(isNanjuProxySession(makeSession('proxy-1', { nanjuProxy: true }))).toBe(true)
+    expect(isNanjuProxySession(makeSession('normal'))).toBe(false)
+    // 委派子会话（parent+delegation 皆在）不命中代理谓词（两谓词语义独立）
+    expect(isNanjuProxySession(makeSession('deleg-1', { parentSessionId: 'p', sourceDelegationId: 'd' }))).toBe(false)
+  })
+
+  test('buildAgentSessionTrees：仅含 nanjuProxy meta 的代理会话不进树（根与子节点都不出现）', () => {
+    const normal = makeSession('normal-root')
+    const proxy = makeSession('proxy-ghost', { nanjuProxy: true })
+    const tree = buildAgentSessionTrees([normal, proxy] as never[])
+    expect(tree.map((t: { session: { id: string } }) => t.session.id)).toEqual(['normal-root'])
+    expect(JSON.stringify(tree)).not.toContain('proxy-ghost')
+  })
+
+  test('isDelegatedChildSession 语义未动：parent+delegation 双条件委派子会话仍归树（不扩散未绑定写豁免）', () => {
+    const parent = makeSession('parent')
+    const child = makeSession('deleg-child', { parentSessionId: 'parent', sourceDelegationId: 'd1' })
+    const tree = buildAgentSessionTrees([parent, child] as never[])
+    expect(tree.map((t: { session: { id: string } }) => t.session.id)).toEqual(['parent'])
+    expect(JSON.stringify(tree)).toContain('deleg-child')
   })
 })

@@ -1114,6 +1114,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         // 展示/持久化使用 displayText（编码原文，remarkMentions 解码显示）。
         userMessage: sdkText,
         rawUserMessage: displayText,
+        // F1-1（Defender #2）：程序化重放非真人新输入——显式非 humanOrigin，
+        // 防 activeConfirmAsk 窗口内确认词置位推进授权（main/ipc.ts 缺省权威打 true）
+        humanOrigin: false,
         channelId,
         modelId: agentModelId || undefined,
         workspaceId: currentWorkspaceId || undefined,
@@ -1392,6 +1395,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         sessionId,
         userMessage: snapshot.sdkMessage,
         rawUserMessage: snapshot.message,
+        // F1-1（Defender #2）：pendingPrompt 自动配置是程序化注入，非真人输入
+        humanOrigin: false,
         channelId: snapshot.channelId,
         modelId: snapshot.modelId,
         workspaceId: snapshot.workspaceId,
@@ -2495,6 +2500,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     window.electronAPI.sendAgentMessage({
       sessionId,
       userMessage: '/compact',
+      // F1-1（Defender #2）：/compact 是合成指令非真人输入
+      humanOrigin: false,
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
@@ -2615,6 +2622,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       // Agent 侧使用解码后的文本（@file 真实路径）；持久化/展示保留编码原文，避免新历史记录被 \S+ 截断
       userMessage: lastUserMessage,
       rawUserMessage: lastUserRawMessage,
+      // F1-1（Defender #2）：retry 重放复用用户历史文本，与队列重放同构——程序化非真人新输入
+      // （不保留真人语义：重放动作本身不构成确认表达；confirm.replay-origin 埋点由 A 域收口）
+      humanOrigin: false,
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,

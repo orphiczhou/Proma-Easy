@@ -16,6 +16,28 @@ mock.module('./config-paths', () => ({
   getWorkspaceFilesDir: () => fixtureRoot,
   getAgentWorkspacePath: () => fixtureRoot,
 }))
+// 返工 F2-8：deriveBlockedEventCategory 联合断言需加载 nanju-clarify-proxy-tool，
+// 其传递链静态 import channel-manager（顶层 import electron）——先 mock 再加载
+mock.module('electron', () => ({
+  app: { isPackaged: true, getPath: () => '/tmp/proma-rp-test', getName: () => 'proma', getVersion: () => '0.0.0-test' },
+  BrowserWindow: class {},
+  dialog: {}, clipboard: {}, nativeImage: { createFromPath: () => ({}) }, nativeTheme: {},
+  powerMonitor: {}, powerSaveBlocker: {}, screen: {}, shell: {},
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (v: string) => Buffer.from(v),
+    decryptString: (v: Buffer) => v.toString('utf-8'),
+  },
+  ipcMain: { handle() {}, removeHandler() {} },
+  webContents: { send() {} },
+}))
+mock.module('./channel-manager', () => ({
+  listChannels: () => [{
+    id: 'ch-minimax-uuid', enabled: true, provider: 'minimax',
+    models: [{ id: 'MiniMax-M3', name: 'MiniMax-M3', enabled: true }],
+  }],
+  getChannelById: () => null,
+}))
 
 const { buildL2TaskWithAC, resolveMinimaxM3Channel, getNanjuRouterPrompt } = await import('./nanju-router-prompt')
 const { getPhaseNode } = await import('./nanju-router')
@@ -454,6 +476,9 @@ describe('L1 指令：意见收集轮回归标记 + architecture 环境确认流
       id: 'ch-minimax-uuid', enabled: true, provider: 'minimax',
       models: [{ id: 'MiniMax-M3', name: 'MiniMax-M3', enabled: true }],
     }],
+    // 返工 F2-8：nanju-clarify-proxy-tool 传递链（agent-model-selection）静态 import
+    // getChannelById——本 mock 是文件内最晚注册的 channel-manager mock，必须带全导出面
+    getChannelById: () => null,
   }))
   /** 构造项目 fixture 并返回 prompt（复用文件级 fixtureRoot——mock 的 getWorkspaceFilesDir 读它） */
   function buildPromptFor(stage: string, files?: Record<string, string>): string | undefined {
@@ -597,6 +622,7 @@ describe('W12：coding L1 轻过渡收口（故事覆盖交还 GWT 机器裁判�
 // 返回可解析的 minimax 渠道（工厂惰性调用，makeChannel 函数声明提升后可用）。
 mock.module('./channel-manager', () => ({
   listChannels: () => [makeChannel()],
+  getChannelById: () => null,
 }))
 
 describe('v2.4：六确认话术 header「确认·」前缀改造（Defender #26：漏改则横幅被 deny）', () => {
@@ -760,3 +786,87 @@ describe('v2.4：AC 攻击者模板增补（代答清单披露 + 同族加倍攻
     }
   })
 })
+
+// ═══════════════ v2.4 返工（DeepSeek 工程审查 F2-6/F2-8） ═══════════════
+
+describe('返工 F2-6（Defender #16）：「跳过」两处口径统一——跳过是确认形式之一，非直接推进', () => {
+  function buildRequirementsPrompt(): string {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-rw16-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-rw16')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'rw16', name: '跳过口径项目', mode: 'quick', status: 'active',
+      currentStage: 'requirements', createdAt: '', updatedAt: '', sessionId: 's-rw16', workspaceSlug: root,
+    }]))
+    const prompt = getNanjuRouterPrompt(fixtureRoot, 's-rw16')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  test('「用户说跳过」改写：视为确认形式，经确认通道授权推进（与词表口径一致）', () => {
+    const prompt = buildRequirementsPrompt()
+    // 新口径：跳过 = 确认形式之一，走 I1 授权推进
+    expect(prompt).toContain('视为对当前阶段的确认')
+    expect(prompt).toContain('确认词表')
+    // 反断言：旧矛盾措辞（「直接推进到下一阶段」）不再存在
+    expect(prompt).not.toContain('直接推进到下一阶段')
+  })
+
+  test('禁止条目同步改写：禁止的是「未经确认直接推进」，与跳过=确认不再矛盾', () => {
+    const prompt = buildRequirementsPrompt()
+    expect(prompt).not.toContain('- 跳过用户确认直接推进')
+    expect(prompt).toContain('未经用户确认')
+  })
+})
+
+describe('返工 F2-8：L2 任务模板携带 phase.role 显式标记（类别派生唯一权威信号）', () => {
+  // 与既有 AC 测试同构：minimax 作者（家族断言可通过）
+  const authorUuid = 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd'
+  const minimaxAuthor = { channel: authorUuid, model: 'MiniMax-M3' }
+  type MarkerCase = { mode: 'quick' | 'iterative'; stage: import('./nanju-router').PhaseId; role: string }
+  type DeriveCase = { mode: 'quick' | 'iterative'; stage: import('./nanju-router').PhaseId; expected: import('./nanju-clarify-proxy-tool').NanjuClarifyCategory }
+
+  /** 全部六角色 phase（iterative 全链 + quick 归并）逐一验证标记存在且格式匹配 B 域正则 */
+  test('六个 phase 的 L2 任务均含行首 phase.role: <role> 标记（PHASE_ROLE_MARKER_RE 可解析）', () => {
+    const { PHASE_ROLE_MARKER_RE } = await_importProxyTool()
+    const cases: MarkerCase[] = [
+      { mode: 'iterative', stage: 'requirements', role: 'requirement-analyst' },
+      { mode: 'iterative', stage: 'prototype', role: 'ux-advisor' },
+      { mode: 'iterative', stage: 'architecture', role: 'architect' },
+      { mode: 'iterative', stage: 'planning', role: 'engineering-manager' },
+      { mode: 'iterative', stage: 'coding', role: 'fullstack-developer' },
+      { mode: 'iterative', stage: 'testing', role: 'test-engineer' },
+    ]
+    for (const { mode, stage, role } of cases) {
+      const phase = getPhaseNode(mode, stage)!
+      const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project')
+      const matches = Array.from(task.matchAll(PHASE_ROLE_MARKER_RE)).map((m) => m[1])
+      expect(matches).toContain(role)
+    }
+  })
+
+  test('生产者-消费者闭环：模板喂 deriveBlockedEventCategory → 六角色类别正确（fail-closed 不退化）', () => {
+    const { deriveBlockedEventCategory } = await_importProxyTool()
+    const cases: DeriveCase[] = [
+      { mode: 'iterative', stage: 'requirements', expected: 'requirement-clarify' },
+      { mode: 'iterative', stage: 'architecture', expected: 'requirement-clarify' },
+      { mode: 'iterative', stage: 'prototype', expected: 'design-preference' },
+      { mode: 'iterative', stage: 'planning', expected: 'other' },
+      { mode: 'iterative', stage: 'coding', expected: 'other' },
+      { mode: 'iterative', stage: 'testing', expected: 'other' },
+    ]
+    for (const { mode, stage, expected } of cases) {
+      const phase = getPhaseNode(mode, stage)!
+      const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project')
+      expect(deriveBlockedEventCategory(task)).toBe(expected)
+    }
+  })
+})
+
+/** B 域类别门契约的运行时导入（避免顶层静态依赖加重加载链；本文件已 mock electron） */
+function await_importProxyTool(): typeof import('./nanju-clarify-proxy-tool') {
+  const mod = require('./nanju-clarify-proxy-tool') as typeof import('./nanju-clarify-proxy-tool')
+  return mod
+}
