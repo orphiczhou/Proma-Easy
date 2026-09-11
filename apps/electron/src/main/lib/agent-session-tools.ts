@@ -480,6 +480,9 @@ export function buildPiSessionTools(sdk: PiSdk, ctx: SessionToolsContext): ToolD
               workspaceId: meta.workspaceId,
               permissionModeOverride: 'bypassPermissions' as PromaPermissionMode,
               startedAt: Date.now(),
+              // v2.4（D7 §1 I1-②a）：工具注入非真 UI 人类输入，显式置 false——
+              // 南大推进门不认 send_message 注入的确认词（R4-01 攻击面封堵）
+              humanOrigin: false,
             },
             {
               source: 'delegation',

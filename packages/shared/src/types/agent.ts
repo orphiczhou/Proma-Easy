@@ -1191,6 +1191,18 @@ export interface AgentSendInput {
    *  门禁仍需注入），仅豁免用户意图检测（入口确认检测/自动续接消息不得进入
    *  judgeConfirmAdvance —— 裁决 A2 wiring 类别混淆修复，不可用 triggeredBy 替代）。 */
   systemInitiated?: boolean
+  /**
+   * v2.4 南大向导自动补完需求（D7 §1 I1-②a）：消息来源分级标记。
+   * - true = 真 UI 人类输入（用户聊天发送）——唯一授权打标点：主进程用户消息 IPC 通道
+   *   （AGENT_IPC_CHANNELS.SEND_MESSAGE）对缺省值权威打 true；
+   * - false = 程序化/工具注入（一切非人类入口必须显式置 false）：send_message 工具、
+   *   HTTP bridge、nanju orchestrator、systemInitiated 续接，以及渲染端程序化调用
+   *   （队列重放 / pendingPrompt 自动配置 / /compact 合成 / retry 重放）——显式 false
+   *   优先于通道缺省打标。
+   * 南大推进门（confirmAuthorization I1-②）仅认 humanOrigin=true 的确认词；缺省
+   * 语义在工具/桥接入口一律按 false（fail-closed）。
+   */
+  humanOrigin?: boolean
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
   automationContext?: string
 }

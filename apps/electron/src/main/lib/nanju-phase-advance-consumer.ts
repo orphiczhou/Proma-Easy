@@ -46,6 +46,17 @@ export interface PhaseAdvanceHooks {
  * W10/W17/W18：确认响应推进检测（单条用户文本）——事件流路径与 run 初始输入路径共用。
  * 语义见模块头；置位/清除/埋点与 W10 原事件流块完全一致，不自动推进（W10 设计决策）。
  *
+ * v2.4（D7 §1 I1，2026-09-11）：确认命中时同步置位推进授权 confirmAuthorization——
+ * - I1-① ask-answer（横幅 IPC 结构化答案，不可伪造）：置位
+ *   {source:'ask-answer', expectedTarget=阶段图唯一下一阶段}；无活跃确认问句在场时
+ *   埋 clarify.suspect-fake-confirm 观测（不阻断——结构化通道无伪造面，主口径按子任务）；
+ * - I1-② 真·用户消息（opts.humanOrigin===true 且 activeConfirmAsk 活跃）：置位
+ *   {source:'user-message', expectedTarget=activeConfirmAsk.expectedTarget}（确认上下文
+ *   绑定，R4-02）；无活跃问句的散点确认词只埋点不授权；
+ * - 其余（humanOrigin≠true 的注入文本：send_message/HTTP bridge/事件流 tool_result
+ *   重放/队列重放等）一律不授权（R4-01 红测：确认词冒充无效）。
+ * confirmPendingStage（W10 提示注入）语义不变，与授权相互独立。
+ *
  * W18 Wave2（v0.17.83）交付域（先于普通 confirmPending 检测，两者独立不至扩散）：
  * - 否定词（DELIVERY_REJECT_WORDS，两来源均生效）→ 清除 ack+challenge；
  * - ask-answer 来源且精确等值「满意交付」且 testing 阶段且 challenge 在场且磁盘报告
@@ -56,12 +67,16 @@ export interface PhaseAdvanceHooks {
  *
  * @param source 'ask-answer' = AskUserQuestion 横幅答案（结构化精确选项，可置位交付 ack）；
  *   'message' = 事件流/初始输入自由文本（只观测不置位；旧 tool_result 重放走此路径天然免疫）
+ * @param opts.humanOrigin v2.4 I1-②a 消息来源分级：仅 sendMessage 入口按
+ *   AgentSendInput.humanOrigin 透传（真 UI 人类输入=true）；事件流路径缺省不传
+ *   （false——事件流 user 消息实际为工具注入，入口路径已覆盖真用户初始输入）
  */
 export function checkConfirmAdvanceInput(
   sessionId: string,
   workspaceSlug: string,
   userText: string,
   source: 'message' | 'ask-answer' = 'message',
+  opts?: { humanOrigin?: boolean },
 ): void {
   if (userText.trim() === '') return
   try {
@@ -92,6 +107,58 @@ export function checkConfirmAdvanceInput(
         }, project.projectId)
       } catch { /* 埋点失败不影响置位 */ }
       console.log(`[南大路由] 确认检测：置位 confirmPending=${project.currentStage}（${project.name}）`)
+      // —— v2.4（D7 §1 I1）：推进授权置位（与 confirmPending 提示相互独立）——
+      try {
+        const {
+          setConfirmAuthorization, getActiveConfirmAsk, clearActiveConfirmAsk,
+        } = require('./nanju-project') as typeof import('./nanju-project')
+        const { getNextPhase } = require('./nanju-router') as typeof import('./nanju-router')
+        if (source === 'ask-answer') {
+          // I1-①：横幅 IPC 结构化答案（唯一产生点 renderer 横幅确认 IPC，不可伪造）。
+          // expectedTarget 由 harness 按阶段图算（L1 无法引导到非法目标）。
+          const expected = getNextPhase(project.mode, project.currentStage as import('./nanju-router').PhaseId)
+          if (expected) {
+            const ask = getActiveConfirmAsk(workspaceSlug, project.projectId)
+            if (!ask) {
+              // Defender #4 观测：无活跃确认问句在场的 ask-answer（话术失范/伪造「确认」
+              // header 嫌疑）——埋点必发，不阻断（结构化通道无伪造面，主口径：仍置位）
+              try {
+                const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+                recordTelemetry(workspaceSlug, 'clarify.suspect-fake-confirm' as never, {
+                  project_id: project.projectId,
+                  stage: project.currentStage,
+                  textPreview: userText.slice(0, 40),
+                }, project.projectId)
+              } catch { /* 埋点失败不影响 */ }
+            }
+            setConfirmAuthorization(workspaceSlug, project.projectId, 'ask-answer', expected)
+            clearActiveConfirmAsk(workspaceSlug, project.projectId) // 横幅已答，问句失效
+            console.log(`[南大路由] 推进授权置位：ask-answer → ${expected}（${project.name}）`)
+          }
+        } else if (opts?.humanOrigin === true) {
+          // I1-②：真 UI 人类消息 + 活跃确认问句绑定（R4-02：散点确认词不授权）
+          const ask = getActiveConfirmAsk(workspaceSlug, project.projectId)
+          if (ask) {
+            setConfirmAuthorization(workspaceSlug, project.projectId, 'user-message', ask.expectedTarget)
+            clearActiveConfirmAsk(workspaceSlug, project.projectId) // 确认词已消费问句（§1 I1-②b：横幅答或确认词命中即失效）
+            console.log(`[南大路由] 推进授权置位：user-message → ${ask.expectedTarget}（${project.name}）`)
+          } else {
+            try {
+              const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+              recordTelemetry(workspaceSlug, 'confirm.scatter-no-auth' as never, {
+                project_id: project.projectId,
+                stage: project.currentStage,
+                textPreview: userText.slice(0, 40),
+              }, project.projectId)
+            } catch { /* 埋点失败不影响 */ }
+            console.log(`[南大路由] 确认词命中但无活跃确认问句，不授权（散点确认，${project.name}）`)
+          }
+        }
+        // 其余（source='message' 且 humanOrigin≠true）：send_message/HTTP bridge/事件流
+        // tool_result 重放/队列重放等注入文本——不授权（R4-01），仅保留既有 confirmPending 提示语义
+      } catch (authErr) {
+        console.warn('[南大路由] 推进授权置位异常（不影响既有 confirmPending 语义）:', authErr instanceof Error ? (authErr as Error).message : String(authErr))
+      }
     } else if (action === 'clear') {
       clearProjectConfirmPending(workspaceSlug, project.projectId)
       console.log(`[南大路由] 确认检测：反义词清除 confirmPending（${project.name}）`)
@@ -319,6 +386,61 @@ hooks: PhaseAdvanceHooks,
             console.warn('[南大路由] 推进目标校验异常（放行，不阻断推进）:', e instanceof Error ? e.message : String(e))
           }
           if (advanceTargetOk) {
+            // ── v2.4（D7 §2）：推进硬门（承重）──
+            // PHASE_ADVANCE:<target> 消费前授权校验（特判分支 isTestingSelfAdvance /
+            // isDeliverFromTesting 在上方分流，原样保留不走本门）：
+            //   合法 ⇔ confirmAuthorization（source∈{ask-answer,user-message} ∧
+            //          expectedTarget===target，TTL 10min，消费即清）
+            //          ∨ systemAdvanceAuthorized.target===target（I2，消费即清）。
+            // 不满足 → 拒 + 教育（发起确认问句或等待系统指令），不推进。授权状态读取
+            // 异常时按无授权处理（fail-closed：拒绝代价=用户重新确认，远小于未授权推进）。
+            {
+              let advanceAuthorized = false
+              let authSource = ''
+              try {
+                const {
+                  getConfirmAuthorization, consumeConfirmAuthorization,
+                  getSystemAdvanceAuthorized, consumeSystemAdvanceAuthorized,
+                } = require('./nanju-project') as typeof import('./nanju-project')
+                const confirmAuth = getConfirmAuthorization(workspaceSlug, project.projectId)
+                if (confirmAuth && (confirmAuth.source === 'ask-answer' || confirmAuth.source === 'user-message')
+                  && confirmAuth.expectedTarget === newStage) {
+                  advanceAuthorized = true
+                  authSource = `confirm:${confirmAuth.source}`
+                  consumeConfirmAuthorization(workspaceSlug, project.projectId)
+                } else {
+                  const sysAuth = getSystemAdvanceAuthorized(workspaceSlug, project.projectId)
+                  if (sysAuth && sysAuth.target === newStage) {
+                    advanceAuthorized = true
+                    authSource = 'system'
+                    consumeSystemAdvanceAuthorized(workspaceSlug, project.projectId)
+                  }
+                }
+              } catch (authReadErr) {
+                console.warn('[南大路由] 推进授权读取异常（按无授权拒绝）:', authReadErr instanceof Error ? (authReadErr as Error).message : String(authReadErr))
+              }
+              if (!advanceAuthorized) {
+                console.log(`[南大路由] 推进硬门拒绝：无授权（${project.currentStage} → ${newStage}，${project.name}）`)
+                try {
+                  const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+                  recordTelemetry(workspaceSlug, 'advance.gate-deny' as never, {
+                    project_id: project.projectId,
+                    from_stage: project.currentStage,
+                    target: newStage,
+                    mode: project.mode,
+                  }, project.projectId)
+                } catch { /* 埋点失败不影响拒绝 */ }
+                hooks.injectAssistantMessage(
+                  sessionId,
+                  '⚠️ 推进未被授权：阶段推进需要真人确认（或系统指令）才能生效。\n\n'
+                  + '请先用 AskUserQuestion（header 以「确认」开头）向用户发起本阶段收口确认，'
+                  + '待用户横幅答复确认（或聊天框回复确认词）后，再重新声明推进；系统自动续接场景由系统指令驱动，无需自行声明。\n'
+                  + '在未获得授权前，不要重复输出推进标记——重复声明同样会被拒绝。',
+                )
+                continue
+              }
+              console.log(`[南大路由] 推进硬门通过：${authSource}（${project.currentStage} → ${newStage}）`)
+            }
             // W7（v0.17.69 + AC 审计 M3/M4）：architecture 产出验证前置位——解析
             // architecture.md 的 projectEnv 标记行写 envReady（write-then-gate：先置位
             // 再跑含 envReady 门禁的 verifyPhaseOutput，避免首推进被自己未置位的门禁

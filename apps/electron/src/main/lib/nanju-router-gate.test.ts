@@ -10,7 +10,7 @@
  * 按本仓库既有测试模式（见 __tests__/nanju-ipc.test.ts）先 mock.module
  * 指向 tmpdir，再动态导入被测模块。
  */
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
@@ -29,10 +29,15 @@ mock.module('./config-paths', () => ({
 
 // W19 缺陷A：mock 委派子会话标记（sourceDelegationId 是 L2 专属，走真实 agent-session-manager
 // 会拉起 electron 依赖；本测试文件导入链中仅 nanju-router-gate 惰性 require 该模块）
+// v2.4：同步 mock nanjuProxy 会话标记（代理子会话工具面白名单测试用）
 const delegationChildSessions = new Set<string>()
+const nanjuProxySessions = new Set<string>()
 mock.module('./agent-session-manager', () => ({
-  getAgentSessionMeta: (id: string) =>
-    delegationChildSessions.has(id) ? { id, sourceDelegationId: 'delegation-x' } : undefined,
+  getAgentSessionMeta: (id: string) => {
+    if (delegationChildSessions.has(id)) return { id, sourceDelegationId: 'delegation-x' }
+    if (nanjuProxySessions.has(id)) return { id, nanjuProxy: true }
+    return undefined
+  },
 }))
 
 const { verifyPhaseOutput, validateAdvanceTarget, checkNanjuRouterGate } = await import('./nanju-router-gate')
@@ -714,5 +719,147 @@ describe('W19 F1（审查必修）：路径归一化——三个实证绕过形�
       file_path: 'project-act//01_PRD/./x.md',
     })
     expect(result?.behavior).toBe('deny')
+  })
+})
+
+// ═══════════════ v2.4（D7 §3/§4）：nanjuProxy 工具面白名单 + L1 AskUser 路由 ═══════════════
+
+import { getActiveConfirmAsk, setProjectDeliveryChallenge, __resetNanjuAdvanceAuthStoresForTests } from './nanju-project'
+
+describe('v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退）', () => {
+  beforeEach(() => {
+    nanjuProxySessions.add('session-proxy')
+  })
+  afterEach(() => {
+    nanjuProxySessions.delete('session-proxy')
+    __resetNanjuAdvanceAuthStoresForTests()
+  })
+
+  test('检索与只读工具放行（WebSearch/WebFetch/Read/LS/Glob/Grep）', () => {
+    for (const tool of ['WebSearch', 'WebFetch', 'Read', 'LS', 'Glob', 'Grep']) {
+      expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-proxy', tool, {})).toBeNull()
+    }
+  })
+
+  test('红测（Defender #12）：AskUserQuestion / mcp__session__send_message / Write / Edit / Bash / NotebookEdit / delegate_agent 一律 deny', () => {
+    for (const tool of [
+      'AskUserQuestion', 'mcp__session__send_message', 'mcp__session__list_sessions',
+      'Write', 'Edit', 'Bash', 'NotebookEdit', 'delegate_agent', 'mcp__collaboration__delegate_agent',
+    ]) {
+      const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-proxy', tool, { file_path: '/tmp/x' })
+      expect(result?.behavior).toBe('deny')
+      expect(result?.message).toContain('nanju_clarify_proxy')
+    }
+  })
+
+  test('红测（Defender #13）：workspaceSlug=undefined（未绑定工作区）时代理会话仍走白名单分支而非早退放行', () => {
+    // 早退放行 = fail-open：白名单外工具必须在任何 workspaceSlug 下都被拦
+    expect(checkNanjuRouterGate(undefined, 'session-proxy', 'AskUserQuestion', {})).not.toBeNull()
+    expect(checkNanjuRouterGate(undefined, 'session-proxy', 'Write', { file_path: '/tmp/x' })).not.toBeNull()
+    // 白名单内工具仍放行（代理正常工作不受影响）
+    expect(checkNanjuRouterGate(undefined, 'session-proxy', 'WebSearch', {})).toBeNull()
+  })
+
+  test('非代理会话现状回归：L1（session-1，requirements）AskUserQuestion 放行（非 auto 项目无路由约束）', () => {
+    // setupFixture 建的 session-1 是 requirements 阶段项目会话（autoClarify 未开启）
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '这个布局可以吗？', header: '原型交互验证', options: [] }],
+    })).toBeNull()
+  })
+})
+
+describe('v2.4 §3：L1 AskUserQuestion 路由（auto 开启时按 header 前缀）', () => {
+  /** AskUser 路由 fixture：requirements 阶段 + autoClarify 可控 + 达标 PRD */
+  function setupAskFixture(autoClarify?: { enabled: boolean; proxyBudget: number; pendingQuestionIds: string[] }): void {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    // requirements 阶段更贴合推进语义（expectedTarget=prototype）；重写项目元数据
+    const projectsPath = join(fixtureRoot, '_nanju-projects.json')
+    const projects = JSON.parse(readFileSync(projectsPath, 'utf-8')) as Array<Record<string, unknown>>
+    const p = projects[0]!
+    p.currentStage = 'requirements'
+    p.autoClarify = autoClarify
+    writeFileSync(projectsPath, JSON.stringify(projects))
+  }
+
+  const AUTO_ON = { enabled: true, proxyBudget: 20, pendingQuestionIds: [] }
+
+  afterEach(() => {
+    __resetNanjuAdvanceAuthStoresForTests()
+  })
+
+  test('auto 开启 + header「确认·…」前缀 → 放行 + 登记 activeConfirmAsk（expectedTarget=阶段图唯一下一阶段）', () => {
+    setupAskFixture(AUTO_ON)
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: 'PRD 已产出，是否确认进入下一阶段？', header: '确认·需求阶段收口', options: [{ label: '确认' }, { label: '需要修改' }] }],
+    })
+    expect(result).toBeNull()
+    const ask = getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
+    expect(ask).toBeTruthy()
+    expect(ask!.expectedTarget).toBe('prototype') // quick: requirements → prototype
+  })
+
+  test('auto 开启 + header「设计…」/「转述…」前缀 → 放行 + 不登记 activeConfirmAsk（非确认问句）', () => {
+    setupAskFixture(AUTO_ON)
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '导航放顶部还是侧边？', header: '设计·导航布局偏好', options: [] }],
+    })).toBeNull()
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '这个问题需要转述真人确认', header: '转述·环境依赖确认', options: [] }],
+    })).toBeNull()
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
+  })
+
+  test('红测：auto 开启 + 无豁免前缀 header → deny + 教育话术（含「确认必须由真人给出」与「nanju_clarify_proxy」，Defender #9）', () => {
+    setupAskFixture(AUTO_ON)
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '这个工具的目标用户是谁？使用频率多高？', header: '需求澄清', options: [] }],
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('确认必须由真人给出')
+    expect(result?.message).toContain('nanju_clarify_proxy')
+  })
+
+  test('交付挑战机器豁免（Defender #7）：auto 开启 + deliveryChallenge 在场 → 无前缀 header 也放行', () => {
+    setupAskFixture(AUTO_ON)
+    setProjectDeliveryChallenge(WORKSPACE_SLUG, PROJECT_ID, 'run-1', 'session-1')
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '验收全部通过，是否满意交付？', header: '交付验收', options: [] }],
+    })).toBeNull()
+  })
+
+  test('auto 关闭（autoClarify 缺失 / enabled:false）→ 全放行（现状零变化回归）', () => {
+    setupAskFixture(undefined)
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '需求澄清问题', header: '需求澄清', options: [] }],
+    })).toBeNull()
+    setupAskFixture({ enabled: false, proxyBudget: 20, pendingQuestionIds: [] })
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '需求澄清问题', header: '需求澄清', options: [] }],
+    })).toBeNull()
+  })
+
+  test('多 question 混合 header：任一非豁免前缀 → 整体 deny（fail-closed，Defender #17①）', () => {
+    setupAskFixture(AUTO_ON)
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [
+        { question: '确认进入下一阶段？', header: '确认·收口', options: [] },
+        { question: '顺便问下目标用户是谁？', header: '需求澄清', options: [] },
+      ],
+    })
+    expect(result?.behavior).toBe('deny')
+    // 混合调用不登记确认问句
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
+  })
+
+  test('「确认」类问句重复放行覆盖登记（新问句替代旧问句，10min TTL 语义不变）', () => {
+    setupAskFixture(AUTO_ON)
+    checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: 'A', header: '确认·A', options: [] }],
+    })
+    checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: 'B', header: '确认·B', options: [] }],
+    })
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeTruthy() // 后到者胜（覆盖式）
   })
 })

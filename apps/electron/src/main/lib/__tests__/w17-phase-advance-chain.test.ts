@@ -36,7 +36,15 @@ const { collectPhaseAdvanceStages } = await import('../nanju-router-gate')
 const { checkConfirmAdvanceInput, consumePhaseAdvanceMarks } =
   await import('../nanju-phase-advance-consumer')
 type PhaseAdvanceHooks = import('../nanju-phase-advance-consumer').PhaseAdvanceHooks
-const { getProjectConfirmPending } = await import('../nanju-project')
+const {
+  getProjectConfirmPending,
+  // v2.4 推进授权内存态（D7 §1/§2）：授权门红测 + 既有用例补前置
+  setConfirmAuthorization, getConfirmAuthorization, consumeConfirmAuthorization,
+  setActiveConfirmAsk, getActiveConfirmAsk, clearActiveConfirmAsk,
+  registerSystemAdvance, getSystemAdvanceAuthorized, consumeSystemAdvanceAuthorized,
+  clearNanjuAdvanceAuthState, __resetNanjuAdvanceAuthStoresForTests,
+  CONFIRM_ADVANCE_KEYWORDS,
+} = await import('../nanju-project')
 // W18：交付双事实门禁（delivered 消费用例前置）
 const { checkGwtDeliveryFacts } = await import('../nanju-gwt-runner')
 const { readProjectInfo, setProjectDeliveryChallenge, setProjectDeliveryAck } = await import('../nanju-project')
@@ -104,9 +112,12 @@ const RESUME = { channelId: 'chan-1' }
 
 beforeEach(() => {
   setupFixture()
+  // v2.4：推进授权内存态逐用例隔离（Map 跨用例残留会让无授权红测误绿）
+  __resetNanjuAdvanceAuthStoresForTests()
 })
 
 afterEach(() => {
+  __resetNanjuAdvanceAuthStoresForTests()
   if (fixtureRoot) {
     try { rmSync(fixtureRoot, { recursive: true, force: true }) } catch { /* 并发清理容忍 */ }
     fixtureRoot = ''
@@ -188,6 +199,8 @@ describe('W17 §3-1：collectPhaseAdvanceStages 全消息扫描', () => {
 
 describe('W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费', () => {
   test('终局复测案例重演：[prototype, test, delivery]——prototype 消费、test/delivery 按序拒绝并注入纠正教育消息', () => {
+    // v2.4（D7 §2）：新门生效后通用分支消费需授权——用系统授权模拟 harness 指令链
+    registerSystemAdvance(WS, 'p1', 'prototype')
     const hooks = buildTestHooks()
     const advanced = consumePhaseAdvanceMarks(
       SESSION_ID, WS, ['prototype', 'test', 'delivery'],
@@ -222,6 +235,7 @@ describe('W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费', () 
 
   test('合法目标但产出不达标：W11 放行 → verifyPhaseOutput 拦截（AC L-002 可见化注入）', () => {
     rmSync(join(fixtureRoot, 'project-p1', '01_PRD'), { recursive: true, force: true })
+    registerSystemAdvance(WS, 'p1', 'prototype') // v2.4：先过授权门才走到产出验证
     const hooks = buildTestHooks()
     const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
     expect(advanced).toBe(null)
@@ -235,6 +249,7 @@ describe('W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费', () 
 
 describe('W17 §3-3：已消费标记去重（防重放）', () => {
   test('同 run 重复声明同目标：第二次直接跳过，不二次推进、不注入拒绝消息', () => {
+    registerSystemAdvance(WS, 'p1', 'prototype') // v2.4：授权门前置
     const hooks = buildTestHooks()
     const advanced = consumePhaseAdvanceMarks(
       SESSION_ID, WS, ['prototype', 'prototype', 'prototype'],
@@ -248,6 +263,7 @@ describe('W17 §3-3：已消费标记去重（防重放）', () => {
   })
 
   test('前序消费推进状态机后，后续消费按新状态校验（不是按初始状态）；跨 run 不受去重影响', () => {
+    registerSystemAdvance(WS, 'p1', 'prototype') // v2.4：授权门前置
     const hooks = buildTestHooks()
     expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe('prototype')
     // 新 run（新消费调用）：prototype 阶段再声明 prototype → W11 拒绝（expected=architecture）
@@ -372,7 +388,8 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
   })
 
   test('run 初始输入路径：sendMessage 入口在 getNanjuRouterPrompt 之前调用同一检测（本轮 prompt 即带强推进提示）', () => {
-    const entryCall = 'checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage)'
+    // v2.4：入口调用透传 humanOrigin（I1-②a 消息来源分级）
+    const entryCall = "checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage, 'message', {"
     const promptCall = 'getNanjuRouterPrompt(workspaceSlug, sessionId)'
     const entryIdx = orchestratorSource.indexOf(entryCall)
     const promptIdx = orchestratorSource.indexOf(promptCall)
@@ -380,6 +397,7 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
     expect(promptIdx).toBeGreaterThan(-1)
     expect(entryIdx).toBeLessThan(promptIdx)
     expect(orchestratorSource).toContain('!input.triggeredBy && !input.systemInitiated && shouldPersistUserMessage')
+    expect(orchestratorSource).toContain('humanOrigin: input.humanOrigin === true')
   })
 
   test('Q1 接线：result 块用 collectPhaseAdvanceStages(accumulatedMessages) 全量收集并交 consumePhaseAdvanceMarks 按序消费（经 hooks 装配）', () => {
@@ -437,5 +455,226 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
     const promptSource = readFileSync(new URL('../nanju-router-prompt.ts', import.meta.url), 'utf-8')
     expect(promptSource).toContain('若用户消息中还包含修改/补充请求，先完成该请求再推进')
     expect(promptSource).toContain('仅当你确信产出确需补充时，先向用户说明理由')
+  })
+})
+
+// ═══════════════ v2.4（D7 §2）：推进硬门红测——授权链全覆盖 ═══════════════
+
+describe('v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）', () => {
+  test('红测：纯 mark 无任何授权 → 拒绝推进 + 注入教育消息 + advance.gate-deny 埋点，状态机不动', () => {
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    expect(readProjects()[0]?.currentStage).toBe('requirements')
+    const denied = hooks.injected.find((t) => t.includes('推进未被授权'))
+    expect(denied).toBeTruthy()
+    expect(denied).toContain('AskUserQuestion')
+    expect(denied).toContain('「确认」')
+    // telemetry：advance.gate-deny 落库
+    const month = new Date().toISOString().slice(0, 7)
+    const telemetryPath = join(fixtureRoot, '_telemetry', `events-${month}.jsonl`)
+    expect(existsSync(telemetryPath)).toBe(true)
+    const events = readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    const denyEvent = events.find((e) => e.eventType === 'advance.gate-deny')
+    expect(denyEvent).toBeTruthy()
+    expect((denyEvent!.payload as Record<string, unknown>).target).toBe('prototype')
+  })
+
+  test('红测：无授权时产出验证也不执行（拒绝先于文件验证——教育路径清晰）', () => {
+    rmSync(join(fixtureRoot, 'project-p1', '01_PRD'), { recursive: true, force: true })
+    const hooks = buildTestHooks()
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    // 产出验证拦截消息不出现（授权门先拒，不对未授权目标做产出验证）
+    expect(hooks.injected.some((t) => t.includes('阶段推进被拦截'))).toBe(false)
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
+  })
+
+  test('ask-answer 授权（target 匹配）→ 推进成功且消费即清（单次授权单次有效）', () => {
+    setConfirmAuthorization(WS, 'p1', 'ask-answer', 'prototype')
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    expect(advanced).toBe('prototype')
+    expect(readProjects()[0]?.currentStage).toBe('prototype')
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null) // 消费即清
+    // 同轮第二次声明同目标：已消费去重（不消耗新授权，也不推进）
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, buildTestHooks())).toBe(null)
+  })
+
+  test('红测：ask-answer 授权但 expectedTarget 不匹配（确认 A 却推进 B）→ 拒绝且授权保留', () => {
+    setConfirmAuthorization(WS, 'p1', 'ask-answer', 'architecture')
+    const hooks = buildTestHooks()
+    // quick 模式 requirements 下一阶段是 prototype——W11 目标校验对 architecture 拒（跳级），
+    // 用合法目标 prototype 才能到达授权门：授权 expectedTarget=architecture ≠ prototype
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    expect(readProjects()[0]?.currentStage).toBe('requirements')
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
+    // 目标不符不消费：授权保留给正确目标
+    expect(getConfirmAuthorization(WS, 'p1')?.expectedTarget).toBe('architecture')
+  })
+
+  test('systemAdvanceAuthorized（I2）匹配 → 推进；消费即清（单次）；目标不符 → 拒且授权保留', () => {
+    registerSystemAdvance(WS, 'p1', 'prototype')
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe('prototype')
+    expect(readProjects()[0]?.currentStage).toBe('prototype')
+    expect(getSystemAdvanceAuthorized(WS, 'p1')).toBe(null) // 消费即清
+
+    // 目标不符场景：setupFixture 重置回 requirements
+    setupFixture()
+    registerSystemAdvance(WS, 'p1', 'prototype')
+    const hooks2 = buildTestHooks()
+    // W11 拒非法目标在前；用合法但与授权不符的目标无法构造（合法目标唯一），
+    // 改测：授权目标 testing（与合法下一阶段 prototype 不符）→ 门拒（W11 对 testing 也拒，
+    // 故用 prototype 合法 + 授权 delivered 不匹配——语义等价于 target!==expectedTarget）
+    clearNanjuAdvanceAuthState(WS, 'p1')
+    registerSystemAdvance(WS, 'p1', 'delivered')
+    const advanced2 = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks2)
+    expect(advanced2).toBe(null)
+    expect(hooks2.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
+    expect(getSystemAdvanceAuthorized(WS, 'p1')?.target).toBe('delivered') // 保留
+  })
+
+  test('红测：send_message 注入消息（humanOrigin 缺省 false）+ 确认词 → 不构成授权（R4-01）', () => {
+    // 模拟 send_message/bridge 注入路径：入口检测 opts 不传 humanOrigin
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进')
+    expect(getProjectConfirmPending(WS, 'p1')).toBe('requirements') // 既有提示语义保留
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null) // 但不授权
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe(null)
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
+  })
+
+  test('红测：事件流路径显式 humanOrigin:false + 确认词 → 不授权（工具注入免疫）', () => {
+    checkConfirmAdvanceInput(SESSION_ID, WS, '好的，可以推进', 'message', { humanOrigin: false })
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+  })
+
+  test('红测：真 UI 消息（humanOrigin:true）+ 确认词但无活跃确认问句（散点「继续」）→ 不授权（R4-02）+ 埋点观测', () => {
+    checkConfirmAdvanceInput(SESSION_ID, WS, '继续', 'message', { humanOrigin: true })
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+    const month = new Date().toISOString().slice(0, 7)
+    const telemetryPath = join(fixtureRoot, '_telemetry', `events-${month}.jsonl`)
+    expect(existsSync(telemetryPath)).toBe(true)
+    const events = readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(events.some((e) => e.eventType === 'confirm.scatter-no-auth')).toBe(true)
+  })
+
+  test('I1-② 完整链：活跃确认问句（harness 登记）+ humanOrigin:true + 确认词 → 授权并消费推进', () => {
+    // 模拟「确认」header 问句被路由放行时的登记（nanju-router-gate 放行侧）
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，继续', 'message', { humanOrigin: true })
+    const auth = getConfirmAuthorization(WS, 'p1')
+    expect(auth).toBeTruthy()
+    expect(auth!.source).toBe('user-message')
+    expect(auth!.expectedTarget).toBe('prototype')
+    // activeConfirmAsk 消费后清除（问句已答）
+    expect(getActiveConfirmAsk(WS, 'p1')).toBe(null)
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe('prototype')
+    expect(readProjects()[0]?.currentStage).toBe('prototype')
+  })
+
+  test('「跳过」入确认词表：活跃问句 + humanOrigin +「跳过」→ 授权（I1-②c）', () => {
+    expect(CONFIRM_ADVANCE_KEYWORDS).toContain('跳过')
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
+    checkConfirmAdvanceInput(SESSION_ID, WS, '跳过这个环节', 'message', { humanOrigin: true })
+    expect(getConfirmAuthorization(WS, 'p1')?.expectedTarget).toBe('prototype')
+  })
+
+  test('ask-answer 确认词 → 置位授权（I1-① 主通道）+ 无活跃问句时埋 suspect-fake-confirm 观测', () => {
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认', 'ask-answer')
+    const auth = getConfirmAuthorization(WS, 'p1')
+    expect(auth).toBeTruthy()
+    expect(auth!.source).toBe('ask-answer')
+    expect(auth!.expectedTarget).toBe('prototype') // harness 按阶段图算（quick: requirements→prototype）
+    const month = new Date().toISOString().slice(0, 7)
+    const telemetryPath = join(fixtureRoot, '_telemetry', `events-${month}.jsonl`)
+    const events = readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    expect(events.some((e) => e.eventType === 'clarify.suspect-fake-confirm')).toBe(true)
+  })
+
+  test('ask-answer 到达时清除既有 activeConfirmAsk（横幅已答，问句失效）', () => {
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认', 'ask-answer')
+    expect(getActiveConfirmAsk(WS, 'p1')).toBe(null)
+  })
+
+  test('TTL：授权与活跃问句 10min 过期后失效（惰性清除）', () => {
+    setConfirmAuthorization(WS, 'p1', 'ask-answer', 'prototype')
+    setActiveConfirmAsk(WS, 'p1', 'prototype')
+    // 快进 11 分钟（monkey-patch Date.now，测后恢复）
+    const realNow = Date.now
+    try {
+      Date.now = () => realNow() + 11 * 60 * 1000
+      expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+      expect(getActiveConfirmAsk(WS, 'p1')).toBe(null)
+    } finally {
+      Date.now = realNow
+    }
+    // 过期后真 UI 确认词不授权（问句已过期）
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认', 'message', { humanOrigin: true })
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+  })
+
+  test('既有特判保留：testing 自环（isTestingSelfAdvance）与 delivered 交付不走授权门（无授权也可触发 GWT/交付门禁）', () => {
+    // testing 重入：无任何授权 → 仍触发 GWT（特判先分流）
+    setupFixture({ stage: 'testing' })
+    const hooks = buildTestHooks()
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['testing'], RESUME, hooks)
+    expect(hooks.gwtTriggered.length).toBe(1)
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(false)
+    expect(readProjects()[0]?.currentStage).toBe('testing')
+  })
+
+  test('幂等：同 target 重复 registerSystemAdvance 不叠加（覆盖式刷新）', () => {
+    registerSystemAdvance(WS, 'p1', 'prototype')
+    registerSystemAdvance(WS, 'p1', 'prototype')
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, buildTestHooks())).toBe('prototype')
+    expect(getSystemAdvanceAuthorized(WS, 'p1')).toBe(null)
+  })
+})
+
+// ═══════════════ v2.4：消息来源分级 / 门禁重入 / 系统指令登记——源码断言 ═══════════════
+
+describe('v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线', () => {
+  const orchestratorSource = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
+
+  test('main/ipc.ts 用户消息通道（SEND_MESSAGE）权威打标：缺省 true，显式 false 优先（Defender #1/#2）', () => {
+    const ipcSource = readFileSync(new URL('../../../main/ipc.ts', import.meta.url), 'utf-8')
+    expect(ipcSource).toContain("input.humanOrigin = input.humanOrigin === false ? false : true")
+    const sharedTypesSource = readFileSync(
+      new URL('../../../../../../packages/shared/src/types/agent.ts', import.meta.url), 'utf-8')
+    expect(sharedTypesSource).toContain('humanOrigin?: boolean')
+  })
+
+  test('三个工具/桥接注入入口显式 humanOrigin:false（R4-01 攻击面；缺省即 false 防回归）', () => {
+    const sessionTools = readFileSync(new URL('../agent-session-tools.ts', import.meta.url), 'utf-8')
+    const mcpBridge = readFileSync(new URL('../agent-mcp-bridge.ts', import.meta.url), 'utf-8')
+    const nanjuOrch = readFileSync(new URL('../nanju-orchestrator.ts', import.meta.url), 'utf-8')
+    expect(sessionTools).toContain('humanOrigin: false')
+    expect(mcpBridge).toContain('humanOrigin: false')
+    expect(nanjuOrch).toContain('humanOrigin: false')
+  })
+
+  test('canUseTool 门禁条件：nanjuProxy 代理会话重入门禁（triggeredBy 会话中代理仍过门禁，D7 §4）', () => {
+    expect(orchestratorSource).toContain('(!input.triggeredBy || sessionIsNanjuProxy)')
+    expect(orchestratorSource).toContain("?.nanjuProxy === true")
+  })
+
+  test('systemInitiated 推进指令点统一 registerSystemAdvance（D7 §1 I2：delivered ×1 + testing ×5）', () => {
+    expect(orchestratorSource.split("this.registerSystemAdvance(").length - 1).toBe(6)
+    expect(orchestratorSource).toContain("this.registerSystemAdvance(workspaceSlug, projectId, 'delivered')")
+    expect(orchestratorSource.split("this.registerSystemAdvance(workspaceSlug, projectId, 'testing')").length - 1).toBe(5)
+  })
+
+  test('router-gate 第一行为 nanjuProxy 分支（先于 !workspaceSlug 早退与 project 查询，Defender #13）', () => {
+    const gateSource = readFileSync(new URL('../nanju-router-gate.ts', import.meta.url), 'utf-8')
+    const fnStart = gateSource.indexOf('export function checkNanjuRouterGate')
+    const bodyStart = gateSource.indexOf('{', gateSource.indexOf(')', fnStart))
+    const firstStmt = gateSource.slice(bodyStart, bodyStart + 700)
+    expect(firstStmt).toContain('isNanjuProxySession(sessionId)')
+    // 首分支先于 workspaceSlug 早退
+    expect(firstStmt.indexOf('isNanjuProxySession')).toBeLessThan(firstStmt.indexOf('if (!workspaceSlug)'))
   })
 })

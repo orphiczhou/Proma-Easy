@@ -144,6 +144,8 @@ ${contextSummary}
       modelId: config.model,
       permissionModeOverride: 'bypassPermissions' as PromaPermissionMode,
       startedAt: Date.now(),
+      // v2.4（D7 §1 I1-②a）：nanju orchestrator 注入非真 UI 人类输入，显式置 false
+      humanOrigin: false,
     },
     {
       source: 'delegation',

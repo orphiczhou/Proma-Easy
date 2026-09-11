@@ -2868,6 +2868,11 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
+      // v2.4（D7 §1 I1-②a）：真 UI 人类输入打标——本通道是真人聊天的唯一入口，
+      // 缺省权威打 humanOrigin:true；渲染端程序化调用（队列重放 / pendingPrompt
+      // 自动配置 / /compact 合成 / retry 重放）显式传 false 优先（约定见
+      // AgentSendInput.humanOrigin 注释）。工具/桥接注入不走本通道，各自显式 false。
+      input.humanOrigin = input.humanOrigin === false ? false : true
       const session = getAgentSessionMeta(input.sessionId)
       if (session) {
         await feishuBridgeManager.startSessionMirrorRun(session).catch((error) => {

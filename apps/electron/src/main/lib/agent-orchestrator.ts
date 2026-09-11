@@ -622,6 +622,25 @@ export class AgentOrchestrator {
   }
 
   /**
+   * v2.4（D7 §1 I2）：systemInitiated 推进指令统一登记出口（防御性）。
+   *
+   * harness 注入的推进指令（「完成后重新声明 PHASE_ADVANCE: xxx」）统一先登记
+   * systemAdvanceAuthorized（§2 推进门 I2 分支数据源；消费即清、单次有效；同 target
+   * 重复登记幂等——Defender #19）。R6-03 口径：现网目标集={testing,delivered}，
+   * testing 重入/delivered 交付走既有特判分支，本登记作为防御性双保险；新增跨阶段
+   * systemInitiated 指令点必须走本出口，不得私设旁路。
+   */
+  private registerSystemAdvance(workspaceSlug: string, projectId: string, target: string): void {
+    try {
+      const { registerSystemAdvance } = require('./nanju-project') as typeof import('./nanju-project')
+      registerSystemAdvance(workspaceSlug, projectId, target)
+      console.log(`[南大路由] 系统推进授权登记：→ ${target}（projectId=${projectId}）`)
+    } catch (e) {
+      console.warn('[南大路由] 系统推进授权登记失败（不阻断续接）:', e instanceof Error ? (e as Error).message : String(e))
+    }
+  }
+
+  /**
    * 触发 GWT 验收测试（异步，不阻塞本轮 result 流）。
    *
    * 触发时机：PHASE_ADVANCE: testing 重入（currentStage 已是 testing）——
@@ -785,6 +804,9 @@ export class AgentOrchestrator {
             console.warn('[南大路由] 交付挑战登记失败（不阻断验收注入）:', challengeErr instanceof Error ? challengeErr.message : String(challengeErr))
           }
           console.log(`[南大路由] ✅ GWT 验收通过，进入交付验收（等待用户确认交付）: ${projectName}`)
+          // v2.4 I2：交付验收续接指令含「满意交付 → PHASE_ADVANCE: delivered」——防御性登记
+          //（isDeliverFromTesting 特判为主路径，双事实门禁仍是主承重）
+          this.registerSystemAdvance(workspaceSlug, projectId, 'delivered')
           this.injectNanjuAssistantMessage(sessionId, buildGwtDeliveryAcceptanceMessage(outcome.summaryText))
           setTimeout(() => {
             runRegisteredHeadlessAgent(
@@ -832,6 +854,8 @@ export class AgentOrchestrator {
         } else if (outcome.failureKind === 'coverage' && outcome.prdUserStoriesMissing) {
           // 覆盖性基准缺失（v0.17.63，AC F-002）：PRD 缺 US-xx 清单 → 指引补 PRD
           // （需求变更需用户确认，不自动烧回炉续接）
+          // v2.4 I2：指令含「完成后重新声明推进 PHASE_ADVANCE: testing」——防御性登记
+          this.registerSystemAdvance(workspaceSlug, projectId, 'testing')
           this.injectNanjuAssistantMessage(
             sessionId,
             outcome.summaryText + '\n\n处理指引：请与用户确认需求范围后，用 continue_delegation 委派「需求分析师」补充 PRD 用户故事清单'
@@ -845,6 +869,8 @@ export class AgentOrchestrator {
             + '\n\n请 continue_delegation 委派「测试工程师」为缺失的用户故事补生成 GWT 场景与 steps.json 映射'
             + '（只写 06_TESTS/，不动 08_APP/ 与 01_PRD/），完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
           )
+          // v2.4 I2：覆盖类回炉指令含「重新声明推进 PHASE_ADVANCE: testing」——防御性登记
+          this.registerSystemAdvance(workspaceSlug, projectId, 'testing')
           setTimeout(() => {
             runRegisteredHeadlessAgent(
               {
@@ -881,6 +907,8 @@ export class AgentOrchestrator {
             + '重新核对 08_APP 实码的 data-ai-id 后重写对应 steps.json 映射（只改 06_TESTS/，不动 08_APP/ 与 01_PRD/），'
             + '完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
           )
+          // v2.4 I2：映射类回炉指令含「重新声明推进 PHASE_ADVANCE: testing」——防御性登记
+          this.registerSystemAdvance(workspaceSlug, projectId, 'testing')
           setTimeout(() => {
             runRegisteredHeadlessAgent(
               {
@@ -916,6 +944,8 @@ export class AgentOrchestrator {
             + '\n\n请 continue_delegation 委派「全栈开发」修复以上缺陷（仅改 08_APP/ 下代码，不得改 06_TESTS/ 与 01_PRD/），'
             + '修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
           )
+          // v2.4 I2：行为类回炉指令含「重新声明推进 PHASE_ADVANCE: testing」——防御性登记
+          this.registerSystemAdvance(workspaceSlug, projectId, 'testing')
           setTimeout(() => {
             runRegisteredHeadlessAgent(
               {
@@ -941,6 +971,8 @@ export class AgentOrchestrator {
         }
       } catch (e) {
         console.error(`[南大路由] GWT 验收执行异常:`, e)
+        // v2.4 I2：异常指引含「重新声明推进 PHASE_ADVANCE: testing」——防御性登记
+        this.registerSystemAdvance(workspaceSlug, projectId, 'testing')
         this.injectNanjuAssistantMessage(
           sessionId,
           `⚠️ 验收测试执行异常：${e instanceof Error ? e.message : String(e)}。请检查 08_APP/index.html 与 06_TESTS/ 产物完整性，修复后重新声明推进 <!-- PHASE_ADVANCE: testing -->。`,
@@ -1949,8 +1981,20 @@ export class AgentOrchestrator {
           return validationFailure
         }
 
-        // ── 南大向导路由硬门禁（优先于权限模式，automation 会话跳过） ──
-        if (!automationContext && !input.triggeredBy) {
+        // ── 南大向导路由硬门禁（优先于权限模式，automation 会话跳过）──
+        // v2.4（D7 §4）：nanjuProxy 代理子会话重入门禁——代理会话由 harness 代生
+        //（triggeredBy='delegation'），原条件会跳过门禁使 §4 工具面白名单失效；
+        // 代理会话必须过门禁（PROXY 白名单分支在 checkNanjuRouterGate 第一行）。
+        // isNanjuProxySession：lazy require meta 先例（nanju-router-gate 同型），
+        // 防御性类型断言不依赖 meta 类型声明（nanjuProxy 字段由代理工具域同步落地）。
+        let sessionIsNanjuProxy = false
+        if (input.triggeredBy) {
+          try {
+            const { getAgentSessionMeta } = require('./agent-session-manager') as typeof import('./agent-session-manager')
+            sessionIsNanjuProxy = (getAgentSessionMeta(sessionId) as { nanjuProxy?: boolean } | undefined)?.nanjuProxy === true
+          } catch { /* meta 读取失败按非代理处理（保守：维持原跳过行为） */ }
+        }
+        if (!automationContext && (!input.triggeredBy || sessionIsNanjuProxy)) {
           const nanjuGate = checkNanjuRouterGate(workspaceSlug, sessionId, toolName, input)
           if (nanjuGate) {
             console.log(`[南大路由门禁] 拒绝工具 ${toolName}`)
@@ -2190,7 +2234,14 @@ export class AgentOrchestrator {
       // 「继续/推进」字样，属 wiring 类别混淆（裁决 A2）；不可用 triggeredBy 替代
       //（会连带跳过 nanjuRouterPrompt 阶段门禁注入）。
       if (workspaceSlug && !automationContext && !input.triggeredBy && !input.systemInitiated && shouldPersistUserMessage) {
-        checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage)
+        // v2.4（D7 §1 I1-②a）：透传 humanOrigin——仅真 UI 人类输入（主进程用户消息
+        // IPC 通道打标，注入/程序化一律 false）的确认词可构成 I1-② 授权（活跃问句
+        // 绑定见 checkConfirmAdvanceInput 内部）。事件流路径（下方）不传——事件流
+        // user 消息实际为工具注入，入口路径已覆盖真用户初始输入（Pi adapter 下初始
+        // 输入不进事件流）。
+        checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage, 'message', {
+          humanOrigin: input.humanOrigin === true,
+        })
       }
 
       // 南大向导阶段门禁：注入当前阶段的硬性指令

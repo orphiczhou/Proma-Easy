@@ -210,7 +210,12 @@ function createSessionToolHandlers(): Record<string, ToolHandler> {
       const shouldWait = args.wait !== false
       try {
         await runRegisteredHeadlessAgent(
-          { sessionId: args.session_id as string, userMessage: args.message as string, channelId, modelId, workspaceId: meta.workspaceId, permissionModeOverride: 'bypassPermissions' as PromaPermissionMode, startedAt: Date.now() },
+          {
+            sessionId: args.session_id as string, userMessage: args.message as string, channelId, modelId, workspaceId: meta.workspaceId, permissionModeOverride: 'bypassPermissions' as PromaPermissionMode, startedAt: Date.now(),
+            // v2.4（D7 §1 I1-②a）：HTTP bridge 注入非真 UI 人类输入，显式置 false
+            //（南大推进门不认 bridge 注入的确认词）
+            humanOrigin: false,
+          },
           { source: 'delegation', onError: () => {}, onComplete: () => {}, onTitleUpdated: () => {} },
         )
       } catch (e) { return { session_id: args.session_id, status: 'error', error: e instanceof Error ? e.message : String(e) } }

@@ -59,6 +59,33 @@ export interface NanjuProject {
   workspaceSlug: string
   /** 关联的 tree-engine tree_id */
   treeId?: string
+  /**
+   * v2.4 自动补完需求（D7 §5）：快消模式勾选状态与代理预算（持久化于
+   * _nanju-projects.json）。enabled=需求补充类问题交 nanju_clarify_proxy 代理
+   * 作答；proxyBudget=代理调用预算余量（cap=20）；pendingQuestionIds=代理
+   * 已登记待回注的 blocked 事件问题 id。缺失 = 未开启（存量项目零变化）。
+   * 存取走 getProjectAutoClarify/updateProjectAutoClarify（唯一写入点纪律）。
+   */
+  autoClarify?: NanjuAutoClarifyState
+}
+
+/** v2.4 自动补完需求持久化状态（NanjuProject.autoClarify） */
+export interface NanjuAutoClarifyState {
+  /** 是否开启代理作答（快消卡勾选；关闭/升级即失效，D7 §0 硬边界） */
+  enabled: boolean
+  /** 代理调用预算余量（cap=20；缺省=NANJU_GUARDS.autoClarifyBudgetCap；由 nanju-clarify-proxy-tool 消费递减） */
+  proxyBudget?: number
+  /** 代理已登记待回注的 blocked 事件问题 id（缺省=空；clarify 工具写入/清除） */
+  pendingQuestionIds?: string[]
+}
+
+/** autoClarify 规范化读视图（getProjectAutoClarify/updateProjectAutoClarify 返回形态：
+ *  缺省字段已填（proxyBudget=cap、pendingQuestionIds=[]）——消费方（clarify 工具）
+ *  免于逐字段判空；写入方（IPC/勾选链路）可按需部分提供） */
+export interface NanjuAutoClarifyView {
+  enabled: boolean
+  proxyBudget: number
+  pendingQuestionIds: string[]
 }
 
 /** 可挂熔断计数器的阶段（终态 delivered 不参与） */
@@ -172,7 +199,15 @@ export const NANJU_GUARDS = {
   phaseFailBreakThreshold: 3,
   /** 熔断阈值：阶段 errorCount 累计达到该值即熔断（执行异常重试无意义，1 次即熔断） */
   phaseErrorBreakThreshold: 1,
+  /**
+   * v2.4 自动补完需求代理预算上限（D7 §4：cap=20）——单项目 nanju_clarify_proxy
+   * 可用预算余量基准；由代理工具消费递减，不随熔断时钟复位（独立预算账户）。
+   */
+  autoClarifyBudgetCap: 20,
 } as const
+
+/** autoClarify 默认预算（存取器缺省骨架用；与 NANJU_GUARDS.autoClarifyBudgetCap 同源） */
+export const NANJU_AUTO_CLARIFY_BUDGET_CAP = NANJU_GUARDS.autoClarifyBudgetCap
 
 // ===== 路径 =====
 
@@ -304,6 +339,43 @@ export function getNanjuProject(
   return found ?? null
 
 }
+
+// ===== v2.4 自动补完需求：autoClarify 存取（D7 §5；唯一写入点纪律） =====
+
+/** 读取 autoClarify 状态（规范化视图：缺省字段已填；未开启返回 null；字段缺失兼容旧数据） */
+export function getProjectAutoClarify(
+  workspaceSlug: string,
+  projectId: string,
+): NanjuAutoClarifyView | null {
+  const state = getNanjuProject(workspaceSlug, projectId)?.autoClarify
+  if (!state) return null
+  return {
+    enabled: state.enabled === true,
+    proxyBudget: typeof state.proxyBudget === 'number' ? state.proxyBudget : NANJU_AUTO_CLARIFY_BUDGET_CAP,
+    pendingQuestionIds: Array.isArray(state.pendingQuestionIds) ? state.pendingQuestionIds : [],
+  }
+}
+
+/** 局部更新 autoClarify（read-merge-write；未开启时以默认骨架打底；返回规范化视图） */
+export function updateProjectAutoClarify(
+  workspaceSlug: string,
+  projectId: string,
+  patch: Partial<NanjuAutoClarifyState>,
+): NanjuAutoClarifyView {
+  const current = getProjectAutoClarify(workspaceSlug, projectId) ?? {
+    enabled: false,
+    proxyBudget: NANJU_AUTO_CLARIFY_BUDGET_CAP,
+    pendingQuestionIds: [],
+  }
+  const next: NanjuAutoClarifyView = {
+    enabled: patch.enabled ?? current.enabled,
+    proxyBudget: patch.proxyBudget ?? current.proxyBudget,
+    pendingQuestionIds: patch.pendingQuestionIds ?? current.pendingQuestionIds,
+  }
+  updateNanjuProject(workspaceSlug, projectId, { autoClarify: next })
+  return next
+}
+
 
 /** 删除南大项目 */
 export function deleteNanjuProject(
@@ -574,6 +646,10 @@ export const CONFIRM_ADVANCE_KEYWORDS: readonly string[] = [
   // W12（交付验收后置）：GWT-pass 后验收询问的确认选项词。「满意交付」整词入表而非裸「满意」
   // ——否定形「不太满意」含「满意」子串会误置位，整词形态天然避开（取舍见 w12-report §4）
   '满意交付',
+  // v2.4（D7 §1 I1-②c）：「跳过」入确认词表——活跃确认问句在场的「跳过」应答
+  // 与横幅「跳过」选项同义（跳过本环节即推进到下一阶段）；无活跃问句的散点
+  // 「跳过」不授权（I1-②b 上下文绑定门管住，不靠词表收窄）
+  '跳过',
 ]
 
 /**
@@ -764,4 +840,146 @@ export function clearProjectDeliveryChallenge(workspaceSlug: string, projectId: 
 /** 读取确认待推进阶段。无文件/无字段返回 null */
 export function getProjectConfirmPending(workspaceSlug: string, projectId: string): string | null {
   return readProjectInfo(workspaceSlug, projectId)?.confirmPendingStage ?? null
+}
+
+// ===== v2.4 推进授权内存态（D7 §1/§2/§5：confirmAuthorization / activeConfirmAsk / systemAdvanceAuthorized） =====
+
+/**
+ * 推进授权三态（harness 内存态，不落盘——单次 run 生命周期内有效 + TTL，重启即失效
+ * 是安全缺省：推进是强后果动作，重启后要求重新确认，无授权冒失推进）。
+ *
+ * - confirmAuthorization（I1）：用户确认授权——来源限定 ask-answer（横幅 IPC，I1-①）或
+ *   真·用户消息（humanOrigin=true + 活跃确认问句 + 确认词，I1-②）。expectedTarget 语义
+ *   （D7 §1 I1-②c）：记录「预期推进目标」而非当前阶段，消费时 PHASE_ADVANCE:<target>
+ *   必须 target === expectedTarget，堵「确认 A 阶段产出却推进到 B」的目标漂移。
+ * - activeConfirmAsk（I1-②b 上下文绑定）：合规「确认」header 问句放行时登记；确认词
+ *   命中仅在活跃问句在场（10min TTL）时才构成授权——散点「继续/好的」不授权。
+ * - systemAdvanceAuthorized（I2）：harness systemInitiated 推进指令登记（统一出口
+ *   registerSystemAdvance，消费即清、单次有效）。
+ *
+ * key = `${workspaceSlug}/${projectId}`；跨工作区同名 projectId 不串（projectId 本身
+ * 按工作区隔离，双保险）。
+ */
+
+/** I1 确认授权来源（§1：枚举封闭，其余一律拒绝） */
+export type NanjuConfirmSource = 'ask-answer' | 'user-message'
+
+/** confirmAuthorization 内存态（10min TTL，读时惰性过期） */
+export interface NanjuConfirmAuthorization {
+  source: NanjuConfirmSource
+  expectedTarget: string
+  ts: number
+}
+
+/** activeConfirmAsk 内存态（10min TTL；askedAt 为问句放行时刻） */
+export interface NanjuActiveConfirmAsk {
+  askedAt: number
+  expectedTarget: string
+}
+
+/** 授权类内存态 TTL（毫秒）：确认授权 / 活跃确认问句统一 10 分钟（D7 §1 I1-②b/§5） */
+export const NANJU_ADVANCE_AUTH_TTL_MS = 10 * 60 * 1000
+
+const confirmAuthorizationStore = new Map<string, NanjuConfirmAuthorization>()
+const activeConfirmAskStore = new Map<string, NanjuActiveConfirmAsk>()
+const systemAdvanceStore = new Map<string, { target: string; ts: number }>()
+
+function authKey(workspaceSlug: string, projectId: string): string {
+  return `${workspaceSlug}/${projectId}`
+}
+
+/** 置位 I1 确认授权（唯一写入点；覆盖式——后到者胜，TTL 从新 ts 起算） */
+export function setConfirmAuthorization(
+  workspaceSlug: string,
+  projectId: string,
+  source: NanjuConfirmSource,
+  expectedTarget: string,
+): void {
+  confirmAuthorizationStore.set(authKey(workspaceSlug, projectId), { source, expectedTarget, ts: Date.now() })
+}
+
+/** 读取 I1 确认授权（TTL 惰性过期：超时返回 null 并清除） */
+export function getConfirmAuthorization(
+  workspaceSlug: string,
+  projectId: string,
+): NanjuConfirmAuthorization | null {
+  const key = authKey(workspaceSlug, projectId)
+  const state = confirmAuthorizationStore.get(key)
+  if (!state) return null
+  if (Date.now() - state.ts > NANJU_ADVANCE_AUTH_TTL_MS) {
+    confirmAuthorizationStore.delete(key)
+    return null
+  }
+  return state
+}
+
+/** 消费 I1 确认授权（推进门通过后单次清除；幂等） */
+export function consumeConfirmAuthorization(workspaceSlug: string, projectId: string): void {
+  confirmAuthorizationStore.delete(authKey(workspaceSlug, projectId))
+}
+
+/** 登记 activeConfirmAsk（「确认」header 问句放行时；expectedTarget=harness 按阶段图算的唯一下一阶段） */
+export function setActiveConfirmAsk(
+  workspaceSlug: string,
+  projectId: string,
+  expectedTarget: string,
+): void {
+  activeConfirmAskStore.set(authKey(workspaceSlug, projectId), { askedAt: Date.now(), expectedTarget })
+}
+
+/** 读取 activeConfirmAsk（TTL 惰性过期；无/过期返回 null） */
+export function getActiveConfirmAsk(
+  workspaceSlug: string,
+  projectId: string,
+): NanjuActiveConfirmAsk | null {
+  const key = authKey(workspaceSlug, projectId)
+  const state = activeConfirmAskStore.get(key)
+  if (!state) return null
+  if (Date.now() - state.askedAt > NANJU_ADVANCE_AUTH_TTL_MS) {
+    activeConfirmAskStore.delete(key)
+    return null
+  }
+  return state
+}
+
+/** 清除 activeConfirmAsk（横幅已答 / 确认词消费 / 用户反悔；幂等） */
+export function clearActiveConfirmAsk(workspaceSlug: string, projectId: string): void {
+  activeConfirmAskStore.delete(authKey(workspaceSlug, projectId))
+}
+
+/**
+ * I2 系统推进授权登记（唯一出口 registerSystemAdvance——harness systemInitiated 推进
+ * 指令点统一调用；D7 §1 I2/R6-03：现网目标集={testing,delivered}，helper 防御性兜全部
+ * 目标，新增跨阶段指令点必须走本出口，不私设旁路）。同 target 重复登记幂等（ts 刷新）。
+ */
+export function registerSystemAdvance(workspaceSlug: string, projectId: string, target: string): void {
+  systemAdvanceStore.set(authKey(workspaceSlug, projectId), { target, ts: Date.now() })
+}
+
+/** 读取 I2 系统推进授权（无 TTL 消费语义——登记到消费是同一指令闭环；单次消费即清） */
+export function getSystemAdvanceAuthorized(
+  workspaceSlug: string,
+  projectId: string,
+): { target: string; ts: number } | null {
+  return systemAdvanceStore.get(authKey(workspaceSlug, projectId)) ?? null
+}
+
+/** 消费 I2 系统推进授权（推进门通过后单次清除；幂等） */
+export function consumeSystemAdvanceAuthorized(workspaceSlug: string, projectId: string): void {
+  systemAdvanceStore.delete(authKey(workspaceSlug, projectId))
+}
+
+/** 清空某项目全部推进授权态（项目删除/流程重置用；幂等） */
+export function clearNanjuAdvanceAuthState(workspaceSlug: string, projectId: string): void {
+  const key = authKey(workspaceSlug, projectId)
+  confirmAuthorizationStore.delete(key)
+  activeConfirmAskStore.delete(key)
+  systemAdvanceStore.delete(key)
+}
+
+/** 测试专用：全量重置三张内存态（生产代码禁用——防跨测试污染） */
+export function __resetNanjuAdvanceAuthStoresForTests(): void {
+  confirmAuthorizationStore.clear()
+  activeConfirmAskStore.clear()
+  systemAdvanceStore.clear()
 }

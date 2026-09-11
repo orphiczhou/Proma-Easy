@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
-import { listNanjuProjects, getProjectCategory, getProjectEnvState, type NanjuProject, type ProjectStage } from './nanju-project'
+import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, type NanjuProject, type ProjectStage } from './nanju-project'
 import { getPhaseNode, getNextPhase, type PhaseId, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
 import {
@@ -67,6 +67,149 @@ const GLOBAL_ALLOWED_TOOLS = new Set([
   'CompactContext', 'compact',
 ])
 
+// ===== v2.4：nanjuProxy 代理会话工具面（D7 §4 工具面白名单，I3 代理封闭） =====
+
+/** 代理会话允许的工具：联网检索（WebSearch/WebFetch，实际工具名无 web_search）+ 只读 + 会话元工具 */
+const NANJU_PROXY_ALLOWED_TOOLS = new Set([
+  'WebSearch', 'WebFetch',
+  'Read', 'LS', 'Glob', 'Grep',
+  // 会话元工具（与 GLOBAL_ALLOWED_TOOLS 同源语义：管理会话自身上下文，非开发工具）
+  'CompactContext', 'compact',
+])
+
+/** 会话是否为 nanju_clarify_proxy 代理子会话（meta.nanjuProxy 专属标记）。
+ *  lazy require 规避模块初始化环（isDelegationChildSession 同型先例）；
+ *  防御性类型断言读取（不依赖 AgentSessionMeta 类型声明——该字段由代理工具域
+ *  在 agent-session-manager Pick 白名单同步落地，缺失时读 undefined 安全降级为非代理） */
+function isNanjuProxySession(sessionId: string): boolean {
+  try {
+    const { getAgentSessionMeta } = require('./agent-session-manager') as typeof import('./agent-session-manager')
+    const meta = getAgentSessionMeta(sessionId) as { nanjuProxy?: boolean } | undefined
+    return meta?.nanjuProxy === true
+  } catch {
+    return false
+  }
+}
+
+/** 代理会话工具门禁：白名单外一律 deny（fail-closed；含 AskUser/send_message/Write/Edit/Bash/delegate_agent/mcp__session__* 等） */
+function checkNanjuProxyToolGate(
+  sessionId: string,
+  toolName: string,
+): { behavior: 'deny'; message: string } | null {
+  if (NANJU_PROXY_ALLOWED_TOOLS.has(toolName)) return null
+  return {
+    behavior: 'deny',
+    message:
+      '🔒 nanju_clarify_proxy 代理会话是封闭工具面：只允许联网检索（WebSearch/WebFetch）与只读（Read/LS/Glob/Grep）。\n\n'
+      + '不允许：向用户提问（AskUserQuestion）、向其他会话发消息（send_message 等会话工具）、写入/修改文件、执行命令、再委派——代理只能基于检索结果作答。\n\n'
+      + '请直接给出需求补充问题的回答（含来源要点），无需任何其他工具。',
+  }
+}
+
+// ===== v2.4：L1 AskUserQuestion 路由（D7 §3，auto 开启时） =====
+
+/** AskUserQuestion 入参中的 question 结构（header 前缀路由判定的最小字段面） */
+interface AskUserQuestionItem {
+  question: string
+  header?: string
+}
+
+/** 提取 AskUserQuestion 入参的 questions（结构异常返回空数组——交由 askUserService 原生校验，不在此拦格式） */
+function extractAskQuestions(input: Record<string, unknown>): AskUserQuestionItem[] {
+  const raw = input.questions
+  if (!Array.isArray(raw)) return []
+  return (raw as unknown[]).filter(
+    (q): q is AskUserQuestionItem => typeof q === 'object' && q !== null && typeof (q as AskUserQuestionItem).question === 'string',
+  )
+}
+
+/** AskUser 豁免 header 前缀（D7 §3：确认（六确认+交付挑战话术）/设计（点选五项+设计偏好转述）/转述（非 clarify blocked 转述）） */
+const NANJU_ASK_EXEMPT_PREFIXES = ['确认', '设计', '转述'] as const
+
+/**
+ * v2.4（D7 §3）：L1 AskUserQuestion 路由（auto 开启时；非承重——承重在 §2 推进门）。
+ *
+ * - auto 关闭（autoClarify.enabled !== true）→ 全放行（现状零变化）；
+ * - 交付挑战机器豁免（D6/D7 §3②）：getProjectDeliveryChallenge() !== null → 无条件放行
+ *   （不依赖 prompt 遵从 header 指令——交付链不得被切断）；
+ * - header 前缀放行：全部 question 的 header 均以「确认/设计/转述」开头（多 question
+ *   混合时 fail-closed 整体 deny——Defender #17① 口径）；
+ * - 其余 deny + 教育（需求补充类→调 nanju_clarify_proxy；确认必须由真人给出）。
+ */
+function checkNanjuAskUserRoute(
+  workspaceSlug: string,
+  project: NanjuProject,
+  toolName: string,
+  input: Record<string, unknown>,
+): { behavior: 'deny'; message: string } | null {
+  if (project.autoClarify?.enabled !== true) return null
+  // 交付挑战机器豁免（机器事实，非 header 判定）
+  try {
+    if (getProjectDeliveryChallenge(workspaceSlug, project.projectId) !== null) return null
+  } catch { /* 读取失败按无挑战处理，继续前缀判定 */ }
+  const questions = extractAskQuestions(input)
+  if (questions.length === 0) return null
+  const offending = questions.find(
+    (q) => !NANJU_ASK_EXEMPT_PREFIXES.some((p) => (q.header ?? '').startsWith(p)),
+  )
+  if (!offending) return null
+  try {
+    recordTelemetry(
+      workspaceSlug,
+      'router.gate.ask-deny' as never,
+      {
+        sessionId: project.sessionId,
+        projectId: project.projectId,
+        offendingHeader: offending.header ?? '',
+        questionPreview: offending.question.slice(0, 60),
+        questionCount: questions.length,
+      },
+      project.projectId,
+    )
+  } catch { /* 埋点失败不影响门禁 */ }
+  return {
+    behavior: 'deny',
+    message:
+      '🔒 南大向导交互路由（自动补完需求已开启）：AskUserQuestion 仅限三类交互——\n'
+      + '① 确认类：header 以「确认」开头（阶段收口/验收/交付/安装/合并/过渡确认）。确认必须由真人给出，不可代理；\n'
+      + '② 设计类：header 以「设计」开头（设计偏好点选/转述）；\n'
+      + '③ 转述类：header 以「转述」开头（非需求类问题转述真人）。\n\n'
+      + '需求补充类问题不要问真人——请改调 nanju_clarify_proxy 工具由独立模型代理作答（可联网检索），\n'
+      + '采纳后向用户报告「自动补完」卡片。本次问题「' + (offending.header ?? offending.question.slice(0, 20))
+      + '」不匹配前缀规则，已拒绝：请按上述话术 header 重新组织交互，或改调代理工具。',
+  }
+}
+
+/**
+ * v2.4（D7 §1 I1-②b / §3）：AskUser 放行侧登记 activeConfirmAsk。
+ *
+ * 仅「确认」header 类问句登记（全部 question 的 header 均以「确认」开头——设计/转述类
+ * 不是确认问句）；expectedTarget 由 harness 按阶段图从当前 stage 算唯一合法下一阶段
+ * （L1 无法引导到非法目标）；无合法下一阶段（终态/路由缺失）不登记（防御性：
+ * activeConfirmAsk.expectedTarget 永远非空）。不区分 auto 开关——auto 关闭项目的合规
+ * 确认问句同样登记（话术 header 已全局统一加前缀，D7 §10），用户聊天框确认词同样
+ * 需要活跃问句绑定（I1-②b 对全项目生效）。10min TTL 见 nanju-project。
+ */
+function registerConfirmAskIfEligible(
+  workspaceSlug: string,
+  project: NanjuProject,
+  stage: ProjectStage,
+  input: Record<string, unknown>,
+): void {
+  try {
+    const questions = extractAskQuestions(input)
+    if (questions.length === 0) return
+    if (!questions.every((q) => (q.header ?? '').startsWith('确认'))) return
+    const { getNextPhase } = require('./nanju-router') as typeof import('./nanju-router')
+    const expected = getNextPhase(project.mode, stage as import('./nanju-router').PhaseId)
+    if (!expected) return
+    setActiveConfirmAsk(workspaceSlug, project.projectId, expected)
+    console.log(`[南大路由] 登记活跃确认问句（expectedTarget=${expected}，10min TTL）: ${project.name}`)
+  } catch (e) {
+    console.warn('[南大路由] activeConfirmAsk 登记异常（不影响放行）:', e instanceof Error ? e.message : String(e))
+  }
+}
+
 /**
  * 南大向导路由门禁。
  *
@@ -81,6 +224,14 @@ export function checkNanjuRouterGate(
   toolName: string,
   input: Record<string, unknown>,
 ): { behavior: 'deny'; message: string } | null {
+  // v2.4（D7 §4 enforcement）：nanjuProxy 首分支——代理子会话工具面白名单。
+  // 必须是第一条语句（先于 !workspaceSlug 早退与 project 查询，防 fail-open：代理会话
+  // 不绑定项目注册表，若后置会被「未找到项目」分支放行绕过整面封锁）。代理封闭（§1 I3）：
+  // 代理不能产生 I1 任何形态（无 AskUser/无 send_message/无写/无再委派）。
+  if (isNanjuProxySession(sessionId)) {
+    return checkNanjuProxyToolGate(sessionId, toolName)
+  }
+
   if (!workspaceSlug) return null
 
   // W19（v0.17.87）：projects 单次读取复用——未绑定分支的写保护也要消费同一份列表，
@@ -112,6 +263,16 @@ export function checkNanjuRouterGate(
   // 活跃阶段
   const whitelist = PHASE_TOOL_WHITELIST[stage] ?? PHASE_TOOL_WHITELIST.delivered
   if (whitelist.has(toolName)) {
+    // v2.4（D7 §3）：AskUserQuestion 路由（auto 开启时按 header 前缀放行/拒绝+教育；
+    // 交付挑战机器豁免；auto 关闭全放行）+ 放行侧登记 activeConfirmAsk（确认 header 类）。
+    if (toolName === 'AskUserQuestion') {
+      const askGate = checkNanjuAskUserRoute(workspaceSlug, project, toolName, input)
+      if (askGate) {
+        console.log(`[南大路由门禁] AskUser 路由拒绝（自动补完需求开启）: ${project.name}`)
+        return askGate
+      }
+      registerConfirmAskIfEligible(workspaceSlug, project, stage, input)
+    }
     // W8：白名单放行委派工具后，追加参数级三层强制（非委派工具零变化）。
     // automation/triggeredBy 豁免由调用方（agent-orchestrator canUseTool）既有守卫保证。
     return checkNanjuDelegateGuard(workspaceSlug, project, stage, toolName, input)
