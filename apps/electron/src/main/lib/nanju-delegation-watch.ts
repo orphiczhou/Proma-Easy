@@ -318,7 +318,7 @@ export class NanjuDelegationWatcher {
     this.deps.injectMessage(
       sessionId,
       `⏹ 南大护栏·代理硬超时：自动补完需求代理「${delegation.title}」已 ${hardMin} 分钟未完成，已被系统强制停止。`
-      + `nanju_clarify_proxy 工具将返回 fallback:"human"，请按协议把问题转述给真人。`,
+      + `nanju_clarify_proxy 工具将返回 fallback（auto 开启时为 auto-degrade：登记 pendingQuestionIds 并继续本阶段工作；未开启时为 human：转述真人），请按当前项目的自动补完协议处理。`,
     )
   }
 
