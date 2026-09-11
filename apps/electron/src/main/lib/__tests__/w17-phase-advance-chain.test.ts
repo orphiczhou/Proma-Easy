@@ -1255,7 +1255,7 @@ describe('D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后
 
 describe('D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人）', () => {
   interface MiniHarness {
-    watcher: NanjuDelegationWatcher
+    watcher: InstanceType<typeof NanjuDelegationWatcher>
     clock: { now: number }
     stops: string[]
     injections: string[]
