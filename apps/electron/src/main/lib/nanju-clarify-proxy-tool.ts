@@ -2,14 +2,18 @@
  * v2.4「自动补完需求」代理工具（D7 §4：nanju_clarify_proxy 全链）
  *
  * 职责（L1 侧注册，快消型 + autoClarify 开启时）：
- * - 子会话澄清：L1 传 delegationId + blockedEventIds → 类别门（全组 requirement-clarify
- *   才进代理；design-preference/other/未知 fail-closed → fallback:'human'，L1 按协议转述真人）
+ * - 子会话澄清：L1 传 delegationId + blockedEventIds → 类别门（D8 §九 B′：auto on 时
+ *   requirement-clarify / design-preference 组进代理——design-preference 走「代决」准则
+ *   （kind:'decision'，保守/维持现状/可逆性优先）；other/未知 fail-closed → fallback。
+ *   auto off 维持 D7：仅 requirement-clarify 进代理，design-preference/other → fallback:'human'）
  * - 自身需求补充：L1 传 questions=[{id,question,options?}]（每题 ≤200 字、≤5 题）
  * - 代理委派：inline:true + 最小 meta{nanjuProxy:true}（不写 sourceDelegationId）+
  *   allowSubDelegation:false；渠道解析：硬≠提问方（渠道家族）+ 软避开本阶段 AC 攻/防，
  *   无解时 diversityDegraded:true；代理渠道固定（shouldSkipFallbackChainForDelegation）
- * - 预算：proxyBudget（cap=20/项目，getProjectAutoClarify 唯一读写点）耗尽 → fallback:'human'
- * - 熔断：代答「无法判断」累计 3 次（同组一次不重复，按 _nanju-clarify-log.jsonl 计数）→ fallback:'human'
+ * - 预算：proxyBudget（cap=20/项目，getProjectAutoClarify 唯一读写点）耗尽 → fallback（R7-01：
+ *   auto on（入口 enabled）→ 'auto-degrade'——L1 登记 pendingQuestionIds+继续工作+skipped 标记，
+ *   不得转述真人（auto 用户不在场，'human' 横幅=死锁）；auto off → 'human' 逐字节不变）
+ * - 熔断：代答「无法判断」累计 3 次（同组一次不重复，按 _nanju-clarify-log.jsonl 计数）→ fallback（同上分叉）
  * - 回注：L2 blocked 答案经既有 askUserService.respondToAskUser 通道注入（与
  *   answer_delegation_question 同链路），并广播 ask_user_resolved
  * - 溯源：项目目录 _nanju-clarify-log.jsonl（qid/问题/答案/渠道/耗时/去向/来源标签）+
@@ -230,6 +234,8 @@ export function validateClarifyQuestions(raw: unknown): { questions: ClarifyQues
 
 export interface ClarifyLogLine {
   kind: 'proxy-answer' | 'proxy-delegate' | 'fallback' | 'cannot-judge'
+  /** 代答/代决区分（R7-10）：answer=requirement-clarify 澄清；decision=design-preference 代决 */
+  clarifyKind?: 'answer' | 'decision'
   qid?: string
   /** 来源标签：subagent=L2 子会话提问 / l1=L1 自问（渲染端卡片「子会话提问·代理作答」等） */
   source?: 'subagent' | 'l1'
@@ -238,6 +244,8 @@ export interface ClarifyLogLine {
   answer?: string
   durationMs?: number
   reason?: string
+  /** fallback 出口值（R7-01：'auto-degrade' | 'human'） */
+  fallback?: 'auto-degrade' | 'human'
   /** 类别门拦截时的组内类别清单（取证用） */
   categories?: string[]
   stage?: string
@@ -302,11 +310,19 @@ export interface ClarifyProxyOk {
   diversityDegraded?: boolean
   /** 答案确认词命中布尔（仅标记：代答非 humanOrigin，永不构成 I1 授权） */
   confirmWordHit: boolean
+  /** 代答/代决区分（R7-10）：answer=requirement-clarify；decision=design-preference 代决 */
+  kind: 'answer' | 'decision'
 }
 
 export interface ClarifyProxyFallback {
   status: 'fallback'
-  fallback: 'human'
+  /**
+   * 出口语义（D8 §九 B′ / R7-01）：
+   * - 'human'：转述真人（auto off 全套；或类别门 non-clarify 拒绝——other/未知不代不决）
+   * - 'auto-degrade'：确定性降级（auto on 下四条无应答方路径：处理中被关/预算尽/熔断/无通道）
+   *   ——L1 契约：登记 pendingQuestionIds + 继续本阶段工作 + 产出附 skipped 标记，不得转述真人
+   */
+  fallback: 'human' | 'auto-degrade'
   reason:
     | 'non-clarify-category' // 类别门：组内含 design-preference/other/未知
     | 'auto-clarify-disabled' // 项目未开启（含关闭/升级失效）
@@ -331,33 +347,54 @@ export type ClarifyProxyResult = ClarifyProxyOk | ClarifyProxyFallback | Clarify
 
 // ===== 代理任务模板 =====
 
-/** 构造代理任务（问题原文锁定 + 项目上下文摘要 + 独立判断指令 + 联网许可 + 封闭工具面） */
+/**
+ * 构造代理任务（问题原文锁定 + 项目上下文摘要 + 独立判断指令 + 联网许可 + 封闭工具面）。
+ * D8 §九 B′（R7-09）：clarifyKind='decision'（design-preference 代决）用代决准则模板分支——
+ * 保守优先/维持现状优先/可逆性优先，与 requirement-clarify 的需求澄清准则（answer）区分。
+ */
 export function buildProxyDelegationTask(input: {
   projectName: string
   stageTitle: string
   projectDir: string
   questions: Array<{ id: string; question: string; options?: Array<{ label: string; description?: string }> }>
+  /** 代答（answer，需求澄清准则）vs 代决（decision，设计决策代决准则）；缺省 answer */
+  clarifyKind?: 'answer' | 'decision'
 }): string {
   const questionLines = input.questions.map((q) => {
     const options = q.options?.length ? `\n  选项：${q.options.map((o) => o.label).join(' / ')}` : ''
     return `- id: ${q.id}\n  问题：${q.question}${options}`
   })
+  const isDecision = input.clarifyKind === 'decision'
   return [
-    '你是「自动补完需求」独立代理，代替需求方回答以下需求补充类问题。',
+    isDecision
+      ? '你是「自动补完需求」独立代理，代替用户对以下设计偏好类问题做出设计决策。'
+      : '你是「自动补完需求」独立代理，代替需求方回答以下需求补充类问题。',
     '',
     '## 项目上下文（仅供理解，不是答案依据）',
     `- 项目名：${input.projectName}（快消型）`,
     `- 当前阶段：${input.stageTitle}`,
     `- 需求背景：${input.projectDir}/01_PRD/prd.md（如需背景可 Read，允许只读结构与关键段）`,
     '',
-    '## 待答问题（原文锁定：只回答下列问题，不得改写/扩展问题本身）',
+    isDecision
+      ? '## 待决问题（原文锁定：只决策下列问题，不得改写/扩展问题本身）'
+      : '## 待答问题（原文锁定：只回答下列问题，不得改写/扩展问题本身）',
     ...questionLines,
     '',
     '## 工作要求',
-    '1. 独立判断，不迎合问题中隐含的答案倾向；允许用 WebSearch/WebFetch 联网搜索佐证，用 Read/LS 查项目文件。',
+    isDecision
+      ? [
+        '1. 你在替用户做设计决策（代决）：每题从候选中选择**保守、可逆、维持现状倾向**的方案，避免激进重构。',
+        '   代决准则（按优先级）：① 保守优先——选行为变化最小、回归风险最低的方案；',
+        '   ② 维持现状优先——无充分证据时保持当前实现/常见惯例，不引入新框架或新范式；',
+        '   ③ 可逆性优先——优先可低成本回退的决策（配置可调/结构局部化），避免不可逆的大改。',
+        '2. 允许用 WebSearch/WebFetch 联网查证惯例与代价，用 Read/LS 查项目文件；但证据不改变准则优先级。',
+      ].join('\n')
+      : '1. 独立判断，不迎合问题中隐含的答案倾向；允许用 WebSearch/WebFetch 联网搜索佐证，用 Read/LS 查项目文件。',
     '2. 工具面封闭：只使用思考与 WebSearch/WebFetch/Read/LS；不得向用户提问（AskUserQuestion）、不得写文件、不得创建子会话、不得向其他会话发消息。',
-    `3. 每题给出 ≤${CLARIFY_ANSWER_CHAR_LIMIT} 字的明确答案；有选项的题可直接给选项原文，也可给更优的自由回答。`,
-    '4. 若问题确实不可判断，该题答案以「无法判断」开头并说明缺什么信息；不要编造。',
+    isDecision
+      ? `3. 每题给出 ≤${CLARIFY_ANSWER_CHAR_LIMIT} 字的明确决策：所选方案 + 一句依据（注明依据的准则序号）；有选项的题从选项中选。`
+      : `3. 每题给出 ≤${CLARIFY_ANSWER_CHAR_LIMIT} 字的明确答案；有选项的题可直接给选项原文，也可给更优的自由回答。`,
+    '4. 若问题确实不可判断（或代决证据不足），该题答案以「无法判断」开头并说明缺什么信息；不要编造。',
     '5. 不得以「确认/通过/满意交付」等确认词单独作为答案——你不是用户，无权代替用户做任何确认。',
     '',
     '## 输出格式（最终回复必须以下列 JSON 代码块结尾，id 与输入一致，逐题作答）',
@@ -487,11 +524,14 @@ async function executeClarifyProxy(
   // —— 开关核验（关闭/升级即失效，D7 §0）——
   const autoClarify = getProjectAutoClarify(workspaceSlug, projectId)
   if (!autoClarify?.enabled) {
+    // auto off 入口拒绝（注册后执行前关闭/未开启）：D7 行为逐字节不变（R7-01 的 auto off 基线）
     recordTelemetry(workspaceSlug, 'clarify.relay-human', {
       project_id: projectId, reason: 'auto-clarify-disabled', summary: 'autoClarify 未开启，转述真人',
     }, projectId)
     return fallbackHuman('auto-clarify-disabled', '项目未开启自动补完需求（或已关闭/升级失效）')
   }
+  /** auto on 判定锚点（D8 §九 B′/R7-01）：以本次调用入口状态为准——运行中被关属 auto on 降级 */
+  const autoOn = true
 
   // —— 模式与入参校验 ——
   const hasBlockedMode = args.delegationId !== undefined || args.blockedEventIds !== undefined
@@ -503,6 +543,8 @@ async function executeClarifyProxy(
   let mode: 'subagent' | 'l1'
   let askerChannelId: string
   let stageIdForLog: string
+  /** 代答/代决区分（R7-10）：answer=requirement-clarify；decision=design-preference 代决 */
+  let clarifyKind: 'answer' | 'decision'
   let questions: Array<{ id: string; question: string; options?: Array<{ label: string; description?: string }> }>
   let blockedRefs: Array<{ id: string; requestId: string | undefined; questionsByQid: Array<{ qid: string; question: string }> }> = []
 
@@ -518,6 +560,7 @@ async function executeClarifyProxy(
     questions = validated.questions
     askerChannelId = ctx.channelId
     stageIdForLog = project.currentStage
+    clarifyKind = 'answer'
   } else {
     mode = 'subagent'
     const delegationId = (args.delegationId ?? '').trim()
@@ -533,7 +576,7 @@ async function executeClarifyProxy(
     askerChannelId = internals.channelId // 硬≠提问方：main 内部直查 delegations map
     stageIdForLog = project.currentStage
 
-    // —— 类别门（D7 §4：全组 requirement-clarify 才进代理；L2 自报无效）——
+    // —— 类别门（D7 §4 + D8 §九 B′/R7-09：L2 自报无效，main 赋值类别判定）——
     const events = getBlockedEventsForClarifyProxy(delegationId, blockedEventIds)
     const missing = blockedEventIds.filter((id) => !events.some((e) => e.id === id))
     if (missing.length > 0) {
@@ -543,8 +586,13 @@ async function executeClarifyProxy(
     if (resolved.length > 0) {
       return rejectInput(`阻塞事件已被解决: ${resolved.map((e) => e.id).join(', ')}`)
     }
-    const nonClarify = events.filter((e) => e.category !== 'requirement-clarify')
-    if (nonClarify.length > 0) {
+    // D8 类别门矩阵（B′）：auto on 允许组 ⊆ {requirement-clarify, design-preference} 进代理
+    //（design-preference → 代决 kind:'decision'；混合组统一代决准则——保守侧）；auto off 仅
+    // requirement-clarify（D7 fail-closed 不变）。other/未知在两种模式下都不进（不代答不代决）。
+    const allowed = autoOn
+      ? events.every((e) => e.category === 'requirement-clarify' || e.category === 'design-preference')
+      : events.every((e) => e.category === 'requirement-clarify')
+    if (!allowed) {
       const categories = events.map((e) => e.category ?? 'unknown')
       appendClarifyLog(workspaceSlug, projectId, {
         kind: 'fallback', reason: 'non-clarify-category', categories, stage: stageIdForLog, projectId,
@@ -555,10 +603,12 @@ async function executeClarifyProxy(
       }, projectId)
       return {
         status: 'fallback', fallback: 'human', reason: 'non-clarify-category',
-        detail: '组内含非 requirement-clarify 类别（设计偏好/其他/未知），按协议转述真人',
+        detail: '组内含不可代理类别（其他/未知），按协议转述真人',
         categories, elapsedMs: Date.now() - startedAt,
       }
     }
+    /** 代决判定（R7-09/R7-10）：组内含 design-preference → kind='decision'（代决准则） */
+    clarifyKind = events.some((e) => e.category === 'design-preference') ? 'decision' : 'answer'
 
     // 展开 blocked 问题（qid = `${blockedEventId}#${index}`；答案按问题原文键回注）
     questions = []
@@ -585,29 +635,34 @@ async function executeClarifyProxy(
     }
   }
 
-  // —— 预算（cap=20/项目；唯一写入点 updateProjectAutoClarify 递减）——
+  // —— 登记待回注问题 id（R7-01 提前：四条确定性降级路径也要登记——auto-degrade 的 L1 契约
+  //     是「登记 pendingQuestionIds + 继续本阶段工作 + 产出附 skipped 标记，不得转述真人」；
+  //     关闭处置/用户重开 auto 后可据此转述或追答。回注/运行终态后清除）——
+  const pendingQids = questions.map((q) => q.id)
+  updateProjectAutoClarify(workspaceSlug, projectId, {
+    pendingQuestionIds: Array.from(new Set([...(getProjectAutoClarify(workspaceSlug, projectId)?.pendingQuestionIds ?? []), ...pendingQids])),
+  })
+
+  // —— 预算（cap=20/项目；唯一写入点 updateProjectAutoClarify 递减；R7-01 四条降级路径之一）——
   const budgetState = getProjectAutoClarify(workspaceSlug, projectId)
-  if (!budgetState?.enabled) return fallbackHuman('auto-clarify-disabled', 'autoClarify 已在处理过程中被关闭')
+  if (!budgetState?.enabled) {
+    // 入口 auto on、运行中被关：D8 B′ 归入 auto-degrade（登记 pending 后继续；关闭处置会转述存量）
+    return fallbackDegrade({ workspaceSlug, projectId, autoOn, reason: 'auto-clarify-disabled', detail: 'autoClarify 已在处理过程中被关闭', stage: stageIdForLog })
+  }
   if (budgetState.proxyBudget <= 0) {
     recordTelemetry(workspaceSlug, 'clarify.budget-exhausted', {
-      project_id: projectId, summary: `代理预算耗尽（cap=${CLARIFY_PROXY_BUDGET_CAP}），转述真人`,
+      project_id: projectId,
+      fallback: autoOn ? 'auto-degrade' : 'human',
+      summary: autoOn
+        ? `代理预算耗尽（cap=${CLARIFY_PROXY_BUDGET_CAP}），自动降级继续工作`
+        : `代理预算耗尽（cap=${CLARIFY_PROXY_BUDGET_CAP}），转述真人`,
     }, projectId)
-    appendClarifyLog(workspaceSlug, projectId, {
-      kind: 'fallback', reason: 'budget-exhausted', stage: stageIdForLog, projectId,
-    })
-    return fallbackHuman('budget-exhausted', `代理预算已耗尽（cap=${CLARIFY_PROXY_BUDGET_CAP}/项目）`)
+    return fallbackDegrade({ workspaceSlug, projectId, autoOn, reason: 'budget-exhausted', detail: `代理预算已耗尽（cap=${CLARIFY_PROXY_BUDGET_CAP}/项目）`, stage: stageIdForLog })
   }
 
-  // —— 「无法判断」熔断（累计 3 次，同组一次不重复）——
+  // —— 「无法判断」熔断（累计 3 次，同组一次不重复；R7-01 四条降级路径之一）——
   if (countCannotJudge(workspaceSlug, projectId) >= CLARIFY_CANNOT_JUDGE_BREAK) {
-    appendClarifyLog(workspaceSlug, projectId, {
-      kind: 'fallback', reason: 'cannot-judge-circuit', stage: stageIdForLog, projectId,
-    })
-    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
-      project_id: projectId, reason: 'cannot-judge-circuit',
-      summary: `「无法判断」累计 ${CLARIFY_CANNOT_JUDGE_BREAK} 次熔断，转述真人`,
-    }, projectId)
-    return fallbackHuman('cannot-judge-circuit', `代答「无法判断」累计 ${CLARIFY_CANNOT_JUDGE_BREAK} 次，已熔断`)
+    return fallbackDegrade({ workspaceSlug, projectId, autoOn, reason: 'cannot-judge-circuit', detail: `代答「无法判断」累计 ${CLARIFY_CANNOT_JUDGE_BREAK} 次，已熔断`, stage: stageIdForLog })
   }
 
   // —— 渠道解析（硬≠提问方；软避开本阶段 AC 攻/防；代理渠道固定不降级）——
@@ -628,31 +683,22 @@ async function executeClarifyProxy(
   }
   const channelResolution = resolveProxyChannel({ askerChannelId, acChannelIds, validateEndpoint: endpointOk })
   if (!channelResolution) {
-    appendClarifyLog(workspaceSlug, projectId, {
-      kind: 'fallback', reason: 'no-channel', stage: stageIdForLog, projectId,
-    })
-    recordTelemetry(workspaceSlug, 'clarify.relay-human', {
-      project_id: projectId, reason: 'no-channel', summary: '无可用异族代理渠道，转述真人',
-    }, projectId)
-    return fallbackHuman('no-channel', `无可与提问方（${askerChannelId}）异族的已启用代理渠道`)
+    // R7-01 四条降级路径之一（无通道）
+    return fallbackDegrade({ workspaceSlug, projectId, autoOn, reason: 'no-channel', detail: `无可与提问方（${askerChannelId}）异族的已启用代理渠道`, stage: stageIdForLog })
   }
 
   // —— 消费预算（委派创建前扣减；失败不退还——代理调用已发生）——
   updateProjectAutoClarify(workspaceSlug, projectId, { proxyBudget: budgetState.proxyBudget - 1 })
 
-  // —— 登记待回注问题 id（关闭处置的转述清单数据源；回注/终态后清除）——
-  const pendingQids = questions.map((q) => q.id)
-  updateProjectAutoClarify(workspaceSlug, projectId, {
-    pendingQuestionIds: Array.from(new Set([...(getProjectAutoClarify(workspaceSlug, projectId)?.pendingQuestionIds ?? []), ...pendingQids])),
-  })
-
-  // —— 生成代理委派（inline + 最小 meta{nanjuProxy:true} + allowSubDelegation:false + 渠道固定）——
+  // —— 生成代理委派（inline + 最小 meta{nanjuProxy:true} + allowSubDelegation:false + 渠道固定；
+  //     R7-09：clarifyKind 分支模板——decision 用代决准则）——
   const stageTitle = phaseNode?.title ?? project.currentStage
   const task = buildProxyDelegationTask({
     projectName: project.name,
     stageTitle,
     projectDir: getNanjuProjectDir(workspaceSlug, projectId),
     questions,
+    clarifyKind,
   })
   let internals
   try {
@@ -689,10 +735,11 @@ async function executeClarifyProxy(
     asker_channel: askerChannelId,
     question_count: questions.length,
     source: mode,
-    summary: truncateSummary(`代理代答 ${questions.length} 题（${mode === 'subagent' ? '子会话' : 'L1'}提问，渠道 ${channelResolution.channelId}）`),
+    kind: clarifyKind,
+    summary: truncateSummary(`代理${clarifyKind === 'decision' ? '代决' : '代答'} ${questions.length} 题（${mode === 'subagent' ? '子会话' : 'L1'}提问，渠道 ${channelResolution.channelId}）`),
   }, projectId)
   appendClarifyLog(workspaceSlug, projectId, {
-    kind: 'proxy-delegate', channel: channelResolution.channelId, stage: stageIdForLog, projectId,
+    kind: 'proxy-delegate', clarifyKind, channel: channelResolution.channelId, stage: stageIdForLog, projectId,
     reason: mode, qid: pendingQids.join(','),
   })
 
@@ -751,10 +798,11 @@ async function executeClarifyProxy(
   const confirmWordHit = answers.some((a) => isConfirmAdvanceText(a.answer))
   const cannotJudge = answers.some((a) => CANNOT_JUDGE_MARKERS.some((m) => a.answer.includes(m)))
 
-  // —— 日志 + 遥测（每题一行 proxy-answer；「无法判断」组行一次不重复）——
+  // —— 日志 + 遥测（每题一行 proxy-answer；R7-10：clarifyKind 区分代答/代决；
+  //     「无法判断」组行一次不重复）——
   for (const a of answers) {
     appendClarifyLog(workspaceSlug, projectId, {
-      kind: 'proxy-answer', qid: a.id, source: mode, channel: channelResolution.channelId,
+      kind: 'proxy-answer', clarifyKind, qid: a.id, source: mode, channel: channelResolution.channelId,
       question: truncateSummary(a.question, 200), answer: truncateSummary(a.answer, 400),
       durationMs: elapsedMs, stage: stageIdForLog, projectId, ts: Date.now(),
     })
@@ -769,12 +817,13 @@ async function executeClarifyProxy(
     project_id: projectId,
     channel: channelResolution.channelId,
     source: mode,
+    kind: clarifyKind,
     question_count: answers.length,
     cannot_judge: cannotJudge,
     confirm_word_hit: confirmWordHit,
     diversity_degraded: channelResolution.diversityDegraded,
     duration_ms: elapsedMs,
-    summary: truncateSummary(`代理代答完成 ${answers.length} 题（渠道 ${channelResolution.channelId}${cannotJudge ? '，含无法判断' : ''}）`),
+    summary: truncateSummary(`代理${clarifyKind === 'decision' ? '代决' : '代答'}完成 ${answers.length} 题（渠道 ${channelResolution.channelId}${cannotJudge ? '，含无法判断' : ''}）`),
   }, projectId)
 
   // —— 回注：L2 来源经既有 answer_delegation_question 通道（askUserService + ask_user_resolved 广播）——
@@ -794,6 +843,22 @@ async function executeClarifyProxy(
   }
   clearPendingQids(workspaceSlug, projectId, pendingQids)
 
+  // R7-10：代答/代决完成 → nanju:clarify-event 事件流（C 域渲染消费；card 附 clarifyKind，
+  // A 域 NanjuClarifyAnswerCard 接口未列该字段——经变量注入结构类型兼容，渲染端可直接读）
+  broadcastClarifyCardEvent(workspaceSlug, projectId, 'proxy-answer', {
+    qid: answers[0]?.id ?? '',
+    sourceLabel: mode === 'subagent'
+      ? (clarifyKind === 'decision' ? '子会话提问·代理代决' : '子会话提问·代理作答')
+      : (clarifyKind === 'decision' ? 'L1 提问·代理代决' : 'L1 提问·代理作答'),
+    channel: channelResolution.channelId,
+    questionSummary: truncateSummary(answers[0]?.question ?? '', 80),
+    answerSummary: truncateSummary(answers[0]?.answer ?? '', 120),
+    durationMs: elapsedMs,
+    ts: Date.now(),
+    stage: stageIdForLog,
+    clarifyKind,
+  })
+
   return {
     status: 'answered',
     answers,
@@ -801,7 +866,25 @@ async function executeClarifyProxy(
     elapsedMs,
     ...(channelResolution.diversityDegraded ? { diversityDegraded: true } : {}),
     confirmWordHit,
+    kind: clarifyKind,
   }
+}
+
+/**
+ * R7-10：clarify 事件流广播（nanju-ipc 的 broadcastNanjuClarifyEvent——注释明示「代理工具域
+ * 调用入口」）。card 附 clarifyKind（answer|decision）供渲染端区分代答/代决展示；
+ * main window 不可用/require 失败（测试环境 electron 缺位）静默丢弃——轮询兑底。
+ */
+function broadcastClarifyCardEvent(
+  workspaceSlug: string,
+  projectId: string,
+  type: 'proxy-answer' | 'fallback-human',
+  card: Record<string, unknown>,
+): void {
+  try {
+    const { broadcastNanjuClarifyEvent } = require('./nanju-ipc') as typeof import('./nanju-ipc')
+    broadcastNanjuClarifyEvent({ workspaceSlug, projectId, type, card: card as never, ts: Date.now() })
+  } catch { /* 事件流失败不影响主链（渲染端轮询兜底） */ }
 }
 
 /** 清除已处置的待回注问题 id（保持 pendingQuestionIds 只含 in-flight） */
@@ -816,8 +899,48 @@ function clearPendingQids(workspaceSlug: string, projectId: string, qids: string
   } catch { /* 清理失败不影响主流程 */ }
 }
 
+/** 构造 fallback 出参（R7-01：auto on 四条无应答方路径 → 'auto-degrade'；其余 'human'） */
+function fallbackOf(
+  fallback: ClarifyProxyFallback['fallback'],
+  reason: ClarifyProxyFallback['reason'],
+  detail?: string,
+  extra?: { categories?: string[]; elapsedMs?: number },
+): ClarifyProxyFallback {
+  return { status: 'fallback', fallback, reason, detail, ...extra }
+}
+
 function fallbackHuman(reason: ClarifyProxyFallback['reason'], detail?: string): ClarifyProxyFallback {
-  return { status: 'fallback', fallback: 'human', reason, detail }
+  return fallbackOf('human', reason, detail)
+}
+
+/**
+ * R7-01 四条确定性降级路径的统一出口：返回值按 autoOn 分叉（'auto-degrade' | 'human'），
+ * 日志行与遥测带上 fallback 值——auto on 发 clarify.auto-degrade（L1 契约：登记 pending +
+ * 继续工作 + skipped 标记，不得转述真人），auto off 维持 clarify.relay-human。
+ */
+function fallbackDegrade(input: {
+  workspaceSlug: string
+  projectId: string
+  autoOn: boolean
+  reason: ClarifyProxyFallback['reason']
+  detail: string
+  stage: string
+}): ClarifyProxyFallback {
+  const fallback = input.autoOn ? 'auto-degrade' : 'human'
+  appendClarifyLog(input.workspaceSlug, input.projectId, {
+    kind: 'fallback', reason: input.reason, fallback, stage: input.stage, projectId: input.projectId,
+  })
+  if (input.autoOn) {
+    recordTelemetry(input.workspaceSlug, 'clarify.auto-degrade', {
+      project_id: input.projectId, reason: input.reason, fallback,
+      summary: truncateSummary(`自动降级（${input.reason}）：登记待办后继续工作，不转述真人`),
+    }, input.projectId)
+  } else {
+    recordTelemetry(input.workspaceSlug, 'clarify.relay-human', {
+      project_id: input.projectId, reason: input.reason, summary: truncateSummary(input.detail),
+    }, input.projectId)
+  }
+  return fallbackOf(fallback, input.reason, input.detail)
 }
 
 function rejectInput(detail: string): ClarifyProxyReject {

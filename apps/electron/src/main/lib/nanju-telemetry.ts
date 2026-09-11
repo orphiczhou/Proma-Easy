@@ -44,6 +44,9 @@ export type TelemetryEventType =
   // confirm.replay-origin 当前无消费点（Defender #2 可选埋点），预置入表供 A/C 接线。
   | 'advance.gate-deny' | 'confirm.scatter-no-auth' | 'router.gate.ask-deny'
   | 'clarify.suspect-fake-confirm' | 'confirm.replay-origin'
+  // v2.4.1（D8 §九 B′/R7-14）：auto 审核三事件——A 域 autoConfirm 推进/门拒（c5244262 已用，
+  // 现以 as Parameters 绕类型，本表收口后可去）+ B 域确定性降级出口（R7-01 四条路径）
+  | 'confirm.auto-confirm' | 'advance.auto-gate' | 'clarify.auto-degrade'
 
 export interface TelemetryEvent {
   eventId: string

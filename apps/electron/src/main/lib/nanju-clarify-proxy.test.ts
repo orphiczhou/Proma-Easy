@@ -189,6 +189,13 @@ function writeNanjuProjectFixture(opts: ProjectFixtureOptions = {}): void {
   }]))
 }
 
+/** fixture 中关闭 autoClarify（auto off 基线路径：注册后执行前关闭） */
+function disableAutoClarifyInFixture(): void {
+  const raw = JSON.parse(readFileSync(join(fixtureRoot, '_nanju-projects.json'), 'utf-8')) as Array<Record<string, unknown>>
+  raw[0]!.autoClarify = { enabled: false, proxyBudget: 20, pendingQuestionIds: [] }
+  writeFileSync(join(fixtureRoot, '_nanju-projects.json'), JSON.stringify(raw))
+}
+
 /** 预写 clarify 日志行（预算/熔断计数 fixture） */
 function seedClarifyLog(lines: Array<Record<string, unknown>>): void {
   const dir = join(fixtureRoot, 'project-p-v24')
@@ -449,6 +456,14 @@ describe('遥测事件类型 union（审查返工 F2-9：B 域 clarify 五事件
       expect(_typeCheck).toBe(eventType)
     }
   })
+
+  test('D8 §九 B′/R7-14 三事件入表：confirm.auto-confirm / advance.auto-gate / clarify.auto-degrade（A 域 c5244262 去 as Parameters 的前提）', () => {
+    const d8Events = ['confirm.auto-confirm', 'advance.auto-gate', 'clarify.auto-degrade'] as const
+    for (const eventType of d8Events) {
+      const _typeCheck: TelemetryEventType = eventType
+      expect(_typeCheck).toBe(eventType)
+    }
+  })
 })
 
 // ===== 第二层：集成（真实 agent-collaboration-tools + mock 依赖） =====
@@ -481,18 +496,16 @@ describe('注册门（quick + autoClarify 开启才注册给 L1）', () => {
   })
 })
 
-describe('类别门红测（R5-01/R6-01）：design-preference 事件组 → 必返回 fallback:"human"', () => {
-  test('ux-advisor（prototype）委派的 blocked 事件：问题文本自称 requirement-clarify 也不进代理', async () => {
+describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——auto on 代决 / auto off fail-closed', () => {
+  test('auto on（D8 §九 B′/R7-09）：ux-advisor blocked 事件进代理代决——kind=decision + 代决准则模板 + 自报无效', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cat-'))
     writeNanjuProjectFixture({ stage: 'prototype' })
     modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
 
     // 提问委派：phase.role 显式 ux-advisor（即便任务文本混入 clarify 自称，映射仍按 role）
     const delegationId = await delegateAskingChild(
-      'phase.role: ux-advisor\n你是UX 顾问。根据 PRD 生成可交互原型。（本阶段子任务自称 requirement-clarify，仅用于测试 L2 自报无效）',
+      'phase.role: ux-advisor\n你是UX 顾问。根据 PRD 生成可交互原型。（自称 requirement-clarify，测 L2 自报无效）',
     )
-    // 提问委派自身的 headless run 已计入；此后增量应为零（不创建代理委派）
-    const proxyRunsBefore = runCalls.length
     emitBlocked((await pendingChild(delegationId)), 'req-cat-1', [
       { question: '右侧导航放顶部还是侧边？（自报 requirement-clarify）', options: [{ label: '顶部' }, { label: '侧边' }] },
     ])
@@ -501,16 +514,55 @@ describe('类别门红测（R5-01/R6-01）：design-preference 事件组 → 必
     // main 按 phase.role 固定映射赋值：ux-advisor → design-preference（自报无效）
     expect(events[0]!.category).toBe('design-preference')
 
+    // D8：装载代决作答脚本（决策=维持现状倾向）
+    scriptProxyAnswers(() => '维持现状：侧边导航（准则①保守优先，行为变化最小）')
     const result = await callClarifyProxy({ delegationId, blockedEventIds: [events[0]!.id as string] })
+    expect(result.status).toBe('answered')
+    // R7-10：代决 kind='decision'
+    expect(result.kind).toBe('decision')
+    // R7-09：代理任务用代决准则模板分支（保守/维持现状/可逆性）
+    const proxyRun = runCalls.find((c) => c.userMessage.includes('「自动补完需求」独立代理'))
+    expect(proxyRun).toBeDefined()
+    expect(proxyRun!.userMessage).toContain('替用户做设计决策')
+    expect(proxyRun!.userMessage).toContain('保守')
+    expect(proxyRun!.userMessage).toContain('维持现状')
+    expect(proxyRun!.userMessage).toContain('可逆')
+    // answer 模板关键指令不得出现在代决模板中（准则区分）
+    expect(proxyRun!.userMessage).not.toContain('不迎合问题中隐含的答案倾向')
+    // 预算消耗 + 日志/遥测 kind
+    expect(readNanjuProjectAutoClarify().proxyBudget).toBe(19)
+    const log = readClarifyLog('ws-test', 'p-v24')
+    expect(log.some((line) => line.kind === 'proxy-answer' && line.clarifyKind === 'decision')).toBe(true)
+    expect(readTelemetry('ws-test', 'clarify.proxy-answer').some((e) => e.payload.kind === 'decision')).toBe(true)
+    expect(readTelemetry('ws-test', 'clarify.proxy-delegate').some((e) => e.payload.kind === 'decision')).toBe(true)
+  })
+
+  test('auto off（注册后执行前关闭，R7-01 auto off 基线）：design-preference 组维持 D7 fail-closed → fallback:"human"', async () => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cat-off-'))
+    writeNanjuProjectFixture({ stage: 'prototype' })
+    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
+
+    const delegationId = await delegateAskingChild(
+      'phase.role: ux-advisor\n你是UX 顾问。根据 PRD 生成可交互原型。',
+    )
+    emitBlocked((await pendingChild(delegationId)), 'req-cat-off', [
+      { question: '主色调用蓝还是绿？', options: [{ label: '蓝' }, { label: '绿' }] },
+    ])
+    const events = await getPendingBlocked(delegationId)
+    expect(events[0]!.category).toBe('design-preference')
+
+    // 注册（enabled=true 构建）后、执行前关闭开关 → auto off 入口拒绝（D7 行为逐字节不变）。
+    // 注意：需持有关闭前构建的工具定义（重建会因注册门 enabled=false 而不注册——注册面与执行面分离）
+    const clarifyTool = getTool(NANJU_CLARIFY_PROXY_TOOL_NAME)
+    disableAutoClarifyInFixture()
+    toolCallCounter += 1
+    const result = parseResult(await clarifyTool.execute(`clarify-off-${toolCallCounter}`, {
+      delegationId, blockedEventIds: [events[0]!.id as string],
+    }))
     expect(result.status).toBe('fallback')
     expect(result.fallback).toBe('human')
-    expect(result.reason).toBe('non-clarify-category')
-    expect(result.categories).toContain('design-preference')
-    // 未创建任何代理委派、未消耗预算
-    expect(runCalls.length).toBe(proxyRunsBefore)
-    expect(readNanjuProjectAutoClarify().proxyBudget).toBe(20)
-    // 遥测：转述真人
-    expect(readTelemetry('ws-test', 'clarify.relay-human').length).toBeGreaterThan(0)
+    expect(result.reason).toBe('auto-clarify-disabled')
+    expect(runCalls.filter((c) => c.userMessage.includes('「自动补完需求」独立代理'))).toHaveLength(0)
   })
 
   test('未知/缺失类别（旧事件无 phase.role 标记的普通任务）→ fail-closed 转真人', async () => {
@@ -548,6 +600,8 @@ describe('类别门红测（R5-01/R6-01）：design-preference 事件组 → 必
 
     const result = await callClarifyProxy({ delegationId, blockedEventIds: [events[0]!.id as string] })
     expect(result.status).toBe('answered')
+    // R7-10：requirement-clarify → kind='answer'（代答，非代决）
+    expect(result.kind).toBe('answer')
     expect((result.answers as Array<{ answer: string }>)[0]!.answer).toContain('读书笔记')
     // 硬≠提问方：提问委派渠道 glm-zhipu → 代理渠道不落 glm 家族
     expect(String(result.channel).startsWith('glm-zhipu')).toBe(false)
@@ -605,6 +659,8 @@ describe('代理委派生成：inline 最小 meta + 独立时钟标记', () => {
     modelAvailability = { 'deepseek:deepseek-v4-flash': true }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要导出吗？' }] })
     expect(result.status).toBe('fallback')
+    // R7-01 路径④：auto on → auto-degrade（非 human）
+    expect(result.fallback).toBe('auto-degrade')
     expect(result.reason).toBe('no-channel')
     expect(runCalls).toHaveLength(0)
     // 无 model.fallback.used 埋点（代理渠道固定，不降级重试）
@@ -612,19 +668,49 @@ describe('代理委派生成：inline 最小 meta + 独立时钟标记', () => {
   })
 })
 
-describe('预算与熔断', () => {
-  test('proxyBudget=0 → fallback:"human"（budget-exhausted）+ 遥测，不创建委派', async () => {
+describe('预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallback:"auto-degrade"，不转述真人）', () => {
+  test('R7-01 主红测：budget=0 + design-preference blocked + auto on → auto-degrade（非 human）+ pending 登记 + 不建委派', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-budget-'))
+    writeNanjuProjectFixture({ stage: 'prototype', autoClarify: { enabled: true, proxyBudget: 0 } })
+    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
+
+    const delegationId = await delegateAskingChild('phase.role: ux-advisor\n你是UX 顾问。根据 PRD 生成原型。')
+    emitBlocked((await pendingChild(delegationId)), 'req-r701', [
+      { question: '列表要不要分页？', options: [{ label: '分页' }, { label: '无限滚动' }] },
+    ])
+    const events = await getPendingBlocked(delegationId)
+    expect(events[0]!.category).toBe('design-preference')
+
+    const result = await callClarifyProxy({ delegationId, blockedEventIds: [events[0]!.id as string] })
+    // R7-01 核心：不返回 fallback:'human'（auto 用户不在场，human 横幅=死锁）
+    expect(result.status).toBe('fallback')
+    expect(result.fallback).toBe('auto-degrade')
+    expect(result.reason).toBe('budget-exhausted')
+    // 流程继续语义：pendingQuestionIds 已登记（关闭处置/重开 auto 后可追答）
+    const pending = readNanjuProjectAutoClarify().pendingQuestionIds
+    expect(pending.some((id) => id.startsWith(String(events[0]!.id)))).toBe(true)
+    // 不创建代理委派
+    expect(runCalls.filter((c) => c.userMessage.includes('「自动补完需求」独立代理'))).toHaveLength(0)
+    // 遥测：预算事件带 fallback 值 + 降级事件
+    const budgetEvents = readTelemetry('ws-test', 'clarify.budget-exhausted')
+    expect(budgetEvents.length).toBe(1)
+    expect(budgetEvents[0]!.payload.fallback).toBe('auto-degrade')
+    expect(readTelemetry('ws-test', 'clarify.auto-degrade').some((e) => e.payload.reason === 'budget-exhausted')).toBe(true)
+  })
+
+  test('budget=0 + questions 模式（auto on）→ auto-degrade（reason 同上路径分叉验证）', async () => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-budget2-'))
     writeNanjuProjectFixture({ autoClarify: { enabled: true, proxyBudget: 0 } })
     modelAvailability = { 'deepseek:deepseek-v4-flash': true }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要深色模式吗？' }] })
     expect(result.status).toBe('fallback')
+    expect(result.fallback).toBe('auto-degrade')
     expect(result.reason).toBe('budget-exhausted')
+    expect(readNanjuProjectAutoClarify().pendingQuestionIds).toContain('q1')
     expect(runCalls).toHaveLength(0)
-    expect(readTelemetry('ws-test', 'clarify.budget-exhausted').length).toBe(1)
   })
 
-  test('「无法判断」累计 3 次（同组一次）→ 熔断：后续调用直接 fallback:"human"', async () => {
+  test('「无法判断」累计 3 次（同组一次）→ 熔断：auto on → auto-degrade（R7-01 路径③）', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cj-'))
     writeNanjuProjectFixture()
     seedClarifyLog([
@@ -635,7 +721,9 @@ describe('预算与熔断', () => {
     modelAvailability = { 'deepseek:deepseek-v4-flash': true }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '要不要分页？' }] })
     expect(result.status).toBe('fallback')
+    expect(result.fallback).toBe('auto-degrade')
     expect(result.reason).toBe('cannot-judge-circuit')
+    expect(readTelemetry('ws-test', 'clarify.auto-degrade').some((e) => e.payload.reason === 'cannot-judge-circuit')).toBe(true)
     expect(runCalls).toHaveLength(0)
   })
 
