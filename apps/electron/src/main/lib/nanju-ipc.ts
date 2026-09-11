@@ -126,19 +126,19 @@ export function parseClarifyLogLine(raw: string): NanjuClarifyAnswerCard | null 
   } catch {
     return null
   }
-  if (entry.kind !== undefined && entry.kind !== 'proxy-answer' && entry.kind !== 'proxy-delegate') return null
+  if (entry.kind !== undefined && entry.kind !== 'proxy-answer' && entry.kind !== 'decision') return null
   if (!entry.qid || typeof entry.qid !== 'string') return null
   if (!entry.answer) return null
   const ts = typeof entry.ts === 'number' ? entry.ts
     : typeof entry.at === 'string' ? Date.parse(entry.at)
     : 0
-  // D8（R7-10）：kind 判定（宽字段兼容）——clarifyKind（B 域 ClarifyLogLine 实际字段）/
-  // decision:true / answerKind:'decision' / 行类型 proxy-delegate（代决行）/ 类别
-  // design-preference（代决准则路径）→ decision
+  // D8 返工二 F3-1（§十）：kind 判定——B 域 ClarifyLogLine 实际字段 clarifyKind（v0.17.99）
+  // 为主，B 统一字段名后 kind:'decision' / 旧宽字段兼容一轮；proxy-delegate 行类型已从
+  // 判据删除（该行无 answer 字段，入口早退 null——不可达分支清理）。
   const isDecision = entry.clarifyKind === 'decision'
+    || entry.kind === 'decision'
     || entry.decision === true
     || entry.answerKind === 'decision'
-    || entry.kind === 'proxy-delegate'
     || entry.category === 'design-preference'
   return {
     qid: entry.qid,

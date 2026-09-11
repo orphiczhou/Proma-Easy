@@ -110,12 +110,11 @@ describe('v2.4：代答卡片数据结构（parseClarifyLogLine）', () => {
 
   // ══ D8（R7-10）：代答/代决 kind 区分（design-preference 代决显示「代决」标签） ══
 
-  test('D8：kind 判定——宽字段兼容（B 域 clarifyKind / decision:true / answerKind:decision / proxy-delegate / design-preference 类别）→ kind=decision', () => {
+  test('D8：kind 判定——宽字段兼容（B 域 clarifyKind 主字段 / decision:true / answerKind:decision / 类别 design-preference）→ kind=decision', () => {
     for (const extra of [
       { clarifyKind: 'decision' },
       { decision: true },
       { answerKind: 'decision' },
-      { kind: 'proxy-delegate' },
       { category: 'design-preference' },
     ]) {
       const card = parseClarifyLogLine(JSON.stringify({
@@ -123,6 +122,16 @@ describe('v2.4：代答卡片数据结构（parseClarifyLogLine）', () => {
       })) as NanjuClarifyAnswerCard
       expect(card!.kind).toBe('decision')
     }
+  })
+
+  test('D8 返工二 F3-1：死分支清理——proxy-delegate 行（无 answer）必 null，不再作为 decision 判据', () => {
+    // proxy-delegate 行是代决委派登记行（无 answer 字段）→ 入口早退 null（不可达分支已删）
+    expect(parseClarifyLogLine(JSON.stringify({ kind: 'proxy-delegate', qid: 'q-x', channel: 'c' }))).toBeNull()
+    // B 域字段统一后若以 kind:'decision' 作代答行类型 → 放行并判 decision
+    const unified = parseClarifyLogLine(JSON.stringify({
+      kind: 'decision', qid: 'q-u1', channel: 'c', question: 'q', answer: 'a', ts: 1,
+    })) as NanjuClarifyAnswerCard
+    expect(unified!.kind).toBe('decision')
   })
 
   test('D8：默认 kind=answer（requirement-clarify 代答）；fallback/cannot-judge 行仍不生成卡片', () => {

@@ -934,6 +934,19 @@ describe('D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto
     expect(prompt).not.toContain("fallback:'human'（含 non-clarify-category")
   })
 
+  test('auto on：auto-degrade 解除动作（§十 F1-2：保守自答回注解除 / 无法作答则强停+terminated 标记 / 禁止悬空）', () => {
+    const prompt = buildPromptForD8('requirements', true)
+    expect(prompt).toContain('answer_delegation_question')
+    expect(prompt).toContain('保守自判')
+    expect(prompt).toContain('stop_delegation')
+    expect(prompt).toContain('<!-- auto-clarify:skipped,terminated,ts -->')
+    expect(prompt).toContain('禁止放任 blocked 悬空')
+    // off 态不含解除动作契约（D7 无此概念）
+    const offPrompt = buildPromptForD8('requirements', false)
+    expect(offPrompt).not.toContain('禁止放任 blocked 悬空')
+    expect(offPrompt).not.toContain('skipped,terminated')
+  })
+
   test('auto on：溯源 kind 标记（R7-10：kind:answer|decision 区分代答/代决）', () => {
     const prompt = buildPromptForD8('requirements', true)
     expect(prompt).toContain('<!-- auto-clarify:qid,channel,ts,kind:answer|decision -->')
@@ -978,6 +991,49 @@ describe('D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto
     const normalize = (p: string) => p.split(fixtureRoot).join('<FIXTURE_ROOT>')
     expect(normalize(buildPromptForD8('requirements', false))).toMatchSnapshot('d8-auto-off-requirements')
     expect(normalize(buildPromptForD8('prototype', false))).toMatchSnapshot('d8-auto-off-prototype')
+  })
+
+  test('返工二 F3-2：off 冻结串独立证明——architecture/prototype 关键话术行与 054f0721（v0.17.97）逐字一致', () => {
+    // toMatchSnapshot 只固化当前输出，不能独立证明=v0.17.97——从旧提交提取关键行做冻结 toContain 对比
+    const { execSync } = require('node:child_process') as typeof import('node:child_process')
+    const repoRoot = join(import.meta.dir, '..', '..', '..', '..', '..')
+    const v017Source = execSync(
+      'git show 054f0721:apps/electron/src/main/lib/nanju-router-prompt.ts',
+      { cwd: repoRoot, encoding: 'utf-8' },
+    ) as string
+    /** 从旧源提取纯字面量行（整行单字符串，无拼接），作为冻结串 */
+    const frozen = (marker: string): string => {
+      const line = v017Source.split('\n').find((l) => l.includes(marker))
+      expect(line).toBeTruthy()
+      const m = /^\s*'(.*)',\s*$/.exec(line ?? '')
+      expect(m).toBeTruthy()
+      return m![1]!
+    }
+    // prototype off 段关键行（意见收集轮/收口确认/点选五项）
+    const protoPrompt = buildPromptForD8('prototype', false)
+    for (const marker of [
+      '对话式设计迭代 + 交互式确认',
+      '意见收集轮】（核心节奏',
+      '原型交互验证」，multiSelect',
+      '未通过项回到 d 循环修复后重新收口',
+      '设计·快速修改」）：',
+    ]) {
+      expect(protoPrompt).toContain(frozen(marker))
+    }
+    // architecture off 段关键行（环境安装/合并确认/预校验流程）
+    const archPrompt = buildPromptForD8('architecture', false, {
+      '03_ARCHITECTURE/architecture.md':
+        '# 架构文档（返工二冻结对比）\n\nprojectCategory: web-fullstack\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| node | 20 | 前端 |\n\nprojectEnv: ready\n',
+    })
+    for (const marker of [
+      '架构确认 + 环境配置环节',
+      '确认·安装缺失组件',
+      '用户选换技术栈',
+      '重新确认。',
+      '确认·架构与环境配置」）确认架构与环境配置',
+    ]) {
+      expect(archPrompt).toContain(frozen(marker))
+    }
   })
 })
 
