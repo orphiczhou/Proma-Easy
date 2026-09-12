@@ -27,6 +27,7 @@
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
+import { PNG } from 'pngjs'
 import { writeJsonFileAtomic, writeTextFileAtomic } from './safe-file'
 import { getNanjuProjectDir } from './nanju-project'
 import type { NanjuProjectInfoFile } from './nanju-project'
@@ -34,21 +35,44 @@ import { recordTelemetry } from './nanju-telemetry'
 
 // ===== steps.json schema =====
 
-/** op 白名单（Sprint B；设计稿 Q4。v0.17.63 移除 eval：自由 JS 通道整体关闭） */
+/** steps.json schema 版本（W22 A1）：v2 = 新词表（check/uncheck/select/hover/scroll/focus/assert-screenshot + selector 二档）。校验失败（含未知 op/版本不匹配）计 fail 不再静默 skip */
+export const GWT_STEPS_SCHEMA_VERSION = 2
+
+/** op 白名单（Sprint B；设计稿 Q4。v0.17.63 移除 eval；W22 F2/F4 扩展 v2 词表） */
 export type GwtOpType =
   | 'click' | 'fill' | 'press' | 'wait-selector'
   | 'assert-text' | 'assert-visible' | 'assert-count'
+  | 'check' | 'uncheck' | 'select' | 'hover' | 'scroll' | 'focus'
+  | 'assert-screenshot'
+
+/** selector 档位（W22 F3）：data-ai-id 主档不变；#id / aria-label 二档带唯一性校验 */
+export type GwtSelectorTier = 'data-ai-id' | 'id' | 'aria-label'
+
+/** 归一后的 selector 引用：css 为 null 时（aria-label 档）用属性相等匹配，不拼 CSS */
+export interface GwtSelectorRef {
+  tier: GwtSelectorTier
+  /** CSS 查询形态（data-ai-id/#id 档）；aria-label 档为 null */
+  css: string | null
+  /** 档位值：data-ai-id 值 / id 值 / aria-label 原文 */
+  value: string
+}
 
 export interface GwtStepOp {
   type: GwtOpType
-  /** data-ai-id 值（或完整 CSS selector 形态，归一后统一 [data-ai-id="..."]） */
+  /** data-ai-id=xxx / #id / [aria-label="…"] 三档形态（归一后统一 GwtSelectorRef） */
   selector?: string
-  /** fill 文本 / press 键名（Enter、Escape、Tab 等导航键或文本） */
+  /** fill 文本 / press 键名 / select 选项（value 优先，label 兼容匹配） */
   value?: string
   /** assert-text 期望包含文本 */
   contains?: string
   /** assert-count 期望元素数量 */
   count?: number
+  /** scroll 滚动量（px，正向下/负向上） */
+  deltaY?: number
+  /** assert-screenshot 基线名（缺省用 feature+scenario slug） */
+  name?: string
+  /** assert-screenshot 差异阈值（差异像素占比，默认 0.02；warning-only 不影响 verdict） */
+  threshold?: number
   /** op 级超时/轮询窗口（毫秒）——设计稿 schema 示例的写法，与步骤级 timeoutMs 等效（步骤级优先） */
   timeoutMs?: number
 }
@@ -84,10 +108,18 @@ export interface GwtFailedStep {
    * 失败归类（v0.17.63 回炉分流依据，AC L-001）：
    * - selector-wait：click/fill 目标元素轮询窗口内未出现（映射类，回 testing 重映射）
    * - unmapped：步骤未映射但场景未声明 skip（映射类兜底）
+   * - selector-ambiguous：#id / aria-label 档命中非唯一元素（映射类，W22 F3）
+   * - schema-invalid：steps.json 校验失败/未知 op/版本不匹配（映射类，W22 A1——不再静默 skip）
+   * - op-check/op-select/op-hover/op-scroll/op-focus：新 op 执行约束失败（映射类，W22 F2；
+   *   如 select 遇非原生 select、radio uncheck 等测试侧可修复问题，回 testing 改 steps.json）
    * - assert：断言不满足（行为类，回 coding 改代码）
    * - channel：执行通道异常（CDP/标签级故障）
    */
-  category?: 'selector-wait' | 'unmapped' | 'assert' | 'channel'
+  category?: 'selector-wait' | 'unmapped' | 'selector-ambiguous' | 'schema-invalid'
+    | 'op-check' | 'op-select' | 'op-hover' | 'op-scroll' | 'op-focus'
+    | 'assert' | 'channel'
+  /** 失败步骤使用的 selector 档位（W22 F3 报告归因：区分「应用坏了」与「锚点漂了」） */
+  selectorTier?: GwtSelectorTier | null
 }
 
 /** 单场景执行结果 */
@@ -102,6 +134,8 @@ export interface GwtScenarioResult {
   /** 失败截图相对路径（06_TESTS/ 内相对） */
   screenshot: string | null
   durationMs: number
+  /** 非阻塞警告（W22 F4：assert-screenshot baseline-created/diff 等；不影响 verdict） */
+  warnings?: string[]
 }
 
 /** 规则裁判判定 */
@@ -122,33 +156,81 @@ export interface GwtJudgement {
 const DATA_AI_ID_VALUE = /^[A-Za-z][A-Za-z0-9_-]*$/
 const VALID_OP_TYPES: ReadonlySet<string> = new Set([
   'click', 'fill', 'press', 'wait-selector', 'assert-text', 'assert-visible', 'assert-count',
+  // W22 F2/F4 v2 词表
+  'check', 'uncheck', 'select', 'hover', 'scroll', 'focus', 'assert-screenshot',
 ])
 
+/** fill.value 长度上限（W22 F1：evaluate 内联表达式有 20k 字符限制，超长会被误归 channel 类失败） */
+export const GWT_FILL_VALUE_MAX_CHARS = 2_000
+
+/** assert-screenshot 默认差异阈值（差异像素占比；warning-only 不影响 verdict） */
+export const GWT_SCREENSHOT_DIFF_THRESHOLD_DEFAULT = 0.02
+
+/** selector 归一档位识别阈值（W22 F3）：aria-label 属性值长度上限 */
+const ARIA_LABEL_MAX_CHARS = 60
+
 /**
- * selector 归一：接受 `data-ai-id=xxx` / `[data-ai-id="xxx"]` / `[data-ai-id='xxx']` 三种写法，
- * 统一为 CSS `[data-ai-id="xxx"]`。非法形态返回 null（预检阶段拦截，不臆造）。
+ * selector 归一（W22 F3 三档）：
+ * - 主档 data-ai-id 不变：`data-ai-id=xxx` / `[data-ai-id="xxx"]` / `[data-ai-id='xxx']`；
+ * - 二档 #id：正则 ^[A-Za-z][A-Za-z0-9_-]*$（拒绝 React useId 的 `:r1:` 形态等非法 CSS 标识符），
+ *   执行期唯一性校验（querySelectorAll !== 1 即 fail，绝不取第一个）；
+ * - 二档 [aria-label="…"]：属性相等匹配（不拼 CSS，中文/引号/反斜杠安全），≤60 字符，
+ *   同样唯一性校验。
+ * 非法形态返回 null（预检阶段拦截，不臆造；不开放自由 CSS 的防脆弱设计保留）。
  */
-export function normalizeGwtSelector(raw: string): string | null {
+export function normalizeGwtSelector(raw: string): GwtSelectorRef | null {
   const trimmed = (raw ?? '').trim()
   if (!trimmed) return null
   // 形态一：data-ai-id=xxx
   const bare = /^data-ai-id\s*=\s*(.+)$/.exec(trimmed)
   if (bare?.[1]) {
     const value = bare[1].trim()
-    return DATA_AI_ID_VALUE.test(value) ? `[data-ai-id="${value}"]` : null
+    return DATA_AI_ID_VALUE.test(value)
+      ? { tier: 'data-ai-id', css: `[data-ai-id="${value}"]`, value }
+      : null
   }
   // 形态二：[data-ai-id="xxx"] / [data-ai-id='xxx']
   const bracketed = /^\[\s*data-ai-id\s*=\s*["']([^"']+)["']\s*\]$/.exec(trimmed)
   if (bracketed?.[1]) {
     const value = bracketed[1].trim()
-    return DATA_AI_ID_VALUE.test(value) ? `[data-ai-id="${value}"]` : null
+    return DATA_AI_ID_VALUE.test(value)
+      ? { tier: 'data-ai-id', css: `[data-ai-id="${value}"]`, value }
+      : null
+  }
+  // 形态三（W22 F3）：#id —— 正则收紧后直接拼 CSS（已拒绝 ：/空/数字开头等非法标识符）
+  if (trimmed.startsWith('#')) {
+    const value = trimmed.slice(1)
+    return DATA_AI_ID_VALUE.test(value)
+      ? { tier: 'id', css: `#${value}`, value }
+      : null
+  }
+  // 形态四（W22 F3）：[aria-label="…"] —— 属性相等匹配，不拼 CSS 字符串
+  const aria = /^\[\s*aria-label\s*=\s*"([^"]*)"\s*\]$/.exec(trimmed)
+  if (aria) {
+    const value = aria[1] ?? ''
+    if (!value || value.length > ARIA_LABEL_MAX_CHARS || /[\r\n]/.test(value)) return null
+    return { tier: 'aria-label', css: null, value }
   }
   return null
+}
+
+/** 二档 selector（#id / aria-label）执行期需要唯一性校验（data-ai-id 主档保持取首个的现状） */
+function selectorNeedsUniqueCheck(ref: GwtSelectorRef): boolean {
+  return ref.tier !== 'data-ai-id'
+}
+
+/** 页面内查找元素集合的 JS 片段（aria-label 档走属性相等匹配，不拼 CSS） */
+function selectorFindFragment(ref: GwtSelectorRef): string {
+  if (ref.css !== null) return `document.querySelectorAll(${pagePayload(ref.css)})`
+  return `Array.from(document.querySelectorAll('[aria-label]')).filter(e => e.getAttribute('aria-label') === ${pagePayload(ref.value)})`
 }
 
 /** 需要选择器的 op 类型 */
 const SELECTOR_OPS: ReadonlySet<string> = new Set([
   'click', 'fill', 'wait-selector', 'assert-text', 'assert-visible', 'assert-count',
+  // W22 F2 新 op
+  'check', 'uncheck', 'select', 'hover', 'focus',
+  // scroll 的 selector 可选（缺省滚动整页）
 ])
 
 /** 校验单个 steps.json 文件内容；返回错误清单（空=合法） */
@@ -162,6 +244,11 @@ export function validateScenarioFileContent(raw: string): { scenario: GwtScenari
   }
   const obj = parsed as Record<string, unknown>
   if (!obj || typeof obj !== 'object') return { scenario: null, errors: ['顶层不是对象'] }
+  // W22 A1：schemaVersion 存在时必须匹配当前词表版本（不匹配计 fail 并指引重新生成；
+  // 缺失宽容处理为旧版文件——旧 op 全集仍受白名单校验约束，未知 op 不再静默 skip）
+  if (obj.schemaVersion !== undefined && obj.schemaVersion !== GWT_STEPS_SCHEMA_VERSION) {
+    errors.push(`schemaVersion 不匹配：文件声明 ${JSON.stringify(obj.schemaVersion)}，当前运行器支持 v${GWT_STEPS_SCHEMA_VERSION}。请用当前测试工程师词表重新生成 steps.json（不要手改版本号）`)
+  }
   if (typeof obj.feature !== 'string' || !obj.feature.trim()) errors.push('feature 必须是非空字符串')
   if (typeof obj.scenario !== 'string' || !obj.scenario.trim()) errors.push('scenario 必须是非空字符串')
   if (typeof obj.skip !== 'boolean') errors.push('skip 必须是布尔值')
@@ -199,14 +286,35 @@ export function validateScenarioFileContent(raw: string): { scenario: GwtScenari
           if (typeof op.selector !== 'string') {
             errors.push(`${label}.op.type=${op.type} 需要 selector`)
           } else if (!normalizeGwtSelector(op.selector)) {
-            errors.push(`${label}.op.selector 非法（只允许 data-ai-id=xxx 或 [data-ai-id="xxx"] 形态）`)
+            errors.push(`${label}.op.selector 非法（只允许 data-ai-id=xxx / [data-ai-id="xxx"] / #id / [aria-label="…"] 四形态；回炉修映射优先补 data-ai-id，不得用 #id 规避标注纪律）`)
           }
         }
+        if (op.type === 'scroll' && typeof op.selector !== 'undefined' && typeof op.selector !== 'string') {
+          errors.push(`${label}.op.type=scroll 的 selector 可选，但必须是字符串`)
+        }
         if (op.type === 'fill' && typeof op.value !== 'string') errors.push(`${label}.op.type=fill 需要 value 文本`)
+        if (op.type === 'fill' && typeof op.value === 'string' && op.value.length > GWT_FILL_VALUE_MAX_CHARS) {
+          errors.push(`${label}.op.type=fill 的 value 超过 ${GWT_FILL_VALUE_MAX_CHARS} 字符上限`)
+        }
         if (op.type === 'press' && (typeof op.value !== 'string' || !op.value.trim())) errors.push(`${label}.op.type=press 需要 value 键名`)
         if (op.type === 'assert-text' && typeof op.contains !== 'string') errors.push(`${label}.op.type=assert-text 需要 contains 文本`)
         if (op.type === 'assert-count' && (typeof op.count !== 'number' || !Number.isInteger(op.count) || op.count < 0)) {
           errors.push(`${label}.op.type=assert-count 需要 count 非负整数`)
+        }
+        // W22 F2：select 需 selector + value（value 优先精确匹配 option.value，兼容匹配 option.label）
+        if (op.type === 'select' && (typeof op.value !== 'string' || !op.value.trim())) errors.push(`${label}.op.type=select 需要 value（option 的 value 或 label）`)
+        // W22 F2：scroll 需非零有限 deltaY
+        if (op.type === 'scroll' && (typeof op.deltaY !== 'number' || !Number.isFinite(op.deltaY) || op.deltaY === 0)) {
+          errors.push(`${label}.op.type=scroll 需要 deltaY 非零数字（正向下、负向上）`)
+        }
+        // W22 F4：assert-screenshot 可选字段约束
+        if (op.type === 'assert-screenshot') {
+          if (op.name !== undefined && (typeof op.name !== 'string' || !op.name.trim() || op.name.length > 60)) {
+            errors.push(`${label}.op.type=assert-screenshot 的 name 必须是 1-60 字符`)
+          }
+          if (op.threshold !== undefined && (typeof op.threshold !== 'number' || !Number.isFinite(op.threshold) || op.threshold <= 0 || op.threshold > 1)) {
+            errors.push(`${label}.op.type=assert-screenshot 的 threshold 必须是 (0,1] 内数字`)
+          }
         }
       }
     } else {
@@ -320,14 +428,22 @@ export interface GwtReportJson {
   retryCount: number
   /** 执行异常独立计数（v0.17.64 #6，拆 Z-005 口径）：error 轮次累计，pass 轮清零；与 retryCount（非 pass 合计）并存。旧报告无此字段 */
   errorCount?: number
+  /** 非阻塞警告汇总（W22 F4）：assert-screenshot baseline-created/diff 等，不影响 verdict；空数组省略 */
+  warnings?: string[]
   scenarios: Array<{
     feature: string
     scenario: string
     status: GwtScenarioStatus
     reason: string | null
     failedStep: GwtScenarioResult['failedStep']
+    /** 失败步骤的 selector 档位（W22 F3 回炉定位：data-ai-id/id/aria-label；非 fail 或无 selector 时缺省） */
+    selectorTier?: GwtSelectorTier | null
+    /** 失败步骤的失败归类（W22 报告归因字段：与 failedStep.category 同值，方便报告消费方直接读取） */
+    failureCategory?: GwtFailedStep['category']
     screenshot: string | null
     durationMs: number
+    /** 场景级非阻塞警告（W22 F4） */
+    warnings?: string[]
   }>
 }
 
@@ -562,6 +678,10 @@ export function buildReportMarkdown(report: GwtReportJson, projectName: string):
   lines.push(`- 用户故事覆盖：${report.coveredUs.length > 0 ? report.coveredUs.join('、') : '无'}${report.uncoveredUs.length > 0 ? `（未覆盖：${report.uncoveredUs.join('、')}）` : ''}`)
   if (report.prdUserStoriesMissing) lines.push('- ⚠ PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定（请补充 PRD 后重跑）')
   lines.push(`- 重试轮次：${report.retryCount}`)
+  if (report.warnings && report.warnings.length > 0) {
+    lines.push('- ⚠ 视觉观察项（不影响判定）：')
+    report.warnings.forEach((w) => lines.push(`  - ${w.replace(/\|/g, '\\|')}`))
+  }
   lines.push('')
   lines.push('## 场景明细')
   lines.push('')
@@ -610,6 +730,14 @@ export interface GwtBrowserAdapter {
   evaluateInTab(sessionId: string, tabId: string, expression: string, signal?: AbortSignal): Promise<unknown>
   clickPointInTab(sessionId: string, tabId: string, x: number, y: number, signal?: AbortSignal): Promise<void>
   pressKeyInTab(sessionId: string, tabId: string, key: string, signal?: AbortSignal): Promise<void>
+  /** W22 F1：CDP Input.insertText 文本直入（真实编辑管线，isTrusted=true，React/Vue 原生兼容） */
+  insertTextInTab(sessionId: string, tabId: string, text: string, signal?: AbortSignal): Promise<void>
+  /** W22 F2：真实悬停（mouseMoved 微抖动 + 停留 300ms） */
+  hoverPointInTab(sessionId: string, tabId: string, x: number, y: number, signal?: AbortSignal): Promise<void>
+  /** W22 F2：CDP mouseWheel 滚动（失败上抛由调用方走 JS scrollBy 回退） */
+  wheelInTab(sessionId: string, tabId: string, deltaX: number, deltaY: number, signal?: AbortSignal): Promise<void>
+  /** W22 F4：CDP Page.captureScreenshot 视口截图（含逻辑视口尺寸/DPR 元数据） */
+  captureViewportPngInTab(sessionId: string, tabId: string, signal?: AbortSignal): Promise<{ base64: string; width: number; height: number; dpr: number }>
   screenshot(sessionId: string, tabId: string, signal?: AbortSignal): Promise<{ base64: string }>
   closeTab(sessionId: string, tabId: string): Promise<unknown>
   /** 测试结束后恢复用户原活动标签（v0.17.63 AC Z-004；可选实现，未实现时保持现状） */
@@ -620,6 +748,8 @@ export interface GwtBrowserAdapter {
 
 const DEFAULT_ASSERT_TIMEOUT_MS = 4_000
 const DEFAULT_WAIT_SELECTOR_TIMEOUT_MS = 8_000
+/** W22 F2：check/uncheck 点击后勾选态回读轮询窗口（真实点击后状态更新有时延） */
+const DEFAULT_CHECK_CONFIRM_TIMEOUT_MS = 2_000
 const POLL_INTERVAL_MS = 250
 /** 每步执行后的 settle 延时（等异步渲染稳定） */
 const STEP_SETTLE_MS = 150
@@ -642,6 +772,8 @@ export interface GwtSuiteOptions {
   scenarios: GwtScenarioFile[]
   controller: GwtBrowserAdapter
   screenshotDir: string | null
+  /** W22 F4：assert-screenshot 基线目录（06_TESTS/_screenshots/；null 时该 op 降级为 warning） */
+  baselineDir?: string | null
   onProgress?: (event: GwtProgressEvent) => void
 }
 
@@ -654,18 +786,26 @@ function pagePayload(value: unknown): string {
   return JSON.stringify(value).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
 }
 
-/** selector 元素中心坐标（e2e-v59 center_of 同型；找不到返回 null） */
-const CENTER_OF_EXPRESSION = (selector: string) =>
-  `(() => { const el = document.querySelector(${pagePayload(selector)}); if (!el) return null; ` +
-  `el.scrollIntoView({ block: 'center', inline: 'nearest' }); const r = el.getBoundingClientRect(); ` +
-  `return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`
+/** selector 元素中心坐标（e2e-v59 center_of 同型；找不到返回 null；二档 selector 不唯一返回 { ambiguous } 快速失败） */
+const CENTER_OF_EXPRESSION = (ref: GwtSelectorRef) => {
+  const find = selectorFindFragment(ref)
+  const uniqueCheck = selectorNeedsUniqueCheck(ref)
+    ? `if (els.length !== 1) return { ambiguous: true, count: els.length }; `
+    : ''
+  return `(() => { const els = ${find}; if (els.length === 0) return null; ${uniqueCheck}` +
+    `const el = els[0]; el.scrollIntoView({ block: 'center', inline: 'nearest' }); const r = el.getBoundingClientRect(); ` +
+    `return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`
+}
 
-/** 断言轮询模板：每轮求值一次，返回 { ok, actual } */
-const ASSERT_EXPRESSION = (selector: string, op: GwtStepOp) => {
+/** 断言轮询模板：每轮求值一次，返回 { ok, actual }（二档 selector 命中非唯一时快速失败归因） */
+const ASSERT_EXPRESSION = (ref: GwtSelectorRef, op: GwtStepOp) => {
   const kind = op.type === 'assert-text' ? 'text' : op.type === 'assert-visible' ? 'visible' : op.type === 'assert-count' ? 'count' : 'selector'
   const expect = op.type === 'assert-text' ? op.contains : op.type === 'assert-count' ? op.count : null
-  return `(() => { const sel = ${pagePayload(selector)}; const els = document.querySelectorAll(sel); ` +
-    `if (els.length === 0) return { ok: false, actual: '元素不存在' }; ` +
+  const uniqueCheck = selectorNeedsUniqueCheck(ref)
+    ? `if (els.length !== 1) return { ok: false, actual: '选择器命中 ' + els.length + ' 个元素（不唯一，禁止取首个）' }; `
+    : ''
+  return `(() => { const els = ${selectorFindFragment(ref)}; ` +
+    `if (els.length === 0) return { ok: false, actual: '元素不存在' }; ${uniqueCheck}` +
     `if (${pagePayload(kind)} === 'selector') return { ok: true, actual: '元素存在' }; ` +
     `if (${pagePayload(kind)} === 'visible') { const el = els[0]; const visible = !!(el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0)); ` +
     `return { ok: visible, actual: visible ? '元素可见' : '元素不可见' }; } ` +
@@ -674,9 +814,32 @@ const ASSERT_EXPRESSION = (selector: string, op: GwtStepOp) => {
     `return { ok: contains, actual: JSON.stringify(text).slice(0, 120) }; })()`
 }
 
-/** fill 模板：原生 value setter + input/change 事件派发（BrowserDomAction 同型语义） */
-const FILL_EXPRESSION = (selector: string, text: string) =>
-  `(() => { const el = document.querySelector(${pagePayload(selector)}); if (!el) return { ok: false, error: '未找到元素' }; ` +
+/** W22 F1 fill 第 1 步：聚焦 + 全选（为 insertText 覆盖做准备；禁 native-setter 清空——避免 DOM值≠state 窗口导致追加） */
+const FILL_FOCUS_SELECT_EXPRESSION = (ref: GwtSelectorRef) =>
+  `(() => { const els = ${selectorFindFragment(ref)}; if (els.length === 0) return { code: 'missing' }; ` +
+  (selectorNeedsUniqueCheck(ref) ? `if (els.length !== 1) return { code: 'ambiguous', count: els.length }; ` : '') +
+  `const el = els[0]; ` +
+  `if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable)) return { code: 'not-editable' }; ` +
+  `el.scrollIntoView({ block: 'center', inline: 'nearest' }); el.focus({ preventScroll: true }); ` +
+  `if (document.activeElement !== el && !(el.contains && el.contains(document.activeElement))) return { code: 'focus-failed' }; ` +
+  `if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) { el.select(); return { code: 'ok', kind: 'value' }; } ` +
+  `const range = document.createRange(); range.selectNodeContents(el); ` +
+  `const selection = window.getSelection(); if (selection) { selection.removeAllRanges(); selection.addRange(range); } ` +
+  `return { code: 'ok', kind: 'contenteditable' }; })()`
+
+/** W22 F1 fill 第 3 步：回读当前值（input/textarea 读 value；contenteditable 读 textContent） */
+const FILL_READ_VALUE_EXPRESSION = (ref: GwtSelectorRef) =>
+  `(() => { const els = ${selectorFindFragment(ref)}; if (els.length === 0) return { value: null }; const el = els[0]; ` +
+  `if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return { value: el.value }; ` +
+  `return { value: el.textContent ?? '' }; })()`
+
+/**
+ * W22 F1 fill 回退链（单次重试）：native value setter + input/change 事件派发
+ * （旧 FILL_EXPRESSION 同型语义——setter 绕过 tracker 后合成事件能触发 React onChange，
+ * 与 React state 一致；仅作 insertText 主通道失败后的兑底，不再作为主通道）。
+ */
+const FILL_FALLBACK_EXPRESSION = (ref: GwtSelectorRef, text: string) =>
+  `(() => { const els = ${selectorFindFragment(ref)}; if (els.length === 0) return { ok: false, error: '未找到元素' }; const el = els[0]; ` +
   `if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable)) return { ok: false, error: '目标不是可编辑元素' }; ` +
   `el.scrollIntoView({ block: 'center', inline: 'nearest' }); el.focus({ preventScroll: true }); ` +
   `if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) { ` +
@@ -687,6 +850,43 @@ const FILL_EXPRESSION = (selector: string, text: string) =>
   `catch { el.dispatchEvent(new Event('input', { bubbles: true })); } ` +
   `el.dispatchEvent(new Event('change', { bubbles: true })); return { ok: true }; })()`
 
+/** W22 F2 check/uncheck：读 checkbox/radio 勾选态（非可勾选元素明确报错） */
+const CHECK_STATE_EXPRESSION = (ref: GwtSelectorRef) =>
+  `(() => { const els = ${selectorFindFragment(ref)}; if (els.length === 0) return { code: 'missing' }; ` +
+  (selectorNeedsUniqueCheck(ref) ? `if (els.length !== 1) return { code: 'ambiguous', count: els.length }; ` : '') +
+  `const el = els[0]; ` +
+  `if (!(el instanceof HTMLInputElement) || (el.type !== 'checkbox' && el.type !== 'radio')) ` +
+  `return { code: 'not-checkable' }; ` +
+  `return { code: 'ok', checked: el.checked, type: el.type }; })()`
+
+/** W22 F2 select：限原生 <select>——native setter 选 option + 派发 change + 回读校验（非原生给出 click 序列指引） */
+const SELECT_EXPRESSION = (ref: GwtSelectorRef, value: string) =>
+  `(() => { const els = ${selectorFindFragment(ref)}; if (els.length === 0) return { code: 'missing' }; ` +
+  (selectorNeedsUniqueCheck(ref) ? `if (els.length !== 1) return { code: 'ambiguous', count: els.length }; ` : '') +
+  `const el = els[0]; ` +
+  `if (!(el instanceof HTMLSelectElement)) return { code: 'not-native-select', error: '目标不是原生 <select>（自定义下拉请改用 click 序列：先 click 展开，再 click 选项）' }; ` +
+  `if (el.multiple || el.size > 1) return { code: 'unsupported-select', error: '暂不支持 multiple / size>1 的 select，请拆分场景或改用其他断言' }; ` +
+  `const options = Array.from(el.options); ` +
+  `const opt = options.find(o => o.value === ${pagePayload(value)}) || options.find(o => (o.label || o.textContent || '') === ${pagePayload(value)}); ` +
+  `if (!opt) return { code: 'option-missing', error: '未找到匹配 option（按 value 与 label 均未命中）' }; ` +
+  `const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set; ` +
+  `if (setter) setter.call(el, opt.value); else el.value = opt.value; ` +
+  `el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); ` +
+  `return { code: 'ok', value: el.value }; })()`
+
+/** W22 F2 focus：scrollIntoView + focus + activeElement 回读断言 */
+const FOCUS_EXPRESSION = (ref: GwtSelectorRef) =>
+  `(() => { const els = ${selectorFindFragment(ref)}; if (els.length === 0) return { code: 'missing' }; ` +
+  (selectorNeedsUniqueCheck(ref) ? `if (els.length !== 1) return { code: 'ambiguous', count: els.length }; ` : '') +
+  `const el = els[0]; ` +
+  `el.scrollIntoView({ block: 'center', inline: 'nearest' }); el.focus({ preventScroll: true }); ` +
+  `if (document.activeElement !== el && !(el.contains && el.contains(document.activeElement))) return { code: 'focus-failed' }; ` +
+  `return { code: 'ok' }; })()`
+
+/** W22 F2 scroll：JS 回退通道（wheel 失败后），真实触发 scroll 事件/IntersectionObserver */
+const JS_SCROLL_EXPRESSION = (deltaY: number) =>
+  `(() => { window.scrollBy(0, ${pagePayload(deltaY)}); return { ok: true }; })()`
+
 /** 执行单个场景；controller 异常上抛由调用方兜底为 fail */
 async function executeScenario(
   options: GwtSuiteOptions,
@@ -695,6 +895,8 @@ async function executeScenario(
 ): Promise<GwtScenarioResult> {
   const startedAt = Date.now()
   const { controller, sessionId, entryHtmlPath } = options
+  /** 场景级非阻塞警告（W22 F4：assert-screenshot 等 warning-only op 产出） */
+  const stepWarnings: string[] = []
   const base: Omit<GwtScenarioResult, 'status' | 'reason'> = {
     feature: scenario.feature,
     scenario: scenario.scenario,
@@ -739,40 +941,194 @@ async function executeScenario(
     }
 
     try {
-      if (op.type === 'click' || op.type === 'fill' || op.type === 'press') {
+      if (op.type === 'click' || op.type === 'hover') {
+        const ref = normalizeGwtSelector(op.selector ?? '')
+        if (!ref) throw new GwtStepError(i, step, 'selector 语法合法（四档形态）', op.selector ?? '', 'selector-wait', null)
+        const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+        const point = await waitForClickable(controller, sessionId, tabId, ref, timeoutMs)
+        if (point === 'ambiguous') {
+          throw new GwtStepError(i, step, '选择器命中唯一元素', `${describeSelectorRef(ref)} 命中多个元素（不唯一，禁止取首个）`, 'selector-ambiguous', ref.tier)
+        }
+        if (!point) {
+          throw new GwtStepError(i, step, `等待 ${describeSelectorRef(ref)} 出现（${timeoutMs}ms 内）`, `${describeSelectorRef(ref)} 等待超时未出现`, 'selector-wait', ref.tier)
+        }
         if (op.type === 'click') {
-          const selector = normalizeGwtSelector(op.selector ?? '')
-          if (!selector) throw new GwtStepError(i, step, 'selector 语法非法', op.selector ?? '', 'selector-wait')
-          const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
-          const point = await waitForClickable(controller, sessionId, tabId, selector, timeoutMs)
+          await controller.clickPointInTab(sessionId, tabId, point.x, point.y)
+        } else {
+          // W22 F2 hover：真实悬停序列（mouseMoved 微抖动 + 停留 300ms）；悬停后断言交给后续 wait-selector/assert-* 步骤
+          await controller.hoverPointInTab(sessionId, tabId, point.x, point.y)
+        }
+      } else if (op.type === 'fill') {
+        // W22 F1 fill 可信化执行序：focus → select/全选 → CDP insertText → 回读校验 →
+        // 单次重试（native-setter+input 回退）→ 再失败终态 fail（category=assert）。
+        // 清空走真实选区替换（禁 native-setter 清空——两步间 DOM值≠React state 的窗口会让
+        // insertText 变追加，产出「旧值+新值」的难归因失败）。
+        const ref = normalizeGwtSelector(op.selector ?? '')
+        if (!ref) throw new GwtStepError(i, step, 'selector 语法合法（四档形态）', op.selector ?? '', 'selector-wait', null)
+        const text = op.value ?? ''
+        if (text.length > GWT_FILL_VALUE_MAX_CHARS) {
+          throw new GwtStepError(i, step, `value ≤ ${GWT_FILL_VALUE_MAX_CHARS} 字符`, `value 长 ${text.length} 字符（超限）`, 'assert', ref.tier)
+        }
+        const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+        const appeared = await waitForSelectorPresent(controller, sessionId, tabId, ref, timeoutMs)
+        if (!appeared) {
+          throw new GwtStepError(i, step, `等待 ${describeSelectorRef(ref)} 出现（${timeoutMs}ms 内）`, `${describeSelectorRef(ref)} 等待超时未出现`, 'selector-wait', ref.tier)
+        }
+        const prep = await controller.evaluateInTab(sessionId, tabId, FILL_FOCUS_SELECT_EXPRESSION(ref)) as { code?: string; count?: number; kind?: string } | null
+        if (prep?.code === 'ambiguous') {
+          throw new GwtStepError(i, step, '选择器命中唯一元素', `${describeSelectorRef(ref)} 命中 ${prep.count} 个元素（不唯一）`, 'selector-ambiguous', ref.tier)
+        }
+        if (prep?.code === 'missing') {
+          throw new GwtStepError(i, step, `等待 ${describeSelectorRef(ref)} 出现`, '元素在预检后消失（页面重渲染？）', 'selector-wait', ref.tier)
+        }
+        if (prep?.code === 'not-editable') {
+          throw new GwtStepError(i, step, '目标为可编辑元素（input/textarea/contenteditable）', '目标不是可编辑元素', 'assert', ref.tier)
+        }
+        if (prep?.code === 'focus-failed' || prep?.code !== 'ok') {
+          throw new GwtStepError(i, step, '目标元素聚焦成功', `无法聚焦目标元素（${prep?.code ?? '未知响应'}）`, 'assert', ref.tier)
+        }
+        await controller.insertTextInTab(sessionId, tabId, text)
+        let readBack = await controller.evaluateInTab(sessionId, tabId, FILL_READ_VALUE_EXPRESSION(ref)) as { value?: string | null } | null
+        if (readBack?.value !== text) {
+          // 单次重试：回退链（native-setter + input/change 合成事件，与 React state 一致）
+          const fallback = await controller.evaluateInTab(sessionId, tabId, FILL_FALLBACK_EXPRESSION(ref, text)) as { ok?: boolean; error?: string } | null
+          readBack = await controller.evaluateInTab(sessionId, tabId, FILL_READ_VALUE_EXPRESSION(ref)) as { value?: string | null } | null
+          if (readBack?.value !== text) {
+            const actualText = typeof readBack?.value === 'string' ? readBack.value.slice(0, 80) : '（无法回读）'
+            throw new GwtStepError(i, step, `输入后回读等于「${text.slice(0, 40)}」`, `实际「${actualText}」${fallback?.ok === false ? `（回退通道：${fallback.error}）` : '（主+回退两通道均未生效）'}`, 'assert', ref.tier)
+          }
+        }
+      } else if (op.type === 'press') {
+        await controller.pressKeyInTab(sessionId, tabId, op.value ?? 'Enter')
+      } else if (op.type === 'check' || op.type === 'uncheck') {
+        // W22 F2：读态 → 按需点 → 回读（盲点在中断/重试后会反向）；radio 不可 uncheck
+        const ref = normalizeGwtSelector(op.selector ?? '')
+        if (!ref) throw new GwtStepError(i, step, 'selector 语法合法（四档形态）', op.selector ?? '', 'selector-wait', null)
+        const wantChecked = op.type === 'check'
+        const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+        const state = await waitForCheckState(controller, sessionId, tabId, ref, timeoutMs)
+        if (state === 'ambiguous') {
+          throw new GwtStepError(i, step, '选择器命中唯一元素', `${describeSelectorRef(ref)} 命中多个元素（不唯一）`, 'selector-ambiguous', ref.tier)
+        }
+        if (!state) {
+          throw new GwtStepError(i, step, `等待 ${describeSelectorRef(ref)} 出现（${timeoutMs}ms 内）`, `${describeSelectorRef(ref)} 等待超时未出现`, 'selector-wait', ref.tier)
+        }
+        if (state.code === 'not-checkable') {
+          throw new GwtStepError(i, step, '目标为 checkbox/radio 输入框', '目标不是 checkbox/radio（check/uncheck 仅适用于输入框）', 'op-check', ref.tier)
+        }
+        if (state.type === 'radio' && !wantChecked) {
+          throw new GwtStepError(i, step, '可取消勾选的目标', 'radio 不可取消勾选（浏览器语义：选中后只能选别的 radio，请改场景表述）', 'op-check', ref.tier)
+        }
+        if (state.checked !== wantChecked) {
+          const point = await waitForClickable(controller, sessionId, tabId, ref, timeoutMs)
+          if (point === 'ambiguous') {
+            throw new GwtStepError(i, step, '选择器命中唯一元素', `${describeSelectorRef(ref)} 命中多个元素（不唯一）`, 'selector-ambiguous', ref.tier)
+          }
           if (!point) {
-            throw new GwtStepError(i, step, `等待 ${selector} 出现（${timeoutMs}ms 内）`, `${selector} 等待超时未出现`, 'selector-wait')
+            throw new GwtStepError(i, step, '勾选目标可点击', `${describeSelectorRef(ref)} 中心坐标不可得`, 'selector-wait', ref.tier)
           }
           await controller.clickPointInTab(sessionId, tabId, point.x, point.y)
-        } else if (op.type === 'fill') {
-          const selector = normalizeGwtSelector(op.selector ?? '')
-          if (!selector) throw new GwtStepError(i, step, 'selector 语法合法', op.selector ?? '', 'selector-wait')
-          const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
-          const appeared = await waitForSelectorPresent(controller, sessionId, tabId, selector, timeoutMs)
-          if (!appeared) {
-            throw new GwtStepError(i, step, `等待 ${selector} 出现（${timeoutMs}ms 内）`, `${selector} 等待超时未出现`, 'selector-wait')
+          // 回读轮询（真实点击后勾选态更新有时延）
+          const confirmTimeout = step.timeoutMs ?? DEFAULT_CHECK_CONFIRM_TIMEOUT_MS
+          const confirmStartedAt = Date.now()
+          let confirmed: CheckStateResult | 'ambiguous' | null = null
+          while (Date.now() - confirmStartedAt <= confirmTimeout) {
+            confirmed = await evaluateCheckState(controller, sessionId, tabId, ref)
+            if (confirmed && confirmed !== 'ambiguous' && confirmed?.code === 'ok' && confirmed.checked === wantChecked) break
+            await sleep(POLL_INTERVAL_MS)
           }
-          const filled = await controller.evaluateInTab(sessionId, tabId, FILL_EXPRESSION(selector, op.value ?? '')) as { ok?: boolean; error?: string } | null
-          if (!filled || filled.ok !== true) {
-            throw new GwtStepError(i, step, '输入成功', filled?.error ?? 'fill 失败', 'assert')
+          const finalState: CheckStateResult | 'ambiguous' | null = confirmed === 'ambiguous'
+            ? 'ambiguous'
+            : ((confirmed && confirmed.code === 'ok' ? confirmed : await evaluateCheckState(controller, sessionId, tabId, ref)) as CheckStateResult | 'ambiguous' | null)
+          const finalDescribe = !finalState
+            ? '无法回读'
+            : finalState === 'ambiguous'
+              ? '选择器不唯一'
+              : finalState.code === 'ok' ? `checked=${finalState.checked}` : finalState.code
+          if (!finalState || finalState === 'ambiguous' || finalState.code !== 'ok' || finalState.checked !== wantChecked) {
+            throw new GwtStepError(i, step, `点击后 ${wantChecked ? 'checked' : 'unchecked'}`, `回读勾选态不符（${finalDescribe}）`, 'op-check', ref.tier)
           }
-        } else {
-          await controller.pressKeyInTab(sessionId, tabId, op.value ?? 'Enter')
         }
+      } else if (op.type === 'select') {
+        // W22 F2：限原生 <select>——native setter + change 派发 + 回读；非原生给出 click 序列指引
+        const ref = normalizeGwtSelector(op.selector ?? '')
+        if (!ref) throw new GwtStepError(i, step, 'selector 语法合法（四档形态）', op.selector ?? '', 'selector-wait', null)
+        const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+        const value = op.value ?? ''
+        const selected = await waitForSelectResult(controller, sessionId, tabId, ref, value, timeoutMs)
+        if (selected === 'ambiguous') {
+          throw new GwtStepError(i, step, '选择器命中唯一元素', `${describeSelectorRef(ref)} 命中多个元素（不唯一）`, 'selector-ambiguous', ref.tier)
+        }
+        if (!selected) {
+          throw new GwtStepError(i, step, `等待 ${describeSelectorRef(ref)} 出现（${timeoutMs}ms 内）`, `${describeSelectorRef(ref)} 等待超时未出现`, 'selector-wait', ref.tier)
+        }
+        if (selected.code === 'not-native-select') {
+          throw new GwtStepError(i, step, '目标为原生 <select> 元素', selected.error ?? '目标不是原生 select（自定义下拉请改用 click 序列：先 click 展开，再 click 选项）', 'op-select', ref.tier)
+        }
+        if (selected.code !== 'ok') {
+          throw new GwtStepError(i, step, `选中 option（value/label =「${value}」）`, selected.error ?? 'select 失败', 'op-select', ref.tier)
+        }
+      } else if (op.type === 'scroll') {
+        // W22 F2：CDP mouseWheel 优先 + JS scrollBy 回退；不隐式等待（时序交给后续 wait-selector/assert）
+        const deltaY = op.deltaY ?? 0
+        if (op.selector) {
+          const ref = normalizeGwtSelector(op.selector)
+          if (!ref) throw new GwtStepError(i, step, 'selector 语法合法（四档形态）', op.selector, 'selector-wait', null)
+          const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+          const appeared = await waitForSelectorPresent(controller, sessionId, tabId, ref, timeoutMs)
+          if (!appeared) {
+            throw new GwtStepError(i, step, `等待 ${describeSelectorRef(ref)} 出现（${timeoutMs}ms 内）`, `${describeSelectorRef(ref)} 等待超时未出现`, 'selector-wait', ref.tier)
+          }
+          // 滚动目标进入视口（scroll chaining 由随后的 wheel/JS 通道完成）
+          await controller.evaluateInTab(sessionId, tabId, `(() => { const els = ${selectorFindFragment(ref)}; if (els.length > 0) els[0].scrollIntoView({ block: 'center', inline: 'nearest' }); return true; })()`)
+        }
+        let scrolled = false
+        let lastError = ''
+        try {
+          await controller.wheelInTab(sessionId, tabId, 0, deltaY)
+          scrolled = true
+        } catch (e) {
+          lastError = e instanceof Error ? e.message : String(e)
+        }
+        if (!scrolled) {
+          try {
+            const jsResult = await controller.evaluateInTab(sessionId, tabId, JS_SCROLL_EXPRESSION(deltaY)) as { ok?: boolean } | null
+            scrolled = jsResult?.ok === true
+          } catch (e) {
+            lastError += `；JS 回退也失败：${e instanceof Error ? e.message : String(e)}`
+          }
+        }
+        if (!scrolled) {
+          throw new GwtStepError(i, step, `页面滚动 deltaY=${deltaY}`, `wheel 与 JS scrollBy 均未生效（${lastError}）`, 'op-scroll', null)
+        }
+      } else if (op.type === 'focus') {
+        // W22 F2：scrollIntoView + focus + activeElement 回读断言
+        const ref = normalizeGwtSelector(op.selector ?? '')
+        if (!ref) throw new GwtStepError(i, step, 'selector 语法合法（四档形态）', op.selector ?? '', 'selector-wait', null)
+        const timeoutMs = step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS
+        const focused = await waitForFocusResult(controller, sessionId, tabId, ref, timeoutMs)
+        if (focused === 'ambiguous') {
+          throw new GwtStepError(i, step, '选择器命中唯一元素', `${describeSelectorRef(ref)} 命中多个元素（不唯一）`, 'selector-ambiguous', ref.tier)
+        }
+        if (!focused) {
+          throw new GwtStepError(i, step, `等待 ${describeSelectorRef(ref)} 出现（${timeoutMs}ms 内）`, `${describeSelectorRef(ref)} 等待超时未出现`, 'selector-wait', ref.tier)
+        }
+        if (focused.code === 'focus-failed') {
+          throw new GwtStepError(i, step, '目标元素聚焦成功（activeElement 回读）', 'focus 后 activeElement 不是目标元素', 'op-focus', ref.tier)
+        }
+      } else if (op.type === 'assert-screenshot') {
+        // W22 F4：warning-only 视觉断言——不进 verdict（像素 diff 噪声会烧回炉预算并触发熔断）；
+        // 基线存 06_TESTS/_screenshots/（不进交付门内容口径——checkGwtDeliveryFacts 只读 report.json 与 08_APP/index.html）
+        await runAssertScreenshotStep(options, tabId, scenario, op, stepWarnings)
       } else if (op.type === 'wait-selector' || op.type === 'assert-text' || op.type === 'assert-visible' || op.type === 'assert-count') {
         // 断言/等待：轮询窗口（禁严格时刻断言；窗口内重试）
-        const selector = normalizeGwtSelector(op.selector ?? '')
-        if (!selector) throw new GwtStepError(i, step, 'selector 语法合法', op.selector ?? '', 'assert')
+        const ref = normalizeGwtSelector(op.selector ?? '')
+        if (!ref) throw new GwtStepError(i, step, 'selector 语法合法（四档形态）', op.selector ?? '', 'assert', null)
         const isWait = op.type === 'wait-selector'
         const timeoutMs = step.timeoutMs ?? (isWait ? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS : DEFAULT_ASSERT_TIMEOUT_MS)
         const expression = isWait
-          ? `(() => !!document.querySelector(${pagePayload(selector)}))()`
-          : ASSERT_EXPRESSION(selector, op)
+          ? `(() => ${selectorFindFragment(ref)}.length > 0)()`
+          : ASSERT_EXPRESSION(ref, op)
         const waitStartedAt = Date.now()
         let lastActual = '未知'
         let matched = false
@@ -780,7 +1136,7 @@ async function executeScenario(
           const result = await controller.evaluateInTab(sessionId, tabId, expression)
           if (isWait) {
             if (result === true) { matched = true; break }
-            lastActual = `${selector} 在 ${timeoutMs}ms 内未出现`
+            lastActual = `${describeSelectorRef(ref)} 在 ${timeoutMs}ms 内未出现`
           } else {
             const assertion = result as { ok?: boolean; actual?: string } | null
             if (assertion && assertion.ok === true) { matched = true; break }
@@ -789,11 +1145,13 @@ async function executeScenario(
           await sleep(POLL_INTERVAL_MS)
         }
         if (!matched) {
-          const expected = isWait ? `等待 ${selector} 出现`
+          const expected = isWait ? `等待 ${describeSelectorRef(ref)} 出现`
             : op.type === 'assert-text' ? `文本包含「${op.contains}」`
-            : op.type === 'assert-visible' ? `${selector} 可见`
-            : `${selector} 数量 = ${op.count}`
-          throw new GwtStepError(i, step, expected, lastActual, 'assert')
+            : op.type === 'assert-visible' ? `${describeSelectorRef(ref)} 可见`
+            : `${describeSelectorRef(ref)} 数量 = ${op.count}`
+          // 二档 selector 命中非唯一：归 selector-ambiguous（映射类）而非 assert（行为类）
+          const ambiguous = lastActual.includes('不唯一')
+          throw new GwtStepError(i, step, expected, lastActual, ambiguous ? 'selector-ambiguous' : 'assert', ref.tier)
         }
       }
     } catch (e) {
@@ -813,9 +1171,10 @@ async function executeScenario(
           ...base,
           status: 'fail',
           reason: `步骤 ${e.stepIndex + 1}（${e.step.kind}：${e.step.text}）期望「${e.expected}」实际「${e.actual}」`,
-          failedStep: { index: e.stepIndex, kind: e.step.kind, text: e.step.text, expected: e.expected, actual: e.actual, category: e.category },
+          failedStep: { index: e.stepIndex, kind: e.step.kind, text: e.step.text, expected: e.expected, actual: e.actual, category: e.category, selectorTier: e.selectorTier ?? null },
           screenshot,
           durationMs: Date.now() - startedAt,
+          warnings: stepWarnings.length > 0 ? stepWarnings : undefined,
         }
       }
       // 通道级异常（CDP 失败/标签关闭等）：场景级 fail，透明记录
@@ -826,15 +1185,16 @@ async function executeScenario(
         failedStep: { index: i, kind: step.kind, text: step.text, expected: '步骤正常执行', actual: String(e instanceof Error ? e.message : e).slice(0, 200), category: 'channel' },
         screenshot: null,
         durationMs: Date.now() - startedAt,
+        warnings: stepWarnings.length > 0 ? stepWarnings : undefined,
       }
     }
     await sleep(STEP_SETTLE_MS)
   }
 
-  return { ...base, status: 'pass', reason: null, durationMs: Date.now() - startedAt }
+  return { ...base, status: 'pass', reason: null, durationMs: Date.now() - startedAt, warnings: stepWarnings.length > 0 ? stepWarnings : undefined }
 }
 
-/** 步骤失败（带期望/实际与回炉归类，供分流） */
+/** 步骤失败（带期望/实际与回炉归类，供分流；W22 F3 附 selector 档位归因） */
 class GwtStepError extends Error {
   constructor(
     public readonly stepIndex: number,
@@ -842,19 +1202,26 @@ class GwtStepError extends Error {
     public readonly expected: string,
     public readonly actual: string,
     public readonly category: NonNullable<GwtFailedStep['category']>,
+    public readonly selectorTier?: GwtSelectorTier | null,
   ) {
     super(`步骤 ${stepIndex + 1} 失败：期望「${expected}」实际「${actual}」`)
   }
 }
 
-/** click/fill 目标元素执行期轮询：窗口内等元素出现并返回中心坐标（等不到返回 null） */
+/** selector 展示形态（错误消息/报告用；aria-label 档展示属性形态） */
+function describeSelectorRef(ref: GwtSelectorRef): string {
+  return ref.css ?? `[aria-label="${ref.value}"]`
+}
+
+/** click/hover/fill 目标元素执行期轮询：窗口内等元素出现并返回中心坐标（等不到 null；二档不唯一 'ambiguous'） */
 async function waitForClickable(
-  controller: GwtBrowserAdapter, sessionId: string, tabId: string, selector: string, timeoutMs: number,
-): Promise<{ x: number; y: number } | null> {
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, ref: GwtSelectorRef, timeoutMs: number,
+): Promise<{ x: number; y: number } | 'ambiguous' | null> {
   const startedAt = Date.now()
   while (Date.now() - startedAt <= timeoutMs) {
     try {
-      const center = await controller.evaluateInTab(sessionId, tabId, CENTER_OF_EXPRESSION(selector))
+      const center = await controller.evaluateInTab(sessionId, tabId, CENTER_OF_EXPRESSION(ref))
+      if (center && typeof center === 'object' && 'ambiguous' in (center as Record<string, unknown>)) return 'ambiguous'
       const point = center as { x: number; y: number } | null
       if (point && typeof point.x === 'number' && typeof point.y === 'number') return point
     } catch { /* 求值异常按未出现重试，窗口耗尽后由调用方判 fail */ }
@@ -863,19 +1230,210 @@ async function waitForClickable(
   return null
 }
 
-/** click/fill 目标元素执行期轮询：窗口内等元素存在（等不到返回 false） */
+/** 目标元素执行期轮询：窗口内等元素存在（等不到返回 false） */
 async function waitForSelectorPresent(
-  controller: GwtBrowserAdapter, sessionId: string, tabId: string, selector: string, timeoutMs: number,
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, ref: GwtSelectorRef, timeoutMs: number,
 ): Promise<boolean> {
   const startedAt = Date.now()
   while (Date.now() - startedAt <= timeoutMs) {
     try {
-      const exists = await controller.evaluateInTab(sessionId, tabId, `(() => !!document.querySelector(${pagePayload(selector)}))()`)
+      const exists = await controller.evaluateInTab(sessionId, tabId, `(() => ${selectorFindFragment(ref)}.length > 0)()`)
       if (exists === true) return true
     } catch { /* 求值异常按未出现重试，窗口耗尽后由调用方判 fail */ }
     await sleep(POLL_INTERVAL_MS)
   }
   return false
+}
+
+type CheckStateResult = { code: 'ok'; checked: boolean; type: string } | { code: 'not-checkable' } | null
+
+/** W22 F4：基线文件名 slug（feature+scenario 安全化 + 8 位哈希防碰撞） */
+function screenshotBaselineName(scenario: GwtScenarioFile, explicitName?: string): string {
+  if (explicitName && explicitName.trim()) {
+    return explicitName.trim().replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 60)
+  }
+  const slug = `${scenario.feature}-${scenario.scenario}`
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 52)
+  const hash = createHash('sha1').update(`${scenario.feature}|${scenario.scenario}`).digest('hex').slice(0, 8)
+  return `${slug || 'scenario'}-${hash}`
+}
+
+/**
+ * W22 F4：像素差异率（纯函数）——单像素 RGB 通道最大差 >10 才计入差异像素
+ * （过滤字体抗锯齿/子像素渲染噪声），返回差异像素占比。不可比（解码失败/尺寸不符）返回 null。
+ */
+export function computeScreenshotDiffRatio(currentPng: Buffer, baselinePng: Buffer): number | null {
+  let current: PNG
+  let baseline: PNG
+  try {
+    current = PNG.sync.read(currentPng)
+    baseline = PNG.sync.read(baselinePng)
+  } catch {
+    return null
+  }
+  if (current.width !== baseline.width || current.height !== baseline.height) return null
+  const total = current.width * current.height
+  if (total === 0) return null
+  let diff = 0
+  for (let p = 0; p < total; p++) {
+    const a = p * 4
+    const b = a + 1
+    const c = a + 2
+    const maxChannelDiff = Math.max(
+      Math.abs(current.data[a]! - baseline.data[a]!),
+      Math.abs(current.data[b]! - baseline.data[b]!),
+      Math.abs(current.data[c]! - baseline.data[c]!),
+    )
+    if (maxChannelDiff > 10) diff += 1
+  }
+  return diff / total
+}
+
+interface ScreenshotBaselineMeta {
+  width: number
+  height: number
+  dpr: number
+  createdAt: string
+}
+
+/**
+ * W22 F4 assert-screenshot（warning-only，不进 verdict）：
+ * - 首跑无基线 → 落盘基线（06_TESTS/_screenshots/，不进交付门内容口径——checkGwtDeliveryFacts
+ *   只读 report.json 与 08_APP/index.html 指纹）+ warning baseline-created；
+ * - 有基线 → 尺寸/DPR 不符 warning 不可比（不判 fail）；可比则像素 diff，超阈值仅 warning；
+ * - 任何异常（截图/解码/IO）降级为 warning（诚实降级，不 fail 不 error——不烧回炉预算）。
+ */
+async function runAssertScreenshotStep(
+  options: GwtSuiteOptions,
+  tabId: string,
+  scenario: GwtScenarioFile,
+  op: GwtStepOp,
+  warnings: string[],
+): Promise<void> {
+  const name = screenshotBaselineName(scenario, op.name)
+  const relPath = `06_TESTS/_screenshots/${name}.png`
+  if (!options.baselineDir) {
+    warnings.push(`screenshot-skipped:${name}（基线目录不可用）`)
+    return
+  }
+  let shot: { base64: string; width: number; height: number; dpr: number }
+  try {
+    shot = await options.controller.captureViewportPngInTab(options.sessionId, tabId)
+  } catch (e) {
+    warnings.push(`screenshot-failed:${name}（${String(e instanceof Error ? e.message : e).slice(0, 120)}）`)
+    return
+  }
+  const baselinePath = join(options.baselineDir, `${name}.png`)
+  const metaPath = join(options.baselineDir, `${name}.meta.json`)
+  const currentMeta: ScreenshotBaselineMeta = {
+    width: shot.width, height: shot.height, dpr: shot.dpr, createdAt: new Date().toISOString(),
+  }
+  try {
+    if (!existsSync(baselinePath)) {
+      // 首跑建基线（仅记录，不作为验收证据——后续轮次以本轮截图为对照）
+      mkdirSync(options.baselineDir, { recursive: true })
+      writeFileSync(baselinePath, Buffer.from(shot.base64, 'base64'))
+      writeJsonFileAtomic(metaPath, currentMeta)
+      warnings.push(`baseline-created:${relPath}（viewport ${shot.width}x${shot.height}@${shot.dpr}x）`)
+      return
+    }
+    // 有基线：先比尺寸/DPR 元数据（不符判不可比，不判 fail）
+    let baselineMeta: ScreenshotBaselineMeta | null = null
+    try {
+      baselineMeta = JSON.parse(readFileSync(metaPath, 'utf-8')) as ScreenshotBaselineMeta
+    } catch { /* meta 缺失/损坏按不可比处理 */ }
+    if (!baselineMeta
+      || baselineMeta.width !== currentMeta.width || baselineMeta.height !== currentMeta.height
+      || baselineMeta.dpr !== currentMeta.dpr) {
+      const recorded = baselineMeta ? `${baselineMeta.width}x${baselineMeta.height}@${baselineMeta.dpr}x` : '元数据缺失'
+      warnings.push(`screenshot-incomparable:${name}（当前 ${currentMeta.width}x${currentMeta.height}@${currentMeta.dpr}x，基线 ${recorded}——视口/DPR 变化，请人工确认或删基线重建）`)
+      return
+    }
+    const ratio = computeScreenshotDiffRatio(Buffer.from(shot.base64, 'base64'), readFileSync(baselinePath))
+    if (ratio === null) {
+      warnings.push(`screenshot-incomparable:${name}（像素解码失败或尺寸不一致）`)
+      return
+    }
+    const threshold = typeof op.threshold === 'number' && op.threshold > 0 && op.threshold <= 1
+      ? op.threshold
+      : GWT_SCREENSHOT_DIFF_THRESHOLD_DEFAULT
+    if (ratio > threshold) {
+      warnings.push(`screenshot-diff:${name}（差异像素占比 ${(ratio * 100).toFixed(2)}% 超过阈值 ${(threshold * 100).toFixed(1)}%——视觉回归观察项，不影响本次判定；请人工确认基线 06_TESTS/_screenshots/${name}.png）`)
+    }
+    // ratio ≤ threshold：无警告（视觉一致）
+  } catch (e) {
+    warnings.push(`screenshot-error:${name}（${String(e instanceof Error ? e.message : e).slice(0, 120)}）`)
+  }
+}
+
+/** check/uncheck：单次读勾选态（missing 时返回 null 供轮询重试） */
+async function evaluateCheckState(
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, ref: GwtSelectorRef,
+): Promise<CheckStateResult | 'ambiguous'> {
+  try {
+    const result = await controller.evaluateInTab(sessionId, tabId, CHECK_STATE_EXPRESSION(ref)) as
+      | { code?: string; count?: number; checked?: boolean; type?: string } | null
+    if (!result || result.code === 'missing') return null
+    if (result.code === 'ambiguous') return 'ambiguous'
+    if (result.code === 'not-checkable') return { code: 'not-checkable' }
+    if (result.code === 'ok') return { code: 'ok', checked: result.checked === true, type: result.type ?? '' }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** check/uncheck：轮询等目标出现并读态（等不到 null；不唯一 'ambiguous'） */
+async function waitForCheckState(
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, ref: GwtSelectorRef, timeoutMs: number,
+): Promise<CheckStateResult | 'ambiguous' | null> {
+  const startedAt = Date.now()
+  let last: CheckStateResult | 'ambiguous' | null = null
+  while (Date.now() - startedAt <= timeoutMs) {
+    last = await evaluateCheckState(controller, sessionId, tabId, ref)
+    if (last !== null) return last
+    await sleep(POLL_INTERVAL_MS)
+  }
+  return last
+}
+
+/** select：轮询执行选中（missing 重试；其余确定性结果立即返回） */
+async function waitForSelectResult(
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, ref: GwtSelectorRef, value: string, timeoutMs: number,
+): Promise<{ code: string; error?: string; value?: string } | 'ambiguous' | null> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      const result = await controller.evaluateInTab(sessionId, tabId, SELECT_EXPRESSION(ref, value)) as
+        | { code?: string; count?: number; error?: string; value?: string } | null
+      if (!result || result.code === 'missing') { await sleep(POLL_INTERVAL_MS); continue }
+      if (result.code === 'ambiguous') return 'ambiguous'
+      return { code: result.code ?? 'unknown', error: result.error, value: result.value }
+    } catch { /* 求值异常按未出现重试 */ }
+    await sleep(POLL_INTERVAL_MS)
+  }
+  return null
+}
+
+/** focus：轮询聚焦（missing 重试；其余确定性结果立即返回） */
+async function waitForFocusResult(
+  controller: GwtBrowserAdapter, sessionId: string, tabId: string, ref: GwtSelectorRef, timeoutMs: number,
+): Promise<{ code: string } | 'ambiguous' | null> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      const result = await controller.evaluateInTab(sessionId, tabId, FOCUS_EXPRESSION(ref)) as
+        | { code?: string; count?: number } | null
+      if (!result || result.code === 'missing') { await sleep(POLL_INTERVAL_MS); continue }
+      if (result.code === 'ambiguous') return 'ambiguous'
+      return { code: result.code ?? 'unknown' }
+    } catch { /* 求值异常按未出现重试 */ }
+    await sleep(POLL_INTERVAL_MS)
+  }
+  return null
 }
 
 /** 执行全套场景（不判定；判定归 judgeGwtResult） */
@@ -915,18 +1473,30 @@ export async function runGwtSuite(options: GwtSuiteOptions): Promise<GwtScenario
 export const GWT_RETRY_LIMIT = 2
 
 /**
- * 失败构成（v0.17.63 回炉分流，AC L-001）：
+ * 失败构成（v0.17.63 回炉分流，AC L-001；W22 F2/F3/A1 扩展映射类集合）：
  * - behavior：assert 行为类失败（断言不满足/通道异常）→ 回炉 coding 改代码
- * - mapping：selector 等待超时/未映射类失败 → 回炉 testing 重写 steps.json 映射（不烧 coding 预算）
+ * - mapping：selector 等待超时/未映射/二档不唯一/新 op 执行约束/schema 非法 → 回炉 testing
+ *   重写 steps.json 映射（不烧 coding 预算）
  * - coverage：US 覆盖缺失（无可执行场景 / PRD 缺 US-xx 清单 fail-fast）→ 补场景或回 requirements
  */
 export type GwtFailureKind = 'behavior' | 'mapping' | 'coverage'
+
+/** 映射类失败 category 集合（回 testing 重映射，不烧 coding 修复预算；W22 扩展） */
+const MAPPING_FAILURE_CATEGORIES: ReadonlySet<NonNullable<GwtFailedStep['category']>> = new Set([
+  'selector-wait', 'unmapped', 'selector-ambiguous', 'schema-invalid',
+  'op-check', 'op-select', 'op-hover', 'op-scroll', 'op-focus',
+])
+
+/** 判定单场景失败是否映射类（W22：新 op 约束/selector 二档不唯一/schema 非法均归 mapping） */
+export function isGwtMappingFailureCategory(category: GwtFailedStep['category'] | undefined): boolean {
+  return category !== undefined && MAPPING_FAILURE_CATEGORIES.has(category)
+}
 
 /** 从场景结果归纳失败构成（纯函数；verdict=pass 时返回 null） */
 export function classifyGwtFailure(results: Array<Pick<GwtScenarioResult, 'status' | 'failedStep'>>): GwtFailureKind | null {
   const failedResults = results.filter((r) => r.status === 'fail')
   if (failedResults.length === 0) return 'coverage'
-  const isMapping = (r: (typeof failedResults)[number]) => r.failedStep?.category === 'selector-wait' || r.failedStep?.category === 'unmapped'
+  const isMapping = (r: (typeof failedResults)[number]) => isGwtMappingFailureCategory(r.failedStep?.category)
   // 混合失败时优先 behavior：真实缺陷修复后映射类失败常一并消失（元素本该存在），
   // 避免先重映射再发现代码坏了的两跳回炉
   return failedResults.some((r) => !isMapping(r)) ? 'behavior' : 'mapping'
@@ -1035,8 +1605,11 @@ async function runNanjuGwtAcceptanceInner(input: {
   const featuresDir = join(projectDir, '06_TESTS', 'features')
   const reportJsonPath = join(projectDir, '06_TESTS', 'report.json')
 
-  // 1. 加载全部 steps.json（schema 校验；非法文件 → 记录为 skip 场景透明展示）
+  // 1. 加载全部 steps.json（schema 校验）。W22 A1：校验失败（含未知 op/版本不匹配）不再
+  //    静默降级为 skip——计 fail（category=schema-invalid，归 mapping 回 testing 重新生成），
+  //    消除「旧运行器遇新 op 静默 skip、其余场景全过仍判 pass」的交付门放行风险。
   const scenarios: GwtScenarioFile[] = []
+  const schemaInvalidResults: GwtScenarioResult[] = []
   if (existsSync(featuresDir)) {
     for (const file of readdirSync(featuresDir).filter((f) => f.endsWith('.steps.json')).sort()) {
       try {
@@ -1045,21 +1618,37 @@ async function runNanjuGwtAcceptanceInner(input: {
         if (scenario && errors.length === 0) {
           scenarios.push(scenario)
         } else {
-          scenarios.push({
+          schemaInvalidResults.push({
             feature: file.replace(/\.steps\.json$/, ''),
             scenario: `（文件 ${file} 校验失败）`,
-            skip: true,
-            skipReason: `schema 校验失败：${errors.slice(0, 3).join('；')}`,
-            steps: [],
+            status: 'fail',
+            reason: `schema 校验失败：${errors.slice(0, 3).join('；')}`,
+            failedStep: {
+              index: 0, kind: 'given', text: `文件 ${file} 加载`,
+              expected: 'steps.json 符合当前词表 schema（含 schemaVersion）',
+              actual: errors.slice(0, 3).join('；'),
+              category: 'schema-invalid',
+              selectorTier: null,
+            },
+            screenshot: null,
+            durationMs: 0,
           })
         }
       } catch (e) {
-        scenarios.push({
+        schemaInvalidResults.push({
           feature: file.replace(/\.steps\.json$/, ''),
           scenario: `（文件 ${file} 读取失败）`,
-          skip: true,
-          skipReason: `读取失败：${e instanceof Error ? e.message : String(e)}`,
-          steps: [],
+          status: 'fail',
+          reason: `读取失败：${e instanceof Error ? e.message : String(e)}`,
+          failedStep: {
+            index: 0, kind: 'given', text: `文件 ${file} 读取`,
+            expected: 'steps.json 可读',
+            actual: e instanceof Error ? e.message : String(e),
+            category: 'schema-invalid',
+            selectorTier: null,
+          },
+          screenshot: null,
+          durationMs: 0,
         })
       }
     }
@@ -1097,6 +1686,9 @@ async function runNanjuGwtAcceptanceInner(input: {
   // 4. 执行（三种确定态，均不向上抛异常：正常结果 / 覆盖性基准缺失 fail-fast / 执行异常 error）
   const entryHtmlPath = join(projectDir, '08_APP', 'index.html')
   const screenshotDir = join(projectDir, '06_TESTS', 'screenshots')
+  // W22 F4：截图基线目录（06_TESTS/_screenshots/；不进交付门内容口径——
+  // checkGwtDeliveryFacts 只读 report.json 与 08_APP/index.html，不枚举本目录）
+  const baselineDir = join(projectDir, '06_TESTS', '_screenshots')
   let results: GwtScenarioResult[] = []
   let errorReason: string | null = null
   if (prdUserStoriesMissing) {
@@ -1109,6 +1701,7 @@ async function runNanjuGwtAcceptanceInner(input: {
         scenarios,
         controller: input.controller,
         screenshotDir,
+        baselineDir,
         onProgress: input.onProgress,
       })
     } catch (e) {
@@ -1126,6 +1719,10 @@ async function runNanjuGwtAcceptanceInner(input: {
       screenshot: null,
       durationMs: 0,
     }))
+  }
+  // W22 A1：schema 非法文件计 fail（不再静默 skip），与执行结果合并进裁判
+  if (schemaInvalidResults.length > 0) {
+    results = [...results, ...schemaInvalidResults]
   }
 
   // 5. 规则裁判 + 报告
@@ -1165,9 +1762,18 @@ async function runNanjuGwtAcceptanceInner(input: {
     uncoveredUs: judgement.uncoveredUs,
     retryCount,
     errorCount,
+    // W22 F4：非阻塞警告汇总（不影响 verdict）
+    warnings: results.some((r) => r.warnings && r.warnings.length > 0)
+      ? results.flatMap((r) => (r.warnings ?? []).map((w) => `[${r.scenario}] ${w}`))
+      : undefined,
     scenarios: results.map((r) => ({
       feature: r.feature, scenario: r.scenario, status: r.status, reason: r.reason,
-      failedStep: r.failedStep, screenshot: r.screenshot, durationMs: r.durationMs,
+      failedStep: r.failedStep,
+      // W22 F3/F2 报告归因字段：失败步骤的 selector 档位与失败归类（回炉定位直接可读）
+      selectorTier: r.failedStep?.selectorTier ?? null,
+      failureCategory: r.failedStep?.category,
+      screenshot: r.screenshot, durationMs: r.durationMs,
+      warnings: r.warnings,
     })),
   }
   writeJsonFileAtomic(reportJsonPath, report)
@@ -1203,7 +1809,7 @@ async function runNanjuGwtAcceptanceInner(input: {
       passed: judgement.passed,
       failed: judgement.failed,
       skipped: judgement.skipped,
-      mapping_fail: results.filter((r) => r.failedStep?.category === 'selector-wait' || r.failedStep?.category === 'unmapped').length,
+      mapping_fail: results.filter((r) => isGwtMappingFailureCategory(r.failedStep?.category)).length,
       coverage_us: judgement.uncoveredUs.length === 0 ? judgement.coveredUs.join(',') : `缺失:${judgement.uncoveredUs.join(',')}`,
       prd_us_missing: prdUserStoriesMissing || undefined,
       verdict,
@@ -1222,14 +1828,21 @@ async function runNanjuGwtAcceptanceInner(input: {
   }
   results.filter((r) => r.status === 'fail').forEach((r, i) => {
     const fs = r.failedStep
-    const kindTag = fs?.category === 'selector-wait' || fs?.category === 'unmapped' ? '（映射类：目标元素未出现或未映射）' : ''
-    failLines.push(`${i + 1}. [${r.feature}] ${r.scenario} — 步骤 ${(fs?.index ?? 0) + 1}（${fs?.kind ?? ''}：${fs?.text ?? ''}）：期望「${fs?.expected ?? ''}」实际「${fs?.actual ?? r.reason ?? ''}」${kindTag}${r.screenshot ? `（截图 ${r.screenshot}）` : ''}`)
+    const kindTag = isGwtMappingFailureCategory(fs?.category) ? `（映射类：${fs?.category}——回 testing 修 steps.json，不改应用代码）` : ''
+    const tierTag = fs?.selectorTier ? `［selector 档位 ${fs.selectorTier}］` : ''
+    failLines.push(`${i + 1}. [${r.feature}] ${r.scenario} — 步骤 ${(fs?.index ?? 0) + 1}（${fs?.kind ?? ''}：${fs?.text ?? ''}）：期望「${fs?.expected ?? ''}」实际「${fs?.actual ?? r.reason ?? ''}」${kindTag}${tierTag}${r.screenshot ? `（截图 ${r.screenshot}）` : ''}`)
   })
   if (!prdUserStoriesMissing && judgement.uncoveredUs.length > 0) {
     failLines.push(`用户故事 ${judgement.uncoveredUs.join('、')} 没有可执行场景（全部 skip），覆盖不完整。`)
   }
   if (errorReason) {
     failLines.push(`执行异常：${errorReason}`)
+  }
+  // W22 F4：非阻塞警告（assert-screenshot baseline/diff 等）附在缺陷清单后，供人工复核
+  const scenarioWarnings = results.flatMap((r) => (r.warnings ?? []).map((w) => `[${r.scenario}] ${w}`))
+  if (scenarioWarnings.length > 0) {
+    failLines.push('视觉观察项（不影响判定）：')
+    scenarioWarnings.forEach((w) => failLines.push(`- ${w}`))
   }
 
   // 摘要口径（AC U-001/F-002）：PRD 缺 US 清单与执行异常用专用句式，不用普通 fail 文案

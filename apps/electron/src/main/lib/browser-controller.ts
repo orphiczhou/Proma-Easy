@@ -1451,6 +1451,76 @@ export class BrowserController {
     })
   }
 
+  /**
+   * GWT（W22 F1）：文本直入通道——CDP Input.insertText 走真实编辑管线
+   * （isTrusted=true 的 beforeinput/input），React/Vue 受控组件与 isTrusted 敏感组件
+   * 原生兼容；与 pressKeyInTab 语义分离（fill 专用，不带键名解析）。
+   */
+  async insertTextInTab(sessionId: string, tabId: string, text: string, signal?: AbortSignal): Promise<void> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    await this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+      await this.cdp(tab, 'Input.insertText', { text }, undefined, operationSignal)
+      this.trace(browserSession, tab, 'fill', `测试输入 ${Array.from(text).length} 个字符（已脱敏）`, 'dispatched')
+    })
+  }
+
+  /**
+   * GWT（W22 F2 hover）：真实悬停序列——先移至 (x-2,y-2) 制造进入状态变化（同坐标
+   * mouseMoved 会被 Chromium 去重），再移到中心触发 :hover/mouseover，停留 300ms
+   * 让悬停 UI 渲染稳定（Playwright page.hover 同型通道）。
+   */
+  async hoverPointInTab(sessionId: string, tabId: string, x: number, y: number, signal?: AbortSignal): Promise<void> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    await this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 2, y: y - 2, button: 'none' }, undefined, operationSignal)
+      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' }, undefined, operationSignal)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      this.trace(browserSession, tab, 'click', `测试悬停 (${Math.round(x)}, ${Math.round(y)})`, 'dispatched')
+    })
+  }
+
+  /**
+   * GWT（W22 F2 scroll）：CDP Input.dispatchMouseEvent type:mouseWheel——走真实
+   * 滚轮事件（scroll chaining / IntersectionObserver 均自然触发）。调用方负责
+   * JS scrollBy 回退（本方法失败上抛，不隐式等待）。
+   */
+  async wheelInTab(sessionId: string, tabId: string, deltaX: number, deltaY: number, signal?: AbortSignal): Promise<void> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    await this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: 0, y: 0, deltaX, deltaY }, undefined, operationSignal)
+      this.trace(browserSession, tab, 'click', `测试滚轮 deltaY=${Math.round(deltaY)}`, 'dispatched')
+    })
+  }
+
+  /**
+   * GWT（W22 F4 assert-screenshot）：CDP Page.captureScreenshot（viewport 可视区，
+   * fromSurface:true）。走 Chromium 侧通道而非 webContents.capturePage（Electron 侧
+   * 对窗口遮挡/最小化更敏感——论证报告 A2）。返回 base64 PNG + 逻辑视口尺寸/DPR。
+   */
+  async captureViewportPngInTab(sessionId: string, tabId: string, signal?: AbortSignal): Promise<{ base64: string; width: number; height: number; dpr: number }> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+      const shot = await this.cdp(tab, 'Page.captureScreenshot', { format: 'png', fromSurface: true }, undefined, operationSignal) as { data?: string }
+      if (typeof shot?.data !== 'string' || shot.data === '') {
+        throw new Error('Page.captureScreenshot 返回空数据（页面尚未完成可捕获布局）')
+      }
+      const viewport = await this.executePageExpression(tab,
+        '(() => ({ width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio }))()',
+        operationSignal) as { width?: number; height?: number; dpr?: number } | null
+      this.trace(browserSession, tab, 'screenshot', '测试视口截图（CDP）', 'verified')
+      return {
+        base64: shot.data,
+        width: typeof viewport?.width === 'number' ? viewport.width : 0,
+        height: typeof viewport?.height === 'number' ? viewport.height : 0,
+        dpr: typeof viewport?.dpr === 'number' ? viewport.dpr : 0,
+      }
+    })
+  }
+
   async close(sessionId: string): Promise<void> {
     const browserSession = this.sessions.get(sessionId)
     if (!browserSession) {

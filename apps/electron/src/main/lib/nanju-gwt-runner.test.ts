@@ -43,6 +43,9 @@ const {
   runGwtSuite,
   runNanjuGwtAcceptance,
   GWT_RETRY_LIMIT,
+  GWT_STEPS_SCHEMA_VERSION,
+  GWT_FILL_VALUE_MAX_CHARS,
+  computeScreenshotDiffRatio,
 } = await import('./nanju-gwt-runner')
 import type { GwtBrowserAdapter, GwtScenarioFile, GwtProgressEvent, NanjuGwtOutcome } from './nanju-gwt-runner'
 
@@ -51,15 +54,45 @@ afterEach(() => {
   fixtureRoot = ''
 })
 
-// ===== FakePage：按模板表达式特征模拟 DOM 状态（selector/kind 从 JSON 字符串参数提取） =====
+// ===== FakePage：按模板表达式特征模拟 DOM 状态 =====
+// W22：支持 selector 三档（css / #id / aria-label 属性匹配）、新 op 表达式特征、
+// 可信输入链路（insertTextInTab 写值 / strictTrust 受控组件拒绝合成事件）。
+
+interface FakeElement {
+  visible: boolean
+  text: string
+  /** 坐标（CENTER_OF mock 返回；同一坐标的 click 会 toggle checkbox/radio） */
+  x?: number
+  y?: number
+  /** input/textarea/select 类型标记（check/checkable、select 原生性判定用） */
+  tag?: 'input-checkbox' | 'input-radio' | 'input-text' | 'select' | 'div' | 'textarea' | 'contenteditable'
+  /** select 的 option 列表（value/label 对） */
+  options?: Array<{ value: string; label: string }>
+}
 
 class FakePage {
-  elements = new Map<string, { visible: boolean; text: string }>()
+  elements = new Map<string, FakeElement>()
+  /** 二档 selector 命中多元素的场景（querySelectorAll !== 1 → ambiguous） */
+  ambiguousSelectors = new Set<string>()
+  /** 元素当前值（fill 链路读写 / select 回读） */
+  values = new Map<string, string>()
+  /** 勾选态（checkbox/radio） */
+  checked = new Map<string, boolean>()
+  /** 可信输入记录：insertTextInTab 调用（模拟真实编辑管线写入） */
+  insertTexts: Array<{ key: string; text: string }> = []
+  /** 受控组件模式：合成事件通道（FILL_FALLBACK）被拒绝，仅 insertText 可写（旧实现必挂范式） */
+  strictTrust = new Set<string>()
   clicks: Array<{ x: number; y: number }> = []
+  hovers: Array<{ x: number; y: number }> = []
+  wheels: Array<{ deltaX: number; deltaY: number }> = []
+  jsScrolls: number[] = []
   keys: string[] = []
   fills: Array<{ selector: string; text: string }> = []
   /** loadFileInTab 调用计数（场景隔离验证） */
   reloads = 0
+  /** 视口截图 mock（W22 F4）：返回固定 PNG buffer；设为 'throw' 模拟截图失败 */
+  viewportPng: Buffer | 'throw' = makeSolidPng(2, 2, [200, 200, 200])
+  viewportMeta = { width: 375, height: 667, dpr: 2 }
 
   private strings(expr: string): string[] {
     const out: string[] = []
@@ -69,37 +102,106 @@ class FakePage {
     return out
   }
 
-  eval(expr: string): unknown {
+  /** 从表达式提取元素 key：aria-label 档用属性值形态（find 片段在模板最前，label 恒为首个 JSON 串），其余用首个 JSON 字符串（css/#id） */
+  private keyOf(expr: string): string {
     const strings = this.strings(expr)
-    const sel = strings[0] ?? ''
-    if (expr.includes('dispatchEvent')) {
-      this.fills.push({ selector: sel, text: strings[1] ?? '' })
+    if (expr.includes("getAttribute('aria-label')")) {
+      return `[aria-label="${strings[0] ?? ''}"]`
+    }
+    return strings[0] ?? ''
+  }
+
+  eval(expr: string): unknown {
+    const key = this.keyOf(expr)
+    const el = this.elements.get(key)
+    const exists = !!el || this.ambiguousSelectors.has(key)
+    const ambiguous = this.ambiguousSelectors.has(key)
+
+    // ---- W22 新模板特征 ----
+    // fill 聚焦+全选（FILL_FOCUS_SELECT）
+    if (expr.includes('selectNodeContents') || (expr.includes('el.select()') && expr.includes('focus('))) {
+      if (!exists) return { code: 'missing' }
+      if (ambiguous) return { code: 'ambiguous', count: 2 }
+      if (el?.tag === 'div') return { code: 'not-editable' }
+      this.values.set('focused', key) // 记录当前聚焦元素（insertTextInTab mock 消费）
+      return { code: 'ok', kind: el?.tag === 'contenteditable' ? 'contenteditable' : 'value' }
+    }
+    // fill 回读（FILL_READ_VALUE；特征收紧避免吞 select 模板的 el.value setter/回读）
+    if (expr.includes('return { value: el.value }') || expr.includes("el.textContent ?? ''}")) {
+      if (!exists) return { value: null }
+      return { value: this.values.get(key) ?? '' }
+    }
+    // fill 回退链（FILL_FALLBACK：旧 native-setter+合成事件通道；InputEvent 为模板独有特征，区别于 select 的 Event 派发）
+    if (expr.includes('new InputEvent')) {
+      this.fills.push({ selector: key, text: this.strings(expr)[this.strings(expr).length - 1] ?? '' })
+      if (!exists) return { ok: false, error: '未找到元素' }
+      if (el?.tag === 'div') return { ok: false, error: '目标不是可编辑元素' }
+      if (this.strictTrust.has(key)) return { ok: false, error: 'isTrusted=false 合成事件被受控组件拒绝（模拟）' }
+      this.values.set(key, this.fills[this.fills.length - 1]!.text)
       return { ok: true }
     }
-    if (expr.includes('getBoundingClientRect')) {
-      return this.elements.has(sel) ? { x: 8, y: 16 } : null
+    // check/uncheck 读态（CHECK_STATE）
+    if (expr.includes("el.type !== 'checkbox'")) {
+      if (!exists) return { code: 'missing' }
+      if (ambiguous) return { code: 'ambiguous', count: 2 }
+      if (el?.tag !== 'input-checkbox' && el?.tag !== 'input-radio') return { code: 'not-checkable' }
+      return { code: 'ok', checked: this.checked.get(key) === true, type: el.tag === 'input-radio' ? 'radio' : 'checkbox' }
     }
-    if (expr.startsWith('(() => !!document.querySelector')) {
-      return this.elements.has(sel)
+    // select（SELECT_EXPRESSION）
+    if (expr.includes('HTMLSelectElement')) {
+      if (!exists) return { code: 'missing' }
+      if (ambiguous) return { code: 'ambiguous', count: 2 }
+      if (el?.tag !== 'select') return { code: 'not-native-select', error: '目标不是原生 <select>（自定义下拉请改用 click 序列：先 click 展开，再 click 选项）' }
+      const value = this.strings(expr)[this.strings(expr).length - 1] ?? ''
+      const opt = el.options?.find((o) => o.value === value) ?? el.options?.find((o) => o.label === value)
+      if (!opt) return { code: 'option-missing', error: '未找到匹配 option（按 value 与 label 均未命中）' }
+      this.values.set(key, opt.value)
+      return { code: 'ok', value: opt.value }
+    }
+    // focus op（FOCUS_EXPRESSION；排除 FILL_FOCUS 模板同有的 focus-failed 字样）
+    if (expr.includes('focus-failed') && !expr.includes('el.select()') && !expr.includes('selectNodeContents')) {
+      if (!exists) return { code: 'missing' }
+      if (ambiguous) return { code: 'ambiguous', count: 2 }
+      if (el?.tag === 'div' && el.text === 'unfocusable') return { code: 'focus-failed' }
+      return { code: 'ok' }
+    }
+    // JS 滚动回退（JS_SCROLL_EXPRESSION）
+    if (expr.includes('scrollBy')) {
+      this.jsScrolls.push(Number(/scrollBy\(0, (-?\d+(?:\.\d+)?)\)/.exec(expr)?.[1] ?? 0))
+      return { ok: true }
+    }
+
+    // ---- 旧有模板特征 ----
+    if (expr.includes('getBoundingClientRect')) {
+      if (!exists) return null
+      if (ambiguous) return { ambiguous: true, count: 2 }
+      const x = el?.x ?? 8
+      const y = el?.y ?? 16
+      return { x, y }
+    }
+    if (expr.startsWith('(() =>') && expr.trim().endsWith('.length > 0)()')) {
+      return exists
     }
     // 完整断言模板（特征：els.length === 0 分支；strings = [selector, kind, contains?]）
     if (expr.includes('els.length === 0')) {
+      const strings = this.strings(expr)
       const kind = strings[1] ?? ''
-      if (!this.elements.has(sel)) return { ok: false, actual: '元素不存在' }
+      if (!exists) return { ok: false, actual: '元素不存在' }
+      if (ambiguous) return { ok: false, actual: '选择器命中 2 个元素（不唯一，禁止取首个）' }
       if (kind === 'selector') return { ok: true, actual: '元素存在' }
       if (kind === 'visible') {
-        const visible = this.elements.get(sel)?.visible === true
+        const visible = el?.visible === true
         return { ok: visible, actual: visible ? '元素可见' : '元素不可见' }
       }
       if (kind === 'count') {
-        const n = this.elements.has(sel) ? 1 : 0
+        const n = 1
         const expectMatch = /n === (\d+)/.exec(expr)
         const expect = expectMatch ? Number(expectMatch[1]) : 0
         return { ok: n === expect, actual: `数量 ${n}` }
       }
       // contains 取模板最后一个 JSON 字符串（text 分支的 expect；kind 字符串会出现多次）
       const contains = strings[strings.length - 1] ?? ''
-      const text = this.elements.get(sel)?.text ?? ''
+      const text = el?.text ?? ''
       const ok = text.includes(contains)
       return { ok, actual: JSON.stringify(text).slice(0, 120) }
     }
@@ -107,13 +209,53 @@ class FakePage {
   }
 }
 
+/** 生成纯色小 PNG（W22 F4 像素比对测试用） */
+function makeSolidPng(width: number, height: number, rgb: [number, number, number]): Buffer {
+  const { PNG } = require('pngjs') as typeof import('pngjs')
+  const png = new PNG({ width, height })
+  for (let i = 0; i < width * height; i++) {
+    png.data[i * 4] = rgb[0]
+    png.data[i * 4 + 1] = rgb[1]
+    png.data[i * 4 + 2] = rgb[2]
+    png.data[i * 4 + 3] = 255
+  }
+  return PNG.sync.write(png)
+}
+
 function makeMockController(page: FakePage): GwtBrowserAdapter {
   return {
     createLocalFileTab: async () => ({ tabId: 'tab-gwt-1' }),
     loadFileInTab: async () => { page.reloads += 1 },
     evaluateInTab: async (_sessionId, _tabId, expr) => page.eval(expr),
-    clickPointInTab: async (_sessionId, _tabId, x, y) => { page.clicks.push({ x, y }) },
+    clickPointInTab: async (_sessionId, _tabId, x, y) => {
+      page.clicks.push({ x, y })
+      // 可信点击语义：坐标命中 checkbox/radio 时切换勾选态（真实浏览器行为模拟）
+      for (const [key, el] of page.elements) {
+      if (((el.x ?? 8) === x && (el.y ?? 16) === y) && (el.tag === 'input-checkbox' || el.tag === 'input-radio')) {
+        page.checked.set(key, !(page.checked.get(key) === true))
+      }
+      }
+    },
     pressKeyInTab: async (_sessionId, _tabId, key) => { page.keys.push(key) },
+    insertTextInTab: async (_sessionId, _tabId, text) => {
+      // 模拟 insertText 未生效（页面被遮挡/非聚焦等），触发回退链
+      if (page.values.get('insert-text-broken') === 'yes') return
+      // 真实编辑管线模拟：写入当前聚焦元素（FILL_FOCUS_SELECT mock 记录的 focused）
+      const key = page.values.get('focused') ?? ''
+      if (key) {
+        page.insertTexts.push({ key, text })
+        page.values.set(key, text) // 全选后 insertText 覆盖写（非追加）
+      }
+    },
+    hoverPointInTab: async (_sessionId, _tabId, x, y) => { page.hovers.push({ x, y }) },
+    wheelInTab: async (_sessionId, _tabId, deltaX, deltaY) => {
+      if (page.values.get('wheel-throws') === 'yes') throw new Error('mouseWheel 不可用（模拟）')
+      page.wheels.push({ deltaX, deltaY })
+    },
+    captureViewportPngInTab: async () => {
+      if (page.viewportPng === 'throw') throw new Error('Page.captureScreenshot 失败（模拟）')
+      return { base64: page.viewportPng.toString('base64'), ...page.viewportMeta }
+    },
     screenshot: async () => ({ base64: Buffer.from('fake-png-bytes').toString('base64') }),
     closeTab: async () => null,
   }
@@ -140,19 +282,34 @@ function noteScenario(overrides: Partial<GwtScenarioFile> = {}): GwtScenarioFile
 
 // ===== selector 归一 =====
 
-describe('normalizeGwtSelector', () => {
-  test('三种合法形态统一归一为 [data-ai-id="xxx"]', () => {
-    expect(normalizeGwtSelector('data-ai-id=btn-save')).toBe('[data-ai-id="btn-save"]')
-    expect(normalizeGwtSelector('[data-ai-id="btn-save"]')).toBe('[data-ai-id="btn-save"]')
-    expect(normalizeGwtSelector("[data-ai-id='btn-save']")).toBe('[data-ai-id="btn-save"]')
-    expect(normalizeGwtSelector('  data-ai-id = input-title  ')).toBe('[data-ai-id="input-title"]')
+describe('normalizeGwtSelector（W22 F3 三档）', () => {
+  test('data-ai-id 主档三种写法统一归一（含宽松空格形态）', () => {
+    expect(normalizeGwtSelector('data-ai-id=btn-save')).toEqual({ tier: 'data-ai-id', css: '[data-ai-id="btn-save"]', value: 'btn-save' })
+    expect(normalizeGwtSelector('[data-ai-id="btn-save"]')).toEqual({ tier: 'data-ai-id', css: '[data-ai-id="btn-save"]', value: 'btn-save' })
+    expect(normalizeGwtSelector("[data-ai-id='btn-save']")).toEqual({ tier: 'data-ai-id', css: '[data-ai-id="btn-save"]', value: 'btn-save' })
+    expect(normalizeGwtSelector('  data-ai-id = input-title  ')).toEqual({ tier: 'data-ai-id', css: '[data-ai-id="input-title"]', value: 'input-title' })
   })
 
-  test('非法形态返回 null（不允许臆造任意 CSS）', () => {
+  test('#id 二档：合法标识符接受；React useId 的 :r1: / 数字开头 / 含空格拒绝', () => {
+    expect(normalizeGwtSelector('#main-input')).toEqual({ tier: 'id', css: '#main-input', value: 'main-input' })
+    expect(normalizeGwtSelector('#save_btn-1')).toEqual({ tier: 'id', css: '#save_btn-1', value: 'save_btn-1' })
+    expect(normalizeGwtSelector('#:r1:')).toBeNull()      // React useId 非法 CSS 标识符
+    expect(normalizeGwtSelector('#1abc')).toBeNull()      // 数字开头
+    expect(normalizeGwtSelector('#a b')).toBeNull()       // 含空格
+  })
+
+  test('[aria-label="…"] 二档：属性相等匹配不拼 CSS（css=null），≤60 字符，空值/换行拒绝', () => {
+    expect(normalizeGwtSelector('[aria-label="提交表单"]')).toEqual({ tier: 'aria-label', css: null, value: '提交表单' })
+    expect(normalizeGwtSelector('[aria-label=""]')).toBeNull()
+    expect(normalizeGwtSelector(`[aria-label="${'长'.repeat(61)}"]`)).toBeNull()
+  })
+
+  test('非法形态返回 null（不开放自由 CSS 的防脆弱设计保留）', () => {
     expect(normalizeGwtSelector('#main .btn')).toBeNull()
     expect(normalizeGwtSelector('data-ai-id=1abc')).toBeNull()          // 首字符非字母
     expect(normalizeGwtSelector('data-ai-id=a b')).toBeNull()           // 含空格
     expect(normalizeGwtSelector('[data-ai-id="ok"] .child')).toBeNull() // 复合选择器
+    expect(normalizeGwtSelector('.btn')).toBeNull()
     expect(normalizeGwtSelector('')).toBeNull()
   })
 })
@@ -182,7 +339,7 @@ describe('validateScenarioFileContent', () => {
   test('click 缺 selector 拒绝；selector 非法（任意 CSS）拒绝', () => {
     const noSel = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'click' } }] })
     expect(validateScenarioFileContent(noSel).errors.some((e) => e.includes('selector'))).toBe(true)
-    const badSel = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'click', selector: '#main' } }] })
+    const badSel = JSON.stringify({ ...noteScenario(), steps: [{ kind: 'when', text: 'x', op: { type: 'click', selector: '#main .btn' } }] })
     expect(validateScenarioFileContent(badSel).errors.some((e) => e.includes('非法'))).toBe(true)
   })
 
@@ -326,7 +483,7 @@ describe('runGwtSuite（mock BrowserController）', () => {
   test('全 op 类型执行：click/fill/press/wait-selector/assert 均触达，场景 pass', async () => {
     const page = new FakePage()
     page.elements.set('[data-ai-id="view-note-list"]', { visible: true, text: '百年孤独' })
-    page.elements.set('[data-ai-id="input-title"]', { visible: true, text: '' })
+    page.elements.set('[data-ai-id="input-title"]', { visible: true, text: '', tag: 'input-text' })
     page.elements.set('[data-ai-id="btn-save"]', { visible: true, text: '保存' })
     const events: GwtProgressEvent[] = []
     const results = await runGwtSuite({
@@ -338,7 +495,9 @@ describe('runGwtSuite（mock BrowserController）', () => {
       onProgress: (e) => events.push(e),
     })
     expect(results[0]?.status).toBe('pass')
-    expect(page.fills).toEqual([{ selector: '[data-ai-id="input-title"]', text: '百年孤独' }])
+    // W22 F1：fill 走可信链路 insertTextInTab（覆盖写）；旧合成事件通道未被触发
+    expect(page.insertTexts).toEqual([{ key: '[data-ai-id="input-title"]', text: '百年孤独' }])
+    expect(page.fills).toEqual([])
     expect(page.clicks.length).toBe(1)
     expect(page.keys).toEqual(['Enter'])
     // 进度事件序列：start → scenario-start → scenario-end → done
@@ -787,15 +946,17 @@ describe('runNanjuGwtAcceptance', () => {
     expect(second.retryCount).toBe(0) // 上轮已 pass → 归零
   })
 
-  test('schema 非法文件：降级为 skip 场景透明记录，不执行', async () => {
+  test('schema 非法文件（W22 A1）：计 fail 不再静默 skip——消除「其余场景全过仍判 pass」的交付门放行风险', async () => {
     setupProjectFixture({ stepsFiles: { 'bad.steps.json': '{"feature":"us-01","scenario":1}' } })
     const outcome = await runNanjuGwtAcceptance({
       workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
       sessionId: 's1', controller: makeMockController(new FakePage()),
     })
     expect(outcome.verdict).toBe('fail')
-    expect(outcome.judgement.skipped).toBe(1)
-    expect(outcome.results[0]?.reason).toContain('schema 校验失败')
+    const schemaFail = outcome.results.find((r) => r.status === 'fail')!
+    expect(schemaFail.reason).toContain('schema 校验失败')
+    expect(schemaFail.failedStep?.category).toBe('schema-invalid')
+    expect(outcome.failureKind).toBe('mapping')
   })
 
   test('入口缺失：08_APP/index.html 不存在 → 全场景降级 skip + fail', async () => {
@@ -875,5 +1036,499 @@ describe('W12：GWT-pass 交付验收两段化（不直接 delivered）', () => 
     expect(msg).toContain('满意交付 / 需要调整')
     // 旧形态反断言：续接指令中不存在缺 header 说明的交付弹问话术
     expect(GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE).not.toMatch(/弹问，question「应用已完成/)
+  })
+})
+
+// ═══════════════ W22：F1 fill 可信化 / F2 词表扩展 / F3 selector 二档 / F4 截图断言 / A1 schema 版本 ═══════════════
+
+describe('W22 F1：fill 可信化执行序', () => {
+  const fillScenario = (selector = 'data-ai-id=input-title'): GwtScenarioFile => ({
+    feature: 'us-01', scenario: 'US-01 输入', skip: false, skipReason: null,
+    steps: [{ kind: 'when', text: '输入书名', op: { type: 'fill', selector, value: '百年孤独' } }],
+  })
+
+  test('覆盖写而非追加：select 全选后 insertText 替换旧值（清空顺序不产生「旧值+新值」）', async () => {
+    const page = new FakePage()
+    const key = '[data-ai-id="input-title"]'
+    page.elements.set(key, { visible: true, text: '', tag: 'input-text' })
+    page.values.set(key, '旧的书名') // 初始非空：验证覆盖语义
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [fillScenario()], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.values.get(key)).toBe('百年孤独') // 覆盖，非「旧的书名百年孤独」
+  })
+
+  test('红测范式：isTrusted 敏感受控组件——insertText 未生效且合成事件被拒 → 终态 fail（assert 类）', async () => {
+    const page = new FakePage()
+    const key = '[data-ai-id="input-title"]'
+    page.elements.set(key, { visible: true, text: '', tag: 'input-text' })
+    page.strictTrust.add(key)                       // 受控组件拒绝合成事件（旧实现唯一通道，必挂）
+    page.values.set('insert-text-broken', 'yes')    // 模拟 insertText 未生效
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [fillScenario()], controller: makeMockController(page), screenshotDir: null,
+    })
+    const r = results[0]!
+    expect(r.status).toBe('fail')
+    expect(r.failedStep?.category).toBe('assert')
+    expect(r.reason).toContain('回读')
+    expect(page.fills.length).toBe(1) // 回退链被尝试恰一次（单次重试）
+  })
+
+  test('单次重试成功：insertText 未生效但回退链（native-setter+input）生效 → pass', async () => {
+    const page = new FakePage()
+    const key = '[data-ai-id="input-title"]'
+    page.elements.set(key, { visible: true, text: '', tag: 'input-text' })
+    page.values.set('insert-text-broken', 'yes') // 主通道失效；非 strictTrust → 回退可写
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [fillScenario()], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.fills.length).toBe(1)
+    expect(page.values.get(key)).toBe('百年孤独')
+  })
+
+  test('value ≤2000 字符预检（schema 层拒绝超长）', () => {
+    expect(GWT_FILL_VALUE_MAX_CHARS).toBe(2000)
+    const raw = JSON.stringify({
+      feature: 'us-01', scenario: 'US-01 输入', skip: false, skipReason: null,
+      steps: [{ kind: 'when', text: '超长输入', op: { type: 'fill', selector: 'data-ai-id=input-title', value: 'x'.repeat(2001) } }],
+    })
+    const { errors } = validateScenarioFileContent(raw)
+    expect(errors.some((e) => e.includes('2000'))).toBe(true)
+  })
+})
+
+describe('W22 F2：词表扩展（check/uncheck/select/hover/scroll/focus）', () => {
+  test('check：读态→按需点击→回读；可信点击切换 checkbox 勾选态', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="agree"]', { visible: true, text: '', tag: 'input-checkbox', x: 5, y: 5 })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 勾选', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '勾选同意', op: { type: 'check', selector: 'data-ai-id=agree' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.clicks.length).toBe(1)
+    expect(page.checked.get('[data-ai-id="agree"]')).toBe(true)
+  })
+
+  test('check 幂等：已勾选则不再点击（防中断/重试后反向）', async () => {
+    const page = new FakePage()
+    const key = '[data-ai-id="agree"]'
+    page.elements.set(key, { visible: true, text: '', tag: 'input-checkbox', x: 5, y: 5 })
+    page.checked.set(key, true)
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 幂等', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '勾选', op: { type: 'check', selector: 'data-ai-id=agree' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.clicks.length).toBe(0)
+  })
+
+  test('uncheck radio → fail op-check（radio 不可取消，归 mapping 类）', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="opt-a"]', { visible: true, text: '', tag: 'input-radio', x: 5, y: 5 })
+    page.checked.set('[data-ai-id="opt-a"]', true)
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 取消radio', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '取消', op: { type: 'uncheck', selector: 'data-ai-id=opt-a' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('fail')
+    expect(results[0]?.failedStep?.category).toBe('op-check')
+    expect(results[0]?.failedStep?.actual).toContain('radio')
+  })
+
+  test('check 非 checkbox/radio 目标 → fail op-check（独立失败 category）', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="btn"]', { visible: true, text: '按钮', tag: 'div' })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 误用', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '勾选按钮', op: { type: 'check', selector: 'data-ai-id=btn' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('fail')
+    expect(results[0]?.failedStep?.category).toBe('op-check')
+  })
+
+  test('select：原生 select 按 label 匹配 option + setter 写值 + 回读校验', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="genre"]', {
+      visible: true, text: '', tag: 'select',
+      options: [{ value: 'scifi', label: '科幻' }, { value: 'novel', label: '小说' }],
+    })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 下拉', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '选择科幻', op: { type: 'select', selector: 'data-ai-id=genre', value: '科幻' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.values.get('[data-ai-id="genre"]')).toBe('scifi')
+  })
+
+  test('select 非原生下拉 → fail op-select + 文案指引用 click 序列（归 mapping）', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="custom-dd"]', { visible: true, text: '自定义', tag: 'div' })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 自定义下拉', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '选择', op: { type: 'select', selector: 'data-ai-id=custom-dd', value: 'x' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('fail')
+    expect(results[0]?.failedStep?.category).toBe('op-select')
+    expect(results[0]?.failedStep?.actual).toContain('click 序列')
+  })
+
+  test('hover：真实悬停通道（hoverPointInTab 微抖动+停留）', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="menu"]', { visible: true, text: '菜单' })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 悬停', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '悬停菜单', op: { type: 'hover', selector: 'data-ai-id=menu' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.hovers.length).toBe(1)
+  })
+
+  test('scroll：CDP mouseWheel 优先；wheel 不可用时 JS scrollBy 回退', async () => {
+    const page = new FakePage()
+    const mkScenario = (): GwtScenarioFile => ({
+      feature: 'us-01', scenario: 'US-01 滚动', skip: false, skipReason: null,
+      steps: [{ kind: 'when', text: '向下滚动', op: { type: 'scroll', deltaY: 600 } }],
+    })
+    const first = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(first[0]?.status).toBe('pass')
+    expect(page.wheels).toEqual([{ deltaX: 0, deltaY: 600 }])
+    // wheel 抛错 → JS 回退生效
+    page.values.set('wheel-throws', 'yes')
+    const second = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(second[0]?.status).toBe('pass')
+    expect(page.jsScrolls).toEqual([600])
+  })
+
+  test('focus：聚焦成功 pass；focus 失败 → fail op-focus', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="search"]', { visible: true, text: '', tag: 'input-text' })
+    page.elements.set('[data-ai-id="dead"]', { visible: true, text: 'unfocusable', tag: 'div' })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [
+        {
+          feature: 'us-01', scenario: 'US-01 聚焦ok', skip: false, skipReason: null,
+          steps: [{ kind: 'when', text: '聚焦搜索框', op: { type: 'focus', selector: 'data-ai-id=search' }, timeoutMs: 300 }],
+        },
+        {
+          feature: 'us-02', scenario: 'US-02 聚焦fail', skip: false, skipReason: null,
+          steps: [{ kind: 'when', text: '聚焦死元素', op: { type: 'focus', selector: 'data-ai-id=dead' }, timeoutMs: 300 }],
+        },
+      ], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(results[1]?.status).toBe('fail')
+    expect(results[1]?.failedStep?.category).toBe('op-focus')
+  })
+
+  test('schema：新 op 必填字段校验（select 缺 value / scroll 缺 deltaY / deltaY=0 拒绝）', () => {
+    const mk = (op: Record<string, unknown>): string => JSON.stringify({
+      feature: 'us-01', scenario: 'US-01 x', skip: false, skipReason: null, schemaVersion: 2,
+      steps: [{ kind: 'when', text: 't', op }],
+    })
+    expect(validateScenarioFileContent(mk({ type: 'select', selector: 'data-ai-id=a' })).errors.some((e) => e.includes('select'))).toBe(true)
+    expect(validateScenarioFileContent(mk({ type: 'scroll' })).errors.some((e) => e.includes('deltaY'))).toBe(true)
+    expect(validateScenarioFileContent(mk({ type: 'scroll', deltaY: 0 })).errors.some((e) => e.includes('deltaY'))).toBe(true)
+  })
+})
+
+describe('W22 F3：selector 二档（#id / aria-label）执行期唯一性', () => {
+  test('#id 档命中多元素 → fail selector-ambiguous（绝不取首个），tier 记录进失败步骤', async () => {
+    const page = new FakePage()
+    page.elements.set('#dup-id', { visible: true, text: '第一个' })
+    page.ambiguousSelectors.add('#dup-id') // 同 id 多元素（HTML 不校验唯一）
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 id 漂移', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '点击', op: { type: 'click', selector: '#dup-id' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    const r = results[0]!
+    expect(r.status).toBe('fail')
+    expect(r.failedStep?.category).toBe('selector-ambiguous')
+    expect(r.failedStep?.selectorTier).toBe('id')
+    expect(page.clicks.length).toBe(0)
+  })
+
+  test('aria-label 档：属性相等匹配执行成功（中文值不拼 CSS）', async () => {
+    const page = new FakePage()
+    page.elements.set('[aria-label="提交表单"]', { visible: true, text: '提交' })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 aria', skip: false, skipReason: null,
+        steps: [
+          { kind: 'when', text: '点击提交', op: { type: 'click', selector: '[aria-label="提交表单"]', timeoutMs: 300 } },
+          { kind: 'then', text: '可见', op: { type: 'assert-visible', selector: '[aria-label="提交表单"]', timeoutMs: 300 } },
+        ],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.clicks.length).toBe(1)
+  })
+
+  test('aria-label 档多元素 → fail selector-ambiguous + tier=aria-label；归 mapping 类', async () => {
+    const page = new FakePage()
+    page.ambiguousSelectors.add('[aria-label="提交"]')
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 aria 漂移', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '点击', op: { type: 'click', selector: '[aria-label="提交"]', timeoutMs: 300 } }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.failedStep?.category).toBe('selector-ambiguous')
+    expect(results[0]?.failedStep?.selectorTier).toBe('aria-label')
+  })
+
+  test('#id 档唯一 → 正常执行；data-ai-id 主档行为不变（不强制唯一）', async () => {
+    const page = new FakePage()
+    page.elements.set('#save-btn', { visible: true, text: '保存' })
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-01', scenario: 'US-01 id ok', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '点击保存', op: { type: 'click', selector: '#save-btn' }, timeoutMs: 300 }],
+      }], controller: makeMockController(page), screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(page.clicks.length).toBe(1)
+  })
+})
+
+describe('W22 F4：assert-screenshot（warning-only）', () => {
+  test('computeScreenshotDiffRatio 纯函数：同图=0；通道差≤10 不计；>10 计入；尺寸不符=null', () => {
+    const gray = makeSolidPng(2, 2, [200, 200, 200])
+    expect(computeScreenshotDiffRatio(gray, makeSolidPng(2, 2, [200, 200, 200]))).toBe(0)
+    expect(computeScreenshotDiffRatio(gray, makeSolidPng(2, 2, [210, 205, 200]))).toBe(0)     // ≤10 噪声不计
+    expect(computeScreenshotDiffRatio(gray, makeSolidPng(2, 2, [220, 200, 200]))).toBe(1)    // 20>10 全部计入
+    expect(computeScreenshotDiffRatio(gray, makeSolidPng(3, 2, [200, 200, 200]))).toBeNull() // 尺寸不符
+  })
+
+  test('首跑建基线：baseline-created warning + 落盘 _screenshots/ + 场景 pass（不影响 verdict）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gwt-base-'))
+    try {
+      const page = new FakePage()
+      const results = await runGwtSuite({
+        sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+        scenarios: [{
+          feature: 'us-01', scenario: 'US-01 视觉', skip: false, skipReason: null,
+          steps: [{ kind: 'then', text: '界面视觉一致', op: { type: 'assert-screenshot', name: 'us01-visual' } }],
+        }], controller: makeMockController(page), screenshotDir: null, baselineDir: dir,
+      })
+      const r = results[0]!
+      expect(r.status).toBe('pass')
+      expect(r.warnings?.some((w) => w.startsWith('baseline-created:'))).toBe(true)
+      expect(r.warnings?.[0]).toContain('375x667@2x') // 尺寸+DPR 记录
+      expect(existsSync(join(dir, 'us01-visual.png'))).toBe(true)
+      expect(existsSync(join(dir, 'us01-visual.meta.json'))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('基线一致 → 无新警告；视觉变化超阈 → screenshot-diff warning 但场景仍 pass', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gwt-base-'))
+    try {
+      const page = new FakePage()
+      const mkScenario = (): GwtScenarioFile => ({
+        feature: 'us-01', scenario: 'US-01 视觉', skip: false, skipReason: null,
+        steps: [{ kind: 'then', text: '视觉一致', op: { type: 'assert-screenshot', name: 'us01-visual' } }],
+      })
+      await runGwtSuite({ sessionId: 's1', entryHtmlPath: '/tmp/x.html', scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null, baselineDir: dir })
+      // 二跑同图：无 diff 警告
+      const second = await runGwtSuite({ sessionId: 's1', entryHtmlPath: '/tmp/x.html', scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null, baselineDir: dir })
+      expect(second[0]?.status).toBe('pass')
+      expect(second[0]?.warnings ?? []).toEqual([])
+      // 三跑换图（全像素通道差 20>10 → 100% > 2% 阈值）：warning 但不 fail
+      page.viewportPng = makeSolidPng(2, 2, [220, 200, 200])
+      const third = await runGwtSuite({ sessionId: 's1', entryHtmlPath: '/tmp/x.html', scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null, baselineDir: dir })
+      expect(third[0]?.status).toBe('pass')
+      expect(third[0]?.warnings?.some((w) => w.startsWith('screenshot-diff:'))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('视口/DPR 元数据不符 → screenshot-incomparable（不判 fail）；截图通道失败 → screenshot-failed 降级', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gwt-base-'))
+    try {
+      const page = new FakePage()
+      const mkScenario = (): GwtScenarioFile => ({
+        feature: 'us-01', scenario: 'US-01 视觉', skip: false, skipReason: null,
+        steps: [{ kind: 'then', text: '视觉一致', op: { type: 'assert-screenshot', name: 'us01-visual' } }],
+      })
+      await runGwtSuite({ sessionId: 's1', entryHtmlPath: '/tmp/x.html', scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null, baselineDir: dir })
+      page.viewportMeta = { width: 800, height: 600, dpr: 1 } // 视口变化
+      const resized = await runGwtSuite({ sessionId: 's1', entryHtmlPath: '/tmp/x.html', scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null, baselineDir: dir })
+      expect(resized[0]?.status).toBe('pass')
+      expect(resized[0]?.warnings?.some((w) => w.startsWith('screenshot-incomparable:'))).toBe(true)
+      // 截图通道整体失败：诚实降级为 warning，不 fail 不 error
+      page.viewportPng = 'throw'
+      const broken = await runGwtSuite({ sessionId: 's1', entryHtmlPath: '/tmp/x.html', scenarios: [mkScenario()], controller: makeMockController(page), screenshotDir: null, baselineDir: dir })
+      expect(broken[0]?.status).toBe('pass')
+      expect(broken[0]?.warnings?.some((w) => w.startsWith('screenshot-failed:'))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('W22 A1：schemaVersion + 未知 op 计 fail（不再静默 skip）', () => {
+  test('未知 op（旧运行器场景）→ verdict=fail + category=schema-invalid + failureKind=mapping + 文案指引重新生成', async () => {
+    const bad = JSON.stringify({
+      feature: 'us-01', scenario: 'US-01 未来词表', skip: false, skipReason: null,
+      steps: [{ kind: 'when', text: 'x', op: { type: 'navigate', selector: 'data-ai-id=a' } }],
+    })
+    const bothUs = JSON.stringify({
+      feature: 'us-01', scenario: 'US-01 添加读书笔记', skip: false, skipReason: null,
+      steps: [{ kind: 'then', text: '列表可见', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } }],
+    })
+    setupProjectFixture({
+      stepsFiles: {
+        'us-01.steps.json': bad,
+        'us-02.steps.json': bothUs.replace(/US-01/g, 'US-02').replace(/us-01/g, 'us-02'),
+      },
+    })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(outcome.verdict).toBe('fail') // 不再静默 skip 放行交付门
+    const schemaFail = outcome.results.find((r) => r.status === 'fail')!
+    expect(schemaFail.failedStep?.category).toBe('schema-invalid')
+    expect(schemaFail.reason).toContain('白名单')
+    expect(outcome.failureKind).toBe('mapping') // 回 testing 重新生成 steps.json
+    // 报告归因字段（W22：selectorTier/failureCategory 直接可读）
+    const report = JSON.parse(readFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), 'utf-8'))
+    const failEntry = report.scenarios.find((s: { status: string }) => s.status === 'fail')
+    expect(failEntry.failureCategory).toBe('schema-invalid')
+    expect(failEntry.selectorTier).toBeNull()
+  })
+
+  test('schemaVersion 不匹配（声明 99）→ fail + 指引重新生成', async () => {
+    setupProjectFixture({
+      stepsFiles: {
+        'us-01.steps.json': JSON.stringify({
+          feature: 'us-01', scenario: 'US-01 添加读书笔记', schemaVersion: 99, skip: false, skipReason: null,
+          steps: [{ kind: 'then', text: 'x', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } }],
+        }),
+        'us-02.steps.json': JSON.stringify({
+          feature: 'us-02', scenario: 'US-02 删除读书笔记', skip: false, skipReason: null,
+          steps: [{ kind: 'then', text: 'x', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } }],
+        }),
+      },
+    })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+    expect(outcome.verdict).toBe('fail')
+    const schemaFail = outcome.results.find((r) => r.status === 'fail')!
+    expect(schemaFail.reason).toContain('schemaVersion 不匹配')
+    expect(schemaFail.reason).toContain('重新生成')
+    expect(GWT_STEPS_SCHEMA_VERSION).toBe(2)
+  })
+
+  test('schemaVersion=2 + 新 op 正常执行；旧文件（无 schemaVersion + 旧 op）保持兼容执行', async () => {
+    const v2File = JSON.stringify({
+      feature: 'us-01', scenario: 'US-01 勾选场景', schemaVersion: 2, skip: false, skipReason: null,
+      steps: [{ kind: 'when', text: '勾选', op: { type: 'check', selector: 'data-ai-id=agree', timeoutMs: 300 } }],
+    })
+    const legacyFile = JSON.stringify({
+      feature: 'us-02', scenario: 'US-02 删除读书笔记', skip: false, skipReason: null,
+      steps: [{ kind: 'then', text: '列表可见', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } }],
+    })
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': v2File, 'us-02.steps.json': legacyFile } })
+    const page = fullPassPage()
+    page.elements.set('[data-ai-id="agree"]', { visible: true, text: '', tag: 'input-checkbox', x: 5, y: 5 })
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(page),
+    })
+    expect(outcome.verdict).toBe('pass') // v2 新 op + 无版本旧文件均正常执行
+  })
+})
+
+describe('W22 报告归因字段与警告汇总', () => {
+  test('fail 场景报告含 selectorTier + failureCategory；assert-screenshot 警告进顶层 warnings 且不影响 verdict', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gwt-report-'))
+    try {
+      fixtureRoot = dir
+      const projectDir = join(dir, 'project-p1')
+      mkdirSync(join(projectDir, '06_TESTS', 'features'), { recursive: true })
+      mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+      mkdirSync(join(projectDir, '08_APP'), { recursive: true })
+      writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 添加读书笔记\n## US-02 删除读书笔记\n')
+      writeFileSync(join(projectDir, '08_APP', 'index.html'), '<!DOCTYPE html><html><body></body></html>')
+      writeFileSync(join(projectDir, '06_TESTS', 'features', 'us-01.steps.json'), JSON.stringify({
+        feature: 'us-01', scenario: 'US-01 id 唯一性', schemaVersion: 2, skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '点击', op: { type: 'click', selector: '#dup', timeoutMs: 200 } }],
+      }))
+      writeFileSync(join(projectDir, '06_TESTS', 'features', 'us-02.steps.json'), JSON.stringify({
+        feature: 'us-02', scenario: 'US-02 视觉', schemaVersion: 2, skip: false, skipReason: null,
+        steps: [{ kind: 'then', text: '视觉', op: { type: 'assert-screenshot', name: 'us02-shot' } }],
+      }))
+      const page = new FakePage()
+      page.elements.set('#dup', { visible: true, text: 'x' })
+      page.ambiguousSelectors.add('#dup')
+      const outcome = await runNanjuGwtAcceptance({
+        workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+        sessionId: 's1', controller: makeMockController(page),
+      })
+      expect(outcome.verdict).toBe('fail') // US-01 fail（selector-ambiguous）
+      expect(outcome.failureKind).toBe('mapping')
+      const report = JSON.parse(readFileSync(join(projectDir, '06_TESTS', 'report.json'), 'utf-8'))
+      const failEntry = report.scenarios.find((s: { status: string }) => s.status === 'fail')
+      expect(failEntry.selectorTier).toBe('id')
+      expect(failEntry.failureCategory).toBe('selector-ambiguous')
+      // assert-screenshot 的 baseline-created 是 warning：进顶层 warnings，pass 场景不受影响
+      const passEntry = report.scenarios.find((s: { status: string }) => s.status === 'pass')
+      expect(passEntry.status).toBe('pass')
+      expect(passEntry.warnings?.some((w: string) => w.startsWith('baseline-created:'))).toBe(true)
+      expect(report.warnings?.some((w: string) => w.includes('baseline-created:'))).toBe(true)
+      // 人读报告 md 同步输出视觉观察项
+      const md = readFileSync(outcome.reportMdPath, 'utf-8')
+      expect(md).toContain('视觉观察项')
+      // 回炉缺陷清单带 selector 档位归因
+      expect(outcome.failListText).toContain('selector 档位 id')
+      expect(outcome.failListText).toContain('映射类')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
