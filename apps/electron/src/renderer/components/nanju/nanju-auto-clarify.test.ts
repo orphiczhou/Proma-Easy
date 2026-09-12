@@ -12,7 +12,7 @@ import { join } from 'node:path'
 const { resolveAutoClarifyAvailability } = await import('./ModeSelectView')
 const { stripRouteHeaderPrefix } = await import('../agent/AskUserBanner')
 const { isNanjuProxySession, buildAgentSessionTrees } = await import('../app-shell/LeftSidebar')
-const { buildClarifyNoticeText } = await import('./guide/GuidePanel')
+const { buildClarifyNoticeText, resolveAutoClarifyHeaderBadge, planAutoClarifyReenable } = await import('./guide/GuidePanel')
 
 describe('v2.4：自动补完复选框可用性（仅快消型）', () => {
   test('quick → available（复选框可选）', () => {
@@ -164,5 +164,40 @@ describe('D8：CLARIFY 澄清态文案分叉（R7-12：auto 下「代理澄清�
     expect(buildClarifyNoticeText('PROTO', true)).toBeNull()
     expect(buildClarifyNoticeText('PROTO_UC', true)).toBeNull()
     expect(buildClarifyNoticeText('', false)).toBeNull()
+  })
+})
+
+// ═══════════════ W22 M-8（#12）：GuidePanel 停用态徽标 + 重开入口 ═══════════════
+
+describe('W22 M-8：autoClarify 停用态徽标（off 态存在 + 点击重开 enabled=true）', () => {
+  test('off 态（quick + 曾开启后停用：字段存在且 enabled=false）→ 灰色徽标存在（disabled）', () => {
+    expect(resolveAutoClarifyHeaderBadge({ mode: 'quick', autoClarify: { enabled: false } })).toEqual({ kind: 'disabled' })
+  })
+
+  test('on 态 → active；从未开启（字段缺失/enabled 缺省）→ null 零噪音；iterative → null（无重开语义）', () => {
+    expect(resolveAutoClarifyHeaderBadge({ mode: 'quick', autoClarify: { enabled: true } })).toEqual({ kind: 'active' })
+    expect(resolveAutoClarifyHeaderBadge({ mode: 'quick' })).toBeNull()
+    expect(resolveAutoClarifyHeaderBadge({ mode: 'quick', autoClarify: {} })).toBeNull()
+    // iterative 即使残留 enabled=false（升级处置后）也不显示——升级即失效，重开会被 IPC 拒绝
+    expect(resolveAutoClarifyHeaderBadge({ mode: 'iterative', autoClarify: { enabled: false } })).toBeNull()
+    expect(resolveAutoClarifyHeaderBadge(null)).toBeNull()
+  })
+
+  test('重开动作：点击后 IPC 入参 enabled=true（仅 disabled 态可重开；active/null 无动作）', () => {
+    expect(planAutoClarifyReenable({ kind: 'disabled' })).toEqual({ enabled: true })
+    expect(planAutoClarifyReenable({ kind: 'active' })).toBeNull()
+    expect(planAutoClarifyReenable(null)).toBeNull()
+  })
+
+  test('UI 接线：徽标文案「自动补完·已停用」+ 重开经内联二次确认后走 nanjuSetAutoClarify', () => {
+    // 徽标文案（灰色态，与开启态「自动进行中」区分）
+    expect(guidePanelSource).toContain('自动补完·已停用')
+    // 点击徽标 → 确认条（不直接调 IPC——重启自动模式是行为变化，需显式确认）
+    expect(guidePanelSource).toContain('reenableConfirming')
+    expect(guidePanelSource).toContain('重新开启「自动补完需求」')
+    // 确认后调用 IPC 且入参来自 plan（enabled=true）
+    expect(guidePanelSource).toMatch(/nanjuSetAutoClarify\(\{ workspaceSlug, projectId: data\.project\.projectId, enabled: plan\.enabled \}/)
+    // 开启语义提示与既有复选框口径一致（环境安装除外）
+    expect(guidePanelSource).toContain('确认类环节自动通过（环境安装除外）')
   })
 })

@@ -228,6 +228,7 @@ export function buildL2TaskWithAC(
     parts.push(JSON.stringify({
       feature: 'us-01',
       scenario: '成功添加一条读书笔记',
+      schemaVersion: 2,
       skip: false,
       skipReason: null,
       steps: [
@@ -238,12 +239,30 @@ export function buildL2TaskWithAC(
       ],
     }, null, 2))
     parts.push('```')
-    parts.push('op.type 白名单：click / fill / press / wait-selector / assert-text / assert-visible / assert-count。')
+    // W22（#14+F2/F3 同步）：op 词表升级 v2——五类新 op + selector 三档 + schemaVersion 声明。
+    // op 名单与 gwt-runner VALID_OP_TYPES（T 域 F2）对齐；未声明的旧文件遇新 op 判 schema
+    // 失败而非静默 skip（A1：防旧运行器静默 skip 后 verdict=pass 放过交付门）。
+    parts.push('每个 steps.json 顶层必须声明 "schemaVersion": 2（新 op/新 selector 依赖 v2 运行器；')
+    parts.push('缺省声明的旧文件遇新 op 会被判 schema 失败，不是静默跳过）。')
+    parts.push('op.type 白名单（schemaVersion:2）：click / fill / press / wait-selector / assert-text / assert-visible / assert-count / check / uncheck / select / hover / scroll / focus。')
+    // 五类新 op 的 Gherkin→steps 书写范例（E2E 7 个 behavior fail 的主因之一：勾选/下拉/悬停/滚动无 op 可映射）
+    parts.push('· 勾选类（When 用户勾选「记住我」）→ {type:"check", selector:"…"}；取消勾选 → {type:"uncheck", selector:"…"}（radio 不可取消，勿对 radio 用 uncheck）；')
+    parts.push('· 下拉选择（When 用户在「分类」中选择「工作」）→ {type:"select", selector:"…", value:"工作"}（value 匹配 option 的 value 或显示文本）——')
+    parts.push('  仅限原生 <select>（运行器校验元素类型，非原生直接判失败）；自定义下拉组件禁用 select，改用 click 序列（click 展开按钮 → click 目标选项）；')
+    parts.push('· 悬停显示（When 用户悬停「帮助」图标出现提示）→ {type:"hover", selector:"…"}，悬停后才出现的提示元素交给后续 wait-selector/assert-text 断言；')
+    parts.push('· 滚动加载（When 用户向下滚动加载更多）→ {type:"scroll", deltaY:600}（页面级滚动可省 selector，元素内滚动写该元素 selector）；')
+    parts.push('  scroll 本身不隐式等待，滚动后的加载结果交给后续 assert-count/wait-selector 断言；')
+    parts.push('· 聚焦类（When 输入框获得焦点出现格式提示）→ {type:"focus", selector:"…"}，聚焦后出现的提示同样交给后续断言 op。')
     parts.push('· press 的 value 写键名（如 Enter、Escape、Tab）；assert-count 用 count（非负整数）；')
     parts.push('· 复杂状态断言暂不支持自定义脚本：改用 assert-text 轮询读界面呈现的状态文本（如倒计时剩余数值、状态徽标文案）；')
     parts.push('· 断言类默认 timeoutMs=4000（轮询窗口内重试），禁止依赖严格时刻的断言；')
     parts.push('· 无法可靠映射的步骤：op 置 null 且 unmapped:true，场景标 skip:true + skipReason（透明跳过，不臆造）；')
-    parts.push('· selector 只允许 data-ai-id=xxx 形态，ID 必须来自实际代码，与 .feature 文字描述一一对应。')
+    // F3 selector 三档（防脆弱设计保留：不开放自由 CSS/文本选择器）；模板明确优先级防回炉用 #id 规避标注纪律（A4）
+    parts.push('· selector 三档形态（优先级从高到低，按需选档）：')
+    parts.push('  ① data-ai-id=xxx（首选：显式测试锚点；回炉修映射时优先给应用补 data-ai-id 标注）；')
+    parts.push('  ② #my-id（次选：页面内唯一的稳定元素 id；运行器做唯一性校验，不唯一直接判失败，绝不静默取第一个）；')
+    parts.push('  ③ [aria-label="提交表单"]（兜底：精确匹配元素显式 aria-label 属性值，≤60 字符；不是所有可访问名都来自该属性）；')
+    parts.push('  三档的 ID/label 都必须来自实际代码，与 .feature 文字描述一一对应；不得用 ②③ 规避 data-ai-id 标注纪律。')
     parts.push('')
   }
 
@@ -384,6 +403,52 @@ export function buildL2TaskWithAC(
   return parts.join('\n')
 }
 
+// ===== W22 M-9（#13 主通道）：autoClarify 开关的每轮 prompt 消费 =====
+
+/** 开关「近期切换」窗口（ms，=60min，典型一轮 run 的时长量级；工单允许的简化实现：
+ *  严格判定「lastToggledAt 晚于会话最后一轮」需读会话数据，此处用时间窗口兑底） */
+export const NANJU_AUTO_TOGGLE_RECENT_MS = 60 * 60 * 1000
+
+/** 解析 autoClarify.lastToggledAt（宽容两形态：number=毫秒时间戳 / string=ISO；无效 → null）。
+ *  字段由 set-auto-clarify IPC 写入（G 域）；未合入/旧数据无此字段 → null（off 态零注入，
+ *  v0.17.97 off 快照与存量项目行为不变）。 */
+export function parseAutoClarifyToggledAt(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw
+  if (typeof raw === 'string') {
+    const t = Date.parse(raw)
+    return Number.isFinite(t) ? t : null
+  }
+  return null
+}
+
+/** 判定开关切换是否落在「近期」窗口内（未来时间戳视为近期——时钟偏移容忍） */
+function isRecentToggle(toggledAt: number | null, now: number): boolean {
+  if (toggledAt === null) return false
+  return now - toggledAt <= NANJU_AUTO_TOGGLE_RECENT_MS
+}
+
+/**
+ * M-9 开关状态头部行（每轮 prompt 重建时消费注册表——L1 心智随开关更新）。
+ *
+ * - on：总注入「当前模式：自动审核开启」；近期切换时追加提示（旧上下文中的手动确认指令作废）
+ * - off：仅当存在切换记录（lastToggledAt 可解析）才注入「当前模式：自动审核关闭」——
+ *   从未开启过的项目零注入（off 态行为与 v0.17.97 一致，快照不变）
+ * - 不强制续接（注入通道由 G 域另行处理；本通道是唯一能保证 L1 心智与注册表一致的确定通道）
+ */
+export function buildAutoClarifyModeLines(enabled: boolean, toggledAtRaw: unknown, now: number): string[] {
+  const toggledAt = parseAutoClarifyToggledAt(toggledAtRaw)
+  const recent = isRecentToggle(toggledAt, now)
+  if (enabled) {
+    return recent
+      ? ['当前模式：自动审核开启（近期切换——本轮起按自动模式处理，旧上下文中的手动确认指令以本行为准）', '']
+      : ['当前模式：自动审核开启', '']
+  }
+  if (toggledAt === null) return []
+  return recent
+    ? ['当前模式：自动审核关闭（近期已停用——本轮起确认类环节恢复用户参与，不得按旧上下文的自动模式直出推进标记）', '']
+    : ['当前模式：自动审核关闭（已停用——确认类环节由用户参与）', '']
+}
+
 /**
  * v2.4.1（D8 §九 C′/B′）：auto 开启时注入 L1 的「自动补完+自动审核」协议段。
  * auto 关闭零注入（行为零变化，off 态快照锁定 v0.17.97）。
@@ -477,6 +542,10 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
   const authorChannel = authorOverride?.channelId ?? phase.channel
   const authorModel = authorOverride?.modelId ?? phase.model
+  // W22 R1（#10 后半）：testing 回炉话术引用 coding 阶段渠道/模型（动态读，不硬编码——
+  // 模型矩阵演进时话术自适应；与 M 域 nanju-model-config 单一真相源对齐）
+  const codingPhase = stage === 'testing' ? getPhaseNode(project.mode, 'coding') : null
+  const codingPhaseEndpoint = codingPhase ? codingPhase.channel + ' / ' + codingPhase.model : 'coding 配置'
   const acDefenderRuntime = phase.acDefenderChannel === 'minimax' ? resolveMinimaxM3Actor() : null
   const acDefenderEndpoint = acDefenderRuntime
     ? { channel: acDefenderRuntime.channelId, model: acDefenderRuntime.modelId }
@@ -501,8 +570,14 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
 
   // v2.4（D7 §0/§3）：auto 开启判定——仅快消型（升级即失效硬边界）；字段由
   // nanju-project（autoClarify{enabled,...}）提供，宽类型访问兼容并行域类型未合入期。
-  const autoClarifyEnabled = project.mode === 'quick'
-    && ((project as { autoClarify?: { enabled?: boolean } }).autoClarify?.enabled === true)
+  // W22 M-9（#13 主通道）：同时读 lastToggledAt（G 域 IPC 写入）——开关状态头部行每轮
+  // prompt 重建时消费，消除「同一 run 内提示词快照不更新」的 L1 旧心智（D8-2 上游预防；
+  // 不强制续接——续接通道归 G 域，本通道是心智与注册表一致的确定性主通道）。
+  const autoClarifyField = (project as { autoClarify?: { enabled?: boolean; lastToggledAt?: unknown } }).autoClarify
+  const autoClarifyEnabled = project.mode === 'quick' && autoClarifyField?.enabled === true
+  const autoClarifyModeLines = project.mode === 'quick'
+    ? buildAutoClarifyModeLines(autoClarifyEnabled, autoClarifyField?.lastToggledAt, Date.now())
+    : []
 
   // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导；
   // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击）
@@ -564,7 +639,11 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     '子会话内部会自行完成 AC 对抗审计（异构模型）并修复 red 级问题。',
     '',
     // v2.4（D7 §6）：auto 开启时注入协议段（auto 关闭零注入）
-    ...(autoClarifyEnabled ? buildAutoClarifyProtocolLines() : []),
+    // W22 M-9：开关状态头部行先行——on 态总注入（近期切换带提示）；off 态仅存在切换
+    // 记录的项目注入（从未开启 → 零注入，off 行为与 v0.17.97 一致）
+    ...(autoClarifyEnabled
+      ? [...autoClarifyModeLines, ...buildAutoClarifyProtocolLines()]
+      : autoClarifyModeLines),
     '### 具体操作步骤',
     '1. 用 delegate_agent 委派「' + phase.title + '」子会话：',
     '   - channelId: ' + authorChannel,
@@ -751,10 +830,17 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
           ]),
         '     · 用户需要调整（或描述问题）→ 意见收集轮收集修改意见（可引导用户点选右侧预览元素精准定位，',
         '       复用编码阶段 c/d 的收集节奏：逐条确认理解、收齐后统一改），收齐后 continue_delegation',
-        '       委派「全栈开发」修复 08_APP/ 下的代码（不动 06_TESTS/ 与 01_PRD/），修复完成后输出',
+        '       委派原「全栈开发」委派修复 08_APP/ 下的代码（不动 06_TESTS/ 与 01_PRD/；渠道用 coding 阶段配置，',
+        '       不要委派 minimax 做代码修复——M3 不用于代码修复），修复完成后输出',
         '       <!-- PHASE_ADVANCE: testing --> 重跑自动测试（回炉修复与重映射合计 ≤2 次，超限系统转人工）。',
-        '   - ❌ 行为类失败（断言不匹配等应用缺陷）：按失败清单 continue_delegation 委派「全栈开发」修复缺陷',
-        '     （仅改 08_APP/ 下的代码，不得改 06_TESTS/ 与 01_PRD/），修复完成后重新输出',
+        // W22 R1（#10 后半）：行为类失败回炉路由回原 coding 委派（保留上下文，不新建修复会话）；
+        // 渠道话术动态读 coding 阶段配置（不硬编码渠道名，随模型矩阵演进自适应）；
+        // R2 配合：明确禁 minimax 做代码修复（E2E 实锤 M3 干修复）
+        '   - ❌ 行为类失败（断言不匹配等应用缺陷）：把失败清单转交原「全栈开发」修复——优先按 GWT 注入消息中的',
+        '     continue_delegation(<codingDelegationId>) 续接原 coding 委派（它保留完整上下文与原渠道，不要新建修复会话）；',
+        '     仅当注入消息未带 ID 时才新建 delegate_agent 修复委派，且渠道必须用 coding 阶段配置（' + codingPhaseEndpoint + '），',
+        '     【不要】委派 minimax（M3 不用于代码修复，代码修复回到原全栈开发委派）；',
+        '     修复仅改 08_APP/ 下的代码，不得改 06_TESTS/ 与 01_PRD/，修复完成后重新输出',
         '     <!-- PHASE_ADVANCE: testing --> 重跑测试。',
         '   - 🔁 映射类失败（目标元素等待超时未出现）：continue_delegation 委派「测试工程师」重新映射 steps.json',
         '     （只改 06_TESTS/ 下的映射，不动 08_APP/ 与 01_PRD/），改完重跑；这不是应用缺陷，不要去改代码。',

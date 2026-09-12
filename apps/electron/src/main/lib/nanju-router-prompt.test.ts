@@ -40,7 +40,7 @@ mock.module('./channel-manager', () => ({
 }))
 
 const { buildL2TaskWithAC, resolveMinimaxM3Channel, getNanjuRouterPrompt } = await import('./nanju-router-prompt')
-const { getPhaseNode } = await import('./nanju-router')
+const { getPhaseNode, resolveACActors } = await import('./nanju-router')
 
 /** 构造测试用渠道 */
 function makeChannel(overrides: Partial<Channel> = {}): Channel {
@@ -284,7 +284,8 @@ describe('testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；W13 
     const phase = getPhaseNode('quick', 'testing')!
     const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', ['/tmp/prd.md'], '/tmp/project')
     expect(task).toContain('steps.json 格式规范')
-    expect(task).toContain('click / fill / press / wait-selector / assert-text / assert-visible / assert-count。')
+    // W22（#14+F2/F3 同步）：白名单升级 v2（五类新 op 入表，仍不含 eval）
+    expect(task).toContain('click / fill / press / wait-selector / assert-text / assert-visible / assert-count / check / uncheck / select / hover / scroll / focus。')
     expect(task).toContain('复杂状态断言暂不支持自定义脚本')
     expect(task).not.toContain('/ eval')
     expect(task).toContain('06_TESTS/features/us-XX.feature 配一个同名 us-XX.steps.json')
@@ -420,16 +421,18 @@ describe('L1 调度员指令（v0.17.64：超时纪律 + 收口果断性）', ()
     expect(prompt).toContain('<!-- PHASE_ADVANCE: testing -->')
   })
 
-  test('W13：testing L1 委派指令指向 glm-zhipu/glm-5.3-flash；AC 防御者=minimax 家族（字面标记或同 worker 有 electron mock 时解析出的 UUID 渠道；家族断言两部均通过）', () => {
+  test('W13：testing L1 委派指令携带路由配置的作者/攻防渠道（动态断言——W22 M#6/M#7 模型矩阵演进后不再硬编码）；AC 防御者=minimax 家族', () => {
     const prompt = buildPrompt('testing')
-    // 作者委派参数
-    expect(prompt).toContain('channelId: glm-zhipu')
-    expect(prompt).toContain('modelId: glm-5.3-flash')
+    // 作者委派参数 = 路由配置单一真相源（W22 M#6：testing 作者跨族演进时断言随配置自适应）
+    const testingPhase = getPhaseNode('quick', 'testing')!
+    expect(prompt).toContain('channelId: ' + testingPhase.channel)
+    expect(prompt).toContain('modelId: ' + testingPhase.model)
     // L2 任务内 AC 防御者：minimax 家族（字面标记 = 测试环境降级；ch-minimax-uuid = 本文件
     // channel-manager mock 注入且同 worker 有 electron mock 时的运行时解析值）
     expect(prompt).toMatch(/channel=(minimax|ch-minimax-uuid), model=MiniMax-M3/)
-    // 攻者仍为 deepseek 系预设
-    expect(prompt).toContain('channel=deepseek, model=deepseek-v4-flash')
+    // 攻者 = 路由解析值（W22 M#7：acAttacker 覆盖随配置演进；不再断言具体家族字面值）
+    const actors = resolveACActors(testingPhase)
+    expect(prompt).toContain('channel=' + actors.attacker.channel + ', model=' + actors.attacker.model)
   })
 
   test('非 testing 阶段：用户确认后立即收口，不得以再核实/再澄清推迟推进（一句话强化，不改语义）', () => {
@@ -1057,5 +1060,173 @@ describe('D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05）
     const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project', null, null, false)
     expect(task).not.toContain('ac-verdict')
     expect(task).toMatchSnapshot('d8-auto-off-quick-arch-l2')
+  })
+})
+
+// ═══════════════ W22 C 域：L2 模板 v2（#14+F2/F3）+ R1 回炉路由（#10 后半）+ M-9 开关头部行（#13） ═══════════════
+
+describe('W22 #14：testing L2 模板五类新 op 映射指引（Gherkin→steps 范例）', () => {
+  const glmAuthor = { channel: 'glm-zhipu', model: 'glm-5.3-flash' }
+
+  test('check/uncheck：勾选与取消勾选范例 + radio 不可取消约束', () => {
+    const phase = getPhaseNode('quick', 'testing')!
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('{type:"check"')
+    expect(task).toContain('{type:"uncheck"')
+    expect(task).toContain('radio 不可取消，勿对 radio 用 uncheck')
+  })
+
+  test('select：仅限原生 <select> + value 匹配语义 + 自定义下拉改 click 序列', () => {
+    const phase = getPhaseNode('quick', 'testing')!
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('{type:"select"')
+    expect(task).toContain('仅限原生 <select>')
+    expect(task).toContain('自定义下拉组件禁用 select')
+    expect(task).toContain('click 展开按钮 → click 目标选项')
+  })
+
+  test('hover/scroll/focus：悬停断言交给后续 op + 滚动不隐式等待 + 聚焦提示交给断言', () => {
+    const phase = getPhaseNode('quick', 'testing')!
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('{type:"hover"')
+    expect(task).toContain('悬停后才出现的提示元素')
+    expect(task).toContain('{type:"scroll"')
+    expect(task).toContain('scroll 本身不隐式等待')
+    expect(task).toContain('{type:"focus"')
+    expect(task).toContain('聚焦后出现的提示同样交给后续断言 op')
+  })
+
+  test('selector 三档指引：data-ai-id 优先 + #id 唯一性校验 + aria-label 属性匹配 + 不规避标注纪律', () => {
+    const phase = getPhaseNode('quick', 'testing')!
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('selector 三档形态（优先级从高到低')
+    expect(task).toContain('① data-ai-id=xxx（首选')
+    expect(task).toContain('② #my-id')
+    expect(task).toContain('不唯一直接判失败，绝不静默取第一个')
+    expect(task).toContain('③ [aria-label="提交表单"]')
+    expect(task).toContain('不得用 ②③ 规避 data-ai-id 标注纪律')
+  })
+
+  test('schemaVersion:2 声明要求（A1：旧运行器遇新 op 判 schema 失败而非静默 skip）+ 示例 JSON 携带字段', () => {
+    const phase = getPhaseNode('quick', 'testing')!
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('"schemaVersion": 2')
+    expect(task).toContain('会被判 schema 失败，不是静默跳过')
+    // 示例 JSON 内联字段（模板自带书写示范，JSON.stringify 输出形态）
+    expect(task).toContain('"schemaVersion": 2,')
+  })
+})
+
+describe('W22 R1：testing 行为类失败回炉路由（回原 coding 委派，不新建修复会话）', () => {
+  /** testing fixture（复用文件级 fixtureRoot mock） */
+  function buildTestingPrompt(): string {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-w22-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pw22')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n\n## 用户故事\n\n- US-01 添加笔记\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pw22', name: 'W22 项目', mode: 'quick', status: 'active',
+      currentStage: 'testing', createdAt: '', updatedAt: '', sessionId: 's-pw22', workspaceSlug: root,
+    }]))
+    const prompt = getNanjuRouterPrompt(fixtureRoot, 's-pw22')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(() => {
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('行为类失败：continue_delegation(<codingDelegationId>) 转交原全栈开发 + 不新建修复会话 + 未带 ID 时渠道=coding 配置', () => {
+    const prompt = buildTestingPrompt()
+    expect(prompt).toContain('continue_delegation(<codingDelegationId>)')
+    expect(prompt).toContain('续接原 coding 委派')
+    expect(prompt).toContain('不要新建修复会话')
+    expect(prompt).toContain('仅当注入消息未带 ID 时才新建')
+    // 渠道话术动态读 coding 阶段配置（quick=coding：glm-zhipu / GLM-5.3；随模型矩阵演进自适应）
+    expect(prompt).toContain('glm-zhipu / GLM-5.3')
+  })
+
+  test('修复守卫配合话术：代码修复不委派 minimax（M3 不用于代码修复）——行为类与用户调整两分支', () => {
+    const prompt = buildTestingPrompt()
+    expect(prompt).toContain('【不要】委派 minimax')
+    expect(prompt).toContain('M3 不用于代码修复')
+    expect(prompt).toContain('不要委派 minimax 做代码修复')
+  })
+
+  test('mapping/coverage 回炉仍指「测试工程师」（R1 不改道）', () => {
+    const prompt = buildTestingPrompt()
+    expect(prompt).toContain('委派「测试工程师」重新映射 steps.json')
+    expect(prompt).toContain('按注入消息指引委派「测试工程师」补场景')
+  })
+
+  test('修复边界保留：仅改 08_APP/ 不动 06_TESTS/ 与 01_PRD/（既有约束不回退）', () => {
+    const prompt = buildTestingPrompt()
+    expect(prompt).toContain('修复仅改 08_APP/ 下的代码，不得改 06_TESTS/ 与 01_PRD/')
+  })
+})
+
+describe('W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，不强制续接）', () => {
+  /** W22 fixture：autoClarify 可控（enabled + lastToggledAt） */
+  function buildPromptForW22(autoClarify: Record<string, unknown> | undefined): string {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-w22a-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-pw22a')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'pw22a', name: 'M9 项目', mode: 'quick', status: 'active',
+      currentStage: 'requirements', createdAt: '', updatedAt: '', sessionId: 's-pw22a', workspaceSlug: root,
+      ...(autoClarify ? { autoClarify } : {}),
+    }]))
+    const prompt = getNanjuRouterPrompt(fixtureRoot, 's-pw22a')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(() => {
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('on 态 + 近期切换：协议段头部行「当前模式：自动审核开启（近期切换…）」', () => {
+    const prompt = buildPromptForW22({ enabled: true, lastToggledAt: Date.now() - 5 * 60 * 1000 })
+    expect(prompt).toContain('当前模式：自动审核开启（近期切换——本轮起按自动模式处理')
+    // 头部行位于协议段标题之前（心智先行）
+    expect(prompt.indexOf('当前模式：自动审核开启')).toBeLessThan(prompt.indexOf('### 自动补完需求 + 自动审核'))
+  })
+
+  test('on 态 + 无切换记录/切换已久：头部行「当前模式：自动审核开启」无近期尾注', () => {
+    const noToggle = buildPromptForW22({ enabled: true })
+    expect(noToggle).toContain('当前模式：自动审核开启\n')
+    expect(noToggle).not.toContain('近期切换')
+    const longAgo = buildPromptForW22({ enabled: true, lastToggledAt: Date.now() - 48 * 60 * 60 * 1000 })
+    expect(longAgo).toContain('当前模式：自动审核开启\n')
+    expect(longAgo).not.toContain('近期切换')
+  })
+
+  test('off 态 + 存在切换记录：头部行「当前模式：自动审核关闭（近期已停用…）」——L1 旧心智更新', () => {
+    const prompt = buildPromptForW22({ enabled: false, lastToggledAt: Date.now() - 3 * 60 * 1000 })
+    expect(prompt).toContain('当前模式：自动审核关闭（近期已停用——本轮起确认类环节恢复用户参与')
+    expect(prompt).not.toContain('nanju_clarify_proxy')
+  })
+
+  test('off 态 + 无切换记录（从未开启/老项目）：零注入——v0.17.97 off 行为与快照不破坏', () => {
+    const prompt = buildPromptForW22(undefined)
+    expect(prompt).not.toContain('当前模式：自动审核')
+    const legacyField = buildPromptForW22({ enabled: false })
+    expect(legacyField).not.toContain('当前模式：自动审核')
+  })
+
+  test('parseAutoClarifyToggledAt：宽容解析 number(ms)/ISO 字符串；无效与缺失 → null', () => {
+    const { parseAutoClarifyToggledAt } = require('./nanju-router-prompt') as typeof import('./nanju-router-prompt')
+    expect(parseAutoClarifyToggledAt(1770000000000)).toBe(1770000000000)
+    expect(parseAutoClarifyToggledAt('2026-09-12T14:00:00.000Z')).toBe(Date.parse('2026-09-12T14:00:00.000Z'))
+    expect(parseAutoClarifyToggledAt('not-a-date')).toBeNull()
+    expect(parseAutoClarifyToggledAt(undefined)).toBeNull()
+    expect(parseAutoClarifyToggledAt(0)).toBeNull()
+    expect(parseAutoClarifyToggledAt(-1)).toBeNull()
   })
 })

@@ -116,6 +116,29 @@ export function buildClarifyNoticeText(subStage: string | null | undefined, auto
     : '⏳ 澄清中：子会话有澄清问题等待你回答。'
 }
 
+// ===== W22 M-8（#12）：autoClarify 停用态徽标与重开入口（纯函数面，供渲染红测） =====
+
+/** 项目头 autoClarify 徽标三态：active=开启（琥珀徽标）/ disabled=曾开启后停用（灰色徽标，
+ *  可重开）/ null=不渲染（quick 未开启过——autoClarify 缺失零噪音；iterative——升级即
+ *  失效，无重开语义，IPC 也会拒绝）。 */
+export type AutoClarifyHeaderBadge = { kind: 'active' } | { kind: 'disabled' } | null
+
+/** 徽标判定（宽类型入参：mode/autoClarify 字段面宽松，与主进程全量 JSON 投影兼容） */
+export function resolveAutoClarifyHeaderBadge(
+  project: { mode?: unknown; autoClarify?: { enabled?: unknown } } | null | undefined,
+): AutoClarifyHeaderBadge {
+  if (!project || project.mode !== 'quick') return null
+  const auto = project.autoClarify
+  if (auto?.enabled === true) return { kind: 'active' }
+  if (auto && auto.enabled === false) return { kind: 'disabled' }
+  return null
+}
+
+/** 重开动作的 IPC 入参（仅 disabled 态可重开；入参形状与 nanju:set-auto-clarify 对齐） */
+export function planAutoClarifyReenable(badge: AutoClarifyHeaderBadge): { enabled: boolean } | null {
+  return badge?.kind === 'disabled' ? { enabled: true } : null
+}
+
 export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
   // workspaceSlug 来源：会话 → 工作区 atoms 解析（修订 Y4，与 SidePanel 同链路）
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -311,9 +334,10 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
   )
 
   // ===== v2.4：自动补完需求（auto-clarify）状态面 =====
-  /** 项目级开启态（宽类型访问：A 域 NanjuProject.autoClarify 字段投影随全量 JSON 到达） */
-  const autoClarifyEnabled = data.project?.mode === 'quick'
-    && (data.project as { autoClarify?: { enabled?: boolean } }).autoClarify?.enabled === true
+  /** 项目级开启态（宽类型访问：A 域 NanjuProject.autoClarify 字段投影随全量 JSON 到达）。
+   *  W22 M-8：改由徽标三态判定派生（off 曾开启态新增灰色重开徽标） */
+  const autoClarifyBadge = resolveAutoClarifyHeaderBadge(data.project)
+  const autoClarifyEnabled = autoClarifyBadge?.kind === 'active'
   // D8（R7-12）：澄清中 sentinel 文案（auto on=代理澄清中 / off=等用户；非 CLARIFY 态 null）
   const clarifySentinelNotice = buildClarifyNoticeText(data.subStage, autoClarifyEnabled)
   const [clarifyOpen, setClarifyOpen] = React.useState(false)
@@ -353,6 +377,29 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
         setClarifyNotice('关闭失败，请稍后重试。')
       })
   }, [workspaceSlug, data.project, refreshClarify, data.refresh])
+
+  // ===== W22 M-8（#12）：停用态重开入口 =====
+  /** 重开确认条可见性（点灰色徽标 → 内联二次确认，与快照回滚同风格；确认后才调 IPC） */
+  const [reenableConfirming, setReenableConfirming] = React.useState(false)
+
+  /** 重开自动补完（IPC 复用 nanju:set-auto-clarify enabled:true；主进程校验仅快消型） */
+  const handleReenableAutoClarify = React.useCallback(() => {
+    if (!workspaceSlug || !data.project) return
+    const plan = planAutoClarifyReenable(autoClarifyBadge)
+    if (!plan) { setReenableConfirming(false); return }
+    void window.electronAPI.nanjuSetAutoClarify({ workspaceSlug, projectId: data.project.projectId, enabled: plan.enabled })
+      .then((result) => {
+        const r = result as { ok?: boolean; error?: string }
+        if (r?.ok === false && r?.error) setClarifyNotice(`开启失败：${r.error}`)
+        setReenableConfirming(false)
+        refreshClarify()
+        data.refresh()
+      })
+      .catch((e: unknown) => {
+        console.error('[向导图] 重开自动补完失败:', e)
+        setClarifyNotice('开启失败，请稍后重试。')
+      })
+  }, [workspaceSlug, data.project, autoClarifyBadge, refreshClarify, data.refresh])
 
   // ===== 空态 / 骨架 / 错误切换（PRD §九） =====
   let body: React.ReactElement
@@ -441,7 +488,7 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
             </span>
           )}
           {/* v2.4：auto 开启徽标（仅快消型；点击展开代答卡片与开关） */}
-          {autoClarifyEnabled && (
+          {autoClarifyBadge?.kind === 'active' && (
             <button
               type="button"
               onClick={() => { setClarifyOpen((prev) => !prev); setClarifyNotice(null) }}
@@ -453,6 +500,20 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
               )}
             >
               <Sparkles className="size-3" />自动进行中
+            </button>
+          )}
+          {/* W22 M-8：auto 停用态徽标（曾开启后停用；点击弹确认重开——IPC 复用 nanju:set-auto-clarify） */}
+          {autoClarifyBadge?.kind === 'disabled' && (
+            <button
+              type="button"
+              onClick={() => setReenableConfirming(true)}
+              title="自动补完需求已停用：点击重新开启"
+              className={cn(
+                'shrink-0 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px]',
+                'bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground/80',
+              )}
+            >
+              <Sparkles className="size-3 opacity-50" />自动补完·已停用
             </button>
           )}
           {data.abandoned && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已放弃</span>}
@@ -481,6 +542,15 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
           </div>
         )}
       </div>
+
+      {/* W22 M-8：重开自动补完确认条（灰色徽标点击后出现；内联二次确认，与快照回滚同风格） */}
+      {reenableConfirming && data.project && viewMode === 'project' && (
+        <div className="flex items-start gap-1.5 px-3 py-1.5 text-[11px] shrink-0 bg-muted/60">
+          <span className="flex-1 break-all">重新开启「自动补完需求」？开启后需求补充类问题由 AI 代理作答、确认类环节自动通过（环境安装除外）；本轮起调度员按自动模式处理。</span>
+          <button type="button" onClick={handleReenableAutoClarify} className="shrink-0 rounded border border-border px-1.5 py-0.5 hover:bg-muted/70">开启</button>
+          <button type="button" onClick={() => setReenableConfirming(false)} className="shrink-0 rounded border border-border px-1.5 py-0.5 hover:bg-muted/70">取消</button>
+        </div>
+      )}
 
       {body}
 
