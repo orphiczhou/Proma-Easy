@@ -9,18 +9,23 @@ import { describe, expect, test } from 'bun:test'
 import { getGuideRoute, getRoute, AC_PRESETS } from './nanju-router'
 
 describe('getGuideRoute（nanju:get-route 数据面）', () => {
-  test('quick：6 个阶段（含 delivered 哨兵；W7 v0.17.69 起必经 architecture 轻量变体），taskWeight=light，acActors=light 预设（W13b 例外：architecture/coding/testing 防御者=minimax 覆盖）', () => {
+  test('quick：6 个阶段（含 delivered 哨兵；W7 v0.17.69 起必经 architecture 轻量变体），taskWeight=light，acActors=light 预设（例外：architecture/coding 防御者=minimax 覆盖；testing 攻+防双覆盖，W22 M#7）', () => {
     const route = getGuideRoute('quick')
     expect(route.length).toBe(6)
     expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'coding', 'testing', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('light')
-      // W13b：作者 glm 系阶段（architecture/coding）防御者显式覆盖 minimax 系
-      // （testing 为 W13 先例；其余阶段 = light 预设）
-      const expected = phase.id === 'architecture' || phase.id === 'coding' || phase.id === 'testing'
+      // W22 M#7：testing 双覆盖（攻 glm / 防 minimax）；architecture/coding 仅防御者覆盖
+      //（作者 glm 系阶段防御者必须异族）；其余阶段 = light 预设
+      const expected = phase.id === 'architecture' || phase.id === 'coding'
         ? { attacker: AC_PRESETS.light.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
-        : AC_PRESETS.light
+        : phase.id === 'testing'
+          ? {
+              attacker: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
+              defender: { channel: 'minimax', model: 'MiniMax-M3' },
+            }
+          : AC_PRESETS.light
       expect(phase.acActors).toEqual(expected)
     }
     // 哨兵节点字段为空（渲染端按 id==='delivered' 过滤，修订 Y3）
@@ -29,15 +34,20 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(sentinel?.outputPath).toBe('')
   })
 
-  test('iterative：7 个阶段（含 delivered 哨兵；Sprint B 起 testing 入路由），taskWeight=medium，acActors=medium 预设（W13b 例外：architecture/coding/testing 防御者=minimax 覆盖）', () => {
+  test('iterative：7 个阶段（含 delivered 哨兵；Sprint B 起 testing 入路由），taskWeight=medium，acActors=medium 预设（例外：architecture/coding 防御者=minimax 覆盖；testing 攻+防双覆盖，W22 M#7）', () => {
     const route = getGuideRoute('iterative')
     expect(route.map((p) => p.id)).toEqual(['requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered'])
     for (const phase of route) {
       if (phase.id === 'delivered') continue
       expect(phase.taskWeight).toBe('medium')
-      const expected = phase.id === 'architecture' || phase.id === 'coding' || phase.id === 'testing'
+      const expected = phase.id === 'architecture' || phase.id === 'coding'
         ? { attacker: AC_PRESETS.medium.attacker, defender: { channel: 'minimax', model: 'MiniMax-M3' } }
-        : AC_PRESETS.medium
+        : phase.id === 'testing'
+          ? {
+              attacker: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
+              defender: { channel: 'minimax', model: 'MiniMax-M3' },
+            }
+          : AC_PRESETS.medium
       expect(phase.acActors).toEqual(expected)
     }
   })
@@ -102,9 +112,9 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     // W13b：coding GLM 化（原 deepseek-v4-pro）
     expect(byTitle('coding')?.model).toBe('GLM-5.3')
     expect(byTitle('coding')?.channel).toBe('glm-zhipu')
-    // W13：测试工程师换 glm-5.3-flash（机械任务+视觉+成本，用户 09-03 裁定）
-    expect(byTitle('testing')?.model).toBe('glm-5.3-flash')
-    expect(byTitle('testing')?.channel).toBe('glm-zhipu')
+    // W22 M#6：测试工程师换 deepseek-v4-flash（跨族：与 coding 的 glm 系异族，恢复开发/测试独立性）
+    expect(byTitle('testing')?.model).toBe('deepseek-v4-flash')
+    expect(byTitle('testing')?.channel).toBe('deepseek')
     // W13：planning 降档 deepseek-v4-flash（模板化拆分）
     expect(byTitle('planning')?.model).toBe('deepseek-v4-flash')
   })

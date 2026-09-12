@@ -97,7 +97,9 @@ export interface LoadedNanjuModelConfig {
  * - coding/architecture AC 防御者显式覆盖 minimax:MiniMax-M3——作者 glm 系与两档预设
  *   防御者（light=glm-5.3-flash / medium=GLM-5.3，均 glm 系）同族，assertACFamilyDiversity
  *   构建期必抛错；攻者两档均 deepseek 系 → 防御者唯一可用异族 = minimax 系（W13 testing 先例）
- * - testing/planning 沿用 W13 裁定（glm-5.3-flash / deepseek-v4-flash），requirements/prototype 保持
+ * - planning 沿用 W13 裁定（deepseek-v4-flash）；testing：W22（v0.17.106）作者换 deepseek-v4-flash
+ *   （跨族改值，用户问题②）+ acAttacker per-phase 覆盖 glm-5.3-flash（三族矩阵，M#7），
+ *   requirements/prototype 保持
  *
  * fallback 链编译说明：链按端点 key（channel:model）合并——多阶段共用同一主选端点时
  * （architecture 与 coding 共用 glm-zhipu:GLM-5.3），按 NANJU_MODEL_PHASE_ORDER 顺序取
@@ -133,9 +135,19 @@ export const FALLBACK_PHASE_MODELS: Record<NanjuModelPhaseId, PhaseModelEntry> =
     acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
   },
   testing: {
-    channel: 'glm-zhipu',
-    model: 'glm-5.3-flash',
-    fallbacks: ['deepseek:deepseek-v4-flash'],
+    // W22 M#6（v0.17.106，用户问题②）：作者换 deepseek-v4-flash——与 coding（glm 系）跨族，
+    // 恢复开发/测试独立性（同族同源盲区：GLM 写的代码 GLM 测）；选 flash 而非 pro：GWT 场景
+    // 生成是高 token 输出/低推理深度/多轮迭代任务，pro 的边际质量收益小、成本与延迟直接
+    // 叠加回炉时限（论证 P1：D8 实测 requirements 用 pro 链路 31min）。
+    // fallbacks 对调：glm-5.3-flash（原主选，与 coding 同族——降级到它时跨族被破坏，
+    // 由 W22 M#8 启动断言的降级点告警观测）→ deepseek-v4-pro（异族备援）。
+    channel: 'deepseek',
+    model: 'deepseek-v4-flash',
+    fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-pro'],
+    // W22 M#7：AC 攻击者 per-phase 覆盖 glm-zhipu:glm-5.3-flash——与新作者（deepseek 系）
+    // 跨族，与 defender（minimax 系）异族 → 三角色三族矩阵（作者 ds / 攻 glm / 防 minimax）。
+    // 若无本覆盖位，两档预设攻击者均为 deepseek 系 → 与新作者同族。
+    acAttacker: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
     acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
   },
 }

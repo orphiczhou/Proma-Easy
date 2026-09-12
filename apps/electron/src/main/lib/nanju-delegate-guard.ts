@@ -36,7 +36,7 @@
 
 import type { NanjuGuardStage } from './nanju-project'
 import type { ProjectMode } from './nanju-project'
-import { AC_PRESETS, type ACActorConfig } from './nanju-router'
+import { AC_PRESETS, channelFamily, getPhaseNode, resolveACActors, type ACActorConfig } from './nanju-router'
 
 // ===== 层一：阶段角色词表 =====
 
@@ -144,6 +144,44 @@ const AC_ATTACKER_KEYWORDS: readonly string[] = ['攻击', 'attack']
 
 /** AC 防方识别词（用于层二区分攻/防） */
 const AC_DEFENDER_KEYWORDS: readonly string[] = ['防御', 'defense', '裁决']
+
+// ===== W22 M#9/R2：修复路由守卫（testing 阶段 MiniMax 误用于代码修复） =====
+
+/**
+ * R2 判据③的 coding 阶段词（工单口径：全栈/开发/代码/index.html + 英文同义 coding/code）。
+ * 独立成表——**禁动 STRONG_ACTION_VERBS 与既有 ROLE/OUTPUT 词表**（论证 P0#7：
+ * 「修复」入 STRONG_ACTION_VERBS 的血溅面是全阶段，而 testing 合法回炉指令本就含
+ * 「委派全栈开发修复缺陷」）；刻意不含「实现」——testing 合法委派高频含「对比原型
+ * 与实现」（截图比对语境），误杀面大。中文 includes / 英文 \b 词边界（findKeyword 惯例）。
+ */
+export const R2_CODING_STAGE_KEYWORDS: readonly string[] = ['全栈', '开发', '代码', 'coding', 'code', 'index.html']
+
+/** MiniMax-M3 模型名匹配（与 nanju-router-prompt 的 MINIMAX_M3_PATTERN 同口径） */
+const MINIMAX_MODEL_PATTERN = /minimax[-_\s]?m3/i
+
+/**
+ * R2 判据②：显式端点指向 minimax 家族。两信号任一命中：
+ * - channelId 前缀（字面家族标记 'minimax*'——channelFamily 口径）；
+ * - modelId 匹配 MiniMax-M3 模型名——minimax 实际渠道 ID 是 UUID（release/dev 不同），
+ *   渠道前缀判不到家族，E2E 实测形态（二级委派自选 MiniMax-M3）模型名是可靠信号。
+ */
+export function isMinimaxEndpoint(channelId?: string, modelId?: string): boolean {
+  if (channelId !== undefined && channelId.trim() !== '' && channelFamily(channelId) === 'family-minimax') return true
+  if (modelId !== undefined && MINIMAX_MODEL_PATTERN.test(modelId)) return true
+  return false
+}
+
+/**
+ * R2 deny 教育文案：给出可执行替代动作（continue_delegation 原「全栈开发」委派，
+ * 保留上下文与原渠道）——防 L1 退化成「重新 delegate_agent 找一个新全栈」丢上下文
+ * （论证 M#9：那是 #10/R1 要解决的问题）。工单文本 + 原委派查找指引。
+ * 接线位：router-gate 的 deny 文案分支（按 denialKind==='minimax-repair-misuse' 取用）
+ * ——该文件归 W22 G 域，本域已保证 deny 本体经既有 stage-deny 通道生效，教育文案
+ * 接线见 w22-impl-model.md 未尽事项。
+ */
+export const MINIMAX_REPAIR_GUIDANCE: string =
+  '代码修复请用 continue_delegation 向原「全栈开发」委派追加修复指令（保留完整上下文与原渠道）；' +
+  'MiniMax-M3 不用于代码修复（用户已裁决）。若不确定原委派 ID，先用 list_delegations 查找 coding 阶段的全栈开发委派。'
 
 /** 各阶段的中文标题（deny 文案与注入文案用，与 nanju-router PhaseNode.title 对齐） */
 export const STAGE_TITLES: Record<NanjuGuardStage, string> = {
@@ -294,6 +332,12 @@ export interface DelegationMatchSource {
   task?: string
   /** 期望产出说明（R2/AC 裁决 A4：纳入匹配——防 L1 把角色词藏在 expectedOutput 绕过） */
   expectedOutput?: string
+  /** W22 M#9/R2：显式目标渠道（delegate_agent 的 channelId 字段；未显式传时缺省 =
+   *  继承父会话渠道，不入本字段）。不参与词表匹配文本——仅作 R2 的端点家族判定 */
+  channelId?: string
+  /** W22 M#9/R2：显式目标模型（同上；minimax 实际渠道 ID 是 UUID，渠道前缀判不到
+   *  家族时模型名 MiniMax-M3 是可靠信号） */
+  modelId?: string
 }
 
 /** 匹配文本拼接（单一真源：checkDelegationAgainstStage / matchACKeyword / detectACRole 共用；R2 后含 expectedOutput；
@@ -323,8 +367,11 @@ export interface DelegationCheckResult {
   /** 拒绝时：该词所属阶段（仅 other-stage 拒绝时有值） */
   violatedStage?: NanjuGuardStage
   /** W10：拒绝原因细分——'other-stage'（命中他阶段词）/ 'strong-verb'（unmatched+强动作动词）。
-   *  未定义 = W8 既有语义（other-stage），调用方按该默认分流（向后兼容） */
-  denialKind?: 'other-stage' | 'strong-verb'
+   *  未定义 = W8 既有语义（other-stage），调用方按该默认分流（向后兼容）；
+   *  W22 M#9/R2 新增 'minimax-repair-misuse'（testing ∧ 显式 minimax 家族端点 ∧ coding
+   *  阶段词——修复路由误用，调用方按 other-stage 同道分流 deny，教育文案见
+   *  MINIMAX_REPAIR_GUIDANCE） */
+  denialKind?: 'other-stage' | 'strong-verb' | 'minimax-repair-misuse'
   /** W10：strong-verb 拒绝时命中的动作动词（= violatedKeyword 的语义别名，便于调用方取用） */
   matchedVerb?: string
 }
@@ -340,6 +387,9 @@ export interface DelegationCheckResult {
  *    审计宾语天然跨阶段（「攻击 02_UX_DESIGN 原型」含原型/UX 词仍须放行）——审计
  *    意图不受他阶段词影响；但「审计+产出」不是同一意图：强动词在场时本条不裁决，
  *    落入 2-4（「review 架构并实现应用」「审计后顺便编写测试」均拒）。
+ * 1.5. W22 M#9/R2 修复路由守卫：testing 阶段 ∧ 显式 minimax 家族端点 ∧ coding
+ *    阶段词 → 拒绝（denialKind='minimax-repair-misuse'；详见函数内注释与
+ *    R2_CODING_STAGE_KEYWORDS / MINIMAX_REPAIR_GUIDANCE）。
  * 2. 他阶段角色词扫描（无条件、先于本阶段词）→ 拒绝（other-stage；产出物词仍不参与
  *    他阶段扫描——跨阶段动作对象误拦风险，见 STAGE_OUTPUT_KEYWORDS 注释）。
  * 2.5. W18.1（A3 闭合）：强动作动词在场 且 下游阶段（阶段序严格晚于当前，见
@@ -368,6 +418,29 @@ export function checkDelegationAgainstStage(
   const acHit = findKeyword(text, AC_AUDIT_VERBS)
   if (acHit !== undefined && findKeyword(text, STRONG_ACTION_VERBS) === undefined) {
     return { allowed: true, matchKind: 'ac', matchedKeyword: acHit }
+  }
+
+  // 1.5. W22 M#9/R2 修复路由守卫：testing 阶段 ∧ 显式 minimax 家族端点 ∧ 文本命中
+  //     coding 阶段词 → 拒绝（用户裁决：MiniMax-M3 不用于代码修复；修复应 continue_delegation
+  //     原「全栈开发」委派保留上下文）。E2E 实测形态（D8 06:47/06:53：L1→deepseek 协调
+  //     →MiniMax-M3 干代码修复）恰命中三条件合取；合法用途（minimax 视觉裁决/原型核对）
+  //     不会「显式 minimax 端点 + coding 阶段词」并存（论证 M#9）。
+  //     位置在 ① AC 审计意图之后（攻防类委派渠道由层二 resolveACOverride 收口，不经本
+  //     规则——AC 只读审计读代码不等于干修复）、② 他阶段扫描之前（R2 的 deny 归因与
+  //     教育文案比通用 stage-deny 更精准，优先裁决）。
+  //     边界：continue_delegation 不经本守卫（工具入参只有 delegationId+message，不携
+  //     委派文本/渠道），对已存在 minimax 委派的续派拦截需另走渠道反查（见 W22 报告）。
+  if (stage === 'testing' && isMinimaxEndpoint(source.channelId, source.modelId)) {
+    const codingWordHit = findKeyword(text, R2_CODING_STAGE_KEYWORDS)
+    if (codingWordHit !== undefined) {
+      return {
+        allowed: false,
+        matchKind: 'unmatched',
+        violatedKeyword: codingWordHit,
+        violatedStage: 'coding',
+        denialKind: 'minimax-repair-misuse',
+      }
+    }
   }
 
   // 2. 其他阶段专属词（仅扫角色词表——产出物词不参与他阶段扫描，见 STAGE_OUTPUT_KEYWORDS 注释）
@@ -431,11 +504,28 @@ export function detectACRole(source: DelegationMatchSource): 'attacker' | 'defen
 /**
  * 层二覆写值：按项目 mode 取 AC 预设（quick→light 快模型 / iterative→medium 强模型）。
  * 与 resolveACActors 的 taskWeight 口径一致（AC_PRESETS 同源）。
+ *
+ * W22 M#7（v0.17.106，论证 P0#5）：新增可选第三参 stage——传入时优先取该阶段解析
+ * 出的 AC 角色（resolveACActors(phaseNode)：per-phase 显式 acAttacker/acDefender 覆盖
+ * > taskWeight 预设），仅在阶段未知/节点缺失时回退全局 preset。防「per-phase 覆盖被
+ * preset 静默覆写」：testing.acAttacker=glm-zhipu:glm-5.3-flash（W22 三族矩阵）若仍
+ * 走 preset 会被覆写回 deepseek 系，与新作者（deepseek-v4-flash）同族 → 三族矩阵
+ * 静默失效且无告警；同时修复对称问题：per-phase acDefender（minimax，W13 起）此前
+ * 同样被 preset 覆写回 glm 系。
+ * 未传 stage（向后兼容）：保持 W8 语义（按 mode 取全局预设）。
+ * ⚠️ 接线：调用方 router-gate（checkNanjuDelegateGuard）应传 guardStage——该文件归
+ *    W22 G 域施工中，本域未改其调用点（两参调用仍兼容），接线 diff 见
+ *    w22-impl-model.md 未尽事项。
  */
 export function resolveACOverride(
   acRole: 'attacker' | 'defender',
   mode: ProjectMode,
+  stage?: NanjuGuardStage,
 ): ACActorConfig {
+  if (stage !== undefined) {
+    const node = getPhaseNode(mode, stage)
+    if (node) return resolveACActors(node)[acRole]
+  }
   return AC_PRESETS[mode === 'quick' ? 'light' : 'medium'][acRole]
 }
 
@@ -505,12 +595,17 @@ export function matchStageKeyword(stage: NanjuGuardStage, source: DelegationMatc
  * delegate_agent → [{title, task}]；delegate_agents → items 每项的 {title, task}。
  * 防御式取字段（非字符串忽略；items 非数组 → 空，交给 validateToolInput 必填校验）。
  * 非对象项用空 source 占位，保持与 items 数组索引对齐（批量 deny 文案需报序号）。
+ * W22 M#9/R2：同时提取显式 channelId/modelId（不入匹配文本，仅作 R2 端点家族判定
+ * ——router-gate 无需改动即自动获得端点信息，规则在 checkDelegationAgainstStage 内
+ * 生效）。
  */
 export function extractDelegationSources(input: Record<string, unknown>): DelegationMatchSource[] {
   const pick = (obj: Record<string, unknown>): DelegationMatchSource => ({
     title: typeof obj.title === 'string' ? obj.title : undefined,
     task: typeof obj.task === 'string' ? obj.task : undefined,
     expectedOutput: typeof obj.expectedOutput === 'string' ? obj.expectedOutput : undefined,
+    channelId: typeof obj.channelId === 'string' ? obj.channelId : undefined,
+    modelId: typeof obj.modelId === 'string' ? obj.modelId : undefined,
   })
   if (Array.isArray(input.items)) {
     return input.items.map((it) =>

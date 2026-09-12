@@ -74,8 +74,11 @@ describe('FALLBACK_PHASE_MODELS / FALLBACK_AC_PRESETS（代码兜底常量，W13
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
     expect(FALLBACK_PHASE_MODELS.testing).toEqual({
-      channel: 'glm-zhipu', model: 'glm-5.3-flash',
-      fallbacks: ['deepseek:deepseek-v4-flash'],
+      // W22 M#6（v0.17.106）：作者跨族换 deepseek-v4-flash + fallbacks 对调；
+      // W22 M#7：acAttacker per-phase 覆盖（三族矩阵：作者 ds / 攻 glm / 防 minimax）
+      channel: 'deepseek', model: 'deepseek-v4-flash',
+      fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-pro'],
+      acAttacker: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
   })
@@ -240,8 +243,12 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
     expect(resolvePhaseModelConfig('testing')).toEqual({
-      channel: 'glm-zhipu', model: 'glm-5.3-flash',
-      fallbacks: [{ channelId: 'deepseek', modelId: 'deepseek-v4-flash' }],
+      channel: 'deepseek', model: 'deepseek-v4-flash',
+      fallbacks: [
+        { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
+        { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
+      ],
+      acAttacker: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
   })
@@ -258,11 +265,15 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
     })
   })
 
-  test('per-phase AC 防御者覆盖：coding/architecture/testing = minimax:MiniMax-M3；requirements/prototype/planning 无覆盖（默认加载态）', () => {
+  test('per-phase AC 覆盖：architecture/coding 防御者 + testing 攻击者+防御者；requirements/prototype/planning 无覆盖（默认加载态；W22 M#7 起 testing 双覆盖）', () => {
     reloadNanjuModelConfig({ userConfigPath: null })
-    for (const id of ['architecture', 'coding', 'testing'] as const) {
+    for (const id of ['architecture', 'coding'] as const) {
       expect(resolvePhaseModelConfig(id).acDefender).toEqual({ channel: 'minimax', model: 'MiniMax-M3' })
+      expect(resolvePhaseModelConfig(id).acAttacker).toBeUndefined()
     }
+    // W22 三族矩阵：testing 作者 deepseek / 攻击者 glm（M#7 覆盖）/ 防御者 minimax
+    expect(resolvePhaseModelConfig('testing').acAttacker).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
+    expect(resolvePhaseModelConfig('testing').acDefender).toEqual({ channel: 'minimax', model: 'MiniMax-M3' })
     for (const id of ['requirements', 'prototype', 'planning'] as const) {
       expect(resolvePhaseModelConfig(id).acDefender).toBeUndefined()
       expect(resolvePhaseModelConfig(id).acAttacker).toBeUndefined()
@@ -283,7 +294,7 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
 // ===== fallback 链编译（配置优先 / 代码链兜底） =====
 
 describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线）', () => {
-  test('默认链表：5 个 key；同 key（glm-zhipu:GLM-5.3）按阶段序取声明并集（architecture 先、coding 追加）', () => {
+  test('默认链表：4 个 key（W22 M#6 后 testing 主选换 deepseek-v4-flash，glm:glm-5.3-flash 不再是主选 key）；同 key 按阶段序取声明并集（glm:GLM-5.3 由 architecture 先、coding 追加；deepseek:v4-flash 由 planning 先、testing 追加）', () => {
     reloadNanjuModelConfig({ userConfigPath: null })
     const chains = getConfigFallbackChains()
     expect(chains['deepseek:deepseek-v4-pro']).toEqual([
@@ -296,11 +307,17 @@ describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线�
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },        // coding 声明
       { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },     // coding 声明
     ])
-    expect(chains['deepseek:deepseek-v4-flash']).toEqual([{ channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' }])
-    expect(chains['glm-zhipu:glm-5.3-flash']).toEqual([{ channelId: 'deepseek', modelId: 'deepseek-v4-flash' }])
+    // W22 M#6：planning 先声明 [glm-5.3-flash]，testing 追加 [glm-5.3-flash（去重）, deepseek-v4-pro]
+    expect(chains['deepseek:deepseek-v4-flash']).toEqual([
+      { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
+    ])
+    // W22 M#6：testing 主选不再是 glm-zhipu:glm-5.3-flash → 该 key 从配置链表消失
+    // （运行时由代码链 MODEL_FALLBACK_CHAINS 兑底同名链，行为不变）
+    expect(chains['glm-zhipu:glm-5.3-flash']).toBeUndefined()
     expect(Object.keys(chains).sort()).toEqual([
       'deepseek:deepseek-v4-flash', 'deepseek:deepseek-v4-pro',
-      'glm-zhipu:GLM-5.3', 'glm-zhipu:glm-5.3-flash', 'minimax:MiniMax-M3',
+      'glm-zhipu:GLM-5.3', 'minimax:MiniMax-M3',
     ])
   })
 
@@ -314,18 +331,22 @@ describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线�
     ])
   })
 
-  test('配置缺项回退代码链：user 改写 planning 主选后，deepseek:deepseek-v4-flash 不再是配置 key → 走 MODEL_FALLBACK_CHAINS', () => {
+  test('配置缺项回退代码链：user 同时改写 planning+testing 主选后，deepseek:deepseek-v4-flash 不再是配置 key → 走 MODEL_FALLBACK_CHAINS（W22 M#6 后 testing 主选也是该端点，需两者都改才缺项）', () => {
     const userPath = writeLayer('replan-planning', {
-      phases: { planning: { channel: 'kimi', model: 'k3' } }, // 无 fallbacks → 不入配置链表
+      phases: {
+        planning: { channel: 'kimi', model: 'k3' },
+        testing: { channel: 'kimi', model: 'k3' },
+      },
     })
     reloadNanjuModelConfig({ userConfigPath: userPath, builtinConfigPath: null })
     // deepseek:deepseek-v4-flash 主选已不存在于任何阶段 → 配置链无该 key → 代码链兜底
     expect(getFallbackChain('deepseek', 'deepseek-v4-flash')).toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
     ])
-    // 新主选继承低层声明的 fallbacks（字段级合并语义）
+    // 新主选继承低层声明的 fallbacks（字段级合并语义；planning 先声明、testing 追加并集）
     expect(getFallbackChain('kimi', 'k3')).toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
     ])
     // 任何链表都未覆盖的端点 → 空链 = 既有失败路径
     expect(getFallbackChain('deepseek', 'unknown-model')).toEqual([])

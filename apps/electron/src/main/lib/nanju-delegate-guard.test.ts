@@ -46,6 +46,9 @@ const {
   isDelegationTool,
   extractDelegationSources,
   stripPathTokens,
+  isMinimaxEndpoint,
+  R2_CODING_STAGE_KEYWORDS,
+  MINIMAX_REPAIR_GUIDANCE,
 } = await import('./nanju-delegate-guard')
 const { checkNanjuRouterGate } = await import('./nanju-router-gate')
 const { recordTelemetry } = await import('./nanju-telemetry')
@@ -249,6 +252,151 @@ describe('W8 层二：AC 攻防识别与模型覆写', () => {
   })
 })
 
+// ═══════════════ W22 M#7：resolveACOverride per-stage 优先（防 preset 静默覆写） ═══════════════
+
+describe('W22 M#7：resolveACOverride 第三参 stage（per-phase 覆盖优先于 preset）', () => {
+  test('红测：testing attacker 最终 target.channelId=glm-zhipu（per-phase 覆盖生效，不被 preset 覆写回 deepseek 系）——两模式同源', () => {
+    // 论证 P0#5 场景：若 resolveACOverride 不接 stage，per-phase acAttacker 会被
+    // AC_PRESETS 静默覆写 → attacker 与新作者（deepseek-v4-flash）同族，三族矩阵失效
+    expect(resolveACOverride('attacker', 'quick', 'testing')).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
+    expect(resolveACOverride('attacker', 'iterative', 'testing')).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
+  })
+
+  test('testing defender：per-phase 覆盖 minimax:MiniMax-M3 优先（W13 起 acDefender 同样不再被 preset 覆写回 glm 系）', () => {
+    expect(resolveACOverride('defender', 'quick', 'testing')).toEqual({ channel: 'minimax', model: 'MiniMax-M3' })
+    expect(resolveACOverride('defender', 'iterative', 'testing')).toEqual({ channel: 'minimax', model: 'MiniMax-M3' })
+  })
+
+  test('无 attacker 覆盖的阶段（coding/architecture/requirements）→ 节点 taskWeight 对应预设，行为与两参一致', () => {
+    expect(resolveACOverride('attacker', 'quick', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'iterative', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-pro' })
+    expect(resolveACOverride('attacker', 'quick', 'requirements')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('defender', 'quick', 'prototype')).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
+  })
+
+  test('节点缺失（quick 无 planning）→ 回退全局 preset；不传 stage（两参旧签名）→ 向后兼容不变', () => {
+    expect(resolveACOverride('attacker', 'quick', 'planning')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('defender', 'iterative', 'planning')).toEqual({ channel: 'glm-zhipu', model: 'GLM-5.3' })
+    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('defender', 'iterative')).toEqual({ channel: 'glm-zhipu', model: 'GLM-5.3' })
+  })
+
+  test('gate 流模拟：testing 阶段 L1 委派 AC 攻击者，层二覆写后 target 端点 = 三族矩阵攻击位（glm 系），与作者（deepseek 系）异族', () => {
+    const target: { channelId?: string; modelId?: string } = { channelId: 'deepseek', modelId: 'deepseek-v4-pro' } // L1 自选旧值
+    const override = resolveACOverride('attacker', 'quick', 'testing')
+    target.channelId = override.channel
+    target.modelId = override.model
+    expect(target.channelId).toBe('glm-zhipu')
+    expect(target.modelId).toBe('glm-5.3-flash')
+  })
+})
+
+// ═══════════════ W22 M#9/R2：修复路由守卫（testing ∧ minimax 家族端点 ∧ coding 阶段词） ═══════════════
+
+describe('W22 M#9/R2：修复路由守卫（MiniMax-M3 不干代码修复；deny + continue_delegation 教育）', () => {
+  test('isMinimaxEndpoint：字面前缀 / MiniMax-M3 模型名（UUID 渠道实测形态）/ 两者皆无', () => {
+    expect(isMinimaxEndpoint('minimax')).toBe(true)
+    expect(isMinimaxEndpoint('minimax-channel')).toBe(true)
+    expect(isMinimaxEndpoint(undefined, 'MiniMax-M3')).toBe(true)
+    expect(isMinimaxEndpoint(undefined, 'minimax_m3')).toBe(true)
+    // E2E 实测形态：minimax 渠道 ID 是 UUID，渠道前缀判不到家族 → 模型名兜住
+    expect(isMinimaxEndpoint('ad74ac74-aaaa-bbbb-cccc-dddddddddddd', 'MiniMax-M3')).toBe(true)
+    expect(isMinimaxEndpoint('deepseek', 'deepseek-v4-flash')).toBe(false)
+    expect(isMinimaxEndpoint(undefined, undefined)).toBe(false)
+    expect(isMinimaxEndpoint('  ')).toBe(false) // 空白串不算显式指定
+  })
+
+  test('红测·E2E 实测形态：testing 阶段 + 显式 minimax UUID 渠道/MiniMax-M3 + 修复代码描述 → deny（denialKind=minimax-repair-misuse，violatedStage=coding）', () => {
+    // D8 实测（06:47/06:53）：L1→deepseek 协调→MiniMax-M3 干代码修复——三条件恰合取
+    const result = checkDelegationAgainstStage('testing', {
+      title: '修复提交按钮缺陷',
+      task: '修复测试发现的代码缺陷：08_APP/index.html 提交按钮点击无反应，请修改代码逻辑并验证',
+      channelId: 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd',
+      modelId: 'MiniMax-M3',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('minimax-repair-misuse')
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBeDefined()
+    expect(['代码', 'index.html', '开发']).toContain(result.violatedKeyword!)
+  })
+
+  test('字面 minimax 渠道标记同样命中；index.html 纯 ASCII 相对路径保留参与匹配', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '修 index.html',
+      task: '把首页提交按钮的开发问题修好',
+      channelId: 'minimax',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('minimax-repair-misuse')
+  })
+
+  test('合法面①：prototype 阶段 minimax 原型修复 → 放行（R2 只管 testing；本阶段词命中 stage 放行）', () => {
+    const result = checkDelegationAgainstStage('prototype', {
+      title: '原型修复',
+      task: '修复原型中按钮不可点的问题',
+      channelId: 'minimax',
+      modelId: 'MiniMax-M3',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('合法面②：testing 阶段 minimax 截图比对标注（无 coding 阶段词、无 AC 动词）→ R2 不触发，unmatched 放行', () => {
+    // 措辞避开既有层一词表（「视觉/原型」是 prototype ROLE 词、「实现」是 coding ROLE 词，
+    // 会被既有层一拒——那是 W8 既有行为，非 R2 引入；报告已注明该边界）
+    const result = checkDelegationAgainstStage('testing', {
+      title: '截图一致性标注',
+      task: '对比设计稿截图与实际渲染截图，逐条标注差异（只读核对，不修改任何文件）',
+      channelId: 'minimax',
+      modelId: 'MiniMax-M3',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('unmatched')
+    expect(result.denialKind).toBeUndefined()
+  })
+
+  test('合法面③：testing + minimax + coding 词但 AC 审计意图（防御复审缺陷清单，只读）→ 放行（攻防类不经 R2，1 号判定优先）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: 'AC 防御',
+      task: '防御：复审代码缺陷清单的真实性（只读审计，不修复代码）',
+      channelId: 'minimax',
+      modelId: 'MiniMax-M3',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('ac')
+  })
+
+  test('合法面④：testing + 非 minimax 渠道 + 修复类描述 → 不属 R2（端点证据不成立，走既有判定流；无任何阶段词+无强动词 → unmatched 放行）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '修复代码缺陷',
+      task: '修复代码缺陷',
+      channelId: 'deepseek',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('unmatched')
+    expect(result.denialKind).toBeUndefined()
+  })
+
+  test('端点未显式指定（继承父渠道，无 channelId/modelId 字段）→ R2 不触发（无端点证据不判 misuse）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '修复提交按钮',
+      task: '修复代码缺陷',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('unmatched')
+  })
+
+  test('边界锁定：R2 词表不动 STRONG_ACTION_VERBS（修复不在强动词表）；教育文案含 continue_delegation 与原委派查找指引', () => {
+    // 论证 P0#7：「修复」入 STRONG_ACTION_VERBS 血溅面是全阶段；W10 注释明确暂缓——本测试锁住该约束
+    expect(STRONG_ACTION_VERBS).not.toContain('修复')
+    expect(R2_CODING_STAGE_KEYWORDS).toEqual(['全栈', '开发', '代码', 'coding', 'code', 'index.html'])
+    expect(MINIMAX_REPAIR_GUIDANCE).toContain('continue_delegation')
+    expect(MINIMAX_REPAIR_GUIDANCE).toContain('全栈开发')
+    expect(MINIMAX_REPAIR_GUIDANCE).toContain('list_delegations')
+  })
+})
+
 // ═══════════════ 纯函数：路径注入 ═══════════════
 
 describe('W8 层三：injectStagePathConstraint', () => {
@@ -279,8 +427,10 @@ describe('工具名识别与委派参数提取', () => {
     expect(isDelegationTool('Read')).toBe(false)
   })
 
-  test('单个委派：从 input 顶层提取 title/task', () => {
-    expect(extractDelegationSources({ title: 'T', task: 'K', modelId: 'x' })).toEqual([{ title: 'T', task: 'K' }])
+  test('单个委派：从 input 顶层提取 title/task + W22 M#9/R2 端点字段（channelId/modelId）', () => {
+    expect(extractDelegationSources({ title: 'T', task: 'K', modelId: 'x' })).toEqual([{ title: 'T', task: 'K', channelId: undefined, modelId: 'x' }])
+    expect(extractDelegationSources({ title: 'T', task: 'K', channelId: 'minimax', modelId: 'MiniMax-M3' }))
+      .toEqual([{ title: 'T', task: 'K', channelId: 'minimax', modelId: 'MiniMax-M3' }])
   })
 
   test('批量委派：按 items 索引对齐提取（非对象项占位）', () => {

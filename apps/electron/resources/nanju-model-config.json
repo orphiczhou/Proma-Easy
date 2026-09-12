@@ -29,9 +29,10 @@
       "acDefender": { "channel": "minimax", "model": "MiniMax-M3" }
     },
     "testing": {
-      "channel": "glm-zhipu",
-      "model": "glm-5.3-flash",
-      "fallbacks": ["deepseek:deepseek-v4-flash"],
+      "channel": "deepseek",
+      "model": "deepseek-v4-flash",
+      "fallbacks": ["glm-zhipu:glm-5.3-flash", "deepseek:deepseek-v4-pro"],
+      "acAttacker": { "channel": "glm-zhipu", "model": "glm-5.3-flash" },
       "acDefender": { "channel": "minimax", "model": "MiniMax-M3" }
     }
   },

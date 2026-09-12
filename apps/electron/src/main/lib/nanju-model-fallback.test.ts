@@ -207,10 +207,14 @@ describe('MODEL_FALLBACK_CHAINS（代码兑底层，W13b 起配置优先）', ()
     ])
   })
 
-  test('getFallbackChain：flash 级单跳异族备援；minimax 链尾备援（配置链与代码链同值）', () => {
+  test('getFallbackChain：flash 级异族备援；minimax 链尾备援（W22 M#6 后 deepseek:v4-flash 成为 planning+testing 主选 key → 配置链并集，与代码链不同值）', () => {
+    // W22 M#6：planning 先声明 [glm-5.3-flash]、testing 追加 [glm-5.3-flash（去重）, deepseek-v4-pro]
+    // → 配置链 = 两条；不再是与代码链同值的单跳（原仅 testing 声明时同值）
     expect(getFallbackChain('deepseek', 'deepseek-v4-flash')).toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
     ])
+    // W22 M#6：testing 主选不再是 glm:glm-5.3-flash → 配置链无该 key → 代码链兑底（与原值一致，行为不变）
     expect(getFallbackChain('glm-zhipu', 'glm-5.3-flash')).toEqual([
       { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
     ])

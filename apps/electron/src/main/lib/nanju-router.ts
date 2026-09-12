@@ -291,18 +291,19 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
   }
 
   // testing 阶段（P1 Sprint B：GWT 验收测试 + 裁判判定闭环）
-  // 作者换 glm-5.3-flash（W13，v0.17.75，用户 09-03 23:54 裁定）：GWT 场景生成是机械
-  // 任务（PRD US-xx → Gherkin + steps.json 映射），glm-5.3-flash 成本档更低且带视觉
-  // 能力（可 Read 截图辅助场景设计），替代 v0.17.63 仲裁回退的 deepseek-v4-pro
-  // （贵+无视觉双重错配）。
-  // AC 家族多样性（W13 必查项）：assertACFamilyDiversity 要求 defender≠author 家族 +
-  // attacker≠defender 家族。作者换 glm 系后，light/medium 两档预设防御者（glm-5.3-flash /
-  // GLM-5.3）均为 glm 系 → 两模式都会在构建期抛错；攻者两档均为 deepseek 系 → 防御者
-  // 唯一可用异族是 minimax 系，故显式覆盖 acDefender=MiniMax-M3。W13b 起该覆盖随参数
-  // 文件下发（phases.testing.acDefender，per-phase 覆盖能力）；'minimax' 仅是家族标记，
-  // 渠道 ID 是 UUID，构建 L2 指令时运行时解析（getNanjuRouterPrompt，同 prototype 作者
-  // 模式）；未配置 minimax 渠道时降级用字面值（家族断言仍过，AC 委派启动会失败并走
-  // fallback/重试链，可观测后人工处理）。
+  // W22 M#6（v0.17.106，用户问题②）：作者换 deepseek-v4-flash——与 coding（GLM-5.3）跨族，
+  // 恢复开发/测试独立性（W13 原配置 glm-5.3-flash 与 coding 同族 → 同族同源盲区：GLM 写的
+  // 代码 GLM 测，同款幻觉互相确认）。选 flash 而非 pro：GWT 场景生成是高 token 输出/
+  // 低推理深度/多轮迭代任务，pro 边际收益小而成本与延迟叠加回炉时限（W22 论证 P1）。
+  // fallbacks 对调为 [glm-zhipu:glm-5.3-flash, deepseek:deepseek-v4-pro]：首降级落点与
+  // coding 同族（glm）——应急路径可接受残余，由 W22 M#8 启动断言的降级点告警观测
+  // （evaluateModelDiversity，不阻断）。
+  // AC 家族多样性（W22 三族矩阵，M#7）：作者 deepseek 系；acAttacker per-phase 覆盖
+  // glm-zhipu:glm-5.3-flash（与作者跨族；无覆盖时两档预设攻击者均 deepseek 系 → 与作者
+  // 同族）；acDefender 覆盖 minimax:MiniMax-M3（W13 起沿用）→ 三角色三族（作者 ds /
+  // 攻 glm / 防 minimax）。'minimax' 仅是家族标记，渠道 ID 是 UUID，构建 L2 指令时运行时
+  // 解析（getNanjuRouterPrompt，同 prototype 作者模式）；未配置 minimax 渠道时降级用
+  // 字面值（家族断言仍过，AC 委派启动会失败并走 fallback/重试链，可观测后人工处理）。
   // 机器判定推进（requiresUserConfirmation=false）：场景产出后推进即触发 GWT 机器裁判
   // （全场景通过 + 用户故事全覆盖）。W12 交付验收后置：GWT-pass 后的交付确认由 GWT 结果
   // 处理直接注入（不经本节点的 requiresUserConfirmation 机制，避免改 PhaseNode 语义引发连锁）。
@@ -310,7 +311,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     id: 'testing',
     role: 'test-engineer',
     title: '测试工程师',
-    ...phaseModelFields('testing'), // 含 acDefender=minimax 覆盖（W13b 起随参数文件下发）
+    ...phaseModelFields('testing'), // 含 acAttacker=glm-5.3-flash + acDefender=minimax 覆盖（W22 三族矩阵，随参数文件下发）
     task: '你是测试工程师。依据 PRD 用户故事清单，为每条故事生成 GWT 验收场景（中文 Gherkin）'
       + '及可执行的步骤映射（steps.json），写入 06_TESTS/。',
     outputPath: '06_TESTS/features/index.feature', // 汇总入口文件（FORMAT_CHECKS 用）
@@ -479,6 +480,135 @@ export function getNextPhase(mode: ProjectMode, currentPhase: PhaseId): PhaseId 
 /** 判断是否为终态 */
 export function isTerminal(phaseId: PhaseId): boolean {
   return phaseId === 'delivered'
+}
+
+// ===== W22 M#8：模型家族多样性启动断言（可观测，不阻断） =====
+
+/** 多样性告警分类 */
+export type ModelDiversityWarningKind =
+  /** coding↔testing 主选同族：开发/测试独立性缺失（硬期望被破坏） */
+  | 'author-cross-family'
+  /** fallback 降级落点组合会破坏 coding↔testing 跨族（降级时允许破族 + 告警，论证 M#8(a)） */
+  | 'author-cross-family-fallback'
+  /** AC 攻击者与作者同族（合法但观测——requirements/planning 现状同族是既有合法配置，
+   *  只在 testing（运动员/裁判关系）语义上追求强制，故 warn 不 throw，论证 M#7 顺带项） */
+  | 'attacker-author-family'
+
+/** 单条多样性告警（console warn + model.diversity-warn 遥测的载荷单位） */
+export interface ModelDiversityWarning {
+  kind: ModelDiversityWarningKind
+  mode: ProjectMode
+  /** 人类可读细节（含端点与家族名，可直接入遥测 payload.detail） */
+  detail: string
+}
+
+/** 端点家族描述（端点串 + 家族） */
+function describeEndpoint(channel: string, model: string): string {
+  return `${channel}:${model}(${channelFamily(channel)})`
+}
+
+/** 落点角色描述（coding/testing × 主选/第 N 降级） */
+function describeLanding(side: 'coding' | 'testing', index: number): string {
+  return index === 0 ? `${side} 主选` : `${side} fallback[${index - 1}]`
+}
+
+/**
+ * W22 M#8：解析当前有效配置（含 fallback 链解析后的实际渠道）后的多样性评估。
+ *
+ * 检查项：
+ * 1. coding ↔ testing 主选家族互异（开发/测试跨族，用户问题②的核心断言）；
+ * 2. 降级点覆盖：两阶段各自 [主选, ...fallbacks] 全落点组合中任一同族对 → 告警
+ *    （断言不能只看主选，否则只是配置层装饰——论证 P0 M#8(a)；降级时允许破族 + 告警）；
+ * 3. 各阶段 AC 攻击者与作者同族 → 告警（warn 不 throw：requirements/planning 现状
+ *    attacker 预设与作者同 deepseek 系是合法配置，不构成阻断条件）。
+ *
+ * 纯函数（读 resolvePhaseModelConfig / resolveACActors 当前缓存态），不抛错不阻断；
+ * 供模块加载期启动告警与带 workspace 上下文的遥测补发（reportModelDiversityWarnings）
+ * 复用——用户改写 ~/.proma/nanju-model-config.json 后可直调评估验证。
+ */
+export function evaluateModelDiversity(mode: ProjectMode): ModelDiversityWarning[] {
+  const warnings: ModelDiversityWarning[] = []
+
+  // 1+2：coding ↔ testing 全落点组合（主选 vs fallback 均覆盖）
+  const codingCfg = resolvePhaseModelConfig('coding')
+  const testingCfg = resolvePhaseModelConfig('testing')
+  const codingLandings: Array<{ channel: string; model: string }> = [
+    { channel: codingCfg.channel, model: codingCfg.model },
+    ...codingCfg.fallbacks.map((e) => ({ channel: e.channelId, model: e.modelId })),
+  ]
+  const testingLandings: Array<{ channel: string; model: string }> = [
+    { channel: testingCfg.channel, model: testingCfg.model },
+    ...testingCfg.fallbacks.map((e) => ({ channel: e.channelId, model: e.modelId })),
+  ]
+  for (let ci = 0; ci < codingLandings.length; ci++) {
+    const c = codingLandings[ci]!
+    for (let ti = 0; ti < testingLandings.length; ti++) {
+      const t = testingLandings[ti]!
+      if (channelFamily(c.channel) !== channelFamily(t.channel)) continue
+      if (ci === 0 && ti === 0) {
+        warnings.push({
+          kind: 'author-cross-family',
+          mode,
+          detail: `coding↔testing 主选同族：${describeLanding('coding', 0)}=${describeEndpoint(c.channel, c.model)} 与 ${describeLanding('testing', 0)}=${describeEndpoint(t.channel, t.model)}——开发与测试独立性缺失`,
+        })
+      } else {
+        warnings.push({
+          kind: 'author-cross-family-fallback',
+          mode,
+          detail: `fallback 降级点跨族被破坏（diversity_broken）：若 ${describeLanding('coding', ci)}=${describeEndpoint(c.channel, c.model)} 而 ${describeLanding('testing', ti)}=${describeEndpoint(t.channel, t.model)}，两者同族（应急路径允许破族，本告警仅观测）`,
+        })
+      }
+    }
+  }
+
+  // 3：各阶段 attacker ≠ author（warn：现状 requirements/planning 同族是合法配置）
+  for (const node of getRoute(mode)) {
+    if (node.id === 'delivered') continue
+    const actors = resolveACActors(node)
+    if (channelFamily(actors.attacker.channel) === channelFamily(node.channel)) {
+      warnings.push({
+        kind: 'attacker-author-family',
+        mode,
+        detail: `${node.id} 阶段 AC 攻击者与作者同族：attacker=${describeEndpoint(actors.attacker.channel, actors.attacker.model)} / author=${describeEndpoint(node.channel, node.model)}（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）`,
+      })
+    }
+  }
+  return warnings
+}
+
+/**
+ * W22 M#8：多样性告警输出（console warn 必发；遥测需 workspace 上下文，有则发
+ * model.diversity-warn——事件名已由 G 域预留入 TelemetryEventType union）。
+ * 启动期（模块加载）无 workspace → 只落日志；带上下文的调用方（项目创建/阶段切换，
+ * G 域接线位）传 workspaceSlug/projectId 补发遥测。遥测写入失败不阻断（R3 惯例）。
+ */
+export function reportModelDiversityWarnings(
+  warnings: ModelDiversityWarning[],
+  opts?: { workspaceSlug?: string; projectId?: string },
+): void {
+  for (const w of warnings) {
+    console.warn(`[nanju-model-diversity] ${w.kind} (${w.mode}): ${w.detail}`)
+  }
+  if (!opts?.workspaceSlug || warnings.length === 0) return
+  try {
+    // 惰性 require：本模块在加载期被多方消费，避免静态依赖遥测层抬高环风险
+    const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+    for (const w of warnings) {
+      recordTelemetry(opts.workspaceSlug, 'model.diversity-warn', {
+        kind: w.kind,
+        mode: w.mode,
+        detail: w.detail,
+      }, opts.projectId)
+    }
+  } catch (err) {
+    console.warn('[nanju-model-diversity] 遥测写入失败（不阻断）:', err instanceof Error ? err.message : err)
+  }
+}
+
+// W22 M#8 启动断言：模块加载期两模式各评估一次（console warn，不 throw 不阻断）。
+// 路由构建（ROUTES）已完成，此处读同一配置缓存；用户改参数文件重启后重新评估。
+for (const _mode of ['quick', 'iterative'] as const) {
+  reportModelDiversityWarnings(evaluateModelDiversity(_mode))
 }
 
 // ===== 阶段推进决策（修正 Y2 + F11） =====
