@@ -127,6 +127,7 @@ function buildTestHooks(): PhaseAdvanceHooks & {
   return {
     injected,
     get finalized() { return finalized },
+    sendContinuation: (_sid, _text) => {},
     emitAssistantMessage: (_sid, text) => { injected.push(text) },
     injectAssistantMessage: (_sid, text) => { injected.push(text) },
     triggerGwtRun: () => { /* 交付链测试不触发 GWT */ },
