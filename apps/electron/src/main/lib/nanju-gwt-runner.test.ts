@@ -1532,3 +1532,59 @@ describe('W22 报告归因字段与警告汇总', () => {
     }
   })
 })
+
+// ===== W22 收尾：reload op（E2E 闭环 US-09 数据持久化场景）=====
+describe('W22 收尾：reload op', () => {
+  test('schema：reload 在白名单且无需 value/selector（经 validate 间接断言：无错误即已入白名单）', async () => {
+    // 反例对照：同形态未知 op 必报错
+    const bad = validateScenarioFileContent(JSON.stringify({
+      schemaVersion: 2, feature: 'us-t', scenario: 'st', steps: [
+        { kind: 'when', text: 'x', op: { type: 'reload-x' } },
+      ],
+    }))
+    expect(bad.errors.length).toBeGreaterThan(0)
+    const result = validateScenarioFileContent(JSON.stringify({
+      schemaVersion: 2, feature: 'us-t', scenario: 'st', skip: false, skipReason: null, steps: [
+        { kind: 'when', text: '刷新页面', op: { type: 'reload' } },
+      ],
+    }))
+    expect(result.errors).toEqual([])
+  })
+
+  test('执行：location.reload() 被调用（带 selector 等待出现）', async () => {
+    const page = new FakePage()
+    page.elements.set('[data-ai-id="list"]', { visible: true, text: '列表', tag: 'div', x: 1, y: 1 })
+    const reloadCalls: string[] = []
+    const base = makeMockController(page)
+    const controller = { ...base, evaluateInTab: async (s: string, t: string, expr: string) => {
+      if (expr.includes('location.reload')) { reloadCalls.push(expr); return true }
+      return base.evaluateInTab(s, t, expr)
+    } }
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-t', scenario: 'US-T 刷新', skip: false, skipReason: null,
+        steps: [
+          { kind: 'when', text: '刷新', op: { type: 'reload' }, timeoutMs: 300 },
+          { kind: 'when', text: '刷新并等列表', op: { type: 'reload', selector: 'data-ai-id=list' }, timeoutMs: 300 },
+        ],
+      }], controller, screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('pass')
+    expect(reloadCalls.length).toBe(2)
+  })
+
+  test('执行失败：reload 求值返回 null → fail 归 assert', async () => {
+    const page = new FakePage()
+    const base = makeMockController(page)
+    const controller = { ...base, evaluateInTab: async () => null }
+    const results = await runGwtSuite({
+      sessionId: 's1', entryHtmlPath: '/tmp/app/index.html',
+      scenarios: [{
+        feature: 'us-t', scenario: 'US-T 刷新失败', skip: false, skipReason: null,
+        steps: [{ kind: 'when', text: '刷新', op: { type: 'reload' }, timeoutMs: 300 }],
+      }], controller, screenshotDir: null,
+    })
+    expect(results[0]?.status).toBe('fail')
+  })
+})

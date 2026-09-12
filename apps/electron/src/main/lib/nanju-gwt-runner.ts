@@ -38,12 +38,13 @@ import { recordTelemetry } from './nanju-telemetry'
 /** steps.json schema 版本（W22 A1）：v2 = 新词表（check/uncheck/select/hover/scroll/focus/assert-screenshot + selector 二档）。校验失败（含未知 op/版本不匹配）计 fail 不再静默 skip */
 export const GWT_STEPS_SCHEMA_VERSION = 2
 
-/** op 白名单（Sprint B；设计稿 Q4。v0.17.63 移除 eval；W22 F2/F4 扩展 v2 词表） */
+/** op 白名单（Sprint B；设计稿 Q4。v0.17.63 移除 eval；W22 F2/F4 扩展 v2 词表；W22 收尾增 reload） */
 export type GwtOpType =
   | 'click' | 'fill' | 'press' | 'wait-selector'
   | 'assert-text' | 'assert-visible' | 'assert-count'
   | 'check' | 'uncheck' | 'select' | 'hover' | 'scroll' | 'focus'
   | 'assert-screenshot'
+  | 'reload'
 
 /** selector 档位（W22 F3）：data-ai-id 主档不变；#id / aria-label 二档带唯一性校验 */
 export type GwtSelectorTier = 'data-ai-id' | 'id' | 'aria-label'
@@ -158,6 +159,8 @@ const VALID_OP_TYPES: ReadonlySet<string> = new Set([
   'click', 'fill', 'press', 'wait-selector', 'assert-text', 'assert-visible', 'assert-count',
   // W22 F2/F4 v2 词表
   'check', 'uncheck', 'select', 'hover', 'scroll', 'focus', 'assert-screenshot',
+  // W22 收尾（E2E 闭环）：页面刷新/重载（US-09 类「保存后刷新验证持久化」场景）
+  'reload',
 ])
 
 /** fill.value 长度上限（W22 F1：evaluate 内联表达式有 20k 字符限制，超长会被误归 channel 类失败） */
@@ -1000,6 +1003,21 @@ async function executeScenario(
         }
       } else if (op.type === 'press') {
         await controller.pressKeyInTab(sessionId, tabId, op.value ?? 'Enter')
+      } else if (op.type === 'reload') {
+        // W22 收尾：页面刷新——location.reload() 后固定沉降 + 可选 selector 等得（有则用其 timeoutMs）
+        const reloaded = await controller.evaluateInTab(sessionId, tabId, '(() => { location.reload(); return true })()') as boolean | null
+        if (reloaded !== true) {
+          throw new GwtStepError(i, step, '刷新指令已执行', 'location.reload() 求值失败', 'assert')
+        }
+        const waitSel = op.selector ? normalizeGwtSelector(op.selector) : null
+        if (waitSel) {
+          const appeared = await waitForSelectorPresent(controller, sessionId, tabId, waitSel, step.timeoutMs ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS)
+          if (!appeared) {
+            throw new GwtStepError(i, step, `刷新后等待 ${describeSelectorRef(waitSel)} 出现`, `${describeSelectorRef(waitSel)} 刷新后未出现`, 'selector-wait', waitSel.tier)
+          }
+        } else {
+          await sleep(800)
+        }
       } else if (op.type === 'check' || op.type === 'uncheck') {
         // W22 F2：读态 → 按需点 → 回读（盲点在中断/重试后会反向）；radio 不可 uncheck
         const ref = normalizeGwtSelector(op.selector ?? '')
