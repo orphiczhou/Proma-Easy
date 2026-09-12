@@ -860,3 +860,21 @@ describe('D8 A3′：auto on AskUser 路由 install-only（R7-03）', () => {
     expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
   })
 })
+
+// ===== W22 O1/O2 指挥官收口（2026-09-12）：接线存在性锁定 =====
+describe('W22 O1/O2：minimax 修复守卫接线与 AC 覆写阶段感知（源码断言）', () => {
+  test('O1：resolveACOverride 生产调用点带第三参 guardStage（per-phase 覆盖位不失效）', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('./nanju-router-gate.ts', import.meta.url), 'utf-8')
+    expect(src).toContain('resolveACOverride(acRole, project.mode, guardStage)')
+    expect(src).not.toContain('resolveACOverride(acRole, project.mode)(') // 旧两参形态不残留
+  })
+
+  test('O2：minimax-repair-misuse 分流消费 MINIMAX_REPAIR_GUIDANCE 专属文案', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('./nanju-router-gate.ts', import.meta.url), 'utf-8')
+    expect(src).toContain("v.result.denialKind === 'minimax-repair-misuse'")
+    expect(src).toContain('MINIMAX_REPAIR_GUIDANCE}')
+    expect(src).toContain('MINIMAX_REPAIR_GUIDANCE,')
+  })
+})

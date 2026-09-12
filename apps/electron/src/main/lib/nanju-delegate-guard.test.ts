@@ -498,7 +498,7 @@ describe('W8 集成：checkNanjuRouterGate 参数级三层强制', () => {
     expect(events.filter((e) => e.eventType === 'delegate.guard.pass-unmatched')).toHaveLength(1)
   })
 
-  test('层二覆写：L1 自选已下线 glm-5-turbo 委派攻击者 → quick 项目覆写为 light attacker', () => {
+  test('层二覆写：L1 自选已下线 glm-5-turbo 委派攻击者 → quick 项目覆写（W22 起 testing=per-phase glm 攻击者，与新作者 deepseek 跨族）', () => {
     setupProject({ stage: 'testing', mode: 'quick' })
     const input: Record<string, unknown> = {
       title: 'AC 攻击者',
@@ -507,24 +507,25 @@ describe('W8 集成：checkNanjuRouterGate 参数级三层强制', () => {
       modelId: 'glm-5-turbo',
     }
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'mcp__collaboration__delegate_agent', input)).toBeNull()
-    expect(input.channelId).toBe('deepseek')
-    expect(input.modelId).toBe('deepseek-v4-flash')
+    expect(input.channelId).toBe('glm-zhipu')
+    expect(input.modelId).toBe('glm-5.3-flash')
     // AC 类不注入路径约束（审计只读）
     expect(String(input.task)).not.toContain(PATH_CONSTRAINT_MARKER)
     const events = readTelemetryEvents()
     const override = events.find((e) => e.eventType === 'delegate.guard.ac-override')
     expect(override?.payload.originalModelId).toBe('glm-5-turbo')
-    expect(override?.payload.modelId).toBe('deepseek-v4-flash')
+    expect(override?.payload.modelId).toBe('glm-5.3-flash')
     expect(override?.payload.acRole).toBe('attacker')
   })
 
-  test('层二覆写：iterative 项目防御者 → medium defender（GLM-5.3）', () => {
+  test('层二覆写：iterative 项目防御者 → coding per-phase defender=minimax 家族标记 → 跳过覆写（W22 O1：门禁无法解析 UUID 渠道，保留原值+埋点）', () => {
     setupProject({ stage: 'coding', mode: 'iterative' })
     const input: Record<string, unknown> = { title: '防御者', task: '裁决攻方提交的 finding 是否成立' }
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
-    expect(input.channelId).toBe('glm-zhipu')
-    expect(input.modelId).toBe('GLM-5.3')
-    expect(readTelemetryEvents().some((e) => e.eventType === 'delegate.guard.ac-override')).toBe(true)
+    expect(input.channelId).toBeUndefined()
+    expect(input.modelId).toBeUndefined()
+    const ev = readTelemetryEvents().find((e) => e.eventType === 'delegate.guard.ac-override')
+    expect(ev?.payload.skipped).toBe('family-marker')
   })
 
   test('层二边界：命中 AC 词但无攻防区分（仅复审）→ 放行不覆写不注入', () => {
@@ -593,9 +594,9 @@ describe('R1：层三注入与层二识别同源（matchACKeyword 替代 matchKi
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
     // R1 修复前：matchKind='stage'（「测试」本阶段词先命中）→ 误注入；修复后：AC 词在场 → 同源不注入
     expect(String(input.task)).not.toContain(PATH_CONSTRAINT_MARKER)
-    // 层二独立性保持：攻方覆写 quick→light attacker
-    expect(input.modelId).toBe('deepseek-v4-flash')
-    expect(input.channelId).toBe('deepseek')
+    // 层二独立性保持：攻方覆写（W22 起 testing per-phase 攻击者=glm，与新作者 deepseek 跨族）
+    expect(input.modelId).toBe('glm-5.3-flash')
+    expect(input.channelId).toBe('glm-zhipu')
   })
 
   test('混合文本 2：review/复审词无攻防（testing「测试审计复审」）→ 不注入且不覆写', () => {

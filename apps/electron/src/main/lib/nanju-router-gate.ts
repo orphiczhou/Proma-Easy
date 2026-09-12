@@ -22,6 +22,7 @@ import {
   isDelegationTool,
   matchACKeyword,
   matchStageKeyword,
+  MINIMAX_REPAIR_GUIDANCE,
   resolveACOverride,
 } from './nanju-delegate-guard'
 import { recordTelemetry } from './nanju-telemetry'
@@ -801,7 +802,15 @@ function checkNanjuDelegateGuard(
   if (stageViolations.length > 0 || verbViolations.length > 0) {
     const stageTitle = STAGE_TITLES[guardStage]
     const lines: string[] = []
-    for (const v of stageViolations) {
+    // W22 O2：minimax-repair-misuse 优先分流——消费 MINIMAX_REPAIR_GUIDANCE 专属文案
+    // （比通用「命中他阶段词」更精准的纠偏指引），不进通用 stageViolations 行
+    const repairMisuse = stageViolations.filter((v) => v.result.denialKind === 'minimax-repair-misuse')
+    const genericStageViolations = stageViolations.filter((v) => v.result.denialKind !== 'minimax-repair-misuse')
+    for (const v of repairMisuse) {
+      const label = v.source.title?.trim() || taskPreview(v.source.task) || '未命名委派'
+      lines.push(`· #${v.index + 1}「${label}」：代码修复委派指向 MiniMax——${MINIMAX_REPAIR_GUIDANCE}`)
+    }
+    for (const v of genericStageViolations) {
       const label = v.source.title?.trim() || taskPreview(v.source.task) || '未命名委派'
       // R5（AC 裁决 A6）：不断言归属阶段（键序首命中词未必是最专属词——如「测试工程师」
       // 首命中「工程」标 planning），只声明与当前阶段不符，避免误导 L1 纠偏方向
@@ -880,10 +889,15 @@ function checkNanjuDelegateGuard(
     if (!isRecord(target)) continue
 
     // 层二：AC 模型程序化覆写（命中 AC 词且能区分攻/防；不受层一判定顺序影响）
+    // W22 O1：第三参 guardStage——per-phase acAttacker 覆盖位（testing 攻击者=glm 跨族）
+    // 必须在此接线，否则被全局 preset 静默覆写回 deepseek（与新作者同族）。
+    // 家族标记跳过：acDefender 的 'minimax' 是家族标记非真实渠道 ID（真实渠道为运行时
+    // 解析的 UUID，仅 router-prompt 侧能解析）——直接覆写会产生无效渠道，此情形不覆写
     if (matchACKeyword(source) !== undefined) {
       const acRole = detectACRole(source)
       if (acRole !== null) {
-        const override = resolveACOverride(acRole, project.mode)
+        const override = resolveACOverride(acRole, project.mode, guardStage)
+        if (override.channel !== 'minimax') {
         const originalChannelId = typeof target.channelId === 'string' ? target.channelId : '(inherit)'
         const originalModelId = typeof target.modelId === 'string' ? target.modelId : '(inherit)'
         target.channelId = override.channel
@@ -903,6 +917,15 @@ function checkNanjuDelegateGuard(
           },
           project.projectId,
         )
+        } else {
+          // 家族标记（minimax）跳过：保留 L1 显式渠道，仅埋点可观测
+          recordTelemetry(
+            workspaceSlug,
+            'delegate.guard.ac-override',
+            { stage: guardStage, acRole, mode: project.mode, skipped: 'family-marker', channelId: override.channel, modelId: override.model, title: source.title },
+            project.projectId,
+          )
+        }
       }
     }
 
