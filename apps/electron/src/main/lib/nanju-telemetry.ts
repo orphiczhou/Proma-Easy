@@ -47,6 +47,11 @@ export type TelemetryEventType =
   // v2.4.1（D8 §九 B′/R7-14）：auto 审核三事件——A 域 autoConfirm 推进/门拒（c5244262 已用，
   // 现以 as Parameters 绕类型，本表收口后可去）+ B 域确定性降级出口（R7-01 四条路径）
   | 'confirm.auto-confirm' | 'advance.auto-gate' | 'clarify.auto-degrade'
+  // W22（G 域 F5/D8-1）：W11 目标校验拒绝遥测补齐 + 拒收防环转人工/续接放弃归因
+  //（payload.kind 区分 loop-limit / continuation-giveup）
+  | 'advance.target-deny' | 'advance.reject-escalate'
+  // W22（M 域 M#8 预留入表）：开发↔测试跨族断言告警（不阻断，配置层可观测）
+  | 'model.diversity-warn'
 
 export interface TelemetryEvent {
   eventId: string

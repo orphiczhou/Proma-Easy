@@ -235,6 +235,34 @@ function resolveLocalProjectRootForRewind(projectRootPath: string): string {
 let nanjuDelegationStatusWired = false
 
 /**
+ * W22（R1 前半，G 域）：反查 parentSessionId 对应的活跃南大项目；项目处于 coding
+ * 阶段且该委派非 clarify 代理委派（isNanjuProxy——代理委派不承载全栈开发上下文）时
+ * 写入 _project-info.codingDelegationId（唯一写入点 setProjectCodingDelegationId，
+ * 重复出现覆盖为最新）。事件结构无 workspaceSlug——经 listAgentWorkspaces 遍历反查
+ * （工作区数量级小，每次委派 start 仅一次）。
+ */
+function recordNanjuCodingDelegation(parentSessionId: string, delegationId: string): void {
+  const { listAgentWorkspaces } = require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')
+  const { listNanjuProjects, setProjectCodingDelegationId } = require('./nanju-project') as typeof import('./nanju-project')
+  const { listRunningDelegationsForParent } = require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
+  for (const ws of listAgentWorkspaces()) {
+    const project = listNanjuProjects(ws.slug).find(
+      (p: { sessionId?: string; status?: string; currentStage?: string }) =>
+        p.sessionId === parentSessionId && p.status === 'active',
+    )
+    if (!project || project.currentStage !== 'coding') continue
+    // 排除 clarify 代理委派（coding 阶段中途的需求澄清代理不覆盖全栈开发委派 ID）
+    const isProxy = listRunningDelegationsForParent(parentSessionId).some(
+      (d) => d.delegationId === delegationId && d.isNanjuProxy === true,
+    )
+    if (isProxy) return
+    setProjectCodingDelegationId(ws.slug, project.projectId, delegationId)
+    console.log(`[南大路由] coding 委派登记（codingDelegationId=${delegationId}）：${project.name}`)
+    return
+  }
+}
+
+/**
  * W19 缺陷B（E2E 2026-09-05 发现1，R 级）：空会话首发的工作区竞态自愈判定（纯函数）。
  *
  * 背景：南大创建链显式以项目所属工作区建会话（TabContent → createAgentSession(ws.id)），
@@ -325,6 +353,14 @@ export class AgentOrchestrator {
           elapsedMs: event.settledAt != null ? event.settledAt - event.startedAt : 0,
           reason: event.reason,
         })
+        // W22（R1 前半，G 域）：coding 阶段内新委派创建 → 记录 codingDelegationId
+        //（按阶段判定，不按 title 关键词——title 是 L1 自由文本，M-5/M-7 已证明关键词
+        // 匹配脆弱）；GWT behavior-fail 回炉文案消费该 ID 指引 continue_delegation 原委派。
+        if (event.phase === 'start') {
+          try {
+            recordNanjuCodingDelegation(event.parentSessionId, event.delegationId)
+          } catch { /* 记录失败不影响委派/转发（回炉文案降级为无 ID 版） */ }
+        }
       })
     } catch (e) {
       console.warn('[南大护栏] 委派状态事件接线失败（不影响委派）:', e instanceof Error ? e.message : String(e))
@@ -615,6 +651,8 @@ export class AgentOrchestrator {
         })
       },
       injectAssistantMessage: (sid, text) => this.injectNanjuAssistantMessage(sid, text),
+      sendContinuation: (sid, message, opts) =>
+        this.runNanjuGuardContinuation(sid, message, 6, opts?.onGiveUp),
       triggerGwtRun: (input) => this.triggerNanjuGwtRun(input),
       checkGwtDeliveryGate: (workspaceSlug, projectId) => this.checkNanjuGwtDeliveryGate(workspaceSlug, projectId),
       finalizePhaseTodos: (sid) => this.finalizeNanjuPhaseTodos(sid),
@@ -940,11 +978,19 @@ export class AgentOrchestrator {
             const { recordGwtFailureRegression } = require('./nanju-regression') as typeof import('./nanju-regression')
             recordGwtFailureRegression(workspaceSlug, projectId, 'behavior', { sessionId })
           } catch { /* 回归记录失败不影响分流 */ }
+          // W22（R1 前半，G 域）：回炉文案携带 codingDelegationId——continue_delegation
+          // 原全栈开发委派修复（保留完整上下文，不新建修复会话）；ID 不可用降级为
+          // 「新建但沿用 coding 配置渠道（GLM）」。mapping/coverage 分支仍指 testing 作者。
+          let behaviorFailCodingDelegationId: string | null = null
+          try {
+            const { getProjectCodingDelegationId } = require('./nanju-project') as typeof import('./nanju-project')
+            behaviorFailCodingDelegationId = getProjectCodingDelegationId(workspaceSlug, projectId)
+          } catch { /* 读取失败按无 ID 降级文案 */ }
+          const { buildGwtBehaviorFailReworkDirective, buildGwtBehaviorFailReworkResumeMessage } =
+            require('./nanju-phase-advance-consumer') as typeof import('./nanju-phase-advance-consumer')
           this.injectNanjuAssistantMessage(
             sessionId,
-            outcome.summaryText + '\n\n失败清单：\n' + outcome.failListText
-            + '\n\n请 continue_delegation 委派「全栈开发」修复以上缺陷（仅改 08_APP/ 下代码，不得改 06_TESTS/ 与 01_PRD/），'
-            + '修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing --> 重跑测试。',
+            outcome.summaryText + '\n\n' + buildGwtBehaviorFailReworkDirective(outcome.failListText, behaviorFailCodingDelegationId),
           )
           // v2.4 I2：行为类回炉指令含「重新声明推进 PHASE_ADVANCE: testing」——防御性登记
           this.registerSystemAdvance(workspaceSlug, projectId, 'testing')
@@ -952,7 +998,7 @@ export class AgentOrchestrator {
             runRegisteredHeadlessAgent(
               {
                 sessionId,
-                userMessage: '验收测试未全部通过（行为类：应用缺陷）。请按系统注入的失败清单处理：用 continue_delegation 委派全栈开发修复缺陷（仅改 08_APP/），修复完成后重新声明推进 <!-- PHASE_ADVANCE: testing -->。',
+                userMessage: buildGwtBehaviorFailReworkResumeMessage(behaviorFailCodingDelegationId),
                 systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                 channelId: resume.channelId,
                 modelId: resume.modelId,
@@ -1103,20 +1149,29 @@ export class AgentOrchestrator {
    * 护栏续接（注入+续接模式，不直连 sendMessage）：L1 空闲时经注册的 headless 通道
    * 发送续接消息；L1 忙碌（如阻塞在 wait_for_delegations）时短暂重试，耗尽则放弃
    * （硬超时场景强停会解阻塞，L1 的 wait 很快返回并结束本轮）。
+   * W22（F5 ④）：新增可选 onGiveUp——重试耗尽/元数据缺失时回调，供调用方降级
+   *（可见注入+遥测+拒因登记，保证不静默）；既有调用方不传时行为零变化。
    */
-  private runNanjuGuardContinuation(sessionId: string, message: string, retriesLeft = 6): void {
+  private runNanjuGuardContinuation(
+    sessionId: string,
+    message: string,
+    retriesLeft = 6,
+    onGiveUp?: (sessionId: string, message: string) => void,
+  ): void {
     try {
       if (this.isActive(sessionId)) {
         if (retriesLeft > 0) {
-          setTimeout(() => this.runNanjuGuardContinuation(sessionId, message, retriesLeft - 1), 10_000)
+          setTimeout(() => this.runNanjuGuardContinuation(sessionId, message, retriesLeft - 1, onGiveUp), 10_000)
         } else {
           console.warn(`[南大护栏] 续接放弃（会话持续忙碌）：sessionId=${sessionId}`)
+          try { onGiveUp?.(sessionId, message) } catch { /* 降级回调异常不影响 */ }
         }
         return
       }
       const meta = getAgentSessionMeta(sessionId)
       if (!meta?.channelId) {
         console.warn(`[南大护栏] 续接跳过（会话元数据缺失 channelId）：sessionId=${sessionId}`)
+        try { onGiveUp?.(sessionId, message) } catch { /* 降级回调异常不影响 */ }
         return
       }
       runRegisteredHeadlessAgent(

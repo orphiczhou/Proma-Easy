@@ -77,6 +77,9 @@ export interface NanjuAutoClarifyState {
   proxyBudget?: number
   /** 代理已登记待回注的 blocked 事件问题 id（缺省=空；clarify 工具写入/清除） */
   pendingQuestionIds?: string[]
+  /** W22（M-9）：开关最近一次切换时间（ISO；updateNanjuProject 检测到 enabled 变化时自动盖戳，
+   * 覆盖 IPC 直写与 updateProjectAutoClarify 两条写入路径；供渲染端/prompt 消费侧展示变更事实） */
+  lastToggledAt?: string
 }
 
 /** autoClarify 规范化读视图（getProjectAutoClarify/updateProjectAutoClarify 返回形态：
@@ -86,6 +89,8 @@ export interface NanjuAutoClarifyView {
   enabled: boolean
   proxyBudget: number
   pendingQuestionIds: string[]
+  /** W22（M-9）：开关最近一次切换时间（ISO；未切换过为 undefined） */
+  lastToggledAt?: string
 }
 
 /** 可挂熔断计数器的阶段（终态 delivered 不参与） */
@@ -176,6 +181,32 @@ export interface NanjuProjectInfoFile {
    * 交付否定词 / 下次 GWT-pass 注入重建时清除。缺失 = 无待应答挑战。
    */
   deliveryChallenge?: { reportRunId: string; sessionId: string; askedAt: string }
+  /**
+   * W22（R1 前半）：coding 阶段内最近一次新建委派的 ID（唯一写入点
+   * setProjectCodingDelegationId——按阶段判定不按 title 关键词；重复出现覆盖为最新）。
+   * GWT behavior-fail 回炉文案携带该 ID 指引 continue_delegation 原委派修复
+   *（保留上下文，不新建修复会话）；ID 不存在时回炉文案降级为「新建但沿用 coding
+   * 配置渠道」。缺失 = 尚无 coding 委派（新/存量项目）。
+   */
+  codingDelegationId?: string
+  /**
+   * W22（F5 ④）：拒收续接失败时的「待纠正拒因」登记（advance.reject-escalate
+   * kind=continuation-giveup 同拍写入；唯一写入点 setProjectPendingAdvanceCorrection）。
+   * 阶段推进成功时由消费侧清除（clearProjectPendingAdvanceCorrection）——待下轮
+   * prompt 消费侧接线（C 域）。缺失 = 无待纠正拒因。
+   */
+  pendingAdvanceCorrection?: {
+    /** 拒收门类：target-deny（W11 目标校验）/ gate-deny（硬门无授权/auto-gate） */
+    kind: 'target-deny' | 'gate-deny'
+    /** 被拒的标记目标 */
+    target: string
+    /** 合法下一阶段（终态时为空串） */
+    expected: string
+    /** 登记时间（ISO） */
+    at: string
+    /** 登记时的累计拒收次数 */
+    count: number
+  }
 }
 
 /**
@@ -315,9 +346,23 @@ export function updateNanjuProject(
   const existing = projects[idx]
   if (!existing) return null
 
+  const updatesWithToggleStamp: Partial<NanjuProject> = { ...updates }
+  // W22（M-9）：autoClarify 写入统一走字段级 merge（未提供字段保留现状——防部分写入
+  // 丢 lastToggledAt 等）；enabled 变化（含首次开启）→ 自动盖 lastToggledAt（单一检测点，
+  // 覆盖 nanju-ipc set-auto-clarify 直写与 updateProjectAutoClarify 两条写入路径）
+  if (updates.autoClarify && typeof updates.autoClarify === 'object') {
+    const enabledChanged = updates.autoClarify.enabled !== undefined
+      && updates.autoClarify.enabled !== (existing.autoClarify?.enabled === true)
+    updatesWithToggleStamp.autoClarify = {
+      ...existing.autoClarify,
+      ...updates.autoClarify,
+      ...(enabledChanged ? { lastToggledAt: new Date().toISOString() } : {}),
+    }
+  }
+
   const updated: NanjuProject = {
     ...existing,
-    ...updates,
+    ...updatesWithToggleStamp,
     projectId: existing.projectId,
     createdAt: existing.createdAt,
     workspaceSlug: existing.workspaceSlug,
@@ -353,6 +398,7 @@ export function getProjectAutoClarify(
     enabled: state.enabled === true,
     proxyBudget: typeof state.proxyBudget === 'number' ? state.proxyBudget : NANJU_AUTO_CLARIFY_BUDGET_CAP,
     pendingQuestionIds: Array.isArray(state.pendingQuestionIds) ? state.pendingQuestionIds : [],
+    lastToggledAt: typeof state.lastToggledAt === 'string' ? state.lastToggledAt : undefined,
   }
 }
 
@@ -371,6 +417,8 @@ export function updateProjectAutoClarify(
     enabled: patch.enabled ?? current.enabled,
     proxyBudget: patch.proxyBudget ?? current.proxyBudget,
     pendingQuestionIds: patch.pendingQuestionIds ?? current.pendingQuestionIds,
+    // W22（M-9）：未显式携带时透传现状戳；enabled 变化时由 updateNanjuProject 统一盖新戳
+    lastToggledAt: patch.lastToggledAt ?? current.lastToggledAt,
   }
   updateNanjuProject(workspaceSlug, projectId, { autoClarify: next })
   return next
@@ -925,6 +973,81 @@ export function getProjectConfirmPending(workspaceSlug: string, projectId: strin
   return readProjectInfo(workspaceSlug, projectId)?.confirmPendingStage ?? null
 }
 
+// ===== W22（G 域）：codingDelegationId / pendingAdvanceCorrection（_project-info 落盘） =====
+
+/**
+ * W22（R1 前半）：读取 coding 阶段内最近一次新建委派的 ID（无/未登记返回 null）。
+ * GWT behavior-fail 回炉文案消费：有 ID → continue_delegation(<ID>) 原委派修复；
+ * 无 → 降级文案（新建但沿用 coding 配置渠道 GLM）。
+ */
+export function getProjectCodingDelegationId(workspaceSlug: string, projectId: string): string | null {
+  const id = readProjectInfo(workspaceSlug, projectId)?.codingDelegationId
+  return typeof id === 'string' && id !== '' ? id : null
+}
+
+/**
+ * W22（R1 前半）：登记 codingDelegationId（唯一写入点；幂等——重复出现覆盖为最新）。
+ * 写入方（orchestrator 委派生命周期订阅）已按「currentStage==='coding' 且非代理委派」
+ * 前置判定，不按 title 关键词（title 是 L1 自由文本，M-5/M-7 已证明关键词匹配脆弱）。
+ */
+export function setProjectCodingDelegationId(
+  workspaceSlug: string,
+  projectId: string,
+  delegationId: string,
+): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  base.codingDelegationId = delegationId
+  writeProjectInfo(workspaceSlug, projectId, base)
+}
+
+/** 读取待纠正拒因登记（无/无字段返回 null） */
+export function getProjectPendingAdvanceCorrection(
+  workspaceSlug: string,
+  projectId: string,
+): NonNullable<NanjuProjectInfoFile['pendingAdvanceCorrection']> | null {
+  return readProjectInfo(workspaceSlug, projectId)?.pendingAdvanceCorrection ?? null
+}
+
+/**
+ * W22（F5 ④）：登记待纠正拒因（唯一写入点；advance 拒收续接失败时写入——保证不静默，
+ * 下一轮 prompt 消费侧接线后可提示 L1 待纠正事项）。
+ */
+export function setProjectPendingAdvanceCorrection(
+  workspaceSlug: string,
+  projectId: string,
+  correction: NonNullable<NanjuProjectInfoFile['pendingAdvanceCorrection']>,
+): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  const base: NanjuProjectInfoFile = info ?? {
+    projectId,
+    name: projectId,
+    mode: 'quick',
+    createdAt: new Date().toISOString(),
+    workspaceSlug,
+    projectDir: `project-${projectId}`,
+    docDirs: [],
+  }
+  base.pendingAdvanceCorrection = correction
+  writeProjectInfo(workspaceSlug, projectId, base)
+}
+
+/** 清除待纠正拒因（阶段推进成功时；幂等） */
+export function clearProjectPendingAdvanceCorrection(workspaceSlug: string, projectId: string): void {
+  const info = readProjectInfo(workspaceSlug, projectId)
+  if (!info || info.pendingAdvanceCorrection === undefined) return
+  info.pendingAdvanceCorrection = undefined
+  writeProjectInfo(workspaceSlug, projectId, info)
+}
+
 // ===== v2.4 推进授权内存态（D7 §1/§2/§5：confirmAuthorization / activeConfirmAsk / systemAdvanceAuthorized） =====
 
 /**
@@ -1030,6 +1153,68 @@ export function clearActiveConfirmAsk(workspaceSlug: string, projectId: string):
   activeConfirmAskStore.delete(authKey(workspaceSlug, projectId))
 }
 
+// ===== W22（G 域 M-6）：install-only 横幅在场标记（内存态；不登记 activeConfirmAsk） =====
+
+/**
+ * install-only 横幅（header=确认·安装缺失组件）放行时登记；其横幅答案回传
+ * （ask-answer）不构成推进授权，但也不误记 clarify.suspect-fake-confirm——白名单
+ * 豁免口径：suspect 埋点 payload 带 whitelisted:true（事后可区分「真伪造」与
+ * 「白名单放行」）。10min TTL 与授权态同源（横幅长时间未答即失效）。
+ */
+const activeInstallAskStore = new Map<string, { askedAt: number }>()
+
+/** 登记 install-only 横幅在场（AskUserQuestion 放行侧；幂等覆盖） */
+export function setActiveInstallAsk(workspaceSlug: string, projectId: string): void {
+  activeInstallAskStore.set(authKey(workspaceSlug, projectId), { askedAt: Date.now() })
+}
+
+/** 读取 install-only 横幅在场标记（TTL 惰性过期；无/过期返回 null） */
+export function getActiveInstallAsk(
+  workspaceSlug: string,
+  projectId: string,
+): { askedAt: number } | null {
+  const key = authKey(workspaceSlug, projectId)
+  const state = activeInstallAskStore.get(key)
+  if (!state) return null
+  if (Date.now() - state.askedAt > NANJU_ADVANCE_AUTH_TTL_MS) {
+    activeInstallAskStore.delete(key)
+    return null
+  }
+  return state
+}
+
+/** 清除 install-only 横幅标记（ask-answer 到达时消费；幂等） */
+export function clearActiveInstallAsk(workspaceSlug: string, projectId: string): void {
+  activeInstallAskStore.delete(authKey(workspaceSlug, projectId))
+}
+
+// ===== W22（G 域 F5 ③）：advance 拒收注入防环计数（内存态；对齐熔断口径） =====
+
+/**
+ * 同项目 advance 拒收教育注入+续接计数：≤2 次正常教育闭环；第 3 次起转人工提示
+ * （不再注入教育/续接——防「拒收→注入→续接→再拒收」死循环烧 token）。阶段推进
+ * 成功时清零（新阶段重新计数）；不落盘（进程重启重新计数是安全缺省）。
+ */
+const advanceRejectCountStore = new Map<string, number>()
+
+/** 拒收计数 +1 并返回新值 */
+export function bumpAdvanceRejectCount(workspaceSlug: string, projectId: string): number {
+  const key = authKey(workspaceSlug, projectId)
+  const next = (advanceRejectCountStore.get(key) ?? 0) + 1
+  advanceRejectCountStore.set(key, next)
+  return next
+}
+
+/** 读取当前拒收计数（不递增） */
+export function getAdvanceRejectCount(workspaceSlug: string, projectId: string): number {
+  return advanceRejectCountStore.get(authKey(workspaceSlug, projectId)) ?? 0
+}
+
+/** 清零拒收计数（阶段推进成功时；幂等） */
+export function resetAdvanceRejectCount(workspaceSlug: string, projectId: string): void {
+  advanceRejectCountStore.delete(authKey(workspaceSlug, projectId))
+}
+
 /**
  * I2 系统推进授权登记（唯一出口 registerSystemAdvance——harness systemInitiated 推进
  * 指令点统一调用；D7 §1 I2/R6-03：现网目标集={testing,delivered}，helper 防御性兜全部
@@ -1058,11 +1243,17 @@ export function clearNanjuAdvanceAuthState(workspaceSlug: string, projectId: str
   confirmAuthorizationStore.delete(key)
   activeConfirmAskStore.delete(key)
   systemAdvanceStore.delete(key)
+  // W22（G 域）：install-ask 标记与拒收防环计数同批清理
+  activeInstallAskStore.delete(key)
+  advanceRejectCountStore.delete(key)
 }
 
-/** 测试专用：全量重置三张内存态（生产代码禁用——防跨测试污染） */
+/** 测试专用：全量重置内存态（生产代码禁用——防跨测试污染） */
 export function __resetNanjuAdvanceAuthStoresForTests(): void {
   confirmAuthorizationStore.clear()
   activeConfirmAskStore.clear()
   systemAdvanceStore.clear()
+  // W22（G 域）：install-ask 标记与拒收防环计数同批重置
+  activeInstallAskStore.clear()
+  advanceRejectCountStore.clear()
 }

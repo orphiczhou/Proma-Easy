@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
-import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, type NanjuProject, type ProjectStage } from './nanju-project'
+import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, type NanjuProject, type ProjectStage } from './nanju-project'
 import { getPhaseNode, getNextPhase, type PhaseId, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
 import {
@@ -323,6 +323,18 @@ export function checkNanjuRouterGate(
         console.log(`[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: ${project.name}`)
         return askGate
       }
+      // W22（G 域 M-6）：install-only 横幅放行（auto on 的唯一例外 + auto off 的全放行
+      // 两形态均覆盖）→ 登记 installAsk 在场标记——其横幅答案回传不构成推进授权，
+      // 但在 checkConfirmAdvanceInput 侧豁免 clarify.suspect-fake-confirm 误记
+      //（中间类确认不登记 activeConfirmAsk，答案命中确认词时原误记 no-active-ask）。
+      // 不按 header 前缀宽匹配——精确等值 NANJU_ASK_INSTALL_HEADER 才登记，防混合
+      // 问题（install + 非收口类）误入白名单。
+      try {
+        const askQuestions = extractAskQuestions(input)
+        if (askQuestions.length > 0 && askQuestions.every((q) => (q.header ?? '') === NANJU_ASK_INSTALL_HEADER)) {
+          setActiveInstallAsk(workspaceSlug, project.projectId)
+        }
+      } catch { /* 登记失败不影响放行（TTL 兜底，误记仅观测面） */ }
       // D8 A3′：auto on 时整体跳过登记——自动审核项目不产生「等待用户确认」问句
       //（activeConfirmAsk 是 I1-② 授权的上下文源，auto 项目推进走第四形态）；
       // 环境安装问句同样不登记（安装应答不构成推进授权）

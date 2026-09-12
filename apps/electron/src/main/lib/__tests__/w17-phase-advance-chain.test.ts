@@ -44,7 +44,17 @@ const {
   registerSystemAdvance, getSystemAdvanceAuthorized, consumeSystemAdvanceAuthorized,
   clearNanjuAdvanceAuthState, __resetNanjuAdvanceAuthStoresForTests,
   CONFIRM_ADVANCE_KEYWORDS,
+  // W22（G 域）：M-6 install 白名单 + F5 防环计数 + R1 codingDelegationId + M-9 时间戳
+  setActiveInstallAsk, getActiveInstallAsk, clearActiveInstallAsk,
+  bumpAdvanceRejectCount, getAdvanceRejectCount, resetAdvanceRejectCount,
+  setProjectCodingDelegationId, getProjectCodingDelegationId,
+  getProjectPendingAdvanceCorrection, clearProjectPendingAdvanceCorrection,
+  updateNanjuProject,
 } = await import('../nanju-project')
+// W22（G 域）：R1 回炉文案纯函数（orchestrator behavior-fail 分支同源消费）
+const {
+  buildGwtBehaviorFailReworkDirective, buildGwtBehaviorFailReworkResumeMessage,
+} = await import('../nanju-phase-advance-consumer')
 // W18：交付双事实门禁（delivered 消费用例前置）
 const { checkGwtDeliveryFacts } = await import('../nanju-gwt-runner')
 const { readProjectInfo, setProjectDeliveryChallenge, setProjectDeliveryAck } = await import('../nanju-project')
@@ -60,21 +70,25 @@ const {
 const { NanjuDelegationWatcher, AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS } =
   await import('../nanju-delegation-watch')
 
-/** 测试用 hooks：捕获注入消息 / GWT 触发 / Todo 收尾 */
+/** 测试用 hooks：捕获注入消息 / GWT 触发 / Todo 收尾 / systemInitiated 续接（W22 F5） */
 function buildTestHooks(): PhaseAdvanceHooks & {
   injected: string[]
   gwtTriggered: Array<Record<string, unknown>>
   finalized: number
+  continuations: Array<{ sessionId: string; message: string; opts?: { onGiveUp?: (s: string, m: string) => void } }>
 } {
   const injected: string[] = []
   const gwtTriggered: Array<Record<string, unknown>> = []
+  const continuations: Array<{ sessionId: string; message: string; opts?: { onGiveUp?: (s: string, m: string) => void } }> = []
   let finalized = 0
   return {
     injected,
     gwtTriggered,
+    continuations,
     get finalized() { return finalized },
     emitAssistantMessage: (_sessionId, text) => { injected.push(text) },
     injectAssistantMessage: (_sessionId, text) => { injected.push(text) },
+    sendContinuation: (sessionId, message, opts) => { continuations.push({ sessionId, message, opts }) },
     triggerGwtRun: (input) => { gwtTriggered.push(input as unknown as Record<string, unknown>) },
     checkGwtDeliveryGate: () => null,
     finalizePhaseTodos: () => { finalized += 1 },
@@ -1345,5 +1359,220 @@ describe('D8 R2′ 源码断言：F2-3 接线 + F3 清理', () => {
     const gwtSource = readFileSync(new URL('../nanju-gwt-runner.ts', import.meta.url), 'utf-8')
     expect(gwtSource).toContain('第四形态不参与交付路径')
     expect(gwtSource).not.toContain('此处到达即 testing 产出（06_TESTS）已达标的 auto 项目')
+  })
+})
+// ═══════════════ W22（G 域）：F5 拒收教育闭环 / M-6 install 白名单 / R1 回炉文案 / M-9 时间戳 ═══════════════
+
+/** 读取当月 telemetry 事件（fixture 根） */
+function readTelemetryEvents(): Array<{ eventType: string; payload?: Record<string, unknown> }> {
+  const month = new Date().toISOString().slice(0, 7)
+  const telemetryPath = join(fixtureRoot, '_telemetry', `events-${month}.jsonl`)
+  if (!existsSync(telemetryPath)) return []
+  return readFileSync(telemetryPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+}
+
+describe('W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级）', () => {
+  test('红测：无授权拒收 → 教育注入存在 且 systemInitiated 续接被触发（注入≠续接，D8-1/D8-2 真实缺口）+ gate-deny 埋点', () => {
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    expect(readProjects()[0]?.currentStage).toBe('requirements')
+    // 注入存在（教育消息可见）
+    expect(hooks.injected.some((t) => t.includes('推进未被授权'))).toBe(true)
+    // 续接生效（F5 验收口径：注入 且 systemInitiated 续接生效）——同文案驱动 L1 下一轮
+    expect(hooks.continuations.length).toBe(1)
+    expect(hooks.continuations[0]?.sessionId).toBe(SESSION_ID)
+    expect(hooks.continuations[0]?.message).toContain('推进未被授权')
+    expect(hooks.continuations[0]?.message).toContain('AskUserQuestion') // off 项目确认问句指引
+    // 遥测：gate-deny 落库
+    const denyEvent = readTelemetryEvents().find((e) => e.eventType === 'advance.gate-deny')
+    expect(denyEvent).toBeTruthy()
+    expect((denyEvent!.payload as Record<string, unknown>).target).toBe('prototype')
+    // 防环计数已累计
+    expect(getAdvanceRejectCount(WS, 'p1')).toBe(1)
+  })
+
+  test('红测：W11 跳级拒收 → 注入+续接+advance.target-deny 埋点（D8-1 补齐）；off 版文案含确认问句指引', () => {
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, hooks) // requirements → coding 跳级
+    expect(advanced).toBe(null)
+    expect(hooks.injected.some((t) => t.includes('推进标记目标错误'))).toBe(true)
+    const targetDeny = hooks.injected.find((t) => t.includes('推进标记目标错误'))
+    expect(targetDeny).toContain('AskUserQuestion') // off 项目（fixture 默认无 autoClarify）
+    expect(targetDeny).toContain('确认·')
+    expect(hooks.continuations.length).toBe(1)
+    const denyEvent = readTelemetryEvents().find((e) => e.eventType === 'advance.target-deny')
+    expect(denyEvent).toBeTruthy()
+    expect((denyEvent!.payload as Record<string, unknown>).expected).toBe('prototype')
+  })
+
+  test('红测（W11 auto 版）：auto 项目跳级拒收文案含「直接输出推进标记」与 nanju_clarify_proxy 指引', () => {
+    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } })
+    const hooks = buildTestHooks()
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, hooks)
+    expect(advanced).toBe(null)
+    const targetDeny = hooks.injected.find((t) => t.includes('推进标记目标错误'))
+    expect(targetDeny).toContain('请直接输出 <!-- PHASE_ADVANCE: prototype --> 推进标记')
+    expect(targetDeny).toContain('nanju_clarify_proxy')
+    // auto 项目 W11 拒因也计入防环（同一拒收闭环）
+    expect(getAdvanceRejectCount(WS, 'p1')).toBe(1)
+  })
+
+  test('红测（防环 F5③）：前 2 次教育+续接，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点', () => {
+    const first = buildTestHooks()
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, first)
+    const second = buildTestHooks()
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, second)
+    expect(first.continuations.length).toBe(1)
+    expect(second.continuations.length).toBe(1)
+    // 第 3 次：转人工提示（不续接、不再教育注入）
+    const third = buildTestHooks()
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, third)
+    expect(third.continuations.length).toBe(0)
+    expect(third.injected.some((t) => t.includes('自动纠偏闭环已达上限'))).toBe(true)
+    expect(third.injected.some((t) => t.includes('人工介入'))).toBe(true)
+    expect(third.injected.some((t) => t.includes('推进未被授权'))).toBe(false) // 不再教育注入
+    const escalate = readTelemetryEvents().find((e) => e.eventType === 'advance.reject-escalate')
+    expect(escalate).toBeTruthy()
+    expect((escalate!.payload as Record<string, unknown>).kind).toBe('loop-limit')
+    expect((escalate!.payload as Record<string, unknown>).count).toBe(3)
+  })
+
+  test('红测（计数复位）：阶段推进成功 → 拒收计数清零（新阶段重新计数）+ 待纠正拒因清除', () => {
+    bumpAdvanceRejectCount(WS, 'p1')
+    bumpAdvanceRejectCount(WS, 'p1')
+    expect(getAdvanceRejectCount(WS, 'p1')).toBe(2)
+    // 授权推进成功
+    setConfirmAuthorization(WS, 'p1', 'ask-answer', 'prototype')
+    const hooks = buildTestHooks()
+    expect(consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)).toBe('prototype')
+    expect(getAdvanceRejectCount(WS, 'p1')).toBe(0)
+    // 推进成功同时清拒因登记
+    expect(getProjectPendingAdvanceCorrection(WS, 'p1')).toBe(null)
+  })
+
+  test('红测（F5④续接失败降级）：onGiveUp 回调 → 可见注入 + reject-escalate(kind=continuation-giveup) 埋点 + 拒因登记 _project-info', () => {
+    const hooks = buildTestHooks()
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, hooks)
+    expect(hooks.continuations.length).toBe(1)
+    // 模拟 runNanjuGuardContinuation 重试耗尽（会话持续忙碌）
+    const onGiveUp = hooks.continuations[0]?.opts?.onGiveUp
+    expect(onGiveUp).toBeTruthy()
+    onGiveUp!(SESSION_ID, 'x')
+    // 降级可见注入（不静默）
+    expect(hooks.injected.some((t) => t.includes('纠偏续接未送达'))).toBe(true)
+    // 遥测归因
+    const escalate = readTelemetryEvents().find(
+      (e) => e.eventType === 'advance.reject-escalate' && (e.payload as Record<string, unknown>)?.kind === 'continuation-giveup',
+    )
+    expect(escalate).toBeTruthy()
+    // 拒因登记进 _project-info（合法目标 prototype + 计数 1）
+    const correction = getProjectPendingAdvanceCorrection(WS, 'p1')
+    expect(correction).toBeTruthy()
+    expect(correction!.kind).toBe('gate-deny')
+    expect(correction!.target).toBe('prototype')
+    expect(correction!.expected).toBe('prototype')
+    expect(correction!.count).toBe(1)
+    // 登记可清除（推进成功路径消费）
+    clearProjectPendingAdvanceCorrection(WS, 'p1')
+    expect(getProjectPendingAdvanceCorrection(WS, 'p1')).toBe(null)
+  })
+})
+
+describe('W22 M-6：install-only 横幅答案回传豁免 suspect-fake-confirm（红测双向）', () => {
+  test('豁免路径：install 标记在场 + ask-answer 确认词 → suspect 埋点 whitelisted:true + reason=install-whitelisted，不授权', () => {
+    setActiveInstallAsk(WS, 'p1') // gate 放行 install-only 横幅时登记
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认安装', 'ask-answer')
+    const suspect = readTelemetryEvents().find((e) => e.eventType === 'clarify.suspect-fake-confirm')
+    expect(suspect).toBeTruthy()
+    const payload = suspect!.payload as Record<string, unknown>
+    expect(payload.whitelisted).toBe(true)
+    expect(payload.reason).toBe('install-whitelisted')
+    // 不授权不变（安装应答不构成推进授权）
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+    // 标记被消费（幂等清除）
+    expect(getActiveInstallAsk(WS, 'p1')).toBe(null)
+  })
+
+  test('真伪造路径：install 标记不在场 + ask-answer 确认词 → 仍标 suspect（reason=no-active-ask，无 whitelisted 标记）', () => {
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认', 'ask-answer')
+    const suspect = readTelemetryEvents().find((e) => e.eventType === 'clarify.suspect-fake-confirm')
+    expect(suspect).toBeTruthy()
+    const payload = suspect!.payload as Record<string, unknown>
+    expect(payload.whitelisted).toBeUndefined()
+    expect(payload.reason).toBe('no-active-ask')
+    expect(getConfirmAuthorization(WS, 'p1')).toBe(null)
+  })
+})
+
+describe('W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言）', () => {
+  test('有 ID：可见注入版含 continue_delegation(<ID>) + 保留上下文 + 不新建修复会话', () => {
+    const directive = buildGwtBehaviorFailReworkDirective('US-1 加法失败', 'del-123')
+    expect(directive).toContain('失败清单：')
+    expect(directive).toContain('US-1 加法失败')
+    expect(directive).toContain('continue_delegation(del-123)')
+    expect(directive).toContain('保留完整上下文')
+    expect(directive).toContain('不要新建修复会话')
+    expect(directive).toContain('<!-- PHASE_ADVANCE: testing -->')
+  })
+
+  test('无 ID：降级文案指明新建但沿用 coding 配置渠道（GLM）', () => {
+    const directive = buildGwtBehaviorFailReworkDirective('US-1 加法失败', null)
+    expect(directive).toContain('委派「全栈开发」')
+    expect(directive).toContain('GLM')
+    expect(directive).not.toContain('continue_delegation(')
+  })
+
+  test('续接指令（systemInitiated 版）双口径同源', () => {
+    expect(buildGwtBehaviorFailReworkResumeMessage('del-456')).toContain('continue_delegation(del-456)')
+    expect(buildGwtBehaviorFailReworkResumeMessage('del-456')).toContain('不要新建修复会话')
+    expect(buildGwtBehaviorFailReworkResumeMessage(null)).toContain('GLM')
+  })
+
+  test('codingDelegationId 唯一写入点 + 幂等覆盖（setProjectCodingDelegationId）', () => {
+    setProjectCodingDelegationId(WS, 'p1', 'del-a')
+    expect(getProjectCodingDelegationId(WS, 'p1')).toBe('del-a')
+    setProjectCodingDelegationId(WS, 'p1', 'del-b') // 重复出现覆盖为最新
+    expect(getProjectCodingDelegationId(WS, 'p1')).toBe('del-b')
+  })
+
+  test('源码断言（防退化）：orchestrator behavior-fail 分支消费 codingDelegationId + 纯函数；mapping/coverage 分支不经 R1 文案', () => {
+    const orchSource = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
+    expect(orchSource).toContain('getProjectCodingDelegationId(workspaceSlug, projectId)')
+    expect(orchSource).toContain('buildGwtBehaviorFailReworkDirective(outcome.failListText, behaviorFailCodingDelegationId)')
+    expect(orchSource).toContain('userMessage: buildGwtBehaviorFailReworkResumeMessage(behaviorFailCodingDelegationId)')
+    // 编排器记录点：lifecycle 订阅 start 事件 → recordNanjuCodingDelegation（按阶段判定不按 title）
+    expect(orchSource).toContain('recordNanjuCodingDelegation(event.parentSessionId, event.delegationId)')
+    expect(orchSource).toContain('isNanjuProxy') // 代理委派排除（clarify 不覆盖全栈开发 ID）
+    // mapping/coverage 回炉仍指测试工程师（不经 R1 文案）
+    expect(orchSource).toContain('委派「测试工程师」为缺失的用户故事补生成 GWT 场景')
+    expect(orchSource).toContain('委派「测试工程师」')
+  })
+
+  test('源码断言：gate AskUser 放行登记 install-ask（精确等值 header 才入白名单）', () => {
+    const gateSource = readFileSync(new URL('../nanju-router-gate.ts', import.meta.url), 'utf-8')
+    expect(gateSource).toContain('setActiveInstallAsk(workspaceSlug, project.projectId)')
+    expect(gateSource).toContain("askQuestions.every((q) => (q.header ?? '') === NANJU_ASK_INSTALL_HEADER)")
+  })
+})
+
+describe('W22 M-9：autoClarify.lastToggledAt（updateNanjuProject 单一检测点，覆盖 IPC 直写路径）', () => {
+  test('enabled 变化自动盖戳；同值更新（预算扣减）不刷新', () => {
+    const projects = readProjects() as Array<{ autoClarify?: { enabled?: boolean; lastToggledAt?: string } }>
+    expect(projects[0]?.autoClarify).toBeUndefined()
+    // 开启（模拟 IPC set-auto-clarify 直写 updateNanjuProject）
+    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } })
+    const afterOn = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+    expect(typeof afterOn).toBe('string')
+    expect(Number.isNaN(Date.parse(afterOn!))).toBe(false)
+    // 同值更新（预算 20→19）不刷新时间戳
+    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 19, pendingQuestionIds: [] } })
+    const afterBudget = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+    expect(afterBudget).toBe(afterOn)
+    // 关闭再次盖新戳
+    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: false, proxyBudget: 19, pendingQuestionIds: [] } })
+    const afterOff = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+    expect(typeof afterOff).toBe('string')
+    expect(afterOff!).not.toBe(afterOn)
   })
 })
