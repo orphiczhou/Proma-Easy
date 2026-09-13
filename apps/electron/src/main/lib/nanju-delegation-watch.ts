@@ -268,7 +268,9 @@ export class NanjuDelegationWatcher {
       const seq = (GUIDE_SUBSTAGE_SEQUENCE as Record<string, readonly string[] | undefined>)[stage]
       if (!seq) return
       const current = readSub(workspaceSlug, projectId)
-      if (current === `${main}_UC`) return // 产出达标等确认——推导不覆盖
+      // W24-3b：UC 不再绝对优先——实测预存产出文件会让门禁在 AC 轮次前早置 UC，
+      // 钉死子步骤后续点亮。攻防/视觉委派活跃 = 阶段仍在推进的更强事实，允许覆盖；
+      // 无攻防委派时不动 UC（门禁幂等写回：current≠UC 时 verify 通过会重新置 UC 终态）。
       if (current && current.endsWith('_CLARIFY')) return // 澄清中 sentinel 优先（blocked 事实）
       // 候选映射：标题关键词 → 序列内节点（PROTO_VIS 仅 prototype 序列含 VIS）
       let best: { node: string; idx: number } | null = null

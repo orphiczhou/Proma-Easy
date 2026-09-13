@@ -407,7 +407,7 @@ describe('W24-3 deriveSubStageFromDelegations（观察哨推导）', () => {
     expect(h.writes.some((w) => w.nodeId === 'PROTO_ATK' && w.force === true)).toBe(true)
   })
 
-  test('防御+攻击并行 → 取序列更后者 PROTO_DEF；UC 态不被覆盖', () => {
+  test('防御+攻击并行 → 取序列更后者 PROTO_DEF；UC 态被活跃攻防覆盖（W24-3b：预存文件早置 UC 不钉死）', () => {
     const h = makeDeriveHarness('PROTO')
     ;(h.watcher as unknown as { register: (a: string, b: string, c: string) => void }).register('ws', 'root-1', 'demo-project')
     h.setTitles(['攻击者复审 R2：原型修复验证', '防御者裁决：UX 原型 AC 审计 R1+R2'])
@@ -417,9 +417,9 @@ describe('W24-3 deriveSubStageFromDelegations（观察哨推导）', () => {
 
     const uc = makeDeriveHarness('PROTO_UC')
     ;(uc.watcher as unknown as { register: (a: string, b: string, c: string) => void }).register('root-1', 'ws', 'demo-project')
-    uc.setTitles(['防御者裁决：AC 审计'])
+    uc.setTitles(['[AC防御者] 原型审计 R1'])
     uc.poll()
-    expect(uc.writes.length).toBe(0)
+    expect(uc.writes.some((w) => w.nodeId === 'PROTO_DEF')).toBe(true)
   })
 
   test('澄清 sentinel 优先（不覆盖）+ 攻防收工回主节点（回炉可见）', () => {
