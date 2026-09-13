@@ -1,11 +1,14 @@
 /**
  * 南大向导全环节模型参数文件（W13b，v0.17.75）
  *
- * 两层外置加载（用户 09-04 07:25 核心裁定 + 工单 v2 §0）：
- *   层 1（用户覆盖）~/.proma/nanju-model-config.json（开发模式 ~/.proma-dev/，config-paths 惯例）
+ * 四层外置加载（W23 §2.1，合并优先 1 > 1.5 > 2 > 3）：
+ *   层 1（用户手改） ~/.proma[-dev]/nanju-model-config.json（config-paths 惯例）
+ *   层 1.5（UI 覆盖）~/.proma[-dev]/nanju-model-config-override.json（仅设置界面 IPC 单一写者；
+ *                    本模块只读不写，写盘归 D2 nanju-model-settings-service）
  *   层 2（内置）    resources/nanju-model-config.json（electron-builder extraResources 打包；
  *                   dev cwd 探测候选同 nanju-engineering-template 惯例）
- *   层 3（代码兜底）本文件 FALLBACK_PHASE_MODELS / FALLBACK_AC_PRESETS 常量
+ *   层 3（代码兜底）本文件 FALLBACK_PHASE_MODELS / FALLBACK_AC_PRESETS / FALLBACK_PROXY_CANDIDATES 常量
+ * 根节 proxyCandidates（W23）：代理渠道候选有序偏好列表（≤6 项），四层均可声明。
  * 合并语义：字段级覆盖（高层合法字段逐项替换低层值），非法项跳过用兜底 + warn（不整体拒绝）。
  *
  * 消费方：
@@ -15,7 +18,9 @@
  * - nanju-model-fallback.ts：getFallbackChain 优先读 phases[].fallbacks 编译链（配置缺项
  *   回退代码链 MODEL_FALLBACK_CHAINS，两层兼容）
  *
- * 缓存与生效：模块级缓存，进程内首次加载后复用；改参数文件需重启应用（重启生效）。
+ * 缓存与生效：模块级缓存 + 配置代次（W23 §六.1）——每次重算代次 +1，nanju-router 的
+ * ROUTES 脏缓存比对 getConfigGeneration() 按需重建；设置界面 save/reset 依次 reload 后，
+ * 新建/推进的委派即用新矩阵，无需重启。
  * 测试注入：loadNanjuModelConfig / reloadNanjuModelConfig 的 opts 支持显式指定/禁用各层
  * 路径（不依赖 mock.module，避免 bun 多 worker 分片下的跨文件 mock 泄漏）。
  *
@@ -71,19 +76,28 @@ export interface AcPresetEntry {
   defender: NanjuACActor
 }
 
-/** 参数文件根结构（两层文件共用同一 schema） */
+/** 代理渠道候选（根节，有序偏好列表，≤6 项；四层均可声明） */
+export interface NanjuProxyCandidate {
+  channelId: string
+  modelId: string
+}
+
+/** 参数文件根结构（各层文件共用同一 schema；W23 起新增根节 proxyCandidates） */
 export interface NanjuModelConfigFile {
   version?: number
   phases?: Partial<Record<NanjuModelPhaseId, Partial<PhaseModelEntry>>>
   acPresets?: Partial<Record<TaskWeight, Partial<AcPresetEntry>>>
+  proxyCandidates?: NanjuProxyCandidate[]
 }
 
-/** 加载完成的有效配置（三层合并后；六阶段字段全部齐备） */
+/** 加载完成的有效配置（各层合并后；六阶段字段全部齐备） */
 export interface LoadedNanjuModelConfig {
   phases: Record<NanjuModelPhaseId, PhaseModelEntry>
   acPresets: Record<TaskWeight, AcPresetEntry>
-  /** 实际参与合并的层来源（可观测：排查配置为何未生效） */
-  sources: { builtin?: string; user?: string }
+  /** 代理候选（合并后始终非空：层 3 兜底常量托底） */
+  proxyCandidates: NanjuModelEndpoint[]
+  /** 实际参与合并的层来源（可观测：排查配置为何未生效；W23 起含层 1.5 override） */
+  sources: { builtin?: string; override?: string; user?: string }
 }
 
 // ===== 层 3：代码兜底常量（与内置 resources/nanju-model-config.json 同值，锁定测试保证一致） =====
@@ -109,7 +123,7 @@ export const FALLBACK_PHASE_MODELS: Record<NanjuModelPhaseId, PhaseModelEntry> =
   requirements: {
     channel: 'deepseek',
     model: 'deepseek-v4-pro',
-    fallbacks: ['deepseek:deepseek-v4-flash', 'glm-zhipu:glm-5.3-flash'],
+    fallbacks: ['deepseek:deepseek-flash', 'glm-zhipu:glm-5.3-flash'],
   },
   prototype: {
     // 'minimax' 是家族标记（渠道 ID 是 UUID，运行时解析，见 nanju-router-prompt.ts）
@@ -125,13 +139,13 @@ export const FALLBACK_PHASE_MODELS: Record<NanjuModelPhaseId, PhaseModelEntry> =
   },
   planning: {
     channel: 'deepseek',
-    model: 'deepseek-v4-flash',
+    model: 'deepseek-flash',
     fallbacks: ['glm-zhipu:glm-5.3-flash'],
   },
   coding: {
     channel: 'glm-zhipu',
     model: 'GLM-5.3',
-    fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-flash'],
+    fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-flash'],
     acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
   },
   testing: {
@@ -142,7 +156,7 @@ export const FALLBACK_PHASE_MODELS: Record<NanjuModelPhaseId, PhaseModelEntry> =
     // fallbacks 对调：glm-5.3-flash（原主选，与 coding 同族——降级到它时跨族被破坏，
     // 由 W22 M#8 启动断言的降级点告警观测）→ deepseek-v4-pro（异族备援）。
     channel: 'deepseek',
-    model: 'deepseek-v4-flash',
+    model: 'deepseek-flash',
     fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-pro'],
     // W22 M#7：AC 攻击者 per-phase 覆盖 glm-zhipu:glm-5.3-flash——与新作者（deepseek 系）
     // 跨族，与 defender（minimax 系）异族 → 三角色三族矩阵（作者 ds / 攻 glm / 防 minimax）。
@@ -155,7 +169,7 @@ export const FALLBACK_PHASE_MODELS: Record<NanjuModelPhaseId, PhaseModelEntry> =
 /** AC 攻防预设兜底（W4 已定，与 nanju-router 的 AC_PRESETS 同值） */
 export const FALLBACK_AC_PRESETS: Record<TaskWeight, AcPresetEntry> = {
   light: {
-    attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' },
+    attacker: { channel: 'deepseek', model: 'deepseek-flash' },
     defender: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
   },
   medium: {
@@ -163,6 +177,20 @@ export const FALLBACK_AC_PRESETS: Record<TaskWeight, AcPresetEntry> = {
     defender: { channel: 'glm-zhipu', model: 'GLM-5.3' },
   },
 }
+
+/**
+ * 代理候选兜底（proxyCandidates 层 3，W23 §2.1）。与 nanju-clarify-proxy-tool.ts 的
+ * PROXY_CHANNEL_CANDIDATES 同值——本模块不 import 该文件（它经 router 链被多方消费，
+ * 反向会抬高环风险），同值约束由 nanju-model-config.test.ts 锁定测试保证（测试侧双向
+ * import 不构成运行时环）。厂商改名时两处同步改 + 现有锁定测试兜底。
+ */
+export const FALLBACK_PROXY_CANDIDATES: ReadonlyArray<NanjuProxyCandidate> = Object.freeze([
+  { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
+  { channelId: 'deepseek', modelId: 'deepseek-flash' },
+  { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
+  { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
+  { channelId: 'minimax', modelId: 'MiniMax-M3' },
+])
 
 // ===== 路径解析 =====
 
@@ -197,6 +225,17 @@ export function resolveBuiltinNanjuModelConfigPath(explicitBase?: string): strin
 export function getUserNanjuModelConfigPath(): string {
   const { getConfigDirName } = require('./config-paths') as typeof import('./config-paths')
   return join(homedir(), getConfigDirName(), 'nanju-model-config.json')
+}
+
+/**
+ * UI 覆盖文件路径（层 1.5，W23 §2.1）：~/.proma[-dev]/nanju-model-config-override.json
+ * （getConfigDirName 惯例）。**本模块只读不写**——写盘归设置界面 IPC 单一写者
+ * （nanju-model-settings-service，D2 域）；行级恢复 = save patch 字段显式 null，
+ * 整体恢复 = 删该文件（IPC reset）。只拼路径不建目录（读路径不需要副作用）。
+ */
+export function getUserNanjuModelOverridePath(): string {
+  const { getConfigDirName } = require('./config-paths') as typeof import('./config-paths')
+  return join(homedir(), getConfigDirName(), 'nanju-model-config-override.json')
 }
 
 // ===== 校验容错（非法项跳过用兜底 + warn，不整体拒绝） =====
@@ -262,6 +301,7 @@ function cloneFallback(): LoadedNanjuModelConfig {
         defender: { ...FALLBACK_AC_PRESETS.medium.defender },
       },
     },
+    proxyCandidates: FALLBACK_PROXY_CANDIDATES.map((c) => ({ ...c })),
     sources: {},
   }
 }
@@ -281,6 +321,23 @@ function readConfigFile(path: string): NanjuModelConfigFile | null {
     return null
   }
 }
+
+/** 校验单个代理候选项：合法返回克隆，非法 warn 并跳过该元素（元素级容错） */
+function sanitizeProxyCandidate(value: unknown, context: string): NanjuProxyCandidate | undefined {
+  if (typeof value !== 'object' || value === null) {
+    warn(`${context} 不是对象，丢弃`)
+    return undefined
+  }
+  const { channelId, modelId } = value as Record<string, unknown>
+  if (!isNonEmptyString(channelId) || !isNonEmptyString(modelId)) {
+    warn(`${context} 的 channelId/modelId 非空字符串校验失败，丢弃`)
+    return undefined
+  }
+  return { channelId, modelId }
+}
+
+/** proxyCandidates 节上限（W23 §2.1：有序偏好列表 ≤6 项） */
+export const NANJU_PROXY_CANDIDATES_MAX = 6
 
 /** 把一层文件的合法字段合并进基底（字段级覆盖；非法字段 warn 后保持低层值） */
 function mergeFileLayer(base: LoadedNanjuModelConfig, file: NanjuModelConfigFile, sourcePath: string): void {
@@ -356,6 +413,20 @@ function mergeFileLayer(base: LoadedNanjuModelConfig, file: NanjuModelConfigFile
       }
     }
   }
+  // W23：根节 proxyCandidates（元素级容错；全非法/空 = 视为未声明继承低层；>6 截断到前 6）
+  if (file.proxyCandidates !== undefined) {
+    if (Array.isArray(file.proxyCandidates)) {
+      const list = file.proxyCandidates
+        .map((item, i) => sanitizeProxyCandidate(item, `${sourcePath} proxyCandidates[${i}]`))
+        .filter((item): item is NanjuProxyCandidate => item !== undefined)
+      if (list.length > NANJU_PROXY_CANDIDATES_MAX) {
+        warn(`${sourcePath} proxyCandidates 超 ${NANJU_PROXY_CANDIDATES_MAX} 项上限（${list.length}），截断到前 ${NANJU_PROXY_CANDIDATES_MAX} 项`)
+      }
+      if (list.length > 0) base.proxyCandidates = list.slice(0, NANJU_PROXY_CANDIDATES_MAX)
+    } else {
+      warn(`${sourcePath} 的 proxyCandidates 不是数组，忽略该节`)
+    }
+  }
 }
 
 // ===== 加载 + 缓存 =====
@@ -363,8 +434,18 @@ function mergeFileLayer(base: LoadedNanjuModelConfig, file: NanjuModelConfigFile
 export interface NanjuModelConfigLoadOpts {
   /** 层 1 用户覆盖文件路径；undefined = 自动探测（~/.proma/）；null = 禁用该层 */
   userConfigPath?: string | null
+  /** 层 1.5 UI 覆盖文件路径（W23 §2.1）；undefined = 自动探测（~/.proma[-dev]/nanju-model-config-override.json）；null = 禁用该层 */
+  overrideConfigPath?: string | null
   /** 层 2 内置文件路径；undefined = 自动探测（resources 候选）；null = 禁用该层 */
   builtinConfigPath?: string | null
+}
+
+/** 配置代次计数（W23 §六.1）：每次缓存重算 +1；nanju-router 比对代次决定 ROUTES 重建 */
+let _configGeneration = 0
+
+/** 当前配置代次（与缓存内容同步递增；供 router 脏缓存比对，不反向 import router） */
+export function getConfigGeneration(): number {
+  return _configGeneration
 }
 
 function computeConfig(opts: NanjuModelConfigLoadOpts): LoadedNanjuModelConfig {
@@ -376,6 +457,15 @@ function computeConfig(opts: NanjuModelConfigLoadOpts): LoadedNanjuModelConfig {
     if (file) {
       mergeFileLayer(result, file, path)
       result.sources.builtin = path
+    }
+  }
+  // 层 1.5：UI 覆盖（设置界面 IPC 单一写者；优先级高于内置、低于用户手改）
+  if (opts.overrideConfigPath !== null) {
+    const path = opts.overrideConfigPath ?? getUserNanjuModelOverridePath()
+    const file = readConfigFile(path)
+    if (file) {
+      mergeFileLayer(result, file, path)
+      result.sources.override = path
     }
   }
   // 层 1：用户覆盖（最高优先）
@@ -392,20 +482,28 @@ function computeConfig(opts: NanjuModelConfigLoadOpts): LoadedNanjuModelConfig {
 
 let _cache: LoadedNanjuModelConfig | undefined
 
-/**
- * 加载有效配置（模块级缓存）：无 opts 且已有缓存时直接返回缓存（进程内一次 IO）；
- * 传 opts 时按显式路径重算并更新缓存（测试注入用）。
- */
-export function loadNanjuModelConfig(opts?: NanjuModelConfigLoadOpts): LoadedNanjuModelConfig {
-  if (_cache && !opts) return _cache
-  _cache = computeConfig(opts ?? {})
+/** 重算并更新缓存 + 递增代次（router 的 ROUTES 脏缓存比对 getConfigGeneration 重建） */
+function setCacheAndBumpGeneration(opts: NanjuModelConfigLoadOpts): LoadedNanjuModelConfig {
+  _cache = computeConfig(opts)
+  _configGeneration += 1
   return _cache
 }
 
-/** 清缓存重载（总是重算；生产路径对应「重启应用后重新读文件」语义的显式入口） */
+/**
+ * 加载有效配置（模块级缓存）：无 opts 且已有缓存时直接返回缓存（进程内一次 IO）；
+ * 传 opts 时按显式路径重算并更新缓存（测试注入用，同步递增代次）。
+ */
+export function loadNanjuModelConfig(opts?: NanjuModelConfigLoadOpts): LoadedNanjuModelConfig {
+  if (_cache && !opts) return _cache
+  return setCacheAndBumpGeneration(opts ?? {})
+}
+
+/**
+ * 清缓存重载（总是重算 + 代次 +1；W23 §六.1「保存即时生效」的链路入口——
+ * 设置界面 save/reset 依次 reload，下一次 getRoute 自然重建，无需重启应用）。
+ */
 export function reloadNanjuModelConfig(opts?: NanjuModelConfigLoadOpts): LoadedNanjuModelConfig {
-  _cache = computeConfig(opts ?? {})
-  return _cache
+  return setCacheAndBumpGeneration(opts ?? {})
 }
 
 // ===== 解析函数 =====

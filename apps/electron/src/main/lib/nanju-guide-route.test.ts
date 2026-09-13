@@ -113,9 +113,9 @@ describe('getGuideRoute（nanju:get-route 数据面）', () => {
     expect(byTitle('coding')?.model).toBe('GLM-5.3')
     expect(byTitle('coding')?.channel).toBe('glm-zhipu')
     // W22 M#6：测试工程师换 deepseek-v4-flash（跨族：与 coding 的 glm 系异族，恢复开发/测试独立性）
-    expect(byTitle('testing')?.model).toBe('deepseek-v4-flash')
+    expect(byTitle('testing')?.model).toBe('deepseek-flash')
     expect(byTitle('testing')?.channel).toBe('deepseek')
     // W13：planning 降档 deepseek-v4-flash（模板化拆分）
-    expect(byTitle('planning')?.model).toBe('deepseek-v4-flash')
+    expect(byTitle('planning')?.model).toBe('deepseek-flash')
   })
 })

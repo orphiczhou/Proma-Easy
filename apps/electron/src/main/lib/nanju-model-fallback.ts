@@ -43,10 +43,10 @@ export interface ModelEndpoint {
  */
 export const MODEL_FALLBACK_CHAINS: Record<string, string[]> = {
   // 旗舰 → 同族快版 → 异族备援
-  'deepseek:deepseek-v4-pro': ['deepseek:deepseek-v4-flash', 'glm-zhipu:glm-5.3-flash'],
-  'deepseek:deepseek-v4-flash': ['glm-zhipu:glm-5.3-flash'],
-  'glm-zhipu:GLM-5.3': ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-flash'],
-  'glm-zhipu:glm-5.3-flash': ['deepseek:deepseek-v4-flash'],
+  'deepseek:deepseek-v4-pro': ['deepseek:deepseek-flash', 'glm-zhipu:glm-5.3-flash'],
+  'deepseek:deepseek-flash': ['glm-zhipu:glm-5.3-flash'],
+  'glm-zhipu:GLM-5.3': ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-flash'],
+  'glm-zhipu:glm-5.3-flash': ['deepseek:deepseek-flash'],
   'minimax:MiniMax-M3': ['glm-zhipu:glm-5.3-flash'],
 }
 

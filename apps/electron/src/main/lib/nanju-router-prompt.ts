@@ -11,7 +11,7 @@
  */
 
 import { findNanjuProjectBySession } from './nanju-router-gate'
-import { assertACFamilyDiversity, getPhaseNode, resolveACActors, type PhaseId, type PhaseNode } from './nanju-router'
+import { channelFamily, assertACFamilyDiversity, getPhaseNode, resolveACActors, type PhaseId, type PhaseNode } from './nanju-router'
 import {
   buildCategoryGuideLines,
   resolveProjectCategoryForCoding,
@@ -21,6 +21,8 @@ import type { ProjectCategory, ProjectCategorySource } from './nanju-project'
 import { PHASE_TODO_PREFIX } from '@proma/shared'
 import { getNanjuProjectDir } from './nanju-project'
 import type { Channel } from '@proma/shared'
+import { loadNanjuModelConfig } from './nanju-model-config'
+import { computeNanjuModelHealth, recommendEndpointReplacement, type NanjuChannelSnapshot } from './nanju-model-health'
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -33,6 +35,121 @@ const MINIMAX_M3_PATTERN = /minimax[-_\s]?m3/i
 export interface ResolvedChannelModel {
   channelId: string
   modelId: string
+}
+
+// ===== W23 §六.3：配置级 autofix（渠道现状预检 + 单槽临时替换，不落盘） =====
+
+/** 渠道快照家族归并：字面前缀命中用 channelFamily；UUID 渠道回退 provider 归族
+ *  （minimax UUID 渠道 → family-minimax，与家族标记 'minimax' 同族对齐） */
+function channelSnapshotFamily(channel: Channel): string {
+  const byPrefix = channelFamily(channel.id)
+  if (byPrefix !== channel.id) return byPrefix
+  return channel.provider ? `family-${channel.provider}` : channel.id
+}
+
+/** autofix 三角色替换结果（null = 无需/无法替换，保持原值） */
+interface ConfigAutofixResult {
+  author: { channel: string; model: string } | null
+  attacker: { channel: string; model: string } | null
+  defender: { channel: string; model: string } | null
+}
+
+const EMPTY_AUTOFIX: ConfigAutofixResult = { author: null, attacker: null, defender: null }
+
+/**
+ * W23 §六.3：构建 L1 委派指令前对当前阶段 author/attacker/defender 端点预检
+ * （electron 可用性探测 + listChannels 快照，模式照抄 resolveMinimaxM3Actor）；
+ * 失效 → recommendEndpointReplacement 单槽替换（仅本次 prompt，不落盘）+
+ * `model.config-autofix` 遥测（slot/from/to/reason）。
+ *
+ * 硬约束守卫（家族拓扑保持）：autofix 只接受与原端点【同家族】的替换（改名/同族
+ * 同档位场景——W23 触发实证即厂商改名）；跨族候选（规格兑底/任意 enabled）放弃并
+ * warn 降级原值。同族替换不改变 defender≠作者族、attacker≠defender 族、
+ * coding↔testing 跨族的拓扑（家族断言在 buildL2TaskWithAC 内执行，跨族替换可能
+ * 导致 prompt 构建抛错；跨族重构属设置界面 recommend+save 的职责，不在热路径做）。
+ * 渠道快照不完整的观察视角（测试 mock、部分渠道读取异常）也天然安全：异族端点
+ * 在同族约束下无替换即降级原值，不会误换。
+ * 任何异常都不得阻断 prompt 构建（try/catch 降级原值 + console.warn）。
+ */
+export function applyConfigAutofix(
+  workspaceSlug: string,
+  projectId: string | undefined,
+  phase: PhaseNode,
+): ConfigAutofixResult {
+  try {
+    // electron 可用性探测（先例 resolveMinimaxM3Actor）：测试环境（bun）解析到真实
+    // npm 包时只导出安装路径字符串 → 降级零注入
+    const electronModule = require('electron') as unknown
+    if (typeof electronModule !== 'object' || electronModule === null) return EMPTY_AUTOFIX
+    const { listChannels } = require('./channel-manager') as typeof import('./channel-manager')
+    const snapshots: NanjuChannelSnapshot[] = listChannels().map((ch) => ({
+      channelId: ch.id,
+      family: channelSnapshotFamily(ch),
+      models: ch.models.map((m) => ({ modelId: m.id, enabled: m.enabled })),
+    }))
+    const config = loadNanjuModelConfig()
+    const health = computeNanjuModelHealth(config, snapshots)
+    const statusOf = (slot: string) => health.slots.find((s) => s.slot === slot)?.status ?? 'ok'
+
+    const weight = phase.taskWeight ?? 'medium'
+    const actors = resolveACActors(phase)
+    const targets: Array<{
+      role: keyof ConfigAutofixResult
+      slot: string
+      channelId: string
+      modelId: string
+    }> = [
+      { role: 'author', slot: `phases.${phase.id}.primary`, channelId: phase.channel, modelId: phase.model },
+      {
+        role: 'attacker',
+        slot: phase.acAttackerChannel ? `phases.${phase.id}.acAttacker` : `acPresets.${weight}.attacker`,
+        channelId: actors.attacker.channel,
+        modelId: actors.attacker.model,
+      },
+      {
+        role: 'defender',
+        slot: phase.acDefenderChannel ? `phases.${phase.id}.acDefender` : `acPresets.${weight}.defender`,
+        channelId: actors.defender.channel,
+        modelId: actors.defender.model,
+      },
+    ]
+
+    // 家族拓扑守卫基准（替换前有效值；替换只在失效端点上发生，有效角色家族不变）
+    const snapshotFamilyOf = (channelId: string) =>
+      snapshots.find((s) => s.channelId === channelId)?.family ?? channelFamily(channelId)
+    const result: ConfigAutofixResult = { author: null, attacker: null, defender: null }
+    for (const target of targets) {
+      if (statusOf(target.slot) === 'ok') continue
+      const replacement = recommendEndpointReplacement(target.slot, target.channelId, target.modelId, config, snapshots)
+      if (!replacement) {
+        console.warn(`[nanju-autofix] ${target.slot}（${target.channelId}:${target.modelId}）失效且无可用替换，保持原值（委派将走既有 fallback 链）`)
+        continue
+      }
+      // 同族守卫：跨族替换会改变家族多样性拓扑（且可能在渠道快照不完整时误判），热路径不做
+      const originalFamily = snapshotFamilyOf(target.channelId)
+      const replacementFamily = snapshotFamilyOf(replacement.channelId)
+      if (replacementFamily !== originalFamily) {
+        console.warn(`[nanju-autofix] ${target.slot} 替换候选 ${replacement.channelId}:${replacement.modelId}（${replacementFamily}）与原端点家族（${originalFamily}）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）`)
+        continue
+      }
+      result[target.role] = { channel: replacement.channelId, model: replacement.modelId }
+      try {
+        const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+        recordTelemetry(workspaceSlug, 'model.config-autofix', {
+          slot: target.slot,
+          from: `${target.channelId}:${target.modelId}`,
+          to: `${replacement.channelId}:${replacement.modelId}`,
+          reason: replacement.reason,
+        }, projectId)
+      } catch (err) {
+        console.warn('[nanju-autofix] 遥测写入失败（不阻断）:', err instanceof Error ? err.message : err)
+      }
+    }
+    return result
+  } catch (err) {
+    console.warn('[nanju-autofix] 预检异常，降级原值（不阻断 prompt 构建）:', err instanceof Error ? err.message : err)
+    return EMPTY_AUTOFIX
+  }
 }
 
 /**
@@ -142,6 +259,9 @@ function getPrdSummary(workspaceSlug: string, projectId: string): string {
  * @param autoClarifyEnabled v2.4（D7）：auto 开启时 AC 攻击者模板增补两条——代答清单披露
  *   （产物 auto-clarify 标记→代答决策重点审查）+ 同族加倍攻击（diversityDegraded 时双倍怀疑）；
  *   缺省/false = 零注入（既有 AC 指令不变）
+ * @param acAttackerRuntime W23（§六.3）：AC 攻击者 autofix 临时替换值（渠道现状预检失效时的
+ *   单槽推荐，仅本次指令不落盘）。提供时覆盖 resolveACActors 解析出的攻击者；
+ *   null/缺省 = 用节点解析值（向后兼容，既有调用点不变）
  */
 export function buildL2TaskWithAC(
   phase: PhaseNode,
@@ -152,6 +272,7 @@ export function buildL2TaskWithAC(
   categoryInfo?: { category: ProjectCategory; source: ProjectCategorySource } | null,
   acDefenderRuntime?: { channel: string; model: string } | null,
   autoClarifyEnabled?: boolean,
+  acAttackerRuntime?: { channel: string; model: string } | null,
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
@@ -315,6 +436,10 @@ export function buildL2TaskWithAC(
   // W13：防御者运行时解析值优先（testing 阶段 minimax UUID 渠道；缺省回退节点解析值）
   if (acDefenderRuntime) {
     actors.defender = { channel: acDefenderRuntime.channel, model: acDefenderRuntime.model }
+  }
+  // W23 §六.3：攻击者 autofix 临时替换值优先（渠道现状预检失效时的单槽推荐，仅本次指令）
+  if (acAttackerRuntime) {
+    actors.attacker = { channel: acAttackerRuntime.channel, model: acAttackerRuntime.model }
   }
   const attackerCh = actors.attacker.channel
   const attackerModel = actors.attacker.model
@@ -541,16 +666,22 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   // W13：testing 作者换 glm-5.3-flash（字面渠道即可，与 AC 预设防御者同惯例）；
   // testing 的 AC 防御者=minimax 家族覆盖（UUID 渠道），构建 L2 指令时运行时解析
   const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
-  const authorChannel = authorOverride?.channelId ?? phase.channel
-  const authorModel = authorOverride?.modelId ?? phase.model
+  // W23 §六.3：配置级 autofix——当前阶段 author/attacker/defender 端点预检（渠道现状快照），
+  // 失效则单槽推荐替换（仅本次 prompt，不落盘）+ model.config-autofix 遥测；
+  // 任何异常在 applyConfigAutofix 内部降级（不阻断 prompt 构建）。prototype 作者已有
+  // 运行时 UUID 解析优先（解析器本身只返回 enabled 端点）。
+  const autofix = applyConfigAutofix(workspaceSlug, project.projectId, phase)
+  const authorChannel = authorOverride?.channelId ?? autofix.author?.channel ?? phase.channel
+  const authorModel = authorOverride?.modelId ?? autofix.author?.model ?? phase.model
   // W22 R1（#10 后半）：testing 回炉话术引用 coding 阶段渠道/模型（动态读，不硬编码——
   // 模型矩阵演进时话术自适应；与 M 域 nanju-model-config 单一真相源对齐）
   const codingPhase = stage === 'testing' ? getPhaseNode(project.mode, 'coding') : null
   const codingPhaseEndpoint = codingPhase ? codingPhase.channel + ' / ' + codingPhase.model : 'coding 配置'
   const acDefenderRuntime = phase.acDefenderChannel === 'minimax' ? resolveMinimaxM3Actor() : null
+  // W23：防御者优先级——W13 UUID 运行时解析 > autofix 替换 > 节点解析值
   const acDefenderEndpoint = acDefenderRuntime
     ? { channel: acDefenderRuntime.channelId, model: acDefenderRuntime.modelId }
-    : null
+    : autofix.defender
 
   // 工程品类（W3，v0.17.66，仅 coding 消费）：优先读推进钩子写入的判定结果；
   // 读不到（老项目/钩子未触发）时现场从文档提取降级判定，并顺手补写元信息与模板落位
@@ -582,7 +713,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
 
   // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导；
   // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击）
-  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo, acDefenderEndpoint, autoClarifyEnabled)
+  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo, acDefenderEndpoint, autoClarifyEnabled, autofix.attacker)
 
   // M7（AC 审计 A9-timing，v0.17.69）：主进程预校验——architecture 阶段构建 L1 指令时
   // 现场对 architecture.md 环境清单跑 validateEnvChecklist（§九「清单执行前过确定性规则

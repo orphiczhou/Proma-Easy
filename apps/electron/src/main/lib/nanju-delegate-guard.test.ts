@@ -241,8 +241,8 @@ describe('W8 层二：AC 攻防识别与模型覆写', () => {
     expect(detectACRole({ task: '复审 06_TESTS 产出并出审计报告' })).toBeNull()
   })
 
-  test('quick 模式 → light 预设（attacker=deepseek-v4-flash / defender=glm-5.3-flash）', () => {
-    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+  test('quick 模式 → light 预设（attacker=deepseek-flash / defender=glm-5.3-flash；W23 a96a045a 改名对齐）', () => {
+    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'quick')).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
   })
 
@@ -268,16 +268,16 @@ describe('W22 M#7：resolveACOverride 第三参 stage（per-phase 覆盖优先�
   })
 
   test('无 attacker 覆盖的阶段（coding/architecture/requirements）→ 节点 taskWeight 对应预设，行为与两参一致', () => {
-    expect(resolveACOverride('attacker', 'quick', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('attacker', 'iterative', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-pro' })
-    expect(resolveACOverride('attacker', 'quick', 'requirements')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick', 'requirements')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'quick', 'prototype')).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
   })
 
   test('节点缺失（quick 无 planning）→ 回退全局 preset；不传 stage（两参旧签名）→ 向后兼容不变', () => {
-    expect(resolveACOverride('attacker', 'quick', 'planning')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick', 'planning')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'iterative', 'planning')).toEqual({ channel: 'glm-zhipu', model: 'GLM-5.3' })
-    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'iterative')).toEqual({ channel: 'glm-zhipu', model: 'GLM-5.3' })
   })
 

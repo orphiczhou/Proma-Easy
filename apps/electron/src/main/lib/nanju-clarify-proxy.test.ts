@@ -935,3 +935,41 @@ async function pendingChild(delegationId: string): Promise<string> {
   if (!found) throw new Error(`委派不存在: ${delegationId}`)
   return found.childSessionId
 }
+
+
+// ===== W23：resolveProxyChannel 缺省候选接配置（proxyCandidates 即时生效） =====
+
+describe('W23 resolveProxyChannel 缺省候选优先读配置 proxyCandidates（§六.2）', () => {
+  test('配置层 proxyCandidates 覆盖缺省候选序（save → reload → 下一次解析即用新候选）', async () => {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-proxy-cfg-'))
+    try {
+      const userPath = join(dir, 'user.json')
+      writeFileSync(userPath, JSON.stringify({ proxyCandidates: [{ channelId: 'kimi', modelId: 'k3' }] }))
+      reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null })
+      // asker=deepseek：硬约束 ≠提问方族 → kimi 独立族命中（不再落默认序的 glm-zhipu:glm-5.3-flash）
+      const result = resolveProxyChannel({ askerChannelId: 'deepseek', acChannelIds: [], validateEndpoint: () => true })
+      expect(result).toEqual({ channelId: 'kimi', modelId: 'k3', diversityDegraded: false })
+      // AC 避让软约束照常：kimi 同时在 AC 族 → diversityDegraded:true（软避让无解降级可用）
+      const degraded = resolveProxyChannel({
+        askerChannelId: 'deepseek',
+        acChannelIds: ['kimi'],
+        validateEndpoint: () => true,
+      })
+      expect(degraded).toEqual({ channelId: 'kimi', modelId: 'k3', diversityDegraded: true })
+    } finally {
+      reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('显式 candidates 入参仍最高优先（不读配置——既有调用方语义不变）', () => {
+    const result = resolveProxyChannel({
+      askerChannelId: 'deepseek',
+      acChannelIds: [],
+      candidates: [{ channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' }],
+      validateEndpoint: () => true,
+    })
+    expect(result).toEqual({ channelId: 'glm-zhipu', modelId: 'glm-5.3-flash', diversityDegraded: false })
+  })
+})

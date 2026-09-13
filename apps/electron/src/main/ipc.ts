@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, NANJU_MODEL_IPC, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, WINDOWS_AGENT_ISLAND_IPC_CHANNELS, TRAY_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -179,6 +179,20 @@ import {
 } from './lib/channel-manager'
 import { loginCodexOAuth, cancelCodexOAuthLogin } from './lib/codex-oauth-service'
 import { loginXaiOAuth, cancelXaiOAuthLogin } from './lib/xai-oauth-service'
+import {
+  getNanjuModelState,
+  saveNanjuModelSettings,
+  resetNanjuModelSettings,
+  testNanjuModelEndpoints,
+  recommendNanjuModelSettings,
+} from './lib/nanju-model-settings-service'
+import type {
+  NanjuModelRecommendResponse,
+  NanjuModelSavePatch,
+  NanjuModelSaveResponse,
+  NanjuModelSettingsState,
+  NanjuModelTestResultItem,
+} from '@proma/shared'
 import { resolvePiReasoningCapability } from './lib/adapters/pi-model-registry'
 import { serializeCodexCredentials, serializeXaiCredentials } from '@proma/shared'
 import type { CodexOAuthDeviceCode, CodexOAuthLoginMethod, XaiOAuthDeviceCode } from '@proma/shared'
@@ -1447,6 +1461,70 @@ export function registerIpcHandlers(): void {
     CHANNEL_IPC_CHANNELS.XAI_OAUTH_CANCEL,
     async (): Promise<void> => {
       cancelXaiOAuthLogin()
+    }
+  )
+
+  // ===== 南大向导·模型配置（W23 §五：设置界面自愈/IPC 域 D2） =====
+  // 出参无密钥；save 做白名单校验；testEndpoints 不接受 baseUrl 入参（防 SSRF）；
+  // 失败统一转 {error} 形态回传（写失败不静默——验收契约 1）
+
+  // 读取设置界面初始态（effective/sources/health/diversityWarnings/channels 摘要/handLayerPresent）
+  ipcMain.handle(
+    NANJU_MODEL_IPC.GET_STATE,
+    async (): Promise<NanjuModelSettingsState | { error: string }> => {
+      try {
+        return getNanjuModelState()
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  // 逐端点连通测试（main 侧解密 + testChannelDirect；并发 ≤3、单项 15s 超时）
+  ipcMain.handle(
+    NANJU_MODEL_IPC.TEST_ENDPOINTS,
+    async (_, endpoints: Array<{ channelId: string; modelId: string }>): Promise<NanjuModelTestResultItem[] | { error: string }> => {
+      try {
+        return await testNanjuModelEndpoints(endpoints)
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  // 智能配置推荐（确定性整套矩阵 + 硬约束两态；无解时 matrix=null/applyable=false）
+  ipcMain.handle(
+    NANJU_MODEL_IPC.RECOMMEND,
+    async (): Promise<NanjuModelRecommendResponse | { error: string }> => {
+      try {
+        return recommendNanjuModelSettings()
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  // 保存增量 patch 到层 1.5 覆盖文件（字段值 null=删除该键）→ reload 即时生效 → shadowed 遮蔽可见
+  ipcMain.handle(
+    NANJU_MODEL_IPC.SAVE,
+    async (_, patch: NanjuModelSavePatch): Promise<NanjuModelSaveResponse | { error: string }> => {
+      try {
+        return saveNanjuModelSettings(patch)
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  // 恢复默认（整体）：删层 1.5 文件 → reload
+  ipcMain.handle(
+    NANJU_MODEL_IPC.RESET,
+    async (): Promise<NanjuModelSettingsState | { error: string }> => {
+      try {
+        return resetNanjuModelSettings()
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
     }
   )
 

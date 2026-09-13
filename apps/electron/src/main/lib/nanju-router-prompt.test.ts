@@ -148,7 +148,7 @@ describe('L2 委派指令构建（视觉闭环）', () => {
     const phase = getPhaseNode('quick', 'prototype')!
     const task = buildL2TaskWithAC(phase, minimaxAuthor, '无（这是需求阶段）', [], '/tmp/project')
 
-    expect(task).toContain('channel=deepseek, model=deepseek-v4-flash')
+    expect(task).toContain('channel=deepseek, model=deepseek-flash')
     expect(task).toContain('channel=glm-zhipu, model=glm-5.3-flash')
   })
 
@@ -1228,5 +1228,127 @@ describe('W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，
     expect(parseAutoClarifyToggledAt(undefined)).toBeNull()
     expect(parseAutoClarifyToggledAt(0)).toBeNull()
     expect(parseAutoClarifyToggledAt(-1)).toBeNull()
+  })
+})
+
+
+// ═══════════════ W23（§六.3）：配置级 autofix——预检失效端点 → 单槽临时替换 + 遥测 ═══════════════
+
+describe('W23 配置级 autofix（getNanjuRouterPrompt 预检 + model.config-autofix 遥测）', () => {
+  /** 全渠道宇宙 mock（deepseek 家族只剩新名 deepseek-flash——厂家改名形态） */
+  function mockFullChannels(): void {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'deepseek', name: 'DeepSeek', provider: 'deepseek' as Channel['provider'], models: [
+          { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: true },
+          { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
+        ] }),
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+          { id: 'GLM-5.3', name: 'GLM 5.3', enabled: true },
+        ] }),
+        makeChannel(), // minimax UUID 渠道（默认工厂形态，含 MiniMax-M3）
+      ],
+      getChannelById: () => null,
+    }))
+  }
+
+  /** 恢复文件级默认 mock（后续调用方不受本 describe 影响） */
+  function restoreDefaultChannels(): void {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [makeChannel()],
+      getChannelById: () => null,
+    }))
+  }
+
+  /** planning 阶段 iterative 项目 fixture（L1 prompt）；userConfig 指定各层路径 */
+  async function buildPlanningPrompt(userLayer: Record<string, unknown> | null): Promise<string> {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    const root = mkdtempSync(join(tmpdir(), 'nanju-autofix-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    if (userLayer) writeFileSync(userPath, JSON.stringify(userLayer))
+    reloadNanjuModelConfig(userLayer
+      ? { userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null }
+      : { userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-autofix')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示\n内容补齐最低体积。')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'autofix-demo', name: 'autofix 演示', mode: 'iterative', status: 'active',
+      currentStage: 'planning', createdAt: '', updatedAt: '', sessionId: 's-autofix',
+    }]))
+    const prompt = getNanjuRouterPrompt(root, 's-autofix')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(async () => {
+    const { reloadNanjuModelConfig, getConfigGeneration } = await import('./nanju-model-config')
+    void getConfigGeneration
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    restoreDefaultChannels()
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('改名场景：配置仍指旧名 deepseek-v4-flash → prompt 委派值被临时替换为 deepseek-flash + 遥测载荷（slot/from/to/reason）', async () => {
+    mockFullChannels()
+    const prompt = await buildPlanningPrompt({ phases: { planning: { channel: 'deepseek', model: 'deepseek-v4-flash' } } })
+    // autofix 生效：本次指令的委派端点 = 新名（不落盘）
+    expect(prompt).toContain('modelId: deepseek-flash')
+    expect(prompt).not.toContain('modelId: deepseek-v4-flash')
+    // 遥测：model.config-autofix 载荷含 slot/from/to/reason
+    const { readTelemetry } = await import('./nanju-telemetry')
+    const events = readTelemetry(fixtureRoot, 'model.config-autofix')
+    expect(events.length).toBe(1)
+    expect(events[0]!.projectId).toBe('autofix-demo')
+    expect(events[0]!.payload).toEqual({
+      slot: 'phases.planning.primary',
+      from: 'deepseek:deepseek-v4-flash',
+      to: 'deepseek:deepseek-flash',
+      reason: 'same-channel-rename',
+    })
+  })
+
+  test('预检失败不阻断：渠道宇宙无 deepseek 家族（无同族替换）→ 降级原值，prompt 正常构建且零遥测', async () => {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+          { id: 'GLM-5.3', name: 'GLM 5.3', enabled: true },
+        ] }),
+        makeChannel(),
+      ],
+      getChannelById: () => null,
+    }))
+    const prompt = await buildPlanningPrompt({ phases: { planning: { channel: 'deepseek', model: 'deepseek-v4-flash' } } })
+    // 同族守卫：跨族替换（glm/minimax）被放弃 → 保持原值（委派将走既有 fallback 链兜底）
+    expect(prompt).toContain('modelId: deepseek-v4-flash')
+    const { readTelemetry } = await import('./nanju-telemetry')
+    expect(readTelemetry(fixtureRoot, 'model.config-autofix')).toEqual([])
+  })
+
+  test('端点全部有效：零替换零遥测（默认配置与全渠道宇宙匹配）', async () => {
+    mockFullChannels()
+    const prompt = await buildPlanningPrompt(null)
+    expect(prompt).toContain('modelId: deepseek-flash')
+    const { readTelemetry } = await import('./nanju-telemetry')
+    expect(readTelemetry(fixtureRoot, 'model.config-autofix')).toEqual([])
+  })
+
+  test('buildL2TaskWithAC 新增 acAttackerRuntime 覆盖位（向后兼容：缺省不注入）', () => {
+    const phase = getPhaseNode('iterative', 'testing')!
+    const withOverride = buildL2TaskWithAC(
+      phase, { channel: 'deepseek', model: 'deepseek-flash' }, 'PRD', [], '/tmp/project',
+      null, null, false,
+      { channel: 'kimi', model: 'k3' },
+    )
+    expect(withOverride).toContain('channel=kimi, model=k3')
+    expect(withOverride).toContain('channel=minimax, model=MiniMax-M3') // 防御者解析值不受影响
+    const withoutOverride = buildL2TaskWithAC(
+      phase, { channel: 'deepseek', model: 'deepseek-flash' }, 'PRD', [], '/tmp/project',
+    )
+    expect(withoutOverride).toContain('channel=glm-zhipu, model=glm-5.3-flash') // testing 攻击者预设覆盖
   })
 })

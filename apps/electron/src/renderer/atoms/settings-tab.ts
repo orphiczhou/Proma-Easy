@@ -4,6 +4,7 @@
  * 管理设置面板中当前激活的标签页：
  * - general: 通用设置
  * - channels: 渠道配置
+ * - nanju-models: 南大向导·模型配置（六阶段/AC 攻防/代理候选矩阵）
  * - proxy: 代理配置
  * - tools: Chat 工具配置
  * - appearance: 外观设置
@@ -13,7 +14,7 @@
 import { atom } from 'jotai'
 import type { TabType } from './tab-atoms'
 
-export type SettingsTab = 'general' | 'channels' | 'vision-relay' | 'proxy' | 'appearance' | 'about' | 'onboarding' | 'prompts' | 'tools' | 'bots' | 'tutorial' | 'shortcuts' | 'voice-input' | 'migration' | 'storage'
+export type SettingsTab = 'general' | 'channels' | 'nanju-models' | 'vision-relay' | 'proxy' | 'appearance' | 'about' | 'onboarding' | 'prompts' | 'tools' | 'bots' | 'tutorial' | 'shortcuts' | 'voice-input' | 'migration' | 'storage'
 export type ToolSettingsFocus = 'web-search' | 'nano-banana' | 'custom-tools'
 
 /** 当前设置标签页（不持久化，每次打开设置默认显示渠道） */

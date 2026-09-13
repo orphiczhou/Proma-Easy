@@ -52,6 +52,9 @@ export type TelemetryEventType =
   | 'advance.target-deny' | 'advance.reject-escalate'
   // W22（M 域 M#8 预留入表）：开发↔测试跨族断言告警（不阻断，配置层可观测）
   | 'model.diversity-warn'
+  // W23（§六.3）：配置级 autofix——委派指令构建前预检失效端点并临时替换（区别于
+  // 请求级 model.fallback.used：本事件在构建期触发，不落盘，仅本次指令生效）
+  | 'model.config-autofix'
 
 export interface TelemetryEvent {
   eventId: string

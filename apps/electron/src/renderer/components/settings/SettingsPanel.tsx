@@ -54,6 +54,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ChannelSettings } from "./ChannelSettings";
+import { NanjuModelSettings, nanjuModelFormDirty } from "./NanjuModelSettings";
 import { VisionRelaySettings } from "./VisionRelaySettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { ProxySettings } from "./ProxySettings";
@@ -80,6 +81,7 @@ interface TabItem {
 const BASE_TABS: TabItem[] = [
   { id: "general", label: "通用设置", icon: <Settings size={16} /> },
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
+  { id: "nanju-models", label: "南大向导·模型配置", icon: <GraduationCap size={16} /> },
   { id: "vision-relay", label: "视觉助手", icon: <Eye size={16} /> },
   { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
   { id: "proxy", label: "代理设置", icon: <Globe size={16} /> },
@@ -131,6 +133,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <GeneralSettings />;
     case "channels":
       return <ChannelSettings />;
+    case "nanju-models":
+      return <NanjuModelSettings />;
     case "vision-relay":
       return <VisionRelaySettings />;
     case "prompts":
@@ -228,7 +232,7 @@ export function SettingsPanel({
       return
     }
     if (tabId === activeTab) return
-    if (activeTab === 'channels' && channelFormDirty) {
+    if ((activeTab === 'channels' && channelFormDirty) || (activeTab === 'nanju-models' && nanjuModelFormDirty.dirty)) {
       setPendingAction({ type: 'tab', tabId })
       return
     }
@@ -237,7 +241,10 @@ export function SettingsPanel({
 
   /** 关闭设置面板时检测是否有未保存内容 */
   const handleClose = React.useCallback((): void => {
-    if (activeTab === 'channels' && channelFormDirty) {
+    if (
+      (activeTab === 'channels' && channelFormDirty) ||
+      (activeTab === 'nanju-models' && nanjuModelFormDirty.dirty)
+    ) {
       setPendingAction({ type: 'close' })
       return
     }
@@ -264,9 +271,12 @@ export function SettingsPanel({
     setPendingSessionNavigation(null)
   }, [pendingSessionNavigation, setPendingSessionNavigation])
 
-  // Cmd+W 等外部关闭请求：弹出确认对话框
+  // Cmd+W 等外部关闭请求：有未保存内容时弹出确认对话框
   React.useEffect(() => {
     if (closeRequested && activeTab === 'channels') {
+      setPendingAction({ type: 'close' })
+      setCloseRequested(false)
+    } else if (closeRequested && activeTab === 'nanju-models' && nanjuModelFormDirty.dirty) {
       setPendingAction({ type: 'close' })
       setCloseRequested(false)
     }
@@ -363,7 +373,7 @@ export function SettingsPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>放弃未保存的更改？</AlertDialogTitle>
             <AlertDialogDescription>
-              当前渠道配置尚未保存，确定要离开吗？
+              当前页面有未保存的更改，确定要离开吗？
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

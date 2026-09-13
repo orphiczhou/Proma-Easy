@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, NANJU_MODEL_IPC } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -150,6 +150,11 @@ import type {
   ResolvePlanningNativeSyncConflictInput,
   PlanningSyncProfile,
   SavePlanningSyncProfileInput,
+  NanjuModelSettingsState,
+  NanjuModelTestResultItem,
+  NanjuModelRecommendResponse,
+  NanjuModelSavePatch,
+  NanjuModelSaveResponse,
 } from '@proma/shared'
 import type {
   UserProfile,
@@ -1307,6 +1312,17 @@ export interface ElectronAPI {
 
   /** 南大项目：获取执行路由总图数据（阶段 + AC 攻防解析；含 id='delivered' 哨兵节点，渲染端自行过滤） */
   nanjuGetRoute: (mode: 'quick' | 'iterative') => Promise<unknown[]>
+
+  /** 南大向导·模型配置（W23）：读取设置界面初始态（无密钥出参；失败返回 {error}） */
+  nanjuModelGetState: () => Promise<NanjuModelSettingsState | { error: string }>
+  /** 逐端点连通测试（main 侧解密 + 直连测试；并发 ≤3、单项 15s 超时；不接受 baseUrl 入参） */
+  nanjuModelTestEndpoints: (endpoints: Array<{ channelId: string; modelId: string }>) => Promise<NanjuModelTestResultItem[] | { error: string }>
+  /** 智能配置推荐（确定性整套矩阵；无解时 matrix=null/applyable=false，UI 不可应用） */
+  nanjuModelRecommend: () => Promise<NanjuModelRecommendResponse | { error: string }>
+  /** 保存增量 patch（字段值 null=删除该键覆盖）→ 即时生效；shadowed 回传被层 1 遮蔽的字段 */
+  nanjuModelSave: (patch: NanjuModelSavePatch) => Promise<NanjuModelSaveResponse | { error: string }>
+  /** 恢复默认（整体）：删层 1.5 覆盖文件 → reload */
+  nanjuModelReset: () => Promise<NanjuModelSettingsState | { error: string }>
 
   /** 南大向导：向导图阶段内子步骤冷启动快照（W2 S1；项目不存在返回 null）。
    *  v0.17.69：附带 envState（W7 R9 环境三态）与 regressions（W2c 回归边投影，可选）。 */
@@ -3087,6 +3103,19 @@ const electronAPI: ElectronAPI = {
   /** 南大项目：获取执行路由总图数据（阶段 + AC 攻防解析；含 id='delivered' 哨兵节点，渲染端自行过滤） */
   nanjuGetRoute: (mode: 'quick' | 'iterative') =>
     ipcRenderer.invoke('nanju:get-route', mode),
+
+  // ===== 南大向导·模型配置（W23 D2；通道常量 NANJU_MODEL_IPC 见 @proma/shared） =====
+
+  nanjuModelGetState: () => ipcRenderer.invoke(NANJU_MODEL_IPC.GET_STATE),
+
+  nanjuModelTestEndpoints: (endpoints: Array<{ channelId: string; modelId: string }>) =>
+    ipcRenderer.invoke(NANJU_MODEL_IPC.TEST_ENDPOINTS, endpoints),
+
+  nanjuModelRecommend: () => ipcRenderer.invoke(NANJU_MODEL_IPC.RECOMMEND),
+
+  nanjuModelSave: (patch: NanjuModelSavePatch) => ipcRenderer.invoke(NANJU_MODEL_IPC.SAVE, patch),
+
+  nanjuModelReset: () => ipcRenderer.invoke(NANJU_MODEL_IPC.RESET),
 
   nanjuGetGuideProgress: (workspaceSlug: string, projectId: string) =>
     ipcRenderer.invoke('nanju:get-guide-progress', { workspaceSlug, projectId }),

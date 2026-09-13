@@ -38,6 +38,7 @@ import {
   type NanjuProject,
 } from './nanju-project'
 import { channelFamily, getPhaseNode, resolveACActors, type PhaseId } from './nanju-router'
+import { loadNanjuModelConfig } from './nanju-model-config'
 import { recordTelemetry } from './nanju-telemetry'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import {
@@ -155,6 +156,11 @@ export interface ProxyChannelResolution {
  * 解析代理渠道。硬约束：候选家族 ≠ 提问方家族；软约束：候选家族 ∉ AC 攻/防家族。
  * 无硬约束解 → undefined（调用方 fallback:'human'，reason:'no-channel'）。
  * 端点校验注入（assertEnabledModelForChannel）：不可用候选按序跳过。
+ *
+ * W23（§六.2）：缺省候选优先读配置 proxyCandidates（四层：user > override > builtin >
+ * 代码兑底 FALLBACK_PROXY_CANDIDATES，与 PROXY_CHANNEL_CANDIDATES 同值、锁定测试保证）；
+ * 配置层无法提供（意外空数组）时回退本文件常量。设置界面改代理候选后即时生效
+ * （save → reload → 下一次解析即用新候选）。运行时校验逻辑不变。
  */
 export function resolveProxyChannel(input: {
   askerChannelId: string
@@ -162,7 +168,16 @@ export function resolveProxyChannel(input: {
   candidates?: ReadonlyArray<{ channelId: string; modelId: string }>
   validateEndpoint?: (endpoint: { channelId: string; modelId: string }) => boolean
 }): ProxyChannelResolution | undefined {
-  const candidates = input.candidates ?? PROXY_CHANNEL_CANDIDATES
+  let candidates = input.candidates
+  if (!candidates) {
+    // 缺省候选接配置（W23）：单向 import model-config（它只 type-only 引 router，无环）
+    try {
+      const configured = loadNanjuModelConfig().proxyCandidates
+      candidates = configured && configured.length > 0 ? configured : PROXY_CHANNEL_CANDIDATES
+    } catch {
+      candidates = PROXY_CHANNEL_CANDIDATES
+    }
+  }
   const askerFamily = channelFamily(input.askerChannelId)
   const acFamilies = new Set(input.acChannelIds.map((c) => channelFamily(c)))
 

@@ -15,6 +15,7 @@ import type { ProjectMode } from './nanju-project'
 import { CATEGORY_MARKER_GUIDE } from './nanju-engineering-template'
 import {
   FALLBACK_AC_PRESETS,
+  getConfigGeneration,
   resolveAcPreset,
   resolvePhaseModelConfig,
   type NanjuModelPhaseId,
@@ -441,16 +442,25 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
   return [REQUIREMENTS, prototype, architecture, planning, coding, testing, SENTINEL]
 }
 
-const ROUTES: Record<ProjectMode, PhaseNode[]> = {
-  quick: makeRoute('quick'),
-  iterative: makeRoute('iterative'),
+// W23（§六.1）：ROUTES 改代次脏缓存——配置 reload（代次 +1）后下一次 getRoute 按需重建
+//（makeRoute 纯函数、构建廉价；主进程单线程无竞态）。保存链路 reload → 新委派即用新矩阵，
+// 无需重启。配置侧只暴露 getConfigGeneration 计数，本模块不反向写配置（type-only 约束不变）。
+let _routesCache: { generation: number; routes: Record<ProjectMode, PhaseNode[]> } | undefined
+
+function getRoutesTable(): Record<ProjectMode, PhaseNode[]> {
+  const generation = getConfigGeneration()
+  if (!_routesCache || _routesCache.generation !== generation) {
+    _routesCache = { generation, routes: { quick: makeRoute('quick'), iterative: makeRoute('iterative') } }
+  }
+  return _routesCache.routes
 }
 
 // ===== 路由查询 =====
 
 /** 获取指定模式的完整路由 */
 export function getRoute(mode: ProjectMode): PhaseNode[] {
-  return ROUTES[mode] ?? ROUTES.iterative
+  const routes = getRoutesTable()
+  return routes[mode] ?? routes.iterative
 }
 
 /**
@@ -606,7 +616,8 @@ export function reportModelDiversityWarnings(
 }
 
 // W22 M#8 启动断言：模块加载期两模式各评估一次（console warn，不 throw 不阻断）。
-// 路由构建（ROUTES）已完成，此处读同一配置缓存；用户改参数文件重启后重新评估。
+// evaluateModelDiversity 内部走 getRoute（首次调用触发 ROUTES 构建，与旧加载期构建等价），
+// 此处读同一配置缓存；配置 reload 后（W23 代次脏缓存）下一次 getRoute 重新评估。
 for (const _mode of ['quick', 'iterative'] as const) {
   reportModelDiversityWarnings(evaluateModelDiversity(_mode))
 }

@@ -36,8 +36,8 @@ function makeNode(overrides: Partial<PhaseNode> = {}): PhaseNode {
 }
 
 describe('AC 审计分级预设', () => {
-  test('light 预设：攻击 deepseek-v4-flash，防御 glm-5.3-flash', () => {
-    expect(AC_PRESETS.light.attacker).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+  test('light 预设：攻击 deepseek-flash，防御 glm-5.3-flash', () => {
+    expect(AC_PRESETS.light.attacker).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(AC_PRESETS.light.defender).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
   })
 
@@ -48,7 +48,7 @@ describe('AC 审计分级预设', () => {
 
   test('resolveACActors 按 taskWeight 选择预设', () => {
     const light = resolveACActors(makeNode({ taskWeight: 'light' }))
-    expect(light.attacker.model).toBe('deepseek-v4-flash')
+    expect(light.attacker.model).toBe('deepseek-flash')
     expect(light.defender.model).toBe('glm-5.3-flash')
 
     const medium = resolveACActors(makeNode({ taskWeight: 'medium' }))
@@ -181,7 +181,7 @@ describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
       expect(actors.defender.model).toBe('MiniMax-M3')
       // 攻者仍为预设 deepseek 系（quick=light flash / iterative=medium pro）
       expect(actors.attacker.channel).toBe('deepseek')
-      expect(actors.attacker.model).toBe(mode === 'quick' ? 'deepseek-v4-flash' : 'deepseek-v4-pro')
+      expect(actors.attacker.model).toBe(mode === 'quick' ? 'deepseek-flash' : 'deepseek-v4-pro')
     }
   })
 
@@ -211,12 +211,12 @@ describe('coding 阶段（P1 Sprint A：向导域→编程域贯通）', () => {
 })
 
 describe('planning 阶段（W13：v4-pro → v4-flash 降档）', () => {
-  test('planning 节点定义：工程经理 / deepseek-v4-flash（模板化拆分，技术决策已由 architecture 终判）/ 05_PROJECT_PLAN/plan.md / next=coding', () => {
+  test('planning 节点定义：工程经理 / deepseek-flash（模板化拆分，技术决策已由 architecture 终判）/ 05_PROJECT_PLAN/plan.md / next=coding', () => {
     const planning = getPhaseNode('iterative', 'planning')
     expect(planning?.role).toBe('engineering-manager')
     expect(planning?.title).toBe('工程经理')
     expect(planning?.channel).toBe('deepseek')
-    expect(planning?.model).toBe('deepseek-v4-flash') // W13 降档：无独立技术决策耦合，成本敏感
+    expect(planning?.model).toBe('deepseek-flash') // W13 降档：无独立技术决策耦合，成本敏感
     expect(planning?.outputPath).toBe('05_PROJECT_PLAN/plan.md')
     expect(planning?.next).toBe('coding')
     expect(planning?.requiresUserConfirmation).toBe(true)
@@ -248,7 +248,7 @@ describe('architecture 阶段（W13b：deepseek-v4-pro → glm-zhipu:GLM-5.3，�
       expect(arch.acDefenderModel).toBe('MiniMax-M3')
       const actors = resolveACActors(arch)
       expect(actors.defender).toEqual({ channel: 'minimax', model: 'MiniMax-M3' })
-      expect(actors.attacker.model).toBe(mode === 'quick' ? 'deepseek-v4-flash' : 'deepseek-v4-pro')
+      expect(actors.attacker.model).toBe(mode === 'quick' ? 'deepseek-flash' : 'deepseek-v4-pro')
       expect(() => assertACFamilyDiversity({
         authorChannel: arch.channel,
         attackerChannel: actors.attacker.channel,
@@ -329,13 +329,13 @@ describe('AC 家族多样性断言', () => {
 })
 
 describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', () => {
-  test('testing 节点定义：测试工程师 / deepseek-v4-flash（W22 M#6 跨族改值：与 coding 的 glm 系异族，恢复开发/测试独立性；flash 非 pro：GWT 生成是高 token 输出/低推理深度任务）/ 06_TESTS/features/index.feature / next=delivered', () => {
+  test('testing 节点定义：测试工程师 / deepseek-flash（W22 M#6 跨族改值：与 coding 的 glm 系异族，恢复开发/测试独立性；flash 非 pro：GWT 生成是高 token 输出/低推理深度任务）/ 06_TESTS/features/index.feature / next=delivered', () => {
     for (const mode of ['quick', 'iterative'] as const) {
       const testing = getPhaseNode(mode, 'testing')
       expect(testing?.role).toBe('test-engineer')
       expect(testing?.title).toBe('测试工程师')
       expect(testing?.channel).toBe('deepseek') // W22 M#6：与 coding（glm-zhipu）跨族（原 glm-5.3-flash 同族盲区）
-      expect(testing?.model).toBe('deepseek-v4-flash')
+      expect(testing?.model).toBe('deepseek-flash')
       expect(testing?.outputPath).toBe('06_TESTS/features/index.feature')
       expect(testing?.next).toBe('delivered')
       expect(testing?.requiresUserConfirmation).toBe(false) // 机器判定收口（裁判规则），不做人肉确认
@@ -491,5 +491,27 @@ describe('W22 M#8：模型家族多样性启动断言（evaluateModelDiversity�
 
   test('reportModelDiversityWarnings：空告警数组为 no-op 不抛错；告警输出不阻断（遥测需 workspace 上下文，模块加载期只落日志）', () => {
     expect(() => reportModelDiversityWarnings([])).not.toThrow()
+  })
+})
+
+// ===== W23：路由脏缓存（代次失效重建——保存即时生效） =====
+
+describe('W23 路由脏缓存（getRoute 比对 getConfigGeneration 重建）', () => {
+  test('reload 配置后 getRoute 值随新配置重建；再 reload 回默认又恢复（无重启语义）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-route-gen-'))
+    try {
+      const userPath = join(dir, 'user.json')
+      writeFileSync(userPath, JSON.stringify({ phases: { planning: { channel: 'kimi', model: 'k3' } } }))
+      reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null })
+      const planning = getPhaseNode('iterative', 'planning')
+      expect(planning?.channel).toBe('kimi')
+      expect(planning?.model).toBe('k3')
+      reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+      const planningDefault = getPhaseNode('iterative', 'planning')
+      expect(planningDefault?.channel).toBe('deepseek')
+      expect(planningDefault?.model).toBe('deepseek-flash')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

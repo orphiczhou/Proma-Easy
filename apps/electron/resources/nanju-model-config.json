@@ -5,7 +5,7 @@
       "channel": "deepseek",
       "model": "deepseek-v4-pro",
       "fallbacks": [
-        "deepseek:deepseek-v4-flash",
+        "deepseek:deepseek-flash",
         "glm-zhipu:glm-5.3-flash"
       ]
     },
@@ -39,7 +39,7 @@
       "model": "GLM-5.3",
       "fallbacks": [
         "glm-zhipu:glm-5.3-flash",
-        "deepseek:deepseek-v4-flash"
+        "deepseek:deepseek-flash"
       ],
       "acDefender": {
         "channel": "minimax",
@@ -84,5 +84,12 @@
         "model": "GLM-5.3"
       }
     }
-  }
+  },
+  "proxyCandidates": [
+    { "channelId": "glm-zhipu", "modelId": "glm-5.3-flash" },
+    { "channelId": "deepseek", "modelId": "deepseek-flash" },
+    { "channelId": "deepseek", "modelId": "deepseek-v4-pro" },
+    { "channelId": "glm-zhipu", "modelId": "GLM-5.3" },
+    { "channelId": "minimax", "modelId": "MiniMax-M3" }
+  ]
 }

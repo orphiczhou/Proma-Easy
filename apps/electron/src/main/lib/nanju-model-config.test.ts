@@ -5,7 +5,11 @@ import { join } from 'node:path'
 import {
   FALLBACK_AC_PRESETS,
   FALLBACK_PHASE_MODELS,
+  FALLBACK_PROXY_CANDIDATES,
+  NANJU_PROXY_CANDIDATES_MAX,
   getConfigFallbackChains,
+  getConfigGeneration,
+  getUserNanjuModelOverridePath,
   loadNanjuModelConfig,
   reloadNanjuModelConfig,
   resolveAcPreset,
@@ -43,8 +47,8 @@ function writeLayer(name: string, content: NanjuModelConfigFile | string): strin
 afterEach(() => {
   if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true })
   fixtureDir = ''
-  // 恢复确定性默认缓存：禁用用户层（builtin 自动 = 仓库内置 json，与代码兜底同值）
-  reloadNanjuModelConfig({ userConfigPath: null })
+  // 恢复确定性默认缓存：禁用用户层与 override 层（builtin 自动 = 仓库内置 json，与代码兜底同值）
+  reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
 })
 
 // ===== 层 3：代码兜底常量 =====
@@ -53,7 +57,7 @@ describe('FALLBACK_PHASE_MODELS / FALLBACK_AC_PRESETS（代码兜底常量，W13
   test('六阶段主选 + fallbacks + per-phase 防御者覆盖（coding/architecture = GLM-5.3，用户 09-04 07:25 核心裁定）', () => {
     expect(FALLBACK_PHASE_MODELS.requirements).toEqual({
       channel: 'deepseek', model: 'deepseek-v4-pro',
-      fallbacks: ['deepseek:deepseek-v4-flash', 'glm-zhipu:glm-5.3-flash'],
+      fallbacks: ['deepseek:deepseek-flash', 'glm-zhipu:glm-5.3-flash'],
     })
     expect(FALLBACK_PHASE_MODELS.prototype).toEqual({
       channel: 'minimax', model: 'MiniMax-M3',
@@ -65,18 +69,18 @@ describe('FALLBACK_PHASE_MODELS / FALLBACK_AC_PRESETS（代码兜底常量，W13
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
     expect(FALLBACK_PHASE_MODELS.planning).toEqual({
-      channel: 'deepseek', model: 'deepseek-v4-flash',
+      channel: 'deepseek', model: 'deepseek-flash',
       fallbacks: ['glm-zhipu:glm-5.3-flash'],
     })
     expect(FALLBACK_PHASE_MODELS.coding).toEqual({
       channel: 'glm-zhipu', model: 'GLM-5.3',
-      fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-flash'],
+      fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-flash'],
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
     expect(FALLBACK_PHASE_MODELS.testing).toEqual({
-      // W22 M#6（v0.17.106）：作者跨族换 deepseek-v4-flash + fallbacks 对调；
+      // W22 M#6（v0.17.106）：作者跨族换 deepseek-flash + fallbacks 对调；
       // W22 M#7：acAttacker per-phase 覆盖（三族矩阵：作者 ds / 攻 glm / 防 minimax）
-      channel: 'deepseek', model: 'deepseek-v4-flash',
+      channel: 'deepseek', model: 'deepseek-flash',
       fallbacks: ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-pro'],
       acAttacker: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
@@ -85,7 +89,7 @@ describe('FALLBACK_PHASE_MODELS / FALLBACK_AC_PRESETS（代码兜底常量，W13
 
   test('AC 两档预设兜底（W4 已定值不变）', () => {
     expect(FALLBACK_AC_PRESETS.light).toEqual({
-      attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' },
+      attacker: { channel: 'deepseek', model: 'deepseek-flash' },
       defender: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
     })
     expect(FALLBACK_AC_PRESETS.medium).toEqual({
@@ -174,7 +178,7 @@ describe('两层加载（用户覆盖 > 内置 > 代码兜底）', () => {
         coding: {
           channel: '   ',              // 非法（空白）→ 保持兜底 glm-zhipu
           model: 'GLM-User',           // 合法 → 生效
-          fallbacks: ['no-colon', 'deepseek:deepseek-v4-flash', ':leading', 'trailing:'], // 4 条中 1 条合法
+          fallbacks: ['no-colon', 'deepseek:deepseek-flash', ':leading', 'trailing:'], // 4 条中 1 条合法
           acDefender: { channel: 'minimax' }, // 缺 model → 非法，保持兜底覆盖值
         },
       } as unknown as NanjuModelConfigFile['phases'],
@@ -185,7 +189,7 @@ describe('两层加载（用户覆盖 > 内置 > 代码兜底）', () => {
     const config = reloadNanjuModelConfig({ userConfigPath: userPath, builtinConfigPath: null })
     expect(config.phases.coding.channel).toBe('glm-zhipu') // 非法字段保持兜底
     expect(config.phases.coding.model).toBe('GLM-User')   // 合法字段生效
-    expect(config.phases.coding.fallbacks).toEqual(['deepseek:deepseek-v4-flash']) // 非法条目被丢弃
+    expect(config.phases.coding.fallbacks).toEqual(['deepseek:deepseek-flash']) // 非法条目被丢弃
     expect(config.phases.coding.acDefender).toEqual({ channel: 'minimax', model: 'MiniMax-M3' }) // 非法覆盖不动兜底值
     expect(config.acPresets.light.attacker).toEqual(FALLBACK_AC_PRESETS.light.attacker)
   })
@@ -217,7 +221,7 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
     expect(resolvePhaseModelConfig('requirements')).toEqual({
       channel: 'deepseek', model: 'deepseek-v4-pro',
       fallbacks: [
-        { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+        { channelId: 'deepseek', modelId: 'deepseek-flash' },
         { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
       ],
     })
@@ -231,19 +235,19 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
     expect(resolvePhaseModelConfig('planning')).toEqual({
-      channel: 'deepseek', model: 'deepseek-v4-flash',
+      channel: 'deepseek', model: 'deepseek-flash',
       fallbacks: [{ channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' }],
     })
     expect(resolvePhaseModelConfig('coding')).toEqual({
       channel: 'glm-zhipu', model: 'GLM-5.3',
       fallbacks: [
         { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
-        { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+        { channelId: 'deepseek', modelId: 'deepseek-flash' },
       ],
       acDefender: { channel: 'minimax', model: 'MiniMax-M3' },
     })
     expect(resolvePhaseModelConfig('testing')).toEqual({
-      channel: 'deepseek', model: 'deepseek-v4-flash',
+      channel: 'deepseek', model: 'deepseek-flash',
       fallbacks: [
         { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
         { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
@@ -256,7 +260,7 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
   test('resolveAcPreset 两档（quick=light / iterative=medium）', () => {
     reloadNanjuModelConfig({ userConfigPath: null, builtinConfigPath: null })
     expect(resolveAcPreset('light')).toEqual({
-      attacker: { channel: 'deepseek', model: 'deepseek-v4-flash' },
+      attacker: { channel: 'deepseek', model: 'deepseek-flash' },
       defender: { channel: 'glm-zhipu', model: 'glm-5.3-flash' },
     })
     expect(resolveAcPreset('medium')).toEqual({
@@ -294,21 +298,21 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
 // ===== fallback 链编译（配置优先 / 代码链兜底） =====
 
 describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线）', () => {
-  test('默认链表：4 个 key（W22 M#6 后 testing 主选换 deepseek-v4-flash，glm:glm-5.3-flash 不再是主选 key）；同 key 按阶段序取声明并集（glm:GLM-5.3 由 architecture 先、coding 追加；deepseek:v4-flash 由 planning 先、testing 追加）', () => {
+  test('默认链表：4 个 key（W22 M#6 后 testing 主选换 deepseek-flash，glm:glm-5.3-flash 不再是主选 key）；同 key 按阶段序取声明并集（glm:GLM-5.3 由 architecture 先、coding 追加；deepseek:v4-flash 由 planning 先、testing 追加）', () => {
     reloadNanjuModelConfig({ userConfigPath: null })
     const chains = getConfigFallbackChains()
     expect(chains['deepseek:deepseek-v4-pro']).toEqual([
-      { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-flash' },
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
     ])
     expect(chains['minimax:MiniMax-M3']).toEqual([{ channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' }])
     expect(chains['glm-zhipu:GLM-5.3']).toEqual([
       { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },       // architecture 声明（用户指定备选）
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },        // coding 声明
-      { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },     // coding 声明
+      { channelId: 'deepseek', modelId: 'deepseek-flash' },     // coding 声明
     ])
     // W22 M#6：planning 先声明 [glm-5.3-flash]，testing 追加 [glm-5.3-flash（去重）, deepseek-v4-pro]
-    expect(chains['deepseek:deepseek-v4-flash']).toEqual([
+    expect(chains['deepseek:deepseek-flash']).toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
       { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
     ])
@@ -316,7 +320,7 @@ describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线�
     // （运行时由代码链 MODEL_FALLBACK_CHAINS 兑底同名链，行为不变）
     expect(chains['glm-zhipu:glm-5.3-flash']).toBeUndefined()
     expect(Object.keys(chains).sort()).toEqual([
-      'deepseek:deepseek-v4-flash', 'deepseek:deepseek-v4-pro',
+      'deepseek:deepseek-flash', 'deepseek:deepseek-v4-pro',
       'glm-zhipu:GLM-5.3', 'minimax:MiniMax-M3',
     ])
   })
@@ -327,11 +331,11 @@ describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线�
     expect(chain[0]).toEqual({ channelId: 'deepseek', modelId: 'deepseek-v4-pro' })
     expect(chain).not.toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
-      { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-flash' },
     ])
   })
 
-  test('配置缺项回退代码链：user 同时改写 planning+testing 主选后，deepseek:deepseek-v4-flash 不再是配置 key → 走 MODEL_FALLBACK_CHAINS（W22 M#6 后 testing 主选也是该端点，需两者都改才缺项）', () => {
+  test('配置缺项回退代码链：user 同时改写 planning+testing 主选后，deepseek:deepseek-flash 不再是配置 key → 走 MODEL_FALLBACK_CHAINS（W22 M#6 后 testing 主选也是该端点，需两者都改才缺项）', () => {
     const userPath = writeLayer('replan-planning', {
       phases: {
         planning: { channel: 'kimi', model: 'k3' },
@@ -339,8 +343,8 @@ describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线�
       },
     })
     reloadNanjuModelConfig({ userConfigPath: userPath, builtinConfigPath: null })
-    // deepseek:deepseek-v4-flash 主选已不存在于任何阶段 → 配置链无该 key → 代码链兜底
-    expect(getFallbackChain('deepseek', 'deepseek-v4-flash')).toEqual([
+    // deepseek:deepseek-flash 主选已不存在于任何阶段 → 配置链无该 key → 代码链兜底
+    expect(getFallbackChain('deepseek', 'deepseek-flash')).toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
     ])
     // 新主选继承低层声明的 fallbacks（字段级合并语义；planning 先声明、testing 追加并集）
@@ -351,7 +355,7 @@ describe('getConfigFallbackChains + getFallbackChain（W13b 配置优先接线�
     // 任何链表都未覆盖的端点 → 空链 = 既有失败路径
     expect(getFallbackChain('deepseek', 'unknown-model')).toEqual([])
     // requirements 仍声明 deepseek:deepseek-v4-pro 主选 → 配置链在
-    expect(getFallbackChain('deepseek', 'deepseek-v4-pro')[0]).toEqual({ channelId: 'deepseek', modelId: 'deepseek-v4-flash' })
+    expect(getFallbackChain('deepseek', 'deepseek-v4-pro')[0]).toEqual({ channelId: 'deepseek', modelId: 'deepseek-flash' })
   })
 })
 
@@ -404,5 +408,96 @@ describe('一致性锁定（内置 json 与代码兜底同值；路由实际消�
     const builder = readFileSync(join(import.meta.dir, '..', '..', '..', 'electron-builder.yml'), 'utf-8')
     expect(builder).toContain('resources/nanju-model-config.json')
     expect(builder).toContain('to: nanju-model-config.json')
+  })
+})
+
+// ===== W23：层 1.5 UI 覆盖 + proxyCandidates + 配置代次 =====
+
+describe('W23 层 1.5（UI 覆盖文件：user > override > builtin > 兜底）', () => {
+  test('优先级：override 覆盖 builtin，user 覆盖 override；sources 逐层记录；路径按 config-paths 惯例', () => {
+    const builtinPath = writeLayer('w23-builtin', { phases: { planning: { channel: 'deepseek', model: 'deepseek-flash' } } })
+    const overridePath = writeLayer('w23-override', { phases: { planning: { channel: 'kimi', model: 'k3' } } })
+    const userPath = writeLayer('w23-user', { phases: { planning: { channel: 'glm-zhipu', model: 'glm-5.3-flash' } } })
+    let config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: overridePath, builtinConfigPath: builtinPath })
+    expect(config.phases.planning.model).toBe('k3')
+    expect(config.sources.override).toBe(overridePath)
+    config = reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: overridePath, builtinConfigPath: builtinPath })
+    expect(config.phases.planning.model).toBe('glm-5.3-flash')
+    expect(config.sources.user).toBe(userPath)
+    expect(getUserNanjuModelOverridePath()).toContain('nanju-model-config-override.json')
+  })
+
+  test('override 层字段级覆盖语义与既有层一致（合法替换、非法 warn 保持低层）', () => {
+    const builtinPath = writeLayer('w23b-builtin', { phases: { coding: { channel: 'glm-zhipu', model: 'GLM-5.3' } } })
+    const overridePath = writeLayer('w23b-override', { phases: { coding: { model: '' } } } as unknown as NanjuModelConfigFile)
+    const config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: overridePath, builtinConfigPath: builtinPath })
+    expect(config.phases.coding.model).toBe('GLM-5.3')
+  })
+
+  test('overrideConfigPath:null 显式禁用该层（sources.override 缺省）', () => {
+    const builtinPath = writeLayer('w23c-builtin', { phases: { planning: { channel: 'deepseek', model: 'deepseek-flash' } } })
+    const config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null, builtinConfigPath: builtinPath })
+    expect(config.phases.planning.model).toBe('deepseek-flash')
+    expect(config.sources.override).toBeUndefined()
+  })
+})
+
+describe('W23 proxyCandidates（根节，四层取值 + 校验容错）', () => {
+  test('层 3 兜底常量托底（三层禁用仍非空）', () => {
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    expect(loadNanjuModelConfig().proxyCandidates).toEqual([...FALLBACK_PROXY_CANDIDATES])
+  })
+
+  test('四层取值：builtin 声明生效 → override 覆盖 → user 最高', () => {
+    const builtinPath = writeLayer('pc-builtin', { proxyCandidates: [{ channelId: 'a', modelId: 'a1' }] })
+    let config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null, builtinConfigPath: builtinPath })
+    expect(config.proxyCandidates).toEqual([{ channelId: 'a', modelId: 'a1' }])
+    const overridePath = writeLayer('pc-override', { proxyCandidates: [{ channelId: 'b', modelId: 'b1' }] })
+    config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: overridePath, builtinConfigPath: builtinPath })
+    expect(config.proxyCandidates).toEqual([{ channelId: 'b', modelId: 'b1' }])
+    const userPath = writeLayer('pc-user', { proxyCandidates: [{ channelId: 'c', modelId: 'c1' }] })
+    config = reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: overridePath, builtinConfigPath: builtinPath })
+    expect(config.proxyCandidates).toEqual([{ channelId: 'c', modelId: 'c1' }])
+  })
+
+  test('校验容错：非法元素跳过、>6 截断到前 6、全非法 = 继承低层', () => {
+    const overridePath = writeLayer('pc-invalid', {
+      proxyCandidates: [
+        { channelId: '', modelId: 'x' },
+        'not-an-object' as unknown as { channelId: string; modelId: string },
+        { channelId: 'ok', modelId: 'ok1' },
+      ],
+    })
+    let config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: overridePath, builtinConfigPath: null })
+    expect(config.proxyCandidates).toEqual([{ channelId: 'ok', modelId: 'ok1' }])
+    const seven = Array.from({ length: 7 }, (_, i) => ({ channelId: `c${i}`, modelId: `m${i}` }))
+    const bigPath = writeLayer('pc-big', { proxyCandidates: seven })
+    config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: bigPath, builtinConfigPath: null })
+    expect(config.proxyCandidates).toHaveLength(NANJU_PROXY_CANDIDATES_MAX)
+    expect(config.proxyCandidates[NANJU_PROXY_CANDIDATES_MAX - 1]).toEqual({ channelId: 'c5', modelId: 'm5' })
+    const badPath = writeLayer('pc-allbad', { proxyCandidates: [null, 42] as unknown as Array<{ channelId: string; modelId: string }> })
+    config = reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: badPath, builtinConfigPath: null })
+    expect(config.proxyCandidates).toEqual([...FALLBACK_PROXY_CANDIDATES])
+  })
+
+  test('层 3 常量与 nanju-clarify-proxy-tool.PROXY_CHANNEL_CANDIDATES 锁定同值（源码文本锁定——动态 import 会传递引入 electron，bun 下不可用）', () => {
+    const extract = (source: string, constName: string): Array<{ channelId: string; modelId: string }> => {
+      const m = new RegExp(constName + String.raw`[^=]*=\s*Object\.freeze\(\[([\s\S]*?)\]\)`).exec(source)
+      if (!m) throw new Error(constName + ' 常量未在源码中找到')
+      const pairs = Array.from(m[1]!.matchAll(new RegExp(String.raw`\{\s*channelId:\s*'([^']+)'\s*,\s*modelId:\s*'([^']+)'\s*\}`, 'g')))
+      return pairs.map((p) => ({ channelId: p[1]!, modelId: p[2]! }))
+    }
+    const toolSource = readFileSync(join(__dirname, 'nanju-clarify-proxy-tool.ts'), 'utf-8')
+    expect(extract(toolSource, 'PROXY_CHANNEL_CANDIDATES')).toEqual([...FALLBACK_PROXY_CANDIDATES])
+  })
+})
+
+describe('W23 配置代次（getConfigGeneration）', () => {
+  test('每次 reload +1（router 脏缓存比对基准）', () => {
+    const before = getConfigGeneration()
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    expect(getConfigGeneration()).toBe(before + 1)
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    expect(getConfigGeneration()).toBe(before + 2)
   })
 })

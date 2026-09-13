@@ -77,7 +77,7 @@ phase.role: requirement-analyst
 完成产出后，你必须进行 AC 对抗审计（自己驱动，不需要人工干预）：
 
 ### 步骤
-1. 用 delegate_agent(inline:true, channel=deepseek, model=deepseek-v4-flash) 创建攻击者，
+1. 用 delegate_agent(inline:true, channel=deepseek, model=deepseek-flash) 创建攻击者，
    让它严格审查你的产出文件，找出逻辑漏洞、遗漏、不一致、可执行性问题。
    审查维度：完整性、正确性、一致性、可执行性、安全性。
    攻击者必须给出 red/yellow/green 级别的 finding（带证据）。
@@ -191,7 +191,7 @@ phase.role: ux-advisor
 完成产出后，你必须进行 AC 对抗审计（自己驱动，不需要人工干预）：
 
 ### 步骤
-1. 用 delegate_agent(inline:true, channel=deepseek, model=deepseek-v4-flash) 创建攻击者，
+1. 用 delegate_agent(inline:true, channel=deepseek, model=deepseek-flash) 创建攻击者，
    让它严格审查你的产出文件，找出逻辑漏洞、遗漏、不一致、可执行性问题。
    审查维度：完整性、正确性、一致性、可执行性、安全性、视觉还原度、交互可用性。
    攻击者必须给出 red/yellow/green 级别的 finding（带证据）。
