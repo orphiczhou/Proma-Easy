@@ -222,8 +222,12 @@ export function listRunningDelegationTitlesByRoot(rootSessionId: string): string
       out.push(record.title)
       continue
     }
-    const child = getAgentSessionMeta(record.childSessionId)
-    if (child?.rootSessionId === rootSessionId) out.push(record.title)
+    // W24-3 实测修正：inline 委派（L2 内部 AC 攻防）不写 child meta（parentSessionId/
+    // rootSessionId 均空）——改走 DelegationRecord.parentSessionId 查父会话 meta 的
+    // rootSessionId（L2 由 L1 非 inline 委派创建，meta 齐全：root=L1）。
+    const parentMeta = getAgentSessionMeta(record.parentSessionId)
+    const parentRoot = parentMeta?.rootSessionId ?? parentMeta?.id
+    if (parentRoot === rootSessionId) out.push(record.title)
   }
   return out
 }
