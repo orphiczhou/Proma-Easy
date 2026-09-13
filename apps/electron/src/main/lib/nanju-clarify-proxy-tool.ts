@@ -99,7 +99,7 @@ const PHASE_TITLE_PREFIXES: ReadonlyArray<{ title: string; category: NanjuClarif
 /** 代理渠道候选池（偏好序：快模型优先；minimax 是家族标记，运行时校验不通过自动跳过） */
 export const PROXY_CHANNEL_CANDIDATES: ReadonlyArray<{ channelId: string; modelId: string }> = Object.freeze([
   { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
-  { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+  { channelId: 'deepseek', modelId: 'deepseek-flash' },
   { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
   { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
   { channelId: 'minimax', modelId: 'MiniMax-M3' },
