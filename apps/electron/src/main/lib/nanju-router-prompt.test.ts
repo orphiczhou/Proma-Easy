@@ -990,8 +990,11 @@ describe('D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto
     expect(prompt).not.toContain('你用过了吗')
   })
 
-  test('auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化）', () => {
-    const normalize = (p: string) => p.split(fixtureRoot).join('<FIXTURE_ROOT>')
+  test('auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化 + 环境段机器值剥离）', () => {
+    // W24-9：本地环境事实段含机器相关值（os.release/DISPLAY）——快照前剥离整段
+    //（协议话术锁定意图不变；环境段正确性由 W24-9 专项断言覆盖，不进字节级快照）
+    const stripEnv = (p: string) => p.replace(/## 本地环境事实\n(?:- [^\n]*\n)+\n?/g, '<ENV_FACTS>')
+    const normalize = (p: string) => stripEnv(p.split(fixtureRoot).join('<FIXTURE_ROOT>'))
     expect(normalize(buildPromptForD8('requirements', false))).toMatchSnapshot('d8-auto-off-requirements')
     expect(normalize(buildPromptForD8('prototype', false))).toMatchSnapshot('d8-auto-off-prototype')
   })
@@ -1055,11 +1058,13 @@ describe('D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05）
     expect(task).toContain('拒绝自动确认')
   })
 
-  test('auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定）', () => {
+  test('auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定；W24-9 环境段机器值剥离）', () => {
     const phase = getPhaseNode('quick', 'architecture')!
     const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project', null, null, false)
     expect(task).not.toContain('ac-verdict')
-    expect(task).toMatchSnapshot('d8-auto-off-quick-arch-l2')
+    // W24-9：本地环境事实段含机器相关值（os.release/DISPLAY），快照前剥离
+    const stripEnv = (p: string) => p.replace(/## 本地环境事实\n(?:- [^\n]*\n)+\n?/g, '<ENV_FACTS>')
+    expect(stripEnv(task)).toMatchSnapshot('d8-auto-off-quick-arch-l2')
   })
 })
 

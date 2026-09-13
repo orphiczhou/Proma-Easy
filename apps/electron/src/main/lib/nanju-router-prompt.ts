@@ -286,6 +286,21 @@ export function buildL2TaskWithAC(
     '',
   ]
 
+  // W24-9：本地环境事实（全阶段可见）——需求/架构/编码的产出都应与本地运行环境一致，
+  // 代理代答与作者产出此前因无环境事实输入而假设了错误平台（实测 macOS vs 实际 Linux）。
+  try {
+    const osMod = require('node:os') as typeof import('node:os')
+    const osName = osMod.platform() === 'linux' ? `Linux（${osMod.release()}）`
+      : osMod.platform() === 'darwin' ? `macOS（${osMod.release()}）`
+      : `${osMod.platform()}（${osMod.release()}）`
+    parts.push('## 本地环境事实')
+    parts.push(`- 操作系统：${osName}${process.env.DISPLAY ? `，图形会话可用（DISPLAY=${process.env.DISPLAY}）` : '，无图形会话'}`)
+    if (phase.id === 'requirements') {
+      parts.push('- 目标运行环境默认与本地一致（快消型交付须本机可直接运行与验收）；除非用户明确要求其他平台——类比产品（如“类似某 macOS 工具”）只参考功能形态，不得带出平台假设。')
+    }
+    parts.push('')
+  } catch { /* 环境段失败不阻断任务构建 */ }
+
   // 前序上下文
   if (prdSummary !== '无（这是需求阶段）') {
     parts.push('## 前序 PRD 摘要')

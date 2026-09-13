@@ -371,6 +371,34 @@ export type ClarifyProxyResult = ClarifyProxyOk | ClarifyProxyFallback | Clarify
  * D8 §九 B′（R7-09）：clarifyKind='decision'（design-preference 代决）用代决准则模板分支——
  * 保守优先/维持现状优先/可逆性优先，与 requirement-clarify 的需求澄清准则（answer）区分。
  */
+/**
+ * W24-9（用户实测 23:2x 报障）：本地环境事实段——代理代答/代决的问题常涉及运行环境
+ * （目标 OS/桌面/调试方式），此前无环境事实输入，代理按类比对象假设（实测把类 typeless
+ * 输入法补全成 macOS 菜单栏应用，而本地是 Linux/X11——到架构阶段才发现无法本机调试）。
+ * 事实优先于类比：环境相关问题必须以本地事实为准，不得假设其他操作系统。
+ */
+export function buildLocalEnvFactsSection(): string {
+  try {
+    const os = require('node:os') as typeof import('node:os')
+    const isLinux = os.platform() === 'linux'
+    const isMac = os.platform() === 'darwin'
+    const isWin = os.platform() === 'win32'
+    const osName = isLinux ? `Linux（${os.release()}）` : isMac ? `macOS（${os.release()}）` : isWin ? `Windows（${os.release()}）` : `${os.platform()}（${os.release()}）`
+    const hasDisplay = Boolean(process.env.DISPLAY)
+    const lines = [
+      '## 本地环境事实（环境类问题的唯一权威依据）',
+      `- 操作系统：${osName}`,
+      hasDisplay ? `- 桌面环境：X11/Wayland 图形会话（DISPLAY=${process.env.DISPLAY}）——具备本机 GUI 调试条件` : '- 桌面环境：无图形会话（无 DISPLAY）',
+      '- 规则：凡涉及「目标运行环境/操作系统/平台能力/如何调试」的问题，一律以本节事实为准作答；',
+      '  不得因需求类比对象（如“类似 typeless/macOS 工具”）而假设其他操作系统——类比只说明产品形态，不改变运行环境。',
+      '  若产品确实需要面向其他平台，答案中必须注明「目标平台与本地不一致，需跨平台适配与远程验证」并作为风险提出。',
+    ]
+    return lines.join('\n')
+  } catch {
+    return ''
+  }
+}
+
 export function buildProxyDelegationTask(input: {
   projectName: string
   stageTitle: string
@@ -393,6 +421,8 @@ export function buildProxyDelegationTask(input: {
     `- 项目名：${input.projectName}（快消型）`,
     `- 当前阶段：${input.stageTitle}`,
     `- 需求背景：${input.projectDir}/01_PRD/prd.md（如需背景可 Read，允许只读结构与关键段）`,
+    '',
+    buildLocalEnvFactsSection(),
     '',
     isDecision
       ? '## 待决问题（原文锁定：只决策下列问题，不得改写/扩展问题本身）'

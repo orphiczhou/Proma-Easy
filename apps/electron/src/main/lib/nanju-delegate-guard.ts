@@ -203,7 +203,7 @@ function keywordMatcher(keyword: string): (text: string) => boolean {
 }
 
 /** 在文本中查找首个命中的关键词，返回该词（未命中返回 undefined） */
-function findKeyword(text: string, keywords: readonly string[]): string | undefined {
+export function findKeyword(text: string, keywords: readonly string[]): string | undefined {
   for (const kw of keywords) {
     if (keywordMatcher(kw)(text)) return kw
   }

@@ -585,7 +585,7 @@ describe('W8 集成：checkNanjuRouterGate 参数级三层强制', () => {
 // ═══════════════ 修订轮 R1-R3（AC 裁决 20260903 CONVERGED_CERTIFIED 随批） ═══════════════
 
 describe('R1：层三注入与层二识别同源（matchACKeyword 替代 matchKind）', () => {
-  test('混合文本 1：本阶段词+攻击词并存（testing「测试攻击审计」）→ 不注入但覆写', () => {
+  test('混合文本 1：本阶段词+攻击词并存（testing「测试攻击审计」）→ 不注入；W24-8 起 title 无作者标记=纯 AC 委派仍覆写', () => {
     setupProject({ stage: 'testing', mode: 'quick' })
     const input: Record<string, unknown> = {
       title: '测试攻击审计',
@@ -594,7 +594,9 @@ describe('R1：层三注入与层二识别同源（matchACKeyword 替代 matchKi
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
     // R1 修复前：matchKind='stage'（「测试」本阶段词先命中）→ 误注入；修复后：AC 词在场 → 同源不注入
     expect(String(input.task)).not.toContain(PATH_CONSTRAINT_MARKER)
-    // 层二独立性保持：攻方覆写（W22 起 testing per-phase 攻击者=glm，与新作者 deepseek 跨族）
+    // W24-8：豁免只认作者标题标记（测试工程师/GWT…）；「测试攻击审计」无标记=纯 AC 委派
+    // → 层二覆写保持（W22 起 testing per-phase 攻击者=glm，与新作者 deepseek 跨族）。
+    // 作者劫持由「标记命中」分支豁免（见 W24-8 describe 的两条红测）。
     expect(input.modelId).toBe('glm-5.3-flash')
     expect(input.channelId).toBe('glm-zhipu')
   })
@@ -1202,5 +1204,50 @@ describe('W19-C：E2E 9 连拒实测样本重放（telemetry-e2e-w18-验收2 逐
     expect(result).toBeNull()
     const events = readTelemetryEvents()
     expect(events.filter((e) => e.eventType === 'delegate.guard.stage-deny')).toHaveLength(0)
+  })
+})
+// ===== W24-8：作者委派豁免（AC 词内嵌不劫持作者渠道）=====
+
+describe('W24-8 层二覆写·作者委派豁免', () => {
+  test('红测：需求分析师作者委派（任务内嵌 AC 攻防模板）→ 渠道不被覆写为攻击者', () => {
+    setupProject({ stage: 'requirements', mode: 'quick' })
+    const input: Record<string, unknown> = {
+      title: '需求分析师：语音输入法 PRD',
+      task: '你是需求分析师。与用户对话收集需求，产出 PRD。\n\n## AC 对抗审计\n你是【攻击者】，尽最大努力攻击这份 PRD……攻击完成后由【防御者】裁决……',
+      channelId: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+    }
+    expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
+    // 作者渠道保持（deepseek-v4-pro 是配置的 requirements 作者），不被劫持为 light 攻击者 deepseek-flash
+    expect(input.modelId).toBe('deepseek-v4-pro')
+    const events = readTelemetryEvents()
+    const override = events.find((e) => e.eventType === 'delegate.guard.ac-override')
+    expect(override?.payload.skipped).toBe('stage-author-bundle')
+  })
+
+  test('对照：纯 AC 委派（不含本阶段词）仍覆写（quick/testing per-phase glm 攻击者）', () => {
+    setupProject({ stage: 'testing', mode: 'quick' })
+    const input: Record<string, unknown> = {
+      title: '攻击者复审：验证修复',
+      task: '攻击者复审 GWT 修复是否闭合',
+      channelId: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+    }
+    expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
+    expect(input.modelId).toBe('glm-5.3-flash')
+    expect(input.channelId).toBe('glm-zhipu')
+  })
+
+  test('红测：架构师作者委派（GLM-5.3）带内嵌 AC → 保持 GLM-5.3（E2E 实测被劫持场景）', () => {
+    setupProject({ stage: 'architecture', mode: 'quick' })
+    const input: Record<string, unknown> = {
+      title: '架构师：语音输入法架构文档与环境探测',
+      task: '你是架构设计师……## AC 对抗审计（攻击者模板）……攻击……防御者裁决……',
+      channelId: 'glm-zhipu',
+      modelId: 'GLM-5.3',
+    }
+    expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
+    expect(input.modelId).toBe('GLM-5.3')
+    expect(input.channelId).toBe('glm-zhipu')
   })
 })

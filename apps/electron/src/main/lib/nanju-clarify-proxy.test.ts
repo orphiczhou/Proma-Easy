@@ -973,3 +973,26 @@ describe('W23 resolveProxyChannel 缺省候选优先读配置 proxyCandidates（
     expect(result).toEqual({ channelId: 'glm-zhipu', modelId: 'glm-5.3-flash', diversityDegraded: false })
   })
 })
+
+// ===== W24-9：代理任务本地环境事实接地 =====
+describe('W24-9 代理环境接地', () => {
+  test('任务模板含「本地环境事实」段与环境规则（不得假设其他操作系统）', async () => {
+    const { buildProxyDelegationTask } = await import('./nanju-clarify-proxy-tool')
+    const task = buildProxyDelegationTask({
+      projectName: '测试项目', stageTitle: '需求分析师',
+      projectDir: '/tmp/project-x',
+      questions: [{ id: 'q1', question: '目标操作系统是什么？' }],
+    })
+    expect(task).toContain('## 本地环境事实')
+    expect(task).toContain('操作系统')
+    expect(task).toContain('不得因需求类比对象')
+    expect(task).toContain('一律以本节事实为准')
+  })
+
+  test('环境事实段：Linux 主机标注 X11 会话（本机实测环境）', async () => {
+    const { buildLocalEnvFactsSection } = await import('./nanju-clarify-proxy-tool')
+    const section = buildLocalEnvFactsSection()
+    expect(section).toContain('Linux')
+    expect(section).toContain('DISPLAY')
+  })
+})

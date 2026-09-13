@@ -13,6 +13,7 @@ import { getPhaseNode, getNextPhase, type PhaseId, checkOutputFormat } from './n
 import { getWorkspaceFilesDir } from './config-paths'
 import {
   STAGE_ROLE_KEYWORDS,
+  findKeyword,
   STAGE_TITLES,
   checkDelegationAgainstStage,
   describeKeywordHit,
@@ -271,6 +272,20 @@ function registerConfirmAskIfEligible(
  * W8（v0.17.71）：白名单放行委派工具后追加参数级三层强制
  * （checkNanjuDelegateGuard——阶段匹配 deny / AC 模型覆写 / 路径约束注入）。
  */
+/**
+ * W24-8：各阶段**作者委派标题标记**（仅层二 AC 覆写的豁免判定用，不参与层一匹配）。
+ * L1 作者委派标题约定「{角色}：{项目} …」（router-prompt 模板）；AC 委派标题
+ * （攻击者/防御者/审计/复审）不含这些标记 → 不豁免 → 照常程序化覆写。
+ */
+const STAGE_AUTHOR_TITLE_MARKERS: Record<string, readonly string[]> = {
+  requirements: ['需求分析师', '需求分析', 'analyst', 'requirement-analyst'],
+  prototype: ['UX 顾问', 'UX顾问', 'ux-advisor', '原型设计'],
+  architecture: ['架构师', 'architect', '环境探测'],
+  planning: ['工程经理', '项目经理', 'engineering-manager'],
+  coding: ['全栈开发', '开发工程师', 'fullstack-developer'],
+  testing: ['测试工程师', 'test-engineer', 'GWT'],
+}
+
 export function checkNanjuRouterGate(
   workspaceSlug: string | undefined,
   sessionId: string,
@@ -891,11 +906,30 @@ function checkNanjuDelegateGuard(
     // 层二：AC 模型程序化覆写（命中 AC 词且能区分攻/防；不受层一判定顺序影响）
     // W22 O1：第三参 guardStage——per-phase acAttacker 覆盖位（testing 攻击者=glm 跨族）
     // 必须在此接线，否则被全局 preset 静默覆写回 deepseek（与新作者同族）。
-    // 家族标记跳过：acDefender 的 'minimax' 是家族标记非真实渠道 ID（真实渠道为运行时
-    // 解析的 UUID，仅 router-prompt 侧能解析）——直接覆写会产生无效渠道，此情形不覆写
+    // W24-8（用户实测 23:2x 报障）：作者委派豁免——buildL2TaskWithAC 把 AC 攻防模板
+    // 内嵌进作者任务文本，作者委派必然同时命中 AC 词且攻防词并存（detectACRole 按
+    // 攻方处理）→ 作者被劫持到 AC 攻击者渠道（实测三阶段作者全中：v4-pro/M3/GLM-5.3
+    // 全被写成 light 攻击者 deepseek-flash，与设置面板矩阵不符；且作者与内嵌攻击者
+    // 同渠道会诱发 L2 自行换模型「纠偏」——架构阶段 AC 攻击者跑成 GLM-5.3 的根因链）。
+    // 修法：命中当前阶段角色/产出词 = 作者本体委派，不覆写（仅埋点观测）；纯 AC 委派
+    // （不含本阶段词）才程序化覆写。
     if (matchACKeyword(source) !== undefined) {
       const acRole = detectACRole(source)
-      if (acRole !== null) {
+      // 判定收紧：只认 title 含本阶段**作者标题标记**（「需求分析师：/UX 顾问：/架构师：…」——
+      // L1 委派标题约定）。不用 STAGE_ROLE_KEYWORDS：①该表同时服务层一交叉判定，扩词会
+      // 让 PRD 引文（「作者：Proma 需求分析师」）在 prototype 阶段误中 requirements 词被拒
+      // （W19-C 重放实测）；②「测试」等通用词与纯 AC 委派天然交叠。专用标记表零外溢。
+      const isStageAuthorBundle =
+        typeof source.title === 'string' &&
+        findKeyword(source.title, STAGE_AUTHOR_TITLE_MARKERS[guardStage] ?? []) !== undefined
+      if (isStageAuthorBundle) {
+        recordTelemetry(
+          workspaceSlug,
+          'delegate.guard.ac-override',
+          { stage: guardStage, acRole, mode: project.mode, skipped: 'stage-author-bundle', title: source.title },
+          project.projectId,
+        )
+      } else if (acRole !== null) {
         const override = resolveACOverride(acRole, project.mode, guardStage)
         if (override.channel !== 'minimax') {
         const originalChannelId = typeof target.channelId === 'string' ? target.channelId : '(inherit)'
