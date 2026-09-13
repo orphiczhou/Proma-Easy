@@ -219,6 +219,14 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     if (tid.indexOf('proma-ctf-') === 0) return;
     var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
 
+    // W24-6（用户裁定 2026-09-13）：tab/分页类元素（顶部横向分页窄条的场景导航项，
+    // data-ai-type=标签页/tab/分页/页签/导航）是切视图控件——点击应执行原生切换，
+    // 不弹点选面板不高亮不上报（要改 tab 仍可在输入框点名描述）。
+    if (target) {
+      var navType = String(target.getAttribute('data-ai-type') || '').trim();
+      if (/^(标签页|tab|分页|页签|导航)$/i.test(navType)) return;
+    }
+
     // v0.17.59（WO1⑧）：原地编辑中的元素（或其内部节点）的点击不当作点选——
     // 防止打断编辑/误弹面板；编辑结束（finish/blur）或指令清空后恢复
     if (textEditingEl && (target === textEditingEl || (textEditingEl.contains && textEditingEl.contains(target)))) return;

@@ -74,6 +74,10 @@ class StubEl {
   getBoundingClientRect() {
     return { x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 20, width: 100, height: 20 }
   }
+  closest(sel: string): StubEl | null {
+    // 覆盖注入脚本唯一用法 closest('[data-ai-id]')：自身上带该属性即命中
+    return sel === '[data-ai-id]' && this.attributes.has('data-ai-id') ? this : null
+  }
   contains(n: unknown) { return n === this || this.children.includes(n as StubEl) }
   setPointerCapture() { /* no-op */ }
   focus() { this._focused = true }
@@ -321,5 +325,45 @@ describe('click-to-fix-script eval 沙箱：拖拽会话（WO1③④⑤/M3/M8/M9
     expect(node.style.transform).toBe('translate(15px, 15px)')
     sb.send({ __promaCtfApply: true, action: 'undo-all' })
     expect(node.style.transform).toBe('')
+  })
+})
+
+
+// ===== W24-6：tab/分页类点击不弹点选（原生切换放行）=====
+
+describe('W24-6 tab 排除：标签页点击不上报不弹面板', () => {
+  function docClick(sb: ReturnType<typeof buildSandbox>, node: StubEl): void {
+    for (const fn of [...(sb.docListeners.get('click') ?? [])]) {
+      fn({ target: node, preventDefault() {}, stopPropagation() {} })
+    }
+  }
+
+  test('data-ai-type=标签页 的点击零上报（原生行为放行）', () => {
+    const sb = buildSandbox()
+    const tab = sb.el('tab-scene-2')
+    tab.setAttribute('data-ai-type', '标签页')
+    docClick(sb, tab)
+    expect(sb.posted.filter((p) => p.kind === 'element-click').length).toBe(0)
+  })
+
+  test('对照：普通元素（按钮）点击仍上报 element-click', () => {
+    const sb = buildSandbox()
+    const btn = sb.el('btn-record')
+    btn.setAttribute('data-ai-type', '按钮')
+    btn.innerText = '按住说话'
+    docClick(sb, btn)
+    const rep = sb.posted.find((p) => p.kind === 'element-click')
+    expect(rep?.id).toBe('btn-record')
+    expect(rep?.type).toBe('按钮')
+  })
+
+  test('变体兼容：tab/分页/页签/导航（大小写与空白）同样排除', () => {
+    const sb = buildSandbox()
+    for (const [i, t] of ['tab', '分页', '页签', '导航', ' Tab '].entries()) {
+      const n = sb.el('nav-' + i)
+      n.setAttribute('data-ai-type', t)
+      docClick(sb, n)
+    }
+    expect(sb.posted.filter((p) => p.kind === 'element-click').length).toBe(0)
   })
 })
