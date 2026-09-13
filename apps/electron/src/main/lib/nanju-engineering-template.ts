@@ -405,12 +405,17 @@ export const CATEGORY_MARKER_GUIDE =
  */
 const ENV_COMPONENT_SHARED = new Set([
   'node', 'npm', 'bun', 'bunx', 'pnpm', 'yarn', 'deno', 'git',
+  // W24-10：环境事实类探测项（架构师实测把 DISPLAY 会话可用性列为清单行）
+  'display',
 ])
 const ENV_COMPONENTS_BY_CATEGORY: Record<ProjectCategory, Set<string>> = {
   'web-fullstack': new Set([]),
   'api-backend': new Set(['python3', 'pip', 'uv', 'poetry', 'go', 'rustc', 'cargo', 'docker', 'docker-compose']),
   'mobile-app': new Set(['watchman', 'adb', 'xcodebuild', 'xcode-select', 'swift', 'pod', 'cocoapods', 'java', 'gradle']),
-  'desktop-app': new Set(['rustc', 'cargo', 'rustup', 'electron', 'pkg-config', 'cmake', 'clang', 'gcc', 'make', 'python3']),
+  // W24-10：补 Tauri v2 Linux 真实依赖（desktop-app 模板默认栈；架构师实测探测出
+  // webkit2gtk-4.1/gtk+-3.0/libsoup-3.0/ayatana-appindicator3 被白名单误判幻觉包名）
+  'desktop-app': new Set(['rustc', 'cargo', 'rustup', 'electron', 'pkg-config', 'cmake', 'clang', 'gcc', 'cc', 'make', 'python3',
+    'webkit2gtk-4.1', 'webkit2gtk-4.0', 'gtk+-3.0', 'gtk3', 'libsoup-3.0', 'libsoup', 'ayatana-appindicator3-0.1', 'libappindicator', 'appindicator', 'javascriptcoregtk-4.1', 'libsoup-3.0-dev']),
   'cli-tool': new Set(['python3', 'pip', 'uv', 'go', 'rustc', 'cargo']),
   'ai-application': new Set(['python3', 'pip', 'uv', 'poetry', 'ollama', 'docker']),
 }
@@ -467,10 +472,20 @@ export function validateEnvChecklist(
     return { ok: false, problems: ['环境配置清单为空：architecture.md 未解析到环境组件清单（## 环境配置 节缺失或表格为空）'] }
   }
   for (const raw of checklist) {
-    const name = raw.trim().toLowerCase()
-    if (!name) continue
-    if (!allowed.has(name)) {
-      problems.push(`环境组件「${raw}」不在${source}内：请核对拼写（常见组件如 node/npm/bun/rustc/cargo/python3），避免幻觉包名`) 
+    // W24-10：复合名拆分校验——实测架构师会写「pkg-config / cc (gcc)」一行的多组件
+    // 合写（斜杠并列/括号别名），按 token 逐个校验（全合法即过），不再整体误拦。
+    const tokens = raw
+      .split(/[/,，、]/)
+      .flatMap((seg) => {
+        const paren = /\(([^)]*)\)/.exec(seg)
+        return [seg.replace(/\([^)]*\)/g, ''), paren?.[1] ?? '']
+      })
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean)
+    if (tokens.length === 0) continue
+    const unknown = tokens.filter((t) => !allowed.has(t))
+    if (unknown.length > 0) {
+      problems.push(`环境组件「${raw}」不在${source}内：请核对拼写（常见组件如 node/npm/bun/rustc/cargo/python3），避免幻觉包名`)
     }
   }
   return { ok: problems.length === 0, problems }
@@ -481,7 +496,10 @@ export function validateEnvChecklist(
  * 表格行第一列（| 组件 | 版本 | ...）；表头/分隔行自动跳过。
  */
 export function parseEnvChecklistFromDoc(content: string): string[] {
-  const sectionMatch = content.match(/^#{1,3}\s*环境(?:配置)?\s*$/m)
+  // W24-10：节头后缀容忍——实测 L2 会给节头加注释（「## 环境配置（探测时间 …；命令幂等…）」），
+  // 严格行尾匹配解析为空清单 → 环境门禁误拦推进（E2E 实测 architecture→coding verify-failed）。
+  // 锚定：行首标题 + 「环境/环境配置」后跟行尾/括号/冒号/空白（防「环境变化」类误配）。
+  const sectionMatch = content.match(/^#{1,3}\s*环境(?:配置)?(?=[（(：:\s]|$)/m)
   if (!sectionMatch || sectionMatch.index === undefined) return []
   const after = content.slice(sectionMatch.index)
   // 跳过当前节头行再找下一节（避免把节头自己当「下一节」截空）

@@ -508,3 +508,48 @@ describe('syncProjectEnvStateFromArchitectureDoc（M4 共用函数：解析+置�
     syncProjectEnvStateFromArchitectureDoc(fixtureRoot, 'm4-nonexistent')
   })
 })
+
+// ===== W24-10：环境节头后缀容忍 =====
+describe('W24-10 parseEnvChecklistFromDoc 节头后缀容忍', () => {
+  test('节头带注释后缀（实测形态「## 环境配置（探测时间 …）」）→ 正常解析组件清单', () => {
+    const doc = [
+      '# 架构文档',
+      '## 环境配置（探测时间 2026-09-13 23:15 GMT+8；命令幂等只读，未安装/升级/改任何配置）',
+      '| 组件 | 版本 | 用途 | 探测结果 | 备注 |',
+      '| --- | --- | --- | --- | --- |',
+      '| rustc | 1.97.1 | Tauri 后端编译 | 就绪 | — |',
+      '| node | v22 | 前端构建 | 就绪 | — |',
+      '## 下一节',
+    ].join('\n')
+    const components = parseEnvChecklistFromDoc(doc)
+    expect(components).toContain('rustc')
+    expect(components).toContain('node')
+  })
+
+  test('原有严格形态（## 环境配置 无后缀）与「## 环境」短形态保持可解析', () => {
+    expect(parseEnvChecklistFromDoc('## 环境配置\n| 组件 |\n| --- |\n| cargo |')).toContain('cargo')
+    expect(parseEnvChecklistFromDoc('## 环境\n| 组件 |\n| --- |\n| bun |')).toContain('bun')
+  })
+
+  test('非环境节（## 环境变化分析）不误配', () => {
+    expect(parseEnvChecklistFromDoc('## 环境变化分析\n| 项 |\n| --- |\n| x |')).toEqual([])
+  })
+})
+
+describe('W24-10 环境组件白名单扩容与复合名拆分', () => {
+  test('desktop-app：Tauri Linux 真实依赖（webkit2gtk-4.1/gtk+-3.0/libsoup/ayatana）过白名单', () => {
+    const r = validateEnvChecklist('desktop-app', ['rustc', 'cargo', 'webkit2gtk-4.1', 'gtk+-3.0', 'libsoup-3.0', 'ayatana-appindicator3-0.1'])
+    expect(r.ok).toBe(true)
+  })
+
+  test('复合名合写「pkg-config / cc (gcc)」拆 token 全过；DISPLAY 归一为 display 过共享集', () => {
+    const r = validateEnvChecklist('desktop-app', ['pkg-config / cc (gcc)', 'DISPLAY'])
+    expect(r.ok).toBe(true)
+  })
+
+  test('真幻觉包名仍拦（nodej 之类 typo）', () => {
+    const r = validateEnvChecklist('desktop-app', ['nodej'])
+    expect(r.ok).toBe(false)
+    expect(r.problems[0]).toContain('nodej')
+  })
+})
