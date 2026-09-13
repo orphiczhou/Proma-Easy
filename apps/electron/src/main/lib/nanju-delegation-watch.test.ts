@@ -367,3 +367,73 @@ describe('AC Z-4（v0.17.65）：停止委派清理未决 blockedEvents（重派
     ).toHaveLength(0)
   })
 })
+
+// ===== W24-3：向导图子步骤推导（运行中委派标题 → ATK/DEF/VIS 点亮）=====
+
+describe('W24-3 deriveSubStageFromDelegations（观察哨推导）', () => {
+  function makeDeriveHarness(subStage: string | null) {
+    const writes: Array<{ nodeId: string; force?: boolean }> = []
+    let titles: string[] = []
+    const deps: NanjuDelegationWatchDeps = {
+      now: () => 1_000_000,
+      listRunningDelegations: () => [],
+      forceStopDelegation: () => ({ stopped: false }),
+      getActiveProjectStage: (_ws, projectId) => (projectId === 'demo-project' ? 'prototype' : null),
+      recordGuardError: () => ({ justOpened: false, failCount: 0, errorCount: 0 }),
+      injectMessage: () => {},
+      sendContinuation: () => {},
+      log: () => {},
+      listRunningDelegationTitlesByRoot: () => titles,
+      readProjectSubStage: () => subStage,
+      advanceGuideSubStage: (_ws, _pid, nodeId, opts) => {
+        writes.push({ nodeId, force: opts?.force })
+        return true
+      },
+    }
+    const watcher = new NanjuDelegationWatcher(deps)
+    return {
+      watcher,
+      writes,
+      setTitles: (t: string[]) => { titles = t },
+      poll: () => (watcher as unknown as { poll: () => void }).poll(),
+    }
+  }
+
+  test('攻击者委派在跑 → 写 PROTO_ATK（force）', () => {
+    const h = makeDeriveHarness('PROTO')
+    ;(h.watcher as unknown as { register: (a: string, b: string, c: string) => void }).register('ws', 'root-1', 'demo-project')
+    h.setTitles(['攻击者审查：UX 原型 AC 对抗审计'])
+    h.poll()
+    expect(h.writes.some((w) => w.nodeId === 'PROTO_ATK' && w.force === true)).toBe(true)
+  })
+
+  test('防御+攻击并行 → 取序列更后者 PROTO_DEF；UC 态不被覆盖', () => {
+    const h = makeDeriveHarness('PROTO')
+    ;(h.watcher as unknown as { register: (a: string, b: string, c: string) => void }).register('ws', 'root-1', 'demo-project')
+    h.setTitles(['攻击者复审 R2：原型修复验证', '防御者裁决：UX 原型 AC 审计 R1+R2'])
+    h.poll()
+    const atkDef = h.writes.filter((w) => w.nodeId === 'PROTO_ATK' || w.nodeId === 'PROTO_DEF')
+    expect(atkDef.some((w) => w.nodeId === 'PROTO_DEF')).toBe(true)
+
+    const uc = makeDeriveHarness('PROTO_UC')
+    ;(uc.watcher as unknown as { register: (a: string, b: string, c: string) => void }).register('root-1', 'ws', 'demo-project')
+    uc.setTitles(['防御者裁决：AC 审计'])
+    uc.poll()
+    expect(uc.writes.length).toBe(0)
+  })
+
+  test('澄清 sentinel 优先（不覆盖）+ 攻防收工回主节点（回炉可见）', () => {
+    const sentinel = makeDeriveHarness('REQ_CLARIFY')
+    ;(sentinel.watcher as unknown as { register: (a: string, b: string, c: string) => void }).register('root-1', 'ws', 'demo-project')
+    sentinel.setTitles(['攻击者审查：PRD AC'])
+    sentinel.poll()
+    expect(sentinel.writes.length).toBe(0)
+
+    // prototype 阶段（demo-project 默认）攻防完成后只剩作者委派 → PROTO_DEF 回 PROTO
+    const rework = makeDeriveHarness('PROTO_DEF')
+    ;(rework.watcher as unknown as { register: (a: string, b: string, c: string) => void }).register('root-1', 'ws', 'demo-project')
+    rework.setTitles(['UX 顾问：生成原型（作者产出）'])
+    rework.poll()
+    expect(rework.writes.some((w) => w.nodeId === 'PROTO' && w.force === true)).toBe(true)
+  })
+})

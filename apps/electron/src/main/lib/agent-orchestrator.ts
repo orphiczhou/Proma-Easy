@@ -1064,6 +1064,19 @@ export class AgentOrchestrator {
         const { listRunningDelegationsForParent } = require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
         return listRunningDelegationsForParent(parentSessionId)
       },
+      // W24-3：向导图子步骤推导事实源（含 L2 内部 inline AC 孙委派，rootSessionId 链）
+      listRunningDelegationTitlesByRoot: (rootSessionId: string) => {
+        const { listRunningDelegationTitlesByRoot } = require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
+        return listRunningDelegationTitlesByRoot(rootSessionId)
+      },
+      readProjectSubStage: (workspaceSlug: string, projectId: string) => {
+        const { getProjectSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+        return getProjectSubStage(workspaceSlug, projectId)
+      },
+      advanceGuideSubStage: (workspaceSlug: string, projectId: string, nodeId: string, opts?: { force?: boolean }) => {
+        const { tryAdvanceGuideSubStage } = require('./nanju-project') as typeof import('./nanju-project')
+        return tryAdvanceGuideSubStage(workspaceSlug, projectId, nodeId, opts)
+      },
       forceStopDelegation: (parentSessionId: string, delegationId: string) => {
         const { forceStopDelegation } = require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
         return forceStopDelegation(parentSessionId, delegationId)

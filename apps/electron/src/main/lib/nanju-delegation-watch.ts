@@ -16,6 +16,7 @@
  */
 
 import { NANJU_GUARDS, type NanjuGuardStage } from './nanju-project'
+import { GUIDE_SUBSTAGE_SEQUENCE, getGuideStageMainNodeId } from './nanju-guide-progress'
 
 /** 运行中委派的观察视图（orchestrator 从 agent-collaboration-tools 提供） */
 export interface WatchedDelegation {
@@ -73,6 +74,15 @@ export interface NanjuDelegationWatchDeps {
   injectMessage: (parentSessionId: string, text: string) => void
   /** 向 L1 续接下发指令（催办/重派；orchestrator 侧处理忙碌重试） */
   sendContinuation: (parentSessionId: string, message: string) => void
+  /**
+   * W24-3（可选）：按 root 会话枚举运行中委派标题（含 L2 内部 inline AC 孙委派）。
+   * 向导图子步骤推导（ATK/DEF/VIS 点亮）的事实源；缺省不推导（渲染端维持两态）。
+   */
+  listRunningDelegationTitlesByRoot?: (rootSessionId: string) => string[]
+  /** W24-3（可选）：读当前子步骤值（推导幂等/优先级判断用）；缺省 null（视为未知，允许写） */
+  readProjectSubStage?: (workspaceSlug: string, projectId: string) => string | null
+  /** W24-3（可选）：写子步骤（tryAdvanceGuideSubStage 通道）；缺省 no-op */
+  advanceGuideSubStage?: (workspaceSlug: string, projectId: string, nodeId: string, opts?: { force?: boolean }) => boolean
   /**
    * 南大 R1（W1，可选）：软超时告警点转发（渲染端等待 Toast「仍在处理/可催办」数据源）。
    * 只转发已发生事实，不影响催办动作；缺省 no-op。
@@ -164,6 +174,8 @@ export class NanjuDelegationWatcher {
       }
 
       const running = this.deps.listRunningDelegations(sessionId)
+      // W24-3：向导图子步骤推导（每轮 poll；UC/sentinel 优先，内部幂等）
+      this.deriveSubStageFromDelegations(watch.workspaceSlug, watch.projectId, stage, sessionId)
       // 对账：消失的委派移除追踪；新出现的（含 continue_delegation 重派）重新计时
       const runningIds = new Set(running.map((d) => d.delegationId))
       for (const id of watch.tracked.keys()) {
@@ -231,6 +243,53 @@ export class NanjuDelegationWatcher {
         this.tryRestoreMainFromClarify(watch.workspaceSlug, watch.projectId, stage)
       }
     }
+  }
+
+  /**
+   * W24-3：向导图子步骤事实推导——quick 模式 requiresAC=false，ATK/DEF 无既有写入点
+   * （S1 两态空白，子步骤全程灰）；运行中委派标题是「谁在跑」的诚实事实源
+   * （攻击者审查/防御者裁决/视觉裁决），按序点亮对应子节点。
+   * 优先级：UC（产出达标等确认）> 澄清 sentinel > 委派推导；ATK/DEF 轮次交替允许
+   * 回跳（force）；推导节点全部收工（只剩作者委派/无委派）→ 回主节点（回炉重做可见）。
+   */
+  private deriveSubStageFromDelegations(
+    workspaceSlug: string,
+    projectId: string,
+    stage: string,
+    sessionId: string,
+  ): void {
+    try {
+      const listTitles = this.deps.listRunningDelegationTitlesByRoot
+      const readSub = this.deps.readProjectSubStage
+      const advance = this.deps.advanceGuideSubStage
+      if (!listTitles || !readSub || !advance) return
+      const main = getGuideStageMainNodeId(stage)
+      if (!main) return
+      const seq = (GUIDE_SUBSTAGE_SEQUENCE as Record<string, readonly string[] | undefined>)[stage]
+      if (!seq) return
+      const current = readSub(workspaceSlug, projectId)
+      if (current === `${main}_UC`) return // 产出达标等确认——推导不覆盖
+      if (current && current.endsWith('_CLARIFY')) return // 澄清中 sentinel 优先（blocked 事实）
+      // 候选映射：标题关键词 → 序列内节点（PROTO_VIS 仅 prototype 序列含 VIS）
+      let best: { node: string; idx: number } | null = null
+      for (const title of listTitles(sessionId)) {
+        let node: string | null = null
+        if (/攻击|攻方|attacker/i.test(title) && seq.includes(`${main}_ATK`)) node = `${main}_ATK`
+        else if (/防御|守方|defender/i.test(title) && seq.includes(`${main}_DEF`)) node = `${main}_DEF`
+        else if (/视觉|截图|vision/i.test(title) && seq.includes(`${main}_VIS`)) node = `${main}_VIS`
+        if (!node) continue
+        const idx = seq.indexOf(node)
+        if (best === null || idx > best.idx) best = { node, idx }
+      }
+      if (best) {
+        if (current !== best.node) advance(workspaceSlug, projectId, best.node, { force: true })
+        return
+      }
+      // 无攻防/视觉委派在跑：若现值是推导节点 → 回主节点（作者回炉重做可见）；主节点/空值不动
+      if (current && (current === `${main}_ATK` || current === `${main}_DEF` || current === `${main}_VIS`)) {
+        advance(workspaceSlug, projectId, main, { force: true })
+      }
+    } catch { /* 向导图写入失败不影响观察哨 */ }
   }
 
   /** D8 S4′：写澄清中 sentinel（幂等：现值已是 sentinel 不重写；归因+outputPath 校验见 tryAdvanceGuideSubStage） */

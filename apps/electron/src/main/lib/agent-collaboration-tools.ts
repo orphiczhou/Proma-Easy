@@ -38,6 +38,7 @@ import {
 } from './agent-collaboration-utils'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel, pickDefaultModelForChannel } from './agent-model-selection'
 import { findNanjuFallbackProject, getFallbackChain, recordModelFallbackUsed, shouldSkipFallbackChainForDelegation, type ModelEndpoint } from './nanju-model-fallback'
+import { waitForLiveRecords as waitForLiveRecordsPure } from './agent-collaboration-wait'
 
 interface CollaborationToolContext {
   sessionId: string
@@ -78,6 +79,13 @@ interface DelegationRecord {
 
 const MAX_WAIT_SECONDS = 2 * 60 * 60
 const DEFAULT_WAIT_SECONDS = 30 * 60
+/**
+ * W24/M-1 修复（用户裁定 2026-09-13 19:34）：南大向导 auto 开启项目的 wait 分段上限 = 2 分钟。
+ * 背景：wait_for_delegations 不被 blocked 唤醒 → L1 白等默认 30min（实测体验≈20min），
+ * 自动补全介入被拖慢、全链 6h 的主因。auto 项目分段轮询：每 2min 回到 L1 手里重估局面；
+ * 通用 blocked 即唤醒（waitForLiveRecords）对所有会话生效。
+ */
+const NANJU_AUTO_WAIT_SECONDS = 2 * 60
 const RESULT_SUMMARY_CHAR_LIMIT = 50_000
 const DELEGATION_GOAL_CHAR_LIMIT = 1_000
 /** live Map 中保留的已结束委派上限，超出时按完成时间清理最老的（持久化仍可回查） */
@@ -198,6 +206,26 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
   })
 
   console.log('[协作工具] EventBus 阻塞事件监听已注册')
+}
+
+/**
+ * W24-3：按 root 会话归属枚举运行中委派标题（向导图子步骤推导的事实源）。
+ * 覆盖任意深度嵌套（L1 直接子委派 + L2 内部 inline AC 攻防孙委派——rootSessionId 链）；
+ * nanjuProxy 代理委派除外（代答不是阶段工序）。
+ */
+export function listRunningDelegationTitlesByRoot(rootSessionId: string): string[] {
+  const out: string[] = []
+  for (const record of delegations.values()) {
+    if (record.status !== 'running') continue
+    if (record.nanjuProxy === true) continue
+    if (record.parentSessionId === rootSessionId) {
+      out.push(record.title)
+      continue
+    }
+    const child = getAgentSessionMeta(record.childSessionId)
+    if (child?.rootSessionId === rootSessionId) out.push(record.title)
+  }
+  return out
 }
 
 function getPendingBlockedEvents(delegationId: string): BlockedEvent[] {
@@ -787,37 +815,15 @@ function getFinishedDelegationCount(records: DelegationRecord[]): number {
   return records.filter((record) => record.status !== 'running').length
 }
 
-async function waitForLiveRecords(
+function waitForLiveRecords(
   records: DelegationRecord[],
   timeoutSeconds: number,
   liveTarget: number,
-): Promise<'completed' | 'timeout'> {
-  if (getFinishedDelegationCount(records) >= liveTarget) {
-    return 'completed'
-  }
-
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      new Promise<'completed'>((resolve) => {
-        const check = () => {
-          if (getFinishedDelegationCount(records) >= liveTarget) {
-            resolve('completed')
-          }
-        }
-        for (const record of records) {
-          if (record.status === 'running') {
-            record.completion.then(check)
-          }
-        }
-      }),
-      new Promise<'timeout'>((resolve) => {
-        timeout = setTimeout(() => resolve('timeout'), timeoutSeconds * 1000)
-      }),
-    ])
-  } finally {
-    if (timeout) clearTimeout(timeout)
-  }
+): Promise<'completed' | 'timeout' | 'blocked'> {
+  // W24/M-1：实现抽至 agent-collaboration-wait（纯逻辑可单测）；此处注入真实阻塞计数
+  return waitForLiveRecordsPure(records, timeoutSeconds, liveTarget, {
+    countPendingBlocked: (delegationId: string) => getPendingBlockedEvents(delegationId).length,
+  })
 }
 
 function getCurrentParentPermissionMode(
@@ -1242,7 +1248,7 @@ export function buildPiCollaborationTools(
         delegationIds: Type.Optional(Type.Array(Type.String(), { description: '要等待的委派 ID' })),
         mode: Type.Optional(Type.Union([Type.Literal('all'), Type.Literal('any')])),
         minCompleted: Type.Optional(Type.Number({ description: 'mode=any 时至少等待完成的数量，默认 1' })),
-        timeoutSeconds: Type.Optional(Type.Number({ description: '最长等待秒数，默认 1800' })),
+        timeoutSeconds: Type.Optional(Type.Number({ description: '最长等待秒数，默认 1800；南大向导 auto 项目自动分段为 120 秒（W24/M-1）。检测到子会话阻塞事件会提前返回 status=blocked（不等到超时）' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { delegationIds?: string[]; mode?: 'all' | 'any'; minCompleted?: number; timeoutSeconds?: number }
@@ -1258,19 +1264,45 @@ export function buildPiCollaborationTools(
         }
         const mode = args.mode ?? 'all'
         const minCompleted = args.minCompleted ?? 1
-        const timeoutSeconds = Math.min(args.timeoutSeconds ?? DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS)
+        // W24/M-1：南大 auto 项目 wait 分段 2min（未显式传更短值时）；显式传值尊重但不放大
+        const nanjuAutoProject = findNanjuFallbackProject(ctx.workspaceSlug, ctx.sessionId)
+        const isNanjuAuto = nanjuAutoProject?.autoClarify?.enabled === true
+        const requestedSeconds = args.timeoutSeconds ?? DEFAULT_WAIT_SECONDS
+        const timeoutSeconds = Math.min(
+          isNanjuAuto ? Math.min(requestedSeconds, NANJU_AUTO_WAIT_SECONDS) : requestedSeconds,
+          MAX_WAIT_SECONDS,
+        )
         const targetCompleted = mode === 'all' ? totalTargets : Math.max(1, Math.min(minCompleted, totalTargets))
         const liveTarget = Math.max(0, targetCompleted - settled.length)
         const waitResult = liveRecords.length > 0
           ? await waitForLiveRecords(liveRecords, timeoutSeconds, liveTarget)
           : 'completed'
         const allDelegations = [...liveRecords.map(getDelegationSummary), ...settled]
+        // W24/M-1：blocked 提前返回——把未解决阻塞事件带回给 L1（nanju auto → nanju_clarify_proxy；普通会话 → answer_delegation_question 或再 wait）
+        const pendingBlockedEvents = waitResult === 'blocked'
+          ? liveRecords.flatMap((record) =>
+            getPendingBlockedEvents(record.delegationId).map((be) => ({
+              id: be.id,
+              delegationId: be.delegationId,
+              type: be.type,
+              category: be.category ?? 'other',
+              question: be.askUserQuestions?.[0]?.question?.slice(0, 80) ?? be.permissionToolName ?? '',
+            })))
+          : []
         return piJsonResult({
           status: waitResult,
           mode,
           completedCount: allDelegations.filter((item) => item.status !== 'running').length,
           runningCount: allDelegations.filter((item) => item.status === 'running').length,
           delegations: allDelegations,
+          ...(pendingBlockedEvents.length > 0
+            ? {
+              pendingBlockedEvents,
+              note: '检测到子会话阻塞事件（等待应答），提前返回。南大向导 auto 模式：请立即调用 nanju_clarify_proxy（blockedEventIds）代答/代决；普通会话：answer_delegation_question 应答或处理后再次 wait_for_delegations。',
+            }
+            : waitResult === 'blocked'
+              ? { note: '检测到子会话阻塞事件但已解除（竞态），如仍需结果请再次 wait_for_delegations。' }
+              : {}),
         })
       },
     }),
