@@ -357,13 +357,30 @@ describe('W24-6 tab 排除：标签页点击不上报不弹面板', () => {
     expect(rep?.type).toBe('按钮')
   })
 
-  test('变体兼容：tab/分页/页签/导航（大小写与空白）同样排除', () => {
+  test('变体兼容：类型词表全档（含旧生成器的「标签」）同样排除', () => {
     const sb = buildSandbox()
-    for (const [i, t] of ['tab', '分页', '页签', '导航', ' Tab '].entries()) {
-      const n = sb.el('nav-' + i)
+    const variants = ['标签页', '标签', '选项卡', '切换', 'tab', '分页', '页签', '导航', ' Tab ']
+    for (const [i, t] of variants.entries()) {
+      const n = sb.el('x-el-' + i)
       n.setAttribute('data-ai-type', t)
       docClick(sb, n)
     }
     expect(sb.posted.filter((p) => p.kind === 'element-click').length).toBe(0)
+  })
+
+  test('id 启发式：nav-*/tab-*/*-tab-* 排除（两代生成器命名 scene-tab-us01 / nav-scene-tabs / tab-us01）', () => {
+    const sb = buildSandbox()
+    for (const id of ['nav-scene-tabs', 'tab-us01', 'scene-tab-us02', 'navbar-main']) {
+      const n = sb.el(id)
+      n.setAttribute('data-ai-type', '按钮') // 类型不命中，靠 id 兜底
+      docClick(sb, n)
+    }
+    expect(sb.posted.filter((p) => p.kind === 'element-click').length).toBe(0)
+    // 对照：普通 id 不受 id 启发式影响
+    const normal = sb.el('btn-judge-299')
+    normal.setAttribute('data-ai-type', '按钮')
+    normal.innerText = '判定'
+    docClick(sb, normal)
+    expect(sb.posted.some((p) => p.kind === 'element-click' && p.id === 'btn-judge-299')).toBe(true)
   })
 })

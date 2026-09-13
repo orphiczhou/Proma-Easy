@@ -219,12 +219,14 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     if (tid.indexOf('proma-ctf-') === 0) return;
     var target = e.target && e.target.closest ? e.target.closest('[data-ai-id]') : null;
 
-    // W24-6（用户裁定 2026-09-13）：tab/分页类元素（顶部横向分页窄条的场景导航项，
-    // data-ai-type=标签页/tab/分页/页签/导航）是切视图控件——点击应执行原生切换，
-    // 不弹点选面板不高亮不上报（要改 tab 仍可在输入框点名描述）。
+    // W24-6（用户裁定 2026-09-13）：tab/分页类元素（顶部横向分页窄条的场景导航项）
+    // 是切视图控件——点击应执行原生切换，不弹点选面板不高亮不上报（要改仍可在输入框
+    // 点名描述）。两代生成器实测命名不统一：类型值 标签页/标签/tab…、id 含 nav/tab
+    //（nav-scene-tabs / tab-us01 / scene-tab-us02）——双规则并集判定。
     if (target) {
       var navType = String(target.getAttribute('data-ai-type') || '').trim();
-      if (/^(标签页|tab|分页|页签|导航)$/i.test(navType)) return;
+      var navId = String(target.getAttribute('data-ai-id') || '').trim();
+      if (/^(标签页|标签|选项卡|切换|tab|分页|页签|导航)$/i.test(navType) || /(^|[-_])(nav|tab)/i.test(navId)) return;
     }
 
     // v0.17.59（WO1⑧）：原地编辑中的元素（或其内部节点）的点击不当作点选——
