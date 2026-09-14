@@ -13,6 +13,7 @@
 
 import type { ProjectMode } from './nanju-project'
 import { CATEGORY_MARKER_GUIDE } from './nanju-engineering-template'
+import { TEST_ARCHITECTURE_GUIDE } from './nanju-test-architecture'
 import {
   FALLBACK_AC_PRESETS,
   getConfigGeneration,
@@ -361,9 +362,9 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       role: 'architect',
       title: '架构师',
       ...phaseModelFields('architecture'),
-      task: '你是架构设计师。根据 PRD 和原型，产出精简架构文档（约 30-60 行）：'
+      task: '你是架构设计师。根据 PRD 和原型，产出精简架构文档（以完整说明交付和测试所需内容为准）：'
         + '品类终判（projectCategory 标记）+ 技术选型（每项一句话理由）'
-        + '+ 组件清单（含环境探测结果）+ 环境就绪结论。',
+        + '+ 组件清单（含环境探测结果）+ 环境就绪结论 + 交付与运行说明 + 测试架构。',
       outputPath: '03_ARCHITECTURE/architecture.md',
       constraints: [
         '品类终判（必须）：' + CATEGORY_MARKER_GUIDE + '；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置',
@@ -371,7 +372,8 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
         // 但 quick 无 Read 指令 → 架构师不参考模板（与 W7 v3 §五 iterative 前移契约不对齐）。
         // 补齐：终判前必读初判模板（缺失容忍降级，与 iterative 同语义）。
         '品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明',
-        '架构精简为快消定位服务：不写长篇目录树/接口定义，技术选型与组件清单为主（长期演进细节交给工程模板参考）',
+        '架构精简为快消定位服务：长期演进细节可引用工程模板，但交付、运行与测试设计不可省略',
+        TEST_ARCHITECTURE_GUIDE,
         ...ENV_PROBE_CONSTRAINTS,
       ],
       requiresUserConfirmation: true, // 合并确认：架构摘要 + 环境清单一条消息确认（U1 方案 A）
@@ -391,6 +393,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       constraints: [
         '技术选型 + 目录结构',
         'API 规范设计',
+        TEST_ARCHITECTURE_GUIDE,
         // 工程品类终判（W3，v0.17.66）：架构师对项目形态的判断优先于 PRD 初判
         // （resolveProjectCategoryForCoding 按 architecture > prd 顺序提取）；
         // 未标注时 coding 降级 web-fullstack（对本地程序/CLI 等形态会误配工程模板）。

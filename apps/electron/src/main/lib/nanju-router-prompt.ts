@@ -422,7 +422,7 @@ export function buildL2TaskWithAC(
     parts.push('- 有缺失：`projectEnv: missing:<组件逗号清单>`（如 projectEnv: missing:rustc,cargo）')
     if (isQuick) {
       parts.push('')
-      parts.push('【快消型定位提醒】架构文档保持 30-60 行精简：品类终判 + 技术选型 + 组件清单 + 环境结论四块为主，')
+      parts.push('【快消型定位提醒】架构文档保持精简：品类终判 + 技术选型 + 组件清单 + 环境结论 + 交付与运行 + 测试架构，')
       parts.push('不展开目录树逐文件说明与接口定义（长期演进细节由工程模板承载）。')
     }
     parts.push('')
@@ -525,6 +525,7 @@ export function buildL2TaskWithAC(
     parts.push('1. 品类终判标记是否在文档显目位置且为六枚举合法值；')
     parts.push('2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；')
     parts.push('3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。')
+    parts.push('4. 交付与运行字段、测试架构表、真实与模拟边界及失败回流说明是否完整；计划完整不代表验收通过。')
     parts.push('')
     // D8 §九 A1′（R7-05）：auto 开启时 quick architecture 补轻量 AC 载体契约——
     // ac-verdict.json 是 autoConfirmAuthorized 的第 6 条件（A 域已消费），缺失/red 拒自动确认。
@@ -914,7 +915,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ? [
         '4. 【架构确认 + 环境配置环节】（W7，v0.17.69：架构师环节两模式必经；环境缺失时先收口再确认）：',
         '   a. 子会话完成后，用 Read 检查产出文件：' + projectDir + '/' + phase.outputPath,
-        '      确认三要素齐全：品类终判标记（projectCategory:）、「## 环境配置」清单表、结尾 projectEnv: 标记行。',
+        '      确认品类终判标记（projectCategory:）、「## 环境配置」清单表、结尾 projectEnv: 标记行，以及「## 交付与运行」「## 测试架构」及其真实边界/失败回流说明齐全。',
         '   b. 若结尾标记为 projectEnv: missing:<组件清单>（环境有缺失）：',
         ...envPrecheckLines,
         '      - 先用 AskUserQuestion 向用户确认（header「确认·安装缺失组件」）：「环境缺失 {组件清单}，安装约需 X 分钟（按组件估算，',

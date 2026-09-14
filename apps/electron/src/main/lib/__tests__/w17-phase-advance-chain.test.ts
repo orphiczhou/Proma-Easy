@@ -1,3 +1,19 @@
+const testArchitectureDoc = `
+## 交付与运行
+目标平台：按项目约定平台
+交付产物：08_APP 下架构约定产物
+构建方式：执行项目构建配置
+启动方式：启动实际产物
+## 测试架构
+| 层级 | 框架 | 执行方式 | 证据 | 覆盖 |
+| --- | --- | --- | --- | --- |
+| 行为验收 | 平台测试驱动 | 执行真实产品 | 实际输出 | US-01 |
+### 真实与模拟边界
+模拟仅用于隔离单元，实际用户故事需真实行为证据。
+### 失败回流
+失败回开发或测试设计，环境缺失阻塞。
+`
+
 /**
  * W17（v0.17.77）：阶段推进链修复测试——PHASE_ADVANCE 全消息扫描消费 + 确认检测补 run 初始输入路径
  *
@@ -800,7 +816,7 @@ describe('D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格�
     } else if (stage === 'architecture') {
       mkdirSync(join(dir, 'project-p1', '03_ARCHITECTURE'), { recursive: true })
       writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'architecture.md'),
-        '# 架构文档\n\nprojectCategory: web-fullstack\n\n## 技术选型\n\n- 纯前端单页应用（原生 JS）\n\n## 环境配置\n\n| 组件 | 版本 |\n|---|---|\n| node | 20 |\n\nprojectEnv: ready\n'.repeat(2))
+        '# 架构文档\n\nprojectCategory: web-fullstack\n\n## 技术选型\n\n- 纯前端单页应用（原生 JS）\n\n## 环境配置\n\n| 组件 | 版本 |\n|---|---|\n| node | 20 |\n\nprojectEnv: ready\n'.repeat(2) + testArchitectureDoc)
       if (opts.acVerdict && opts.acVerdict !== 'missing') {
         writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'ac-verdict.json'), JSON.stringify({
           verdict: opts.acVerdict,
@@ -832,6 +848,7 @@ describe('D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格�
     const denied = hooks.injected.find((t) => t.includes('推进未被授权'))
     expect(denied).toBeTruthy()
     expect(denied).toContain('自动审核')
+    expect(denied).toContain('产出文件不存在')
     expect(denied).toContain('环境安装确认为唯一例外')
     const month = new Date().toISOString().slice(0, 7)
     const events = readFileSync(join(fixtureRoot, '_telemetry', `events-${month}.jsonl`), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))

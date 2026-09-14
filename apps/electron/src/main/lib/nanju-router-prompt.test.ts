@@ -464,7 +464,8 @@ describe('architecture L2 环境配置指令（W7 B3：探测 + projectEnv 标�
     const quickTask = buildL2TaskWithAC(quickPhase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD', [], '/tmp/project')
     expect(quickTask).not.toContain('AC 对抗审计（必须执行）')
     expect(quickTask).toContain('产出自查（代替 AC 攻防')
-    expect(quickTask).toContain('30-60 行精简')
+    expect(quickTask).toContain('架构文档保持精简')
+    expect(quickTask).toContain('测试架构')
     const iterPhase = getPhaseNode('iterative', 'architecture')!
     const iterTask = buildL2TaskWithAC(iterPhase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD', [], '/tmp/project')
     expect(iterTask).toContain('AC 对抗审计（必须执行）')

@@ -552,7 +552,7 @@ phase.role: ux-advisor
 `;
 
 exports[`D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05） auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定；W24-9 环境段机器值剥离）: d8-auto-off-quick-arch-l2 1`] = `
-"你是架构师。你是架构设计师。根据 PRD 和原型，产出精简架构文档（约 30-60 行）：品类终判（projectCategory 标记）+ 技术选型（每项一句话理由）+ 组件清单（含环境探测结果）+ 环境就绪结论。
+"你是架构师。你是架构设计师。根据 PRD 和原型，产出精简架构文档（以完整说明交付和测试所需内容为准）：品类终判（projectCategory 标记）+ 技术选型（每项一句话理由）+ 组件清单（含环境探测结果）+ 环境就绪结论 + 交付与运行说明 + 测试架构。
 
 phase.role: architect
 
@@ -560,7 +560,7 @@ phase.role: architect
 PRD 摘要
 
 ## 约束
-品类终判（必须）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置；品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明；架构精简为快消定位服务：不写长篇目录树/接口定义，技术选型与组件清单为主（长期演进细节交给工程模板参考）；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进
+品类终判（必须）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置；品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明；架构精简为快消定位服务：长期演进细节可引用工程模板，但交付、运行与测试设计不可省略；架构文档必须包含「## 交付与运行」：以单行「字段：值」列表或两列表格写明目标平台、交付产物、构建方式、启动方式（无需构建时写明理由）；以及「## 测试架构」：表格列为「层级 | 框架 | 执行方式 | 证据 | 覆盖」，至少一个实际测试项，按工程模板设计单元/集成/行为验收并对应 PRD 的 US 编号；该节内另含「### 真实与模拟边界」「### 失败回流」及具体说明。构建成功、单元测试或浏览器模拟不能替代真实用户故事验收；缺环境明确阻塞，安装与系统权限仍须用户确认。；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进
 
 ## 产出文件
 请将产出写入：/tmp/project/03_ARCHITECTURE/architecture.md
@@ -577,7 +577,7 @@ PRD 摘要
 - 全部就绪：\`projectEnv: ready\`
 - 有缺失：\`projectEnv: missing:<组件逗号清单>\`（如 projectEnv: missing:rustc,cargo）
 
-【快消型定位提醒】架构文档保持 30-60 行精简：品类终判 + 技术选型 + 组件清单 + 环境结论四块为主，
+【快消型定位提醒】架构文档保持精简：品类终判 + 技术选型 + 组件清单 + 环境结论 + 交付与运行 + 测试架构，
 不展开目录树逐文件说明与接口定义（长期演进细节由工程模板承载）。
 
 ## 产出自查（代替 AC 攻防——快消型轻量兑底）
@@ -585,5 +585,6 @@ PRD 摘要
 1. 品类终判标记是否在文档显目位置且为六枚举合法值；
 2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；
 3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。
+4. 交付与运行字段、测试架构表、真实与模拟边界及失败回流说明是否完整；计划完整不代表验收通过。
 "
 `;

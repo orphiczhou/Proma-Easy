@@ -455,7 +455,7 @@ function readArchitectureAcVerdict(workspaceSlug: string, projectId: string): 'g
 function evaluateAutoConfirmAuthorized(
   workspaceSlug: string,
   project: { projectId: string; mode: string; currentStage: string; autoClarify?: { enabled?: boolean } },
-): { ok: boolean; reason?: string } {
+): { ok: boolean; reason?: string; detail?: string } {
   if (project.autoClarify?.enabled !== true) return { ok: false, reason: 'disabled' }
   if (project.mode !== 'quick') return { ok: false, reason: 'not-quick' }
   const stage = project.currentStage
@@ -470,8 +470,9 @@ function evaluateAutoConfirmAuthorized(
   } catch {
     return { ok: false, reason: 'no-output-path' }
   }
-  if (verifyPhaseOutput(workspaceSlug, project.projectId, stage as import('./nanju-router').PhaseId) !== null) {
-    return { ok: false, reason: 'verify-failed' }
+  const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, stage as import('./nanju-router').PhaseId)
+  if (verifyError !== null) {
+    return { ok: false, reason: 'verify-failed', detail: verifyError }
   }
   if (stage === 'architecture') {
     const verdict = readArchitectureAcVerdict(workspaceSlug, project.projectId)
@@ -670,6 +671,7 @@ hooks: PhaseAdvanceHooks,
               let authSource = ''
               let autoConfirmPassed = false
               let autoBlockReason = ''
+              let autoBlockDetail = ''
               try {
                 const {
                   getConfirmAuthorization, consumeConfirmAuthorization,
@@ -702,6 +704,7 @@ hooks: PhaseAdvanceHooks,
                   autoConfirmPassed = true
                 } else {
                   autoBlockReason = autoVerdict.reason ?? ''
+                  autoBlockDetail = autoVerdict.detail ?? ''
                 }
               }
               if (!advanceAuthorized) {
@@ -742,7 +745,7 @@ hooks: PhaseAdvanceHooks,
                     + '请先 continue_delegation 委派本阶段角色完成产出（产出达标后系统自动确认推进，无需询问用户；'
                     + '环境安装确认为唯一例外，仍需用户横幅应答）；信息不足时调 nanju_clarify_proxy 补完。'
                     + `产出达标后直接输出 <!-- PHASE_ADVANCE: ${newStage} --> 推进标记即可。当前拒因：`
-                    + (autoBlockReason === 'verify-failed' ? '阶段产出未达标' : autoBlockReason) + '。'
+                    + (autoBlockReason === 'verify-failed' ? '阶段产出未达标：' + autoBlockDetail : autoBlockReason) + '。'
                 } else {
                   hardGateMessage =
                     '⚠️ 推进未被授权：阶段推进需要真人确认（或系统指令）才能生效。\n\n'

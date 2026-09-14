@@ -294,10 +294,26 @@ describe('verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口�
 
 // ===== W7 环境门禁（v0.17.69）：verifyPhaseOutput architecture 分支扩展 =====
 
+const testArchitectureDoc = `
+## 交付与运行
+目标平台：按项目约定平台
+交付产物：08_APP 下架构约定产物
+构建方式：执行项目构建配置
+启动方式：启动实际产物
+## 测试架构
+| 层级 | 框架 | 执行方式 | 证据 | 覆盖 |
+| --- | --- | --- | --- | --- |
+| 行为验收 | 平台测试驱动 | 执行真实产品 | 实际输出 | US-01 |
+### 真实与模拟边界
+模拟仅用于隔离单元，实际用户故事需真实行为证据。
+### 失败回流
+失败回开发或测试设计，环境缺失阻塞。
+`
+
 describe('verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验）', () => {
   /** 合法架构文档（desktop-app 品类 + 环境清单 + ready 标记行） */
   const validArchDoc = (category: string, envLine: string, components: string): string =>
-    `# 架构文档\n\n## 技术选型\n\nTauri v2 桌面程序。\n\nprojectCategory: ${category}\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n${components}\n\n${envLine}\n`
+    `# 架构文档\n\n## 技术选型\n\nTauri v2 桌面程序。\n\nprojectCategory: ${category}\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n${components}\n\n${envLine}\n${testArchitectureDoc}`
 
   const { setProjectCategory, setProjectEnvState } = require('./nanju-project') as typeof import('./nanju-project')
 
@@ -358,7 +374,7 @@ describe('verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规�
     const ws = setupFixture({
       stage: 'architecture',
       mode: 'quick',
-      html: '# 架构文档（web-default 免检用例，补足最低 100 字节）\n\n## 技术选型\n\n纯前端应用，无后端依赖，浏览器直接打开即可运行。\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档。\n\nprojectEnv: ready\n',
+      html: '# 架构文档（web-default 免检用例，补足最低 100 字节）\n\n## 技术选型\n\n纯前端应用，无后端依赖，浏览器直接打开即可运行。\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档。\n\nprojectEnv: ready\n' + testArchitectureDoc,
     })
     // 不写 projectCategory：resolved = web-default → 免 envReady 校验
     // （即便此前置位 false 也不拦——web 品类按 W7 v3 §6.1 免环境门禁）
@@ -876,5 +892,21 @@ describe('W22 O1/O2：minimax 修复守卫接线与 AC 覆写阶段感知（源�
     expect(src).toContain("v.result.denialKind === 'minimax-repair-misuse'")
     expect(src).toContain('MINIMAX_REPAIR_GUIDANCE}')
     expect(src).toContain('MINIMAX_REPAIR_GUIDANCE,')
+  })
+})
+
+
+describe('Given 架构完成 When 推进阶段 Then 必须具备测试设计', () => {
+  test('历史架构缺少测试设计时明确要求补全，不静默放行', () => {
+    const ws = setupFixture({ stage: 'architecture', html: '# 架构文档\n\n' + '已有技术选型与环境说明。'.repeat(15) })
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toContain('架构交付与测试设计不完整')
+  })
+  test('两模式完整文档通过结构门，未宣称执行验收通过', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const ws = setupFixture({ stage: 'architecture', mode, html: '# 架构文档\n' + testArchitectureDoc })
+      expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+      rmSync(fixtureRoot, { recursive: true, force: true })
+      fixtureRoot = ''
+    }
   })
 })

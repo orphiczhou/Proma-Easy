@@ -27,6 +27,7 @@ import {
   resolveACOverride,
 } from './nanju-delegate-guard'
 import { recordTelemetry } from './nanju-telemetry'
+import { validateTestArchitecture } from './nanju-test-architecture'
 
 // ===== 工具白名单（修正 Y9：移除 EnterPlanMode/ExitPlanMode） =====
 
@@ -1109,6 +1110,11 @@ export function verifyPhaseOutput(
           return `环境配置清单校验未通过：${validation.problems.join('；')}`
         }
       }
+    }
+    // 结构检查只证明设计资料齐全，不构成运行证据或权限授权。
+    const testArchitecture = validateTestArchitecture(content)
+    if (!testArchitecture.ok) {
+      return '架构交付与测试设计不完整，请补全后再确认：' + testArchitecture.problems.join('；')
     }
   }
 

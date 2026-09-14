@@ -515,3 +515,15 @@ describe('W23 路由脏缓存（getRoute 比对 getConfigGeneration 重建）', 
     }
   })
 })
+
+
+describe('Given quick 或 iterative When 架构师接单', () => {
+  test('Then 交付运行和测试架构不可因精简模式省略', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const constraints = getPhaseNode(mode, 'architecture')!.constraints.join('\n')
+      for (const required of ['交付与运行', '测试架构', '真实与模拟边界', '失败回流']) {
+        expect(constraints).toContain(required)
+      }
+    }
+  })
+})
