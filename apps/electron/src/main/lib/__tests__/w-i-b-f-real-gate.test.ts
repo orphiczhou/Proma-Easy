@@ -494,3 +494,88 @@ describe('W-I B-f｜接线源断言（门禁路由不越界、不虚构、不静
     expect(suite).toContain('first.testId ?? realTests[0]!.id')
   })
 })
+
+describe('W-I B-f｜G2 宿主观察器接线点（持票据登记 / 观察点声明 / 设备细化）', () => {
+  const OBS_TEST_ID = 'acc-real-observer'
+  const OBS_TARGET = { testId: OBS_TEST_ID, target: 'app', covers: ['US-01'] as const }
+  const HOTKEY_POINT = {
+    id: 'linux.global-hotkey.delivered',
+    kind: 'hotkey' as const,
+    machineObservable: true,
+    observedVia: 'host.global-hotkey.inject-and-listen',
+  }
+
+  /** 观察器登记载荷（等价 Linux 观察器产出；时间在新鲜度窗口内）。 */
+  function observerRegistration(overrides: Partial<Parameters<typeof gate.registerHostObserverEvidence>[1]> = {}) {
+    const now = gate.engineeringRealClock.epochNow()
+    return {
+      testId: OBS_TEST_ID,
+      target: 'app',
+      covers: ['US-01'],
+      sessionId: 'session-1',
+      observationRunId: 'run-observer-1',
+      startedAt: now - 2_000,
+      approvedAt: now - 2_000,
+      finishedAt: now - 1_000,
+      observations: [{
+        pointId: HOTKEY_POINT.id,
+        expected: '宿主注入热键并在系统层交付',
+        actual: 'xdotool key --clearmodifiers ctrl+alt+d -> exit 0',
+        observedVia: HOTKEY_POINT.observedVia,
+        passed: true,
+      }],
+      points: [HOTKEY_POINT],
+      verdict: 'attested' as const,
+      coverageBoundaryCodes: [ENGINEERING_REAL_BOUNDARY_CODES.projectDriverNotIndependent],
+      approval: { requestId: 'permission-observer-1', cancelled: false },
+      ...overrides,
+    }
+  }
+
+  test('Given 宿主观察器登记观察点声明 When 观察期判定 Then 逐点校验生效并指出缺失点', () => {
+    const registered = gate.registerHostObserverEvidence(scopeFor(projectDir), observerRegistration({ observations: [] }))
+    expect(registered.ok).toBe(true)
+    expect(gate.peekObservationPointsForTests(OBS_TEST_ID)).toHaveLength(1)
+    const rejection = gate.resolveSuiteRealEvidence(scopeFor(projectDir), [OBS_TARGET]).rejections[0]
+    expect(rejection?.reason).toBe('host-observation-missing')
+    expect(rejection?.message).toContain(HOTKEY_POINT.id)
+  })
+
+  test('Given 机器点实测与声明接口一致 When 观察期判定 Then 通过（不必传 ack）', () => {
+    expect(gate.registerHostObserverEvidence(scopeFor(projectDir), observerRegistration()).ok).toBe(true)
+    expect(gate.resolveSuiteRealEvidence(scopeFor(projectDir), [OBS_TARGET]).rejections).toEqual([])
+    expect(gate.commitDeliveryRealEvidence(scopeFor(projectDir), [OBS_TARGET]).rejection?.reason)
+      .toBe('coverage-unverified-unacked')
+  })
+
+  test('Given 显式传入 points When 判定 Then 覆盖登记声明（宁严不宽，不静默放宽）', () => {
+    expect(gate.registerHostObserverEvidence(scopeFor(projectDir), observerRegistration()).ok).toBe(true)
+    const explicit = [{ ...HOTKEY_POINT, observedVia: 'host.wrong-interface' }]
+    const rejection = gate.resolveSuiteRealEvidence(scopeFor(projectDir), [{ ...OBS_TARGET, points: explicit }]).rejections[0]
+    expect(rejection?.reason).toBe('host-observation-missing')
+  })
+
+  test('Given 设备细化（音源/加速器/靶应用）When 登记与门禁使用同一 scope Then 对账一致；换设备即 mismatch', () => {
+    const detailed = { ...scopeFor(projectDir), deviceDetail: { audioSource: 'alsa_input.fake', accelerator: 'Ctrl+Alt+D', targetApp: 'geany' } }
+    expect(gate.registerHostObserverEvidence(detailed, observerRegistration()).ok).toBe(true)
+    expect(gate.resolveSuiteRealEvidence(detailed, [OBS_TARGET]).rejections).toEqual([])
+    const otherDevice = { ...detailed, deviceDetail: { audioSource: 'alsa_input.other' } }
+    expect(gate.resolveSuiteRealEvidence(otherDevice, [OBS_TARGET]).rejections[0]?.reason)
+      .toBe('real-evidence-binding-mismatch')
+  })
+
+  test('Given 观察器未声明观察点 When 判定 Then 观察点表保持空（不凭空声明）', () => {
+    expect(gate.peekObservationPointsForTests(OBS_TEST_ID)).toEqual([])
+    expect(gate.registerHostObserverEvidence(scopeFor(projectDir), observerRegistration({ points: [], observations: [] })).ok).toBe(true)
+    // 未声明观察点 → 不放宽也不伪造：判定仍须有登记记录（此处有记录，故按空点放行到交付）
+    expect(gate.resolveSuiteRealEvidence(scopeFor(projectDir), [OBS_TARGET]).rejections).toEqual([])
+    expect(gate.peekObservationPointsForTests(OBS_TEST_ID)).toEqual([])
+  })
+
+  test('Given 重置门禁 When 读取声明 Then 观察点声明与 registry 一并清空', () => {
+    expect(gate.registerHostObserverEvidence(scopeFor(projectDir), observerRegistration()).ok).toBe(true)
+    gate.__resetEngineeringRealGateForTests()
+    expect(gate.peekObservationPointsForTests(OBS_TEST_ID)).toEqual([])
+    expect(gate.resolveSuiteRealEvidence(scopeFor(projectDir), [OBS_TARGET]).rejections[0]?.reason).toBe('requires-real-unattested')
+  })
+})

@@ -12,12 +12,16 @@
  * - **收据签发入口**：只暴露「真实 Ask/permission 回调」可调用的签发函数；本层不生成观察数据。
  *
  * 硬边界（不越界声明能力）：
- * - 本层**不含观察器**：`requiresReal` 在本波仍为 blocked。没有真实 host-observer 登记，
- *   门禁一律 `requires-real-unattested`（逐项指出 testId），交付门保持拒绝。
+ * - 本层**不含观察器**：观察行为（热键注入、录音、ASR 调用、靶窗读回）在
+ *   `nanju-engineering-linux-observer.ts`；本层只提供「持票据登记」的**接线点**。
+ *   没有任何真实 host-observer 登记时，门禁一律 `requires-real-unattested`（逐项指出 testId），
+ *   交付门保持拒绝（G2 起：有登记才是 attested，不是「接了线就放行」）。
  * - registry 引用**不外泄**：不经 IPC、不进 `engineeringExecution.services` 对项目可见路径、
  *   不给 renderer（本模块只导出「按 scope 求结论」的函数与显式标注 `__…ForTests` 的测试钩子）。
- * - 观察点定义（`points`）本轮传空数组：宿主观察器尚未实现，不得凭空声明观察点；空点**不会**
- *   形成假通过——无登记轮次即 `requires-real-unattested`。
+ * - 观察点定义（`points`）来自**宿主观察器登记时声明**（G2）：登记会把声明写进进程内
+ *   `observationPointsByTestId`，门禁据此逐点校验机器实测；**未声明即空数组**，空点**不会**
+ *   形成假通过（无登记轮次仍 `requires-real-unattested`），但也**不**凭空放宽——
+ *   声明过观察点的 testId，其记录缺少对应观测即 `host-observation-missing`。
  *
  * 与 REAL-impl §6.4「每宿主进程实例一个 registry」的差异（如实披露）：
  * 协议层 `EngineeringRealEvidenceRegistryOptions.projectId` 是**必填**且会被写进登记记录的
@@ -46,11 +50,14 @@ import type {
   EngineeringDeviceBinding,
   EngineeringHumanWitnessDecision,
   EngineeringHumanWitnessReceipt,
+  EngineeringObservationPoint,
   EngineeringRealClock,
   EngineeringRealEvidenceGateInput,
   EngineeringRealEvidenceRegistry,
   EngineeringRealEvidenceTarget,
   EngineeringRealGateRejection,
+  EngineeringRealObservation,
+  EngineeringRegistrationResult,
 } from './nanju-engineering-real-evidence'
 
 /* ------------------------------------------------------------------ */
@@ -120,10 +127,25 @@ export function cleanupEngineeringRealEvidence(sessionId: string): void {
   } catch { /* 清理失败不影响会话停止 */ }
 }
 
+/**
+ * 宿主观察器为某个 testId **声明的观察点**（进程内，按 testId）。
+ *
+ * 写入时机：`registerHostObserverEvidence`（唯一入口，即宿主观察器登记路径）。门禁据此逐点
+ * 校验「机器可观察点是否真被宿主实测」；未声明过的 testId 保持空数组（不凭空声明观察点）。
+ * 重启即空（与 registry 同生命周期，不经 IPC、不外泄）。
+ */
+const observationPointsByTestId = new Map<string, readonly EngineeringObservationPoint[]>()
+
 /** 仅供测试：重置全部单例（生产代码不得调用）。 */
 export function __resetEngineeringRealGateForTests(): void {
   registries.clear()
   boundaryAckByScope.clear()
+  observationPointsByTestId.clear()
+}
+
+/** 仅供测试/审计：读取某 testId 当前声明的观察点（不改变 registry 状态）。 */
+export function peekObservationPointsForTests(testId: string): readonly EngineeringObservationPoint[] {
+  return observationPointsByTestId.get(testId) ?? []
 }
 
 /** 仅供测试：取得 registry（生产路径不暴露 registry 引用）。 */
@@ -192,6 +214,12 @@ export interface EngineeringRealEvidenceScope {
   projectId: string
   sessionId: string
   projectDir: string
+  /**
+   * 可选设备细化（音源 / 加速器 / 靶应用 / ASR 端点）。
+   * 登记与门禁**必须用同一个 scope**：协议层按 canonical 全等比较 device，两侧不一致即
+   * `real-evidence-binding-mismatch`（这是结构性防线，不是可选项）。
+   */
+  deviceDetail?: Partial<EngineeringDeviceBinding>
 }
 
 /** 逐项处理的门禁目标（由工程契约派生；**只放 requiresReal 的测试**，避免稀释门禁）。 */
@@ -199,19 +227,33 @@ export interface EngineeringRealEvidenceTestTarget {
   testId: string
   target: string
   covers: readonly string[]
+  /**
+   * 观察点声明（可选）：缺省取 `registerHostObserverEvidence` 登记的声明，再缺省为空数组。
+   * 机器可观察点必须与记录中的观测 `observedVia` 严格一致，否则 `host-observation-missing`。
+   */
+  points?: readonly EngineeringObservationPoint[]
 }
 
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf-8').digest('hex')
 }
 
-/** 设备绑定：证明哪台机器、哪个会话类型（Linux 口径；Wayland 注入未评估）。 */
-export function resolveEngineeringDeviceBinding(): EngineeringDeviceBinding {
+/**
+ * 设备绑定：证明哪台机器、哪个会话类型（Linux 口径；Wayland 注入未评估）。
+ * `detail` 用于补齐观察器声明的音源 / 加速器 / 靶应用 / ASR 端点（未给的字段不写入）。
+ */
+export function resolveEngineeringDeviceBinding(detail: Partial<EngineeringDeviceBinding> = {}): EngineeringDeviceBinding {
   const display = process.env.DISPLAY
   const session: EngineeringDeviceBinding['session'] = process.platform === 'linux'
     ? (display ? 'x11' : 'headless')
     : 'headless'
-  return { platform: process.platform, session, ...(display ? { display } : {}) }
+  // platform/session/display 由宿主解析，不接收调用方覆写（否则可用伪造设备类型绕过绑定对账）。
+  return {
+    ...detail,
+    platform: process.platform,
+    session,
+    ...(display ? { display } : {}),
+  }
 }
 
 /** 门禁入参（缺证据/契约时返回 null → 调用方按「无法判定」拒绝，不放行）。 */
@@ -225,12 +267,12 @@ function buildGateInput(
     if (!evidence) return null
     const contractSha256 = sha256Hex(readFileSync(join(scope.projectDir, ENGINEERING_CONTRACT_PATH), 'utf-8'))
     const ack = options.withAck ? currentBoundaryAckReceipt(scope.projectId, scope.sessionId) : undefined
-    // points 恒为空：宿主观察器未实现（不得凭空声明观察点）
+    // points 来自宿主观察器登记时声明的观察点（未声明即空数组，不凭空声明）。
     const targets: EngineeringRealEvidenceTarget[] = tests.map((test) => ({
       testId: test.testId,
       target: test.target,
       covers: [...test.covers],
-      points: [],
+      points: [...(test.points ?? observationPointsByTestId.get(test.testId) ?? [])],
     }))
     return {
       registry: registryFor(scope.projectId),
@@ -238,7 +280,7 @@ function buildGateInput(
       sessionId: scope.sessionId,
       evidenceDigest: evidence.digest,
       contractSha256,
-      device: resolveEngineeringDeviceBinding(),
+      device: resolveEngineeringDeviceBinding(scope.deviceDetail ?? {}),
       // INV-C1：与 registry 同一实例（禁止另建实现）
       clock: engineeringRealClock,
       tests: targets,
@@ -272,6 +314,84 @@ export function resolveCoverageBoundaryCodes(
     }
   } catch { /* peek 失败只影响边界码合流，不影响门禁结论 */ }
   return [...codes].sort()
+}
+
+/* ------------------------------------------------------------------ */
+/* 宿主观察器登记入口（G2 接线点：持票据登记，registry 引用不外泄）           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 宿主观察器提交的登记载荷（由 `nanju-engineering-linux-observer.ts` 产出）。
+ *
+ * 安全边界：`evidenceDigest` / `contractSha256` / `device` / `producer` / `hostRunId` 都**不由
+ * 调用方提供**——本层在登记时从 `scope` 现算并盖章，避免「观察材料自己声明工程版本」。
+ */
+export interface EngineeringHostObserverRegistration {
+  testId: string
+  target: string
+  covers: readonly string[]
+  sessionId: string
+  observationRunId: string
+  startedAt: number
+  approvedAt: number
+  finishedAt: number
+  observations: readonly EngineeringRealObservation[]
+  /** 观察器声明的观察点（机器点必须与观测 `observedVia` 一致；写入进程内声明表）。 */
+  points: readonly EngineeringObservationPoint[]
+  verdict: 'attested' | 'rejected'
+  coverageBoundaryCodes?: readonly string[]
+  /** 只能放 `issueHumanWitnessAfterRealApproval` 签发的收据；普通对象会被 registry 拒。 */
+  witnessReceipts?: readonly EngineeringHumanWitnessReceipt[]
+  approval: { requestId: string; cancelled: boolean }
+}
+
+/**
+ * 宿主观察器登记（**唯一**持票据的登记入口；registry 引用仍留在本层）。
+ *
+ * 行为：
+ * 1. 先落地观察点声明（即使本轮登记失败，该 testId 也按已声明观察点接受后续校验，宁严不宽）；
+ * 2. 用 `scope` 现算 evidenceDigest / contractSha256 / device，再取票据登记；
+ * 3. 登记失败原因原样回传（`requires-real-unattested` / `real-evidence-replayed` 等），不静默。
+ */
+export function registerHostObserverEvidence(
+  scope: EngineeringRealEvidenceScope,
+  input: EngineeringHostObserverRegistration,
+): EngineeringRegistrationResult {
+  const registry = registryFor(scope.projectId)
+  if (input.points.length > 0) observationPointsByTestId.set(input.testId, [...input.points])
+  try {
+    const evidence = captureEngineeringEvidence(scope.projectDir).evidence
+    if (!evidence) {
+      return { ok: false, reason: 'requires-real-unattested', message: '工程证据不可读，拒绝登记宿主观察（不放行）' }
+    }
+    const contractSha256 = sha256Hex(readFileSync(join(scope.projectDir, ENGINEERING_CONTRACT_PATH), 'utf-8'))
+    const ticket = registry.issueObservationTicket({ testId: input.testId, sessionId: input.sessionId })
+    if (!ticket) return { ok: false, reason: 'real-evidence-capacity-exceeded', message: '观察票据已达上限，拒绝登记（fail-closed）' }
+    return registry.register(ticket, {
+      testId: input.testId,
+      target: input.target,
+      covers: [...input.covers],
+      evidenceDigest: evidence.digest,
+      contractSha256,
+      sessionId: input.sessionId,
+      device: resolveEngineeringDeviceBinding(scope.deviceDetail ?? {}),
+      observationRunId: input.observationRunId,
+      startedAt: input.startedAt,
+      approvedAt: input.approvedAt,
+      finishedAt: input.finishedAt,
+      observations: [...input.observations],
+      witnesses: [...(input.witnessReceipts ?? [])],
+      verdict: input.verdict,
+      coverageBoundaryCodes: [...(input.coverageBoundaryCodes ?? [])],
+      approval: { requestId: input.approval.requestId, cancelled: input.approval.cancelled },
+    })
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'requires-real-unattested',
+      message: '登记宿主观察失败：' + (error instanceof Error ? error.message : String(error)),
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */

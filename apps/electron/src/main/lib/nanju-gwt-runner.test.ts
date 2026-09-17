@@ -42,14 +42,20 @@ const {
   GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE,
   runGwtSuite,
   runNanjuGwtAcceptance,
+  recordEngineeringDeviceDetail,
+  peekEngineeringDeviceDetail,
+  __resetEngineeringDeviceDetailForTests,
   GWT_RETRY_LIMIT,
   GWT_STEPS_SCHEMA_VERSION,
   GWT_FILL_VALUE_MAX_CHARS,
   computeScreenshotDiffRatio,
+  checkGwtDeliveryFacts,
 } = await import('./nanju-gwt-runner')
 import type { GwtBrowserAdapter, GwtScenarioFile, GwtProgressEvent, NanjuGwtOutcome } from './nanju-gwt-runner'
 
+/** G3a：设备细化记忆是进程级状态，逐个测试清空以免跨用例互污染。 */
 afterEach(() => {
+  __resetEngineeringDeviceDetailForTests()
   if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
   fixtureRoot = ''
 })
@@ -1717,6 +1723,143 @@ test('Given 普通工程行为检查已通过 When 真人确认交付 Then 全�
   const input = { workspaceSlug: 'ws', projectId: 'p1', projectDir: root, reportJsonPath: outcome.reportJsonPath }
   expect(checkGwtDeliveryFacts({ ...input, info: null })?.reason).toBe('no-ack')
   expect(checkGwtDeliveryFacts({ ...input, info: { deliveryAck: { reportRunId: report.runId, at: new Date(Date.parse(report.generatedAt) + 1000).toISOString() } } })).toBeNull()
+})
+
+/* ------------------------------------------------------------------ */
+/* G3a：交付门设备细化透传（观察登记与交付门必须同一份）                     */
+/* ------------------------------------------------------------------ */
+
+describe('G3a｜交付门设备细化透传', () => {
+  const DEVICE = {
+    audioSource: 'alsa_input.fixture-mic',
+    accelerator: 'Ctrl+Alt+D',
+    targetApp: 'geany',
+    networkEndpoint: 'dashscope.aliyuncs.com',
+  }
+  const TARGET = { testId: 'acc-real', target: 'program', covers: ['US-01'] }
+
+  /** requiresReal 工程夹具：契约声明一个真实能力测试 + 真实产物文件。 */
+  function setupRealDeviceFixture(): string {
+    setupProjectFixture({ stepsFiles: {}, prd: '# PRD\nUS-01 真实能力' })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(root, '08_APP/program'), '设备细化fixture程序，不是产品验收')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Linux', kind: 'cli', entry: 'program' }, artifacts: ['program'], build: 'fixture', run: 'fixture',
+      tests: [{ id: 'acc-real', layer: 'acceptance', adapter: 'cli-driver', target: 'program', command: '真实能力', covers: ['US-01'], requiresReal: true }],
+    }))
+    return root
+  }
+
+  test('Given 未给细化 When 记录/读取 Then 记忆为空（不凭空造设备）', () => {
+    expect(peekEngineeringDeviceDetail('p1')).toBeUndefined()
+    recordEngineeringDeviceDetail('p1', undefined)
+    expect(peekEngineeringDeviceDetail('p1')).toBeUndefined()
+    recordEngineeringDeviceDetail('p1', {})
+    expect(peekEngineeringDeviceDetail('p1')).toBeUndefined()
+    recordEngineeringDeviceDetail('p1', DEVICE)
+    expect(peekEngineeringDeviceDetail('p1')).toEqual(DEVICE)
+    // 副本语义：读回后改动不影响记忆
+    expect(peekEngineeringDeviceDetail('p1')).toEqual(DEVICE)
+  })
+
+  test('Given 观察登记用设备细化 When 交付门另一个时刻判定 Then 同一份才放行；换设备即拒且不消费', async () => {
+    const gate = await import('./nanju-engineering-real-gate')
+    const { ENGINEERING_REAL_BOUNDARY_CODES } = await import('./nanju-engineering-real-evidence')
+    gate.__resetEngineeringRealGateForTests()
+    const root = setupRealDeviceFixture()
+    const scope = { workspaceSlug: 'ws', projectId: 'p1', sessionId: 's1', projectDir: root, deviceDetail: DEVICE }
+    const now = gate.engineeringRealClock.epochNow()
+    const registered = gate.registerHostObserverEvidence(scope, {
+      testId: TARGET.testId, target: TARGET.target, covers: [...TARGET.covers], sessionId: 's1',
+      observationRunId: 'run-g3a-1', startedAt: now - 2_000, approvedAt: now - 2_000, finishedAt: now - 1_000,
+      observations: [], points: [], verdict: 'attested',
+      coverageBoundaryCodes: [ENGINEERING_REAL_BOUNDARY_CODES.projectDriverNotIndependent],
+      approval: { requestId: 'permission-g3a-1', cancelled: false },
+    })
+    expect(registered.ok).toBe(true)
+    // 本轮只经轮次入参交付设备细化（观察期与交付门读回同一份）
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '设备细化fixture', projectMode: 'quick', sessionId: 's1',
+      controller: makeMockController(fullPassPage()),
+      engineeringExecution: {
+        signal: new AbortController().signal, deviceDetail: DEVICE,
+        services: {
+          approve: async () => true,
+          drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: 'US-01', label: '真实能力', expected: 'observed', actual: 'observed', evidence: ['fixture'] }] }) }],
+        },
+      },
+    })
+    expect(outcome.verdict).toBe('pass')
+    expect(peekEngineeringDeviceDetail('p1')).toEqual(DEVICE)
+    const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+    const ack = gate.issueBoundaryAckAfterRealConfirmation({ projectId: 'p1', sessionId: 's1' }, {
+      requestId: 'permission-ack-g3a', allowed: true,
+      displayedBoundaryCodes: gate.resolveCoverageBoundaryCodes(scope, [TARGET]),
+      displayedObservationRunIds: ['run-g3a-1'],
+    })
+    expect(ack).not.toBeNull()
+    const input = {
+      workspaceSlug: 'ws', projectId: 'p1', projectDir: root, reportJsonPath: outcome.reportJsonPath, sessionId: 's1',
+      info: { deliveryAck: { reportRunId: report.runId, at: new Date(Date.parse(report.generatedAt) + 1000).toISOString() } },
+    }
+    // 换设备（另一轮/另一台机）→ 绑定不符，拒绝且不消费
+    recordEngineeringDeviceDetail('p1', { ...DEVICE, audioSource: 'alsa_input.other' })
+    const mismatched = checkGwtDeliveryFacts(input)
+    expect(mismatched?.reason).toBe('engineering-evidence-missing')
+    expect(mismatched?.message).toContain('设备')
+    expect(gate.__peekEngineeringRealRegistryForTests('p1').peek('acc-real')?.consumed).toBe(false)
+    // 同一份细化 → 放行交付（记录被一次性消费）
+    recordEngineeringDeviceDetail('p1', DEVICE)
+    expect(checkGwtDeliveryFacts(input)).toBeNull()
+    expect(gate.__peekEngineeringRealRegistryForTests('p1').peek('acc-real')?.consumed).toBe(true)
+  })
+
+  test('Given 无任何轮次记录细化 When 交付门判定 Then 与登记（无细化）一致：不因缺细化而误拒', async () => {
+    const gate = await import('./nanju-engineering-real-gate')
+    gate.__resetEngineeringRealGateForTests()
+    const root = setupRealDeviceFixture()
+    const scope = { workspaceSlug: 'ws', projectId: 'p1', sessionId: 's1', projectDir: root }
+    const now = gate.engineeringRealClock.epochNow()
+    expect(gate.registerHostObserverEvidence(scope, {
+      testId: TARGET.testId, target: TARGET.target, covers: [...TARGET.covers], sessionId: 's1',
+      observationRunId: 'run-g3a-2', startedAt: now - 2_000, approvedAt: now - 2_000, finishedAt: now - 1_000,
+      observations: [], points: [], verdict: 'attested', approval: { requestId: 'permission-g3a-2', cancelled: false },
+    }).ok).toBe(true)
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '无细化fixture', projectMode: 'quick', sessionId: 's1',
+      controller: makeMockController(fullPassPage()),
+      engineeringExecution: {
+        signal: new AbortController().signal,
+        services: {
+          approve: async () => true,
+          drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: 'US-01', label: '真实能力', expected: 'observed', actual: 'observed', evidence: ['fixture'] }] }) }],
+        },
+      },
+    })
+    expect(outcome.verdict).toBe('pass')
+    expect(peekEngineeringDeviceDetail('p1')).toBeUndefined()
+    const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+    const input = {
+      workspaceSlug: 'ws', projectId: 'p1', projectDir: root, reportJsonPath: outcome.reportJsonPath, sessionId: 's1',
+      info: null, deviceDetail: {},
+    }
+    // 无 ack 时先被「缺真人确认」拦下，**不是**设备绑定不符 → 证明双方都未细化时不会凭空造设备
+    const noAck = checkGwtDeliveryFacts(input)
+    expect(noAck?.reason).toBe('engineering-evidence-missing')
+    expect(noAck?.message).toContain('boundary ack')
+    expect(noAck?.message).not.toContain('设备')
+    // 补齐真人确认后交付放行（细化缺省在登记/交付两侧一致）
+    expect(gate.issueBoundaryAckAfterRealConfirmation({ projectId: 'p1', sessionId: 's1' }, {
+      requestId: 'permission-ack-g3a-2', allowed: true,
+      displayedBoundaryCodes: gate.resolveCoverageBoundaryCodes(scope, [TARGET]),
+      displayedObservationRunIds: ['run-g3a-2'],
+    })).not.toBeNull()
+    expect(checkGwtDeliveryFacts({
+      ...input,
+      info: { deliveryAck: { reportRunId: report.runId, at: new Date(Date.parse(report.generatedAt) + 1000).toISOString() } },
+    })).toBeNull()
+  })
 })
 
 function setupMixedEngineeringFixture(): string {

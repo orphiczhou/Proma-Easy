@@ -6,6 +6,7 @@ import { EngineeringExecutionBlocked } from './nanju-engineering-execution'
 import { runEngineeringSuite } from './nanju-engineering-suite'
 // W-I B-f：真实能力证据门禁宿主接线层（registry/单时钟/收据签发/交付原子消费）
 import { commitDeliveryRealEvidence, resolveSuiteRealEvidence } from './nanju-engineering-real-gate'
+import type { EngineeringRealEvidenceScope } from './nanju-engineering-real-gate'
 import type { EngineeringSuiteResult } from './nanju-engineering-suite'
 import type { EngineeringExecutionServices } from './nanju-engineering-execution'
 /**
@@ -508,6 +509,46 @@ export interface GwtDeliveryFactBlock {
 }
 
 /**
+ * G3a：宿主观察设备细化——进程内**按项目**记忆最近一次 GWT 轮次使用的值。
+ *
+ * 为什么需要它：协议层按 canonical **全等**比较 device，观察登记（host-observer）与交付门
+ * 必须用同一份设备细化，否则交付期必然 `real-evidence-binding-mismatch`（结构性防线）。
+ * 而交付门在**另一个时刻**被调用（用户声明交付时），调用方当时已拿不到验收轮次的入参，
+ * 故把「本轮实际用过的细化」留在进程内，交付门读回同一份（单一来源，不允许两侧各拼一份）。
+ *
+ * 边界：只存宿主自己解析的设备字段（音源/加速器/靶应用/端点），不含密钥；
+ * 重启即空（与 real-gate registry 同生命周期：hostRunId 变则旧登记本就失效）；
+ * 新一轮不给细化即清空（不让上一轮的设备漏进新轮的交付门）；显式入参优先于记忆值。
+ */
+const engineeringDeviceDetailByProject = new Map<string, NonNullable<EngineeringRealEvidenceScope['deviceDetail']>>()
+
+/** 记录本轮 GWT 使用的设备细化（`undefined`/空对象 = 清空记忆）。 */
+export function recordEngineeringDeviceDetail(
+  projectId: string,
+  detail?: EngineeringRealEvidenceScope['deviceDetail'],
+): void {
+  if (!projectId) return
+  if (!detail || Object.keys(detail).length === 0) {
+    engineeringDeviceDetailByProject.delete(projectId)
+    return
+  }
+  engineeringDeviceDetailByProject.set(projectId, { ...detail })
+}
+
+/** 读取本进程记录的设备细化（交付门 / 观察期共用；无则 undefined）。 */
+export function peekEngineeringDeviceDetail(
+  projectId: string,
+): EngineeringRealEvidenceScope['deviceDetail'] | undefined {
+  const detail = engineeringDeviceDetailByProject.get(projectId)
+  return detail ? { ...detail } : undefined
+}
+
+/** 仅供测试：清空设备细化记忆（生产代码不得调用）。 */
+export function __resetEngineeringDeviceDetailForTests(): void {
+  engineeringDeviceDetailByProject.clear()
+}
+
+/**
  * 交付四道事实校验（W18 Wave2，工单 §1.3）：verdict=pass 之后追加——
  * a. 旧 schema（缺 runId/entryFingerprint/generatedAt）→ 旧版格式不可用，指引重跑；
  * b. entryFingerprint 与当前 08_APP/index.html 实测不符 → pass 后被修改，指引重跑；
@@ -525,6 +566,12 @@ export function checkGwtDeliveryFacts(input: {
   info: Pick<NanjuProjectInfoFile, 'deliveryAck'> | null
   /** W-I B-f：工程真实能力证据门禁需要会话上下文（缺省时不放行 requiresReal 交付）。 */
   sessionId?: string
+  /**
+   * G3a：宿主观察设备细化（音源 / 加速器 / 靶应用 / 端点）。
+   * 缺省取本进程最近一次 GWT 轮次记录的同一份细化（见 `engineeringDeviceDetailByProject`）；
+   * 两侧不一致必然 `real-evidence-binding-mismatch`，故调用方**不要**自行拼一份近似值。
+   */
+  deviceDetail?: EngineeringRealEvidenceScope['deviceDetail']
 }): GwtDeliveryFactBlock | null {
   let report: (Parameters<typeof hasGwtDeliverySchemaFields>[0] & {
     runId?: string
@@ -580,6 +627,8 @@ export function checkGwtDeliveryFacts(input: {
           projectId: input.projectId,
           sessionId: input.sessionId,
           projectDir: input.projectDir,
+          // G3a：设备细化必须与观察登记同一份（缺省回落到本进程记录的轮次值）
+          deviceDetail: input.deviceDetail ?? peekEngineeringDeviceDetail(input.projectId),
         }
         const gateTargets = realTests.map((test) => ({ testId: test.id, target: test.target, covers: test.covers }))
         const consumed = commitDeliveryRealEvidence(gateScope, gateTargets)
@@ -1735,6 +1784,12 @@ export interface EngineeringGwtExecutionOptions {
   serviceRuntimes?: EngineeringServiceRuntimes
   /** browser-url 服务启动依赖；缺省时用生产真实 spawn/探测；测试注入 fixture。 */
   serviceDeps?: EngineeringServiceDeps
+  /**
+   * G3a：本轮观察使用的宿主设备细化（音源 / 加速器 / 靶应用 / 端点）。
+   * 传入即记入本进程（按项目），交付门 `checkGwtDeliveryFacts` 读回**同一份**；
+   * 缺省不写入（并清空上一轮记忆），行为与 G3a 之前一致。
+   */
+  deviceDetail?: EngineeringRealEvidenceScope['deviceDetail']
 }
 
 /** 缺省宿主服务运行时探测（W-C）：不读取项目 command，不在项目目录搜解释器。 */
@@ -1756,6 +1811,8 @@ export async function runNanjuGwtAcceptance(input: {
   onProgress?: (event: GwtProgressEvent) => void
   engineeringExecution?: EngineeringGwtExecutionOptions
 }): Promise<NanjuGwtOutcome> {
+  // G3a：本轮使用的设备细化落进本进程（交付门读回同一份；缺省即清空上一轮记忆）
+  recordEngineeringDeviceDetail(input.projectId, input.engineeringExecution?.deviceDetail)
   // D8 A2′：GWT 运行中标记薄壳（交付门 d' 消费；finally 兜底清除——异常/提前 return
   // 路径不残留，防「running 残留 → auto 交付门永拦」死锁）
   runningGwtProjectIds.add(input.projectId)
@@ -1925,6 +1982,8 @@ async function runNanjuGwtAcceptanceInner(input: {
           projectId: input.projectId,
           sessionId: input.sessionId,
           projectDir: request.projectDir,
+          // G3a：与交付门同一份设备细化（同一来源，不免两套拼法）
+          deviceDetail: peekEngineeringDeviceDetail(input.projectId),
         },
         request.tests,
       ),
