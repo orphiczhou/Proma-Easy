@@ -10,6 +10,7 @@
  * - 预览面板由 Harness 代码自动打开（文件监听 → IPC 通知）
  */
 
+import { resolveCodingOutputPath } from './nanju-engineering-contract'
 import { findNanjuProjectBySession } from './nanju-router-gate'
 import { channelFamily, assertACFamilyDiversity, getPhaseNode, resolveACActors, type PhaseId, type PhaseNode } from './nanju-router'
 import {
@@ -209,6 +210,135 @@ export function resolveMinimaxM3Actor(): ResolvedChannelModel | null {
   }
 }
 
+/**
+ * W-B B2：视觉验证者槽位解析结果（显式 capability 或清晰 blocked，二者必居其一）。
+ *
+ * 语义要点（纠正早期实现的自相矛盾）：
+ * - 「未配置」不再是「跳过」——prototype 阶段必须给出可判定结果：显式端点为 resolved，
+ *   否则为 blocked（附原因）。禁止默认 null 静默跳过后再宣称「已做独立视觉裁决」。
+ * - 不按模型名猜视觉能力（不做 /vision|vl|视觉/ 之类模型名匹配）；能力只来自用户在
+ *   nanju-model-config 中显式声明的 visualReviewer 端点。
+ * - 与作者同端点 = 同端点自证 → blocked（视觉裁决无独立价值），不抛错也不静默硬换。
+ */
+export type VisualValidatorResolution =
+  | { status: 'resolved'; channelId: string; modelId: string }
+  | { status: 'blocked'; reason: string }
+  | { status: 'not-applicable' }
+
+/**
+ * W-B B2：解析 prototype 阶段的独立视觉验证者槽位（显式 capability 或清晰 blocked）。
+ *
+ * @param phase 当前阶段节点（含 visualReviewerChannel/Model 显式配置）
+ * @param options.authorResolved 作者解析后的端点（用于同端点自证判定；未知时传 null）
+ */
+export function resolveVisualValidatorSlot(
+  phase: PhaseNode,
+  options: { authorResolved: ResolvedChannelModel | null },
+): VisualValidatorResolution {
+  if (phase.id !== 'prototype') return { status: 'not-applicable' }
+  const cfgChannel = phase.visualReviewerChannel
+  const cfgModel = phase.visualReviewerModel
+  if (typeof cfgChannel !== 'string' || cfgChannel === '' || typeof cfgModel !== 'string' || cfgModel === '') {
+    return {
+      status: 'blocked',
+      reason: '未显式配置独立视觉验证者端点（phases.prototype.visualReviewer 缺省）',
+    }
+  }
+  // family marker 'minimax' → 运行时解析为真实 UUID 渠道（与作者同源解析）
+  let endpoint: ResolvedChannelModel
+  if (cfgChannel === 'minimax') {
+    const resolved = resolveMinimaxM3Actor()
+    if (!resolved) {
+      return { status: 'blocked', reason: 'minimax 家族标记无法解析为具体渠道（未配置可用的 MiniMax-M3 渠道）' }
+    }
+    endpoint = resolved
+  } else {
+    endpoint = { channelId: cfgChannel, modelId: cfgModel }
+  }
+  const author = options.authorResolved
+  if (author && author.channelId === endpoint.channelId && author.modelId === endpoint.modelId) {
+    return { status: 'blocked', reason: '视觉验证者与作者同端点（同端点自证，无独立裁决价值）' }
+  }
+  if (!author && cfgChannel === 'minimax') {
+    // 家族标记 + 作者端点未知：无法证明异端点 → 不冒充独立能力
+    return { status: 'blocked', reason: '无法确认视觉验证者与作者异端点（作者端点未解析）' }
+  }
+  return { status: 'resolved', channelId: endpoint.channelId, modelId: endpoint.modelId }
+}
+
+/**
+ * W-B B2：显式内部 slot producer——按阶段配置产出四个委派槽位的权威端点。
+ *
+ * 这是 slot 的**唯一权威来源**（config/schema 驱动）。公开工具 schema 不暴露 slot；
+ * title/task 文本推断（nanju-delegate-guard.detectDelegationSlot）仅为 legacy 低信任
+ * 回退，不能作为视觉槽位权威。
+ */
+export interface NanjuPhaseDelegationSlots {
+  author: { channel: string; model: string }
+  acAttacker: { channel: string; model: string }
+  acDefender: { channel: string; model: string }
+  visualValidator: VisualValidatorResolution
+}
+
+export function resolvePhaseDelegationSlots(
+  phase: PhaseNode,
+  options: { authorResolved?: ResolvedChannelModel | null } = {},
+): NanjuPhaseDelegationSlots {
+  const authorResolved = options.authorResolved ?? null
+  const actors = resolveACActors(phase)
+  return {
+    author: {
+      channel: authorResolved?.channelId ?? phase.channel,
+      model: authorResolved?.modelId ?? phase.model,
+    },
+    acAttacker: { channel: actors.attacker.channel, model: actors.attacker.model },
+    acDefender: { channel: actors.defender.channel, model: actors.defender.model },
+    visualValidator: resolveVisualValidatorSlot(phase, { authorResolved }),
+  }
+}
+
+/**
+ * W-B B2：gate 端校验——视觉验证者委派必须命中 producer 解析的独立端点。
+ * 返回 ok=false 时 gate 拒绝（清晰 blocked，不静默放行）。
+ */
+export function validateVisualValidatorDelegation(args: {
+  phase: PhaseNode
+  authorResolved: ResolvedChannelModel | null
+  targetChannelId?: string
+  targetModelId?: string
+}): { ok: true } | { ok: false; reason: string } {
+  const slot = resolveVisualValidatorSlot(args.phase, { authorResolved: args.authorResolved })
+  if (slot.status === 'not-applicable') return { ok: false, reason: '当前阶段不支持独立视觉验证者（仅 UX 原型阶段）' }
+  if (slot.status === 'blocked') return { ok: false, reason: slot.reason }
+  if (args.targetChannelId !== slot.channelId || args.targetModelId !== slot.modelId) {
+    return {
+      ok: false,
+      reason: '视觉验证者端点与配置的独立视觉端点不一致（配置 '
+        + slot.channelId + ':' + slot.modelId + '，实际 '
+        + (args.targetChannelId ?? '(继承)') + ':' + (args.targetModelId ?? '(继承)') + '）',
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * W-B B2 R1(b)：端点检测——委派目标是否命中 producer 解析出的独立视觉端点。
+ *
+ * gate 的第二识别机制：即使委派**无内部 slot、标题也无视觉标记**，只要目标
+ * (channelId+modelId) 与显式配置的 visualReviewer 解析端点一致，就纳入视觉门禁
+ * 管辖（标题推断仅兜底）。未配置/同端点自证 → slot.status !== 'resolved' → false，
+ * 不开门（仍由标题兜底与渲染层 blocked 文案负责）。
+ */
+export function isVisualValidatorEndpointTarget(args: {
+  slot: VisualValidatorResolution
+  targetChannelId?: string
+  targetModelId?: string
+}): boolean {
+  if (args.slot.status !== 'resolved') return false
+  if (typeof args.targetChannelId !== 'string' || typeof args.targetModelId !== 'string') return false
+  return args.targetChannelId === args.slot.channelId && args.targetModelId === args.slot.modelId
+}
+
 /** 读取前序阶段产出文件路径列表 */
 function getPriorArtifacts(workspaceSlug: string, projectId: string, currentPhase: PhaseId): string[] {
   const projectDir = getNanjuProjectDir(workspaceSlug, projectId)
@@ -219,9 +349,9 @@ function getPriorArtifacts(workspaceSlug: string, projectId: string, currentPhas
     architecture: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html'],
     planning: ['01_PRD/prd.md', '03_ARCHITECTURE/architecture.md'],
     // quick 模式下后两个文件不存在，existsSync 自动过滤（零特判）
-    coding: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '05_PROJECT_PLAN/plan.md'],
+    coding: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '03_ARCHITECTURE/engineering.json', '05_PROJECT_PLAN/plan.md'],
     // testing：PRD（用户故事清单）+ 原型（交互基准）；实码 08_APP 由 constraints 强制 L2 自读
-    testing: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html'],
+    testing: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '03_ARCHITECTURE/engineering.json', '08_APP/DELIVERY.md'],
   }
 
   const files = priorFiles[currentPhase] ?? []
@@ -273,6 +403,13 @@ export function buildL2TaskWithAC(
   acDefenderRuntime?: { channel: string; model: string } | null,
   autoClarifyEnabled?: boolean,
   acAttackerRuntime?: { channel: string; model: string } | null,
+  /**
+   * B2：独立视觉验证者槽位解析结果（prototype 阶段专属）。
+   * - status='resolved'：渲染独立端点委派（与 author 解耦）。
+   * - status='blocked'/'not-applicable'/缺省：不得退回 author 端点，渲染清晰 blocked 说明。
+   * 调用方应使用 resolvePhaseDelegationSlots(phase, { authorResolved }) 产出。
+   */
+  visualValidator?: VisualValidatorResolution | null,
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
@@ -353,11 +490,13 @@ export function buildL2TaskWithAC(
 
   // 产出文件
   parts.push('## 产出文件')
-  parts.push('请将产出写入：' + projectDir + '/' + phase.outputPath)
+  parts.push('请将产出写入：' + projectDir + '/' + (isCoding ? resolveCodingOutputPath(projectDir) : phase.outputPath))
   parts.push('')
 
   // testing 阶段：steps.json 机器可执行 schema（双文件契约的机器侧）
   if (isTesting) {
+    parts.push('工程浏览器场景按engineering.json中scenarioFiles逐项写入06_TESTS，必须对应所属test.id的covers且含Then行为断言；不遗漏清单，不把同一场景重复归给多个测试。')
+    parts.push('适用边界：本节steps.json仅用于浏览器场景。非浏览器工程按engineering.json中driver执行，先Read并审查08_APP内驱动是否真正验证PRD行为，再产出Gherkin与审查说明；不伪造DOM步骤、不跨目录修改驱动。')
     parts.push('## steps.json 格式规范（机器可执行，Harness 会严格校验并执行）')
     parts.push('每个 ' + projectDir + '/06_TESTS/features/us-XX.feature 配一个同名 us-XX.steps.json，结构如下：')
     parts.push('```json')
@@ -500,13 +639,28 @@ export function buildL2TaskWithAC(
   parts.push('   随产出文件一并返回，交调度员内用户裁决。禁止第 3 轮攻击修复。')
   if (isPrototype) {
     parts.push('4. 独立视觉裁决（防作者自证，仅 UX 原型阶段）：攻防通过后，')
-    parts.push('   用 delegate_agent(inline:true, channel=' + author.channel + ', model=' + author.model + ') 创建视觉验证者。')
-    parts.push('   只给它两样输入：PRD 用户故事清单 + 最新原型截图（先让它用 read 实际查看截图）。')
-    parts.push('   要求它仅依据这两样证据输出 red/yellow/green 结论与逐条对照结果，不允许参考你的自述。')
-    parts.push('   审查项必含「导航布局合规」：场景索引是否为顶部横向分页窄条（≤48px、sticky 置顶、US-xx 命名）、是否出现纵向全屏索引、核心场景是否首屏可见。')
-    parts.push('5. 视觉裁决为 red → 回到「截图渲染自检循环」修复，再重新走攻防与视觉裁决；green/yellow 才算审计通过。')
-    parts.push('   ⏱ 视觉裁决 red 回炉 ≤2 次（v0.17.64）：第 2 次回炉后仍 red → 收敛交付，未解决项进「已知问题清单」交用户裁决，不再回炉。')
-    parts.push('6. 审计通过后，返回产出文件路径、AC 审计结论摘要与视觉裁决结论。')
+    // B2：视觉验证者端点只来自显式内部 slot producer（resolvePhaseDelegationSlots →
+    // resolveVisualValidatorSlot）。resolved 才渲染独立端点委派；blocked 时给出清晰阻塞
+    // 说明——禁止退回 author 端点（同端点自证）或静默跳过后再宣称已验证。
+    if (visualValidator?.status === 'resolved') {
+      parts.push('   用 delegate_agent(inline:true, channel=' + visualValidator.channelId + ', model=' + visualValidator.modelId + ', title=「独立视觉裁决」) 创建视觉验证者。')
+      // R1(a)：title 稳定锚点——门禁对无 slot 的委派必须先能识别出它是视觉委派。
+      // 逐字使用 VISUAL_VALIDATOR_TITLE_MARKERS 内的标记（「独立视觉裁决」），
+      // 否则 gate 只有在端点检测命中时才拦得住（title 是两者中的兜底机制）。
+      parts.push('   ⚠️ title 必须逐字写作「独立视觉裁决」（不得改写/加前缀/换同义词）：门禁据此识别独立视觉委派，标题不含该标记时无法确认这是视觉裁决（可能被当作普通委派放行）。')
+      parts.push('   只给它两样输入：PRD 用户故事清单 + 最新原型截图（先让它用 read 实际查看截图）。')
+      parts.push('   要求它仅依据这两样证据输出 red/yellow/green 结论与逐条对照结果，不允许参考你的自述。')
+      parts.push('   审查项必含「导航布局合规」：场景索引是否为顶部横向分页窄条（≤48px、sticky 置顶、US-xx 命名）、是否出现纵向全屏索引、核心场景是否首屏可见。')
+      parts.push('5. 视觉裁决为 red → 回到「截图渲染自检循环」修复，再重新走攻防与视觉裁决；green/yellow 才算审计通过。')
+      parts.push('   ⏱ 视觉裁决 red 回炉 ≤2 次（v0.17.64）：第 2 次回炉后仍 red → 收敛交付，未解决项进「已知问题清单」交用户裁决，不再回炉。')
+      parts.push('6. 审计通过后，返回产出文件路径、AC 审计结论摘要与视觉裁决结论。')
+    } else {
+      const reason = visualValidator?.status === 'blocked' ? visualValidator.reason : '未配置独立视觉验证者端点'
+      parts.push('   ⛔ 视觉裁决 unavailable（独立视觉验证者槽位未就绪：' + reason + '）。')
+      parts.push('   禁止用作者自身或同端点模型冒充「独立视觉裁决」，禁止在返回中声称视觉裁决已通过。')
+      parts.push('   请在返回中明确报告「视觉裁决 blocked：' + reason + '」，由调度员交用户裁决或先配置独立视觉验证者端点后重试。')
+      parts.push('5. 除视觉裁决外，攻防审计仍按上述步骤收敛；返回产出文件路径与 AC 审计结论摘要，并显式标注视觉裁决 blocked。')
+    }
   } else {
     parts.push('4. 审计通过后，返回产出文件路径和 AC 审计结论摘要。')
   }
@@ -628,10 +782,11 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   if (!project) return undefined
 
   const stage = project.currentStage as PhaseId
-  const phase = getPhaseNode(project.mode, stage)
+  let phase = getPhaseNode(project.mode, stage)
   if (!phase || stage === 'delivered') return undefined
 
   const projectDir = getNanjuProjectDir(workspaceSlug, project.projectId)
+  if (stage === 'coding') phase = { ...phase, outputPath: resolveCodingOutputPath(projectDir) }
   const prdSummary = getPrdSummary(workspaceSlug, project.projectId)
   const priorArtifacts = getPriorArtifacts(workspaceSlug, project.projectId, stage)
   const nextPhase = phase.next ?? 'delivered'
@@ -680,8 +835,17 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
 
   // prototype 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析。
   // W13：testing 作者换 glm-5.3-flash（字面渠道即可，与 AC 预设防御者同惯例）；
-  // testing 的 AC 防御者=minimax 家族覆盖（UUID 渠道），构建 L2 指令时运行时解析
-  const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
+  // testing 的 AC 防御者=minimax 家族覆盖（UUID 渠道），构建 L2 指令时运行时解析。
+  // W-B：显式 prototype 作者配置优先——仅 phase.channel===phase.model===默认
+  // 'minimax':'MiniMax-M3' 家族标记时才走 resolvePrototypeAuthor 解析 UUID；
+  // 用户显式配置非家族标记（如 glm-zhipu:GLM-5.3）时直接使用 phase.channel/phase.model，
+  // resolvePrototypeAuthor 不被调用以避免其按家族解析覆盖用户选择。家族标记是
+  // resolvePrototypeAuthor 唯一合法触发条件；用户保留 family marker 默认值即
+  // 表达“启用运行时解析”意图。
+  const isPrototypeFamilyMarker = phase.id === 'prototype'
+    && phase.channel === 'minimax'
+    && phase.model === 'MiniMax-M3'
+  const authorOverride = isPrototypeFamilyMarker ? resolvePrototypeAuthor() : null
   // W23 §六.3：配置级 autofix——当前阶段 author/attacker/defender 端点预检（渠道现状快照），
   // 失效则单槽推荐替换（仅本次 prompt，不落盘）+ model.config-autofix 遥测；
   // 任何异常在 applyConfigAutofix 内部降级（不阻断 prompt 构建）。prototype 作者已有
@@ -727,9 +891,26 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     ? buildAutoClarifyModeLines(autoClarifyEnabled, autoClarifyField?.lastToggledAt, Date.now())
     : []
 
+  // B2：prototype 阶段 显式内部 slot producer 解析（config 驱动；视觉槽位 resolved 或
+  // 清晰 blocked）。authorResolved 传 authorOverride（已是 UUID）或 phase 字面/自动修复值。
+  const authorResolvedForSlots: ResolvedChannelModel = authorOverride ?? { channelId: authorChannel, modelId: authorModel }
+  const phaseSlots = resolvePhaseDelegationSlots(phase, { authorResolved: authorResolvedForSlots })
+
   // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导；
-  // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击）
-  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo, acDefenderEndpoint, autoClarifyEnabled, autofix.attacker)
+  // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击；
+  // B2：prototype 阶段 视觉验证者使用 slot producer 产出的独立端点/blocked 结论）
+  const l2Task = buildL2TaskWithAC(
+    phase,
+    { channel: authorChannel, model: authorModel },
+    prdSummary,
+    priorArtifacts,
+    projectDir,
+    categoryInfo,
+    acDefenderEndpoint,
+    autoClarifyEnabled,
+    autofix.attacker,
+    phaseSlots.visualValidator,
+  )
 
   // M7（AC 审计 A9-timing，v0.17.69）：主进程预校验——architecture 阶段构建 L1 指令时
   // 现场对 architecture.md 环境清单跑 validateEnvChecklist（§九「清单执行前过确定性规则
@@ -876,7 +1057,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ? (autoClarifyEnabled
         ? [
           '4. 【自动审核模式：应用验收全自动】（auto-clarify 已开启）：',
-          '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
+          '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）展示产出说明或适用的静态网页。非Web应按架构启动真实程序，文档/网页预览不代表程序已运行。',
           '   b. 子会话产出已含内部 AC 对抗审计——用 Read 检查产出文件确认完整可用（机器前提）。',
           '   c. 检查通过后【直接输出推进标记】<!-- PHASE_ADVANCE: testing -->（不发起预览确认',
           '      AskUser，系统自动确认进入自动测试；用户故事的完整性由自动测试判定）。',
@@ -884,7 +1065,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         ]
         : [
         '4. 【交互验证 + 轻过渡确认】（编码阶段核心环节：预览应用 → 收集意见 → 批量修复 → 确认进入自动测试）：',
-        '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
+        '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）展示产出说明或适用的静态网页。非Web应按架构启动真实程序，文档/网页预览不代表程序已运行。',
         '   b. 向用户宣布代码已生成，邀请直接用自然语言提修改意见；同时告知：',
         '      「也可以直接在右侧预览上【点击】想改的元素，点选后元素会出现在输入框，',
         '        你接着打字描述想怎么改（如“这个按钮改大”），一起发送即可精准修改」。',

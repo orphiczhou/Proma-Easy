@@ -186,6 +186,10 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
 
   var suppressClickUntil = 0;
   var suppressClickTarget = null;
+  // W24-EF F2（v0.17.123）：框选刚结束后抑制「同一释放坐标」100ms 内的合成 click（防双发 blank-click）
+  var boxSelectClickSuppressUntil = 0;
+  var boxSelectReleaseX = -1;
+  var boxSelectReleaseY = -1;
   // ===== P2a：拖拽会话级持续模式 =====
   // dragMode 非空时：目标元素反复可拖（pointerdown 常驻，不再 once）；该元素 click 不弹面板；
   // 退出：其他修改指令 / undo-all / 30s 无拖动 / 点击其他 data-ai-id 元素（用户转去做别的）
@@ -241,6 +245,16 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     // Y7：拖拽刚结束的 click 只对拖拽起点元素生效（不吞对其他元素的快速点选）
     if (Date.now() < suppressClickUntil && e.target === suppressClickTarget) { suppressClickUntil = 0; suppressClickTarget = null; return; }
 
+    // W24-EF F2（v0.17.123）：框选刚结束的合成 click —— 仅抑制「框选释放坐标附近」的
+    // click（同一释放交互），避免误报 blank-click；其他位置 100ms 内的正常点选不受影响。
+    if (Date.now() < boxSelectClickSuppressUntil) {
+      if (typeof e.clientX === 'number' && typeof e.clientY === 'number'
+        && Math.abs(e.clientX - boxSelectReleaseX) < 4
+        && Math.abs(e.clientY - boxSelectReleaseY) < 4) {
+        return;
+      }
+    }
+
     var layer = ensureHighlightLayer();
 
     if (!target) {
@@ -265,6 +279,189 @@ export const CLICK_TO_FIX_INJECT_SCRIPT = `
     highlightTimer = setTimeout(function () { layer.style.display = 'none'; }, 3000);
 
     reportToHost({ kind: 'element-click', id: id, type: type, text: text, rect: rectOf(target) });
+  }, true);
+
+  // ===== W24-EF F2（v0.17.123）：框选多元素批量点选 =====
+  // 设计语义：用户在原型上按下空旷区域并拖动 → 出现选区框 → 松手时收集所有被框选
+  // 且带 data-ai-id 的元素（tab/分页类与 w24-6 同型排除，过滤背景只保留有 id 元素），
+  // 上报 kind='box-select' 给宿主。3 秒高亮（每元素独立高亮框），空选不上报、不报错。
+  //
+  // 边界：
+  // - 与现有 click 互不抢占：mousedown 在 capture 阶段设定 starting flag，仅当 click target
+  //   不是带 data-ai-id 的元素（背景）时进入框选会话；若鼠标是选中 data-ai-id 元素的单击，
+  //   仍走 click 路径（元素点选）；
+  // - 与拖拽会话互不抢占：dragMode 非空时跳过框选（拖拽正在进行）；
+  // - 与 overlay 互不抢占：起点在 overlay（proma-ctf-*）直接返回。
+  // - 状态结构：{ startX, startY, x1, y1, x2, y2, layer, marquee, highlights, timer }
+  //   marquee 是选区框，highlights 是被框选元素的 3 秒高亮覆盖层列表。
+
+  function isInteractiveTabEl(el) {
+    // 与 click 处理 w24-6 同型：tab/分页类元素不可被框选上报（原生切视图控件）
+    if (!el || !el.getAttribute) return false;
+    var navType = String(el.getAttribute('data-ai-type') || '').trim();
+    var navId = String(el.getAttribute('data-ai-id') || '').trim();
+    if (/^(标签页|标签|选项卡|切换|tab|分页|页签|导航)$/i.test(navType)) return true;
+    if (/(^|[-_])(nav|tab)/i.test(navId)) return true;
+    return false;
+  }
+
+  function ensureBoxSelectLayers() {
+    var parent = document.documentElement;
+    var layers = parent.__promaBoxSelectLayers;
+    if (!layers) {
+      var marquee = document.createElement('div');
+      marquee.id = 'proma-ctf-box-marquee';
+      marquee.style.cssText = 'position:absolute;border:2px dashed #4F46E5;background:rgba(79,70,229,0.08);pointer-events:none;z-index:2147483646;display:none;';
+      parent.appendChild(marquee);
+      layers = { marquee: marquee, highlights: [] };
+      parent.__promaBoxSelectLayers = layers;
+    }
+    return layers;
+  }
+
+  function clearBoxSelectHighlight(layers) {
+    if (!layers) return;
+    for (var i = 0; i < layers.highlights.length; i++) {
+      var node = layers.highlights[i];
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+    }
+    layers.highlights = [];
+  }
+
+  // 中心点落框判定：元素中心落在选框内才选中，避免大型容器仅边缘轻触即被过选
+  function rectCenterInBox(rect, box) {
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    return cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom;
+  }
+
+  function performBoxSelect() {
+    try {
+      if (!boxSelect || !boxSelect.layer) return;
+      var layers = boxSelect.layer;
+      var x1 = Math.min(boxSelect.x1, boxSelect.x2);
+      var y1 = Math.min(boxSelect.y1, boxSelect.y2);
+      var x2 = Math.max(boxSelect.x1, boxSelect.x2);
+      var y2 = Math.max(boxSelect.y1, boxSelect.y2);
+      var marqueeRect = { left: x1, right: x2, top: y1, bottom: y2 };
+
+      // 收集所有 data-ai-id 元素，过滤 tab/分页、不可见、中心不在框内（中心点落框，防轻触过选）
+      var all = document.querySelectorAll('[data-ai-id]');
+      var picked = [];
+      var pickedEls = [];
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (isInteractiveTabEl(el)) continue;
+        var r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) continue;
+        if (!rectCenterInBox(r, marqueeRect)) continue;
+        picked.push({ id: el.getAttribute('data-ai-id'), type: el.getAttribute('data-ai-type') || '元素' });
+        pickedEls.push(el);
+      }
+
+      // 重置高亮：清旧 + 画新
+      clearBoxSelectHighlight(layers);
+      layers.marquee.style.display = 'none';
+
+      if (picked.length === 0) {
+        // 空选：不上报，不报错；按 EF §3.2 BDD #1「空选不报错误」
+        boxSelect = null;
+        return;
+      }
+
+      // 为每个被框选元素画 3 秒高亮覆盖层（直接用元素引用，避免按 id 二次 querySelector 的选择器转义面）
+      for (var j = 0; j < pickedEls.length; j++) {
+        var el2 = pickedEls[j];
+        var r2 = el2.getBoundingClientRect();
+        var hl = document.createElement('div');
+        hl.className = 'proma-ctf-box-highlight';
+        hl.style.cssText = 'position:absolute;border:2px solid #4F46E5;border-radius:6px;pointer-events:none;z-index:2147483647;background:rgba(79,70,229,0.08);transition:all .15s ease;';
+        hl.style.top = (r2.top + window.scrollY) + 'px';
+        hl.style.left = (r2.left + window.scrollX) + 'px';
+        hl.style.width = r2.width + 'px';
+        hl.style.height = r2.height + 'px';
+        document.documentElement.appendChild(hl);
+        layers.highlights.push(hl);
+      }
+      setTimeout(function () {
+        clearBoxSelectHighlight(layers);
+      }, 3000);
+
+      // 上报：含 id 与 type 列表；不含 text/rect/innerText（隐私最小，与单点击一致）
+      reportToHost({ kind: 'box-select', items: picked });
+      boxSelect = null;
+    } catch (err) {
+      // 框选结算异常不阻断注入脚本：清状态、隐藏选区框，静默（不误报 blank-click、不抛裸错）
+      var bs = boxSelect;
+      boxSelect = null;
+      if (bs && bs.layer) { try { bs.layer.marquee.style.display = 'none'; } catch (e2) {} }
+    }
+  }
+
+  var boxSelect = null;
+
+  document.addEventListener('mousedown', function (e) {
+    // 仅左键进入框选（右键/中键拖拽不进框选）
+    if (typeof e.button === 'number' && e.button !== 0) return;
+    // 起点在 overlay / proma-ctf-* 上：不进入框选（属 overlay 自身交互）
+    var tid = e.target && e.target.id ? String(e.target.id) : '';
+    if (tid.indexOf('proma-ctf-') === 0) return;
+    // 拖拽会话期间不进入框选（与拖拽互不抢占）
+    if (dragMode) return;
+    // 起点本身是带 data-ai-id 的元素：留给 click 路径处理（用户对单元素的意图）
+    if (e.target && e.target.closest && e.target.closest('[data-ai-id]')) return;
+    // 起点在 input/textarea/contenteditable：不进入框选（让文本选区工作）
+    var tag = e.target && e.target.tagName ? String(e.target.tagName) : '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+
+    var layers = ensureBoxSelectLayers();
+    boxSelect = {
+      startX: e.clientX,
+      startY: e.clientY,
+      x1: e.clientX,
+      y1: e.clientY,
+      x2: e.clientX,
+      y2: e.clientY,
+      layer: layers,
+    };
+    layers.marquee.style.top = (e.clientY + window.scrollY) + 'px';
+    layers.marquee.style.left = (e.clientX + window.scrollX) + 'px';
+    layers.marquee.style.width = '0px';
+    layers.marquee.style.height = '0px';
+    layers.marquee.style.display = '';
+    try { e.preventDefault(); } catch (e0) { /* swallow */ }
+  }, true);
+
+  document.addEventListener('mousemove', function (e) {
+    if (!boxSelect) return;
+    boxSelect.x2 = e.clientX;
+    boxSelect.y2 = e.clientY;
+    var x1 = Math.min(boxSelect.x1, boxSelect.x2);
+    var y1 = Math.min(boxSelect.y1, boxSelect.y2);
+    var x2 = Math.max(boxSelect.x1, boxSelect.x2);
+    var y2 = Math.max(boxSelect.y1, boxSelect.y2);
+    var layers = boxSelect.layer;
+    layers.marquee.style.left = (x1 + window.scrollX) + 'px';
+    layers.marquee.style.top = (y1 + window.scrollY) + 'px';
+    layers.marquee.style.width = (x2 - x1) + 'px';
+    layers.marquee.style.height = (y2 - y1) + 'px';
+  }, true);
+
+  document.addEventListener('mouseup', function (e) {
+    if (!boxSelect) return;
+    var dx = Math.abs(boxSelect.x2 - boxSelect.x1);
+    var dy = Math.abs(boxSelect.y2 - boxSelect.y1);
+    // 微抖动（<3px）视作单击，不进入框选结算；让 click 路径正常处理
+    if (dx < 3 && dy < 3) {
+      boxSelect.layer.marquee.style.display = 'none';
+      boxSelect = null;
+      return;
+    }
+    // 跨阈值 → 框选结算。记录释放坐标 + 设 100ms 抑制窗口（仅抑制同一释放坐标的合成 click）。
+    boxSelectReleaseX = e.clientX;
+    boxSelectReleaseY = e.clientY;
+    boxSelectClickSuppressUntil = Date.now() + 100;
+    performBoxSelect();
   }, true);
 
   // ===== 宿主 → iframe 即时修改指令（交互1 快速选项：颜色/删除/位置/改文字即时生效） =====

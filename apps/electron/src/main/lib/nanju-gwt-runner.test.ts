@@ -1588,3 +1588,468 @@ describe('W22 收尾：reload op', () => {
     expect(results[0]?.status).toBe('fail')
   })
 })
+
+describe('Given 工程契约要求真实驱动，When 当前仅注册浏览器，Then 诚实阻塞', () => {
+  test('Then 不触发浏览器，不消耗已有修复次数，并写blocked报告', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prevReport: { verdict: 'fail', retryCount: 1, errorCount: 0 } })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(root, '08_APP/native-bin'), '真实产物fixture，仅用于宿主单测')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Linux', kind: 'desktop', entry: 'native-bin' }, artifacts: ['native-bin'],
+      build: '按桌面工具链构建', run: '双击native-bin',
+      tests: [{ id: 'native', layer: 'acceptance', adapter: 'native-driver', target: 'native-bin', command: '真实桌面驱动', covers: ['US-01'], requiresReal: true }],
+    }))
+    let opened = 0
+    const controller = { ...makeMockController(fullPassPage()), createLocalFileTab: async () => { opened++; throw Error('不应启动浏览器') } }
+    const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '原生测试', projectMode: 'quick', sessionId: 's1', controller })
+    expect(outcome.verdict as string).toBe('blocked')
+    expect(opened).toBe(0)
+    expect(outcome.retryCount).toBe(1)
+    expect(outcome.errorCount).toBe(0)
+    expect(outcome.summaryText).toContain('native-driver')
+    const report = JSON.parse(readFileSync(join(root, '06_TESTS/report.json'), 'utf-8'))
+    expect(report.verdict).toBe('blocked')
+    // 重复blocked不增加轮次；恢复后只计算原失败对应的一次修复重跑。
+    await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '原生测试', projectMode: 'quick', sessionId: 's1', controller })
+    const repeated = JSON.parse(readFileSync(join(root, '06_TESTS/report.json'), 'utf-8'))
+    expect(repeated.retryCount).toBe(1)
+    expect(repeated.retryPending).toBe(true)
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Browser', kind: 'web', entry: 'index.html' }, artifacts: ['index.html'], build: '静态页面无需构建', run: '打开index.html',
+      tests: [{ id: 'ui', layer: 'acceptance', adapter: 'browser-file', target: 'index.html', command: '宿主GWT', covers: ['US-01'], requiresReal: false }],
+    }))
+    // fixture改变PRD/契约只是模拟恢复条件，不会修改用户项目或擅自降级真实需求。
+    writeFileSync(join(root, '01_PRD/prd.md'), '# PRD\nUS-01 添加读书笔记')
+    const resumed = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '恢复条件fixture', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()) })
+    expect(resumed.retryCount).toBe(2)
+    expect(resumed.verdict).toBe('pass')
+  })
+})
+
+describe('Given 静态Web工程契约，When 宿主完成测试，Then 交付绑定全产物及真人确认', () => {
+  test('Then 不强制index.html，其他资源变化要求重跑', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prd: '# PRD\nUS-01 添加读书笔记' })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(root, '08_APP/app.html'), '<html><body>web fixture</body></html>')
+    writeFileSync(join(root, '08_APP/style.css'), 'body{color:black}')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Browser', kind: 'web', entry: 'app.html' }, artifacts: ['app.html', 'style.css'], build: '静态页面无需构建', run: '打开app.html',
+      tests: [{ id: 'ui', layer: 'acceptance', adapter: 'browser-file', target: 'app.html', command: '宿主GWT映射', covers: ['US-01'], requiresReal: false }],
+    }))
+    rmSync(join(root, '08_APP/index.html'))
+    const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: 'Web工程', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()) })
+    expect(outcome.verdict).toBe('pass')
+    const report = JSON.parse(readFileSync(join(root, '06_TESTS/report.json'), 'utf-8'))
+    expect(report.entry).toBe('08_APP/app.html')
+    expect(report.engineeringEvidence.artifacts.length).toBe(2)
+    const { checkGwtDeliveryFacts } = await import('./nanju-gwt-runner')
+    const base = { workspaceSlug: 'ws', projectId: 'p1', reportJsonPath: outcome.reportJsonPath, projectDir: root }
+    expect(checkGwtDeliveryFacts({ ...base, info: null })?.reason).toBe('no-ack')
+    const info = { deliveryAck: { reportRunId: report.runId, at: new Date(Date.parse(report.generatedAt) + 1000).toISOString() } }
+    expect(checkGwtDeliveryFacts({ ...base, info })).toBeNull()
+    writeFileSync(join(root, '08_APP/style.css'), 'body{color:blue}')
+    expect(checkGwtDeliveryFacts({ ...base, info })?.reason).toBe('engineering-changed')
+  })
+})
+
+
+describe('Given 正在重试的工程测试，When 测试期间产物更新，Then 丢弃本轮计数', () => {
+  test('Then 变更导致blocked仍保留原修复次数和待修复事实', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prd: '# PRD\nUS-01 添加读书笔记', prevReport: { verdict: 'fail', retryCount: 1, errorCount: 0 } })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Browser', kind: 'web', entry: 'index.html' }, artifacts: ['index.html'], build: '无需构建', run: '打开index.html',
+      tests: [{ id: 'ui', layer: 'acceptance', adapter: 'browser-file', target: 'index.html', command: '宿主GWT', covers: ['US-01'], requiresReal: false }],
+    }))
+    const base = makeMockController(fullPassPage())
+    const controller: GwtBrowserAdapter = { ...base, createLocalFileTab: async (...args) => {
+      writeFileSync(join(root, '08_APP/index.html'), '<html><body>编辑后的fixture</body></html>')
+      return base.createLocalFileTab(...args)
+    } }
+    const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '产物变更fixture', projectMode: 'quick', sessionId: 's1', controller })
+    expect(outcome.verdict).toBe('blocked')
+    expect(outcome.retryCount).toBe(1)
+    const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+    expect(report.retryPending).toBe(true)
+    expect(report.blockedReason).toContain('测试期间')
+  })
+})
+
+describe('Given 工程驱动服务已注入，When 实际检查完成，Then 记录证据范围而非借HTML通过', () => {
+  test('Then 原生驱动自报通过仍blocked，报告保留检查与原修复次数', async () => {
+    setupProjectFixture({ stepsFiles: {}, prd: '# PRD\nUS-01 真实能力', prevReport: { verdict: 'fail', retryCount: 1, errorCount: 0 } })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(root, '08_APP/program'), '原生程序fixture，不是产品验收')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Linux', kind: 'desktop', entry: 'program' }, artifacts: ['program'], build: 'fixture', run: 'fixture',
+      tests: [{ id: 'native-check', layer: 'acceptance', adapter: 'native-driver', target: 'program', command: 'fixture', covers: ['US-01'], requiresReal: true }],
+    }))
+    let approved = 0
+    const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '驱动记录fixture', projectMode: 'quick', sessionId: 's1', controller: { ...makeMockController(fullPassPage()), createLocalFileTab: async () => { throw Error('工程分支不能开浏览器') } },
+      engineeringExecution: { signal: new AbortController().signal, services: { approve: async () => { approved++; return true }, drivers: [{ adapter: 'native-driver', execute: async () => ({ testId: 'native-check', target: 'program', exitCode: 0, checks: [{ storyId: 'US-01', label: '驱动记录', expected: 'observed', actual: 'observed', evidence: ['fixture自报'] }] }) }] } },
+    })
+    expect(approved).toBe(1)
+    expect(outcome.verdict).toBe('blocked')
+    expect(outcome.retryCount).toBe(1)
+    const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+    expect(report.entry).toBe('08_APP/program')
+    expect(report.executionContext).toBe('project-driver')
+    expect(report.engineeringSuite.tests[0].checks.length).toBe(1)
+    expect(report.coverageUnverified[0]).toContain('独立')
+    expect(readFileSync(outcome.reportMdPath, 'utf-8')).toContain('工程驱动记录')
+  })
+})
+
+test('Given 普通工程行为检查已通过 When 真人确认交付 Then 全产物与宿主执行记录一致才放行', async () => {
+  setupProjectFixture({ stepsFiles: {}, prd: '# PRD\nUS-01 文件行为' })
+  const root = join(fixtureRoot, 'project-p1')
+  mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+  writeFileSync(join(root, '08_APP/program'), '隔离fixture')
+  writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({ schemaVersion: 1, target: { platform: 'Linux', kind: 'cli', entry: 'program' }, artifacts: ['program'], build: 'fixture', run: 'fixture', tests: [{ id: 'check', layer: 'acceptance', adapter: 'cli-driver', target: 'program', command: 'fixture', covers: ['US-01'], requiresReal: false }] }))
+  const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '行为fixture', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()), engineeringExecution: { signal: new AbortController().signal, services: { approve: async () => true, drivers: [{ adapter: 'cli-driver', execute: async () => ({ testId: 'check', target: 'program', exitCode: 0, checks: [{ storyId: 'US-01', label: '文件检查', expected: '1', actual: '1', evidence: ['fixture结果'] }] }) }] } } })
+  expect(outcome.verdict).toBe('pass')
+  const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+  const { checkGwtDeliveryFacts } = await import('./nanju-gwt-runner')
+  const input = { workspaceSlug: 'ws', projectId: 'p1', projectDir: root, reportJsonPath: outcome.reportJsonPath }
+  expect(checkGwtDeliveryFacts({ ...input, info: null })?.reason).toBe('no-ack')
+  expect(checkGwtDeliveryFacts({ ...input, info: { deliveryAck: { reportRunId: report.runId, at: new Date(Date.parse(report.generatedAt) + 1000).toISOString() } } })).toBeNull()
+})
+
+function setupMixedEngineeringFixture(): string {
+  setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prd: '# PRD\nUS-01 添加读书笔记' })
+  const root = join(fixtureRoot, 'project-p1')
+  mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+  writeFileSync(join(root, '08_APP/app.html'), '<html><body>fixture</body></html>')
+  writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({ schemaVersion: 1, target: { kind: 'web', platform: 'Browser', entry: 'app.html' }, artifacts: ['app.html'], build: '静态', run: '打开app.html', tests: [
+    { id: 'unit', layer: 'unit', adapter: 'cli-driver', target: 'app.html', command: '辅助检查', covers: [], requiresReal: false },
+    { id: 'ui', layer: 'acceptance', adapter: 'browser-file', target: 'app.html', command: '浏览器行为', covers: ['US-01'], requiresReal: false, scenarioFiles: ['features/us-01.steps.json'] },
+  ] }))
+  return root
+}
+
+test('Given 浏览器验收与CLI辅助测试混合 When 宿主运行 Then 两项都批准执行且场景修改使交付证据失效', async () => {
+  const root = setupMixedEngineeringFixture()
+  const approvals: string[] = []
+  const progress: GwtProgressEvent[] = []
+  const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', onProgress: (event) => progress.push(event), projectName: '混合工程', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()), engineeringExecution: { signal: new AbortController().signal, services: {
+    approve: async ({ test }) => { approvals.push(test.id); return true },
+    drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: null, label: '辅助检查', expected: 'ok', actual: 'ok', evidence: ['fixture'] }] }) }],
+  } } })
+  expect(outcome.verdict).toBe('pass')
+  expect(progress.filter((event) => event.phase === 'done')).toHaveLength(1)
+  expect(progress.at(-1)?.verdict).toBe('pass')
+  expect(progress.at(-1)?.total).toBe(2)
+  expect(approvals).toEqual(['unit', 'ui'])
+  const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+  expect(report.engineeringSuite.tests.map((test: { testId: string }) => test.testId)).toEqual(['unit', 'ui'])
+  expect(report.engineeringSuite.tests[0].coveredUs).toEqual([])
+  expect(report.engineeringEvidence.scenarios.length).toBe(1)
+  const { checkGwtDeliveryFacts } = await import('./nanju-gwt-runner')
+  const input = { workspaceSlug: 'ws', projectId: 'p1', projectDir: root, reportJsonPath: outcome.reportJsonPath, info: { deliveryAck: { reportRunId: report.runId, at: new Date(Date.parse(report.generatedAt) + 1000).toISOString() } } }
+  expect(checkGwtDeliveryFacts(input)).toBeNull()
+  writeFileSync(join(root, '06_TESTS/features/us-01.steps.json'), PASSING_STEPS + '\n ')
+  expect(checkGwtDeliveryFacts(input)?.reason).toBe('engineering-changed')
+})
+
+test('Given 混合测试取消发生在浏览器场景中 When 停止会话 Then 关闭标签且不执行后续交互', async () => {
+  const abort = new AbortController()
+  let loads = 0
+  let closed = 0
+  let clicks = 0
+  const controller = makeMockController(fullPassPage())
+  controller.loadFileInTab = async () => { loads++; abort.abort() }
+  controller.closeTab = async () => { closed++ }
+  controller.clickPointInTab = async () => { clicks++ }
+  const scenario = validateScenarioFileContent(PASSING_STEPS).scenario!
+  await expect(runGwtSuite({ sessionId: 'cancel-fixture', entryHtmlPath: '/fixture/app.html', scenarios: [scenario], controller, screenshotDir: null, signal: abort.signal })).rejects.toThrow('取消')
+  expect(loads).toBe(1)
+  expect(closed).toBeGreaterThan(0)
+  expect(clicks).toBe(0)
+})
+
+test('Given 未确认浏览器平台风险 When 混合工程整体预检 Then 不先执行辅助项或打开网页并落blocked报告', async () => {
+  setupMixedEngineeringFixture()
+  let approvals = 0
+  let executions = 0
+  const controller = makeMockController(fullPassPage())
+  controller.hasRiskDisclaimerAcknowledged = () => false
+  controller.createLocalFileTab = async () => { executions++; return { tabId: 'unexpected' } }
+  const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '混合工程', projectMode: 'quick', sessionId: 's1', controller, engineeringExecution: { signal: new AbortController().signal, services: {
+    approve: async () => { approvals++; return true }, drivers: [{ adapter: 'cli-driver', execute: async () => { executions++; return {} } }],
+  } } })
+  expect(outcome.verdict).toBe('blocked')
+  expect(outcome.blockedReason).toContain('平台账号风险告知')
+  expect(approvals).toBe(0)
+  expect(executions).toBe(0)
+  expect(JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8')).verdict).toBe('blocked')
+})
+
+test('Given 辅助项已执行而第二项批准被拒 When 汇总混合工程 Then 保留已执行事实但不交付不消耗修复预算', async () => {
+  const root = setupMixedEngineeringFixture()
+  writeFileSync(join(root, '06_TESTS/report.json'), JSON.stringify({ verdict: 'fail', retryCount: 1 }))
+  const controller = makeMockController(fullPassPage())
+  let opened = 0
+  controller.createLocalFileTab = async () => { opened++; return { tabId: 'unexpected' } }
+  const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '混合工程', projectMode: 'quick', sessionId: 's1', controller, engineeringExecution: { signal: new AbortController().signal, services: {
+    approve: async ({ test }) => test.id === 'unit', drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: null, label: '辅助', expected: 'ok', actual: 'ok', evidence: ['fixture'] }] }) }],
+  } } })
+  expect(outcome.verdict).toBe('blocked')
+  expect(outcome.retryCount).toBe(1)
+  expect(opened).toBe(0)
+  const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+  expect(report.engineeringSuite.tests.map((entry: { status: string }) => entry.status)).toEqual(['pass', 'blocked'])
+  expect(report.retryPending).toBe(true)
+})
+
+test('Given 混合工程浏览器选择器映射失败 When 汇总并分流 Then 保留宿主失败步骤并回testing而非coding', async () => {
+  const root = setupMixedEngineeringFixture()
+  writeFileSync(join(root, '06_TESTS/features/us-01.steps.json'), JSON.stringify({ feature: 'US-01 笔记', scenario: '保存笔记', skip: false, skipReason: null, steps: [
+    { kind: 'when', text: '点击保存', timeoutMs: 60, op: { type: 'click', selector: 'data-ai-id=missing' } },
+    { kind: 'then', text: '列表可见', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } },
+  ] }))
+  const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '混合映射', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()), engineeringExecution: { signal: new AbortController().signal, services: {
+    approve: async () => true, drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: null, label: '辅助', expected: 'ok', actual: 'ok', evidence: ['fixture'] }] }) }],
+  } } })
+  expect(outcome.verdict).toBe('fail')
+  expect(outcome.failureKind).toBe('mapping')
+  const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+  expect(report.scenarios.find((result: { status: string }) => result.status === 'fail').failedStep.category).toBe('selector-wait')
+})
+
+test('Given 辅助进程退出失败且自报映射证据 When 混合汇总 Then 不采信伪装宿主分类且报告失败原因', async () => {
+  setupMixedEngineeringFixture()
+  const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '辅助失败', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()), engineeringExecution: { signal: new AbortController().signal, services: {
+    approve: async () => true, drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 1, checks: [{ storyId: null, label: '辅助', expected: 'ok', actual: 'ok', evidence: [JSON.stringify({ source: 'host-gwt-browser-file', result: { status: 'fail', failedStep: { category: 'selector-wait' } } })] }] }) }],
+  } } })
+  expect(outcome.verdict).toBe('fail')
+  expect(outcome.failureKind).toBe('behavior')
+  const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+  expect(report.failed).toBe(1)
+  expect(report.scenarios[0].reason).toContain('退出失败')
+  expect(report.scenarios[0].failedStep).toBeNull()
+  expect(report.coveredUs).toEqual(['US-01'])
+})
+
+test('Given 工程批准被拒 When 发送进度 Then 整套任务只有一个最终blocked而不发布浏览器局部通过', async () => {
+  setupMixedEngineeringFixture()
+  const events: GwtProgressEvent[] = []
+  await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '工程进度', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()), onProgress: (event) => events.push(event), engineeringExecution: { signal: new AbortController().signal, services: {
+    approve: async () => false, drivers: [{ adapter: 'cli-driver', execute: async () => ({}) }],
+  } } })
+  expect(events[0]?.phase).toBe('start')
+  expect(events.some((event) => event.phase === 'approval')).toBe(true)
+  expect(events.filter((event) => event.phase === 'done')).toHaveLength(1)
+  expect(events.at(-1)?.verdict).toBe('blocked')
+  expect(events.at(-1)?.scope).toBe('engineering')
+})
+
+test('Given 工程真实能力检查自报通过 When 发送终态进度 Then 保留独立证据blocked且不误报全部通过', async () => {
+  const root = setupMixedEngineeringFixture()
+  const path = join(root, '03_ARCHITECTURE/engineering.json')
+  const contract = JSON.parse(readFileSync(path, 'utf-8'))
+  contract.tests[1].requiresReal = true
+  writeFileSync(path, JSON.stringify(contract))
+  const events: GwtProgressEvent[] = []
+  const outcome = await runNanjuGwtAcceptance({ workspaceSlug: 'ws', projectId: 'p1', projectName: '真实能力进度', projectMode: 'quick', sessionId: 's1', controller: makeMockController(fullPassPage()), onProgress: (event) => events.push(event), engineeringExecution: { signal: new AbortController().signal, services: {
+    approve: async () => true, drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: null, label: '辅助', expected: 'ok', actual: 'ok', evidence: ['fixture'] }] }) }],
+  } } })
+  expect(outcome.verdict).toBe('blocked')
+  expect(events.filter((event) => event.phase === 'done')).toHaveLength(1)
+  expect(events.at(-1)?.verdict).toBe('blocked')
+  expect(events.at(-1)?.passed).toBe(2)
+  expect(events.at(-1)?.reason).toContain('独立')
+})
+
+// ===== W-C：served URL（browser-url）执行通道 =====
+
+describe('runGwtSuite entryUrl 模式（专用tab + 场景级URL重载）', () => {
+  function urlController(page: FakePage, record: { urls: string[]; opened: number; closed: number }): GwtBrowserAdapter {
+    const base = makeMockController(page)
+    return {
+      ...base,
+      createUrlTab: async () => { record.opened++; return { tabId: 'tab-url-1', url: 'http://127.0.0.1:18742/index.html', previousActiveTabId: 'tab-user' } },
+      loadUrlInTab: async (_s, _t, url) => { record.urls.push(url); base.loadFileInTab(_s, _t, 'x') },
+      closeTab: async () => { record.closed++ },
+    }
+  }
+  const urlScenario = (): GwtScenarioFile => validateScenarioFileContent(JSON.stringify({
+    feature: 'us-01', scenario: 'US-01 添加读书笔记', skip: false, skipReason: null,
+    steps: [{ kind: 'then', text: '列表可见', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list', timeoutMs: 300 } }],
+  }))!.scenario!
+
+  test('entryUrl：经createUrlTab打开专用标签，每场景loadUrlInTab重载，结束关闭', async () => {
+    const record = { urls: [] as string[], opened: 0, closed: 0 }
+    const results = await runGwtSuite({ sessionId: 's1', entryUrl: 'http://127.0.0.1:18742/index.html', scenarios: [urlScenario(), urlScenario()], controller: urlController(fullPassPage(), record), screenshotDir: null })
+    expect(results.map((r) => r.status)).toEqual(['pass', 'pass'])
+    expect(record.opened).toBe(1)
+    expect(record.urls).toHaveLength(2)
+    expect(record.urls[0]).toBe('http://127.0.0.1:18742/index.html')
+    expect(record.closed).toBeGreaterThan(0)
+  })
+  test('适配器未接入URL通道时明确失败而不是回落file直载', async () => {
+    const base = makeMockController(fullPassPage())
+    let fileLoads = 0
+    base.loadFileInTab = async () => { fileLoads++ }
+    await expect(runGwtSuite({ sessionId: 's1', entryUrl: 'http://127.0.0.1:18742/index.html', scenarios: [urlScenario()], controller: base, screenshotDir: null })).rejects.toThrow('URL')
+    expect(fileLoads).toBe(0)
+  })
+  test('entryUrl与entryHtmlPath必须二选一', async () => {
+    const base = makeMockController(fullPassPage())
+    await expect(runGwtSuite({ sessionId: 's1' as never, scenarios: [urlScenario()], controller: base, screenshotDir: null } as never)).rejects.toThrow('入口')
+  })
+  test('场景后校验实际URL出origin → 场景fail且标签关闭（S9）', async () => {
+    const record = { urls: [] as string[], opened: 0, closed: 0 }
+    let asserted = 0
+    const controller = {
+      ...urlController(fullPassPage(), record),
+      assertUrlTabOrigin: async () => { asserted++; throw new Error('已离开宿主loopback地址') },
+    }
+    const results = await runGwtSuite({ sessionId: 's1', entryUrl: 'http://127.0.0.1:18742/index.html', scenarios: [urlScenario()], controller, screenshotDir: null })
+    expect(asserted).toBeGreaterThan(0)
+    expect(results[0]?.status).toBe('fail')
+    expect(record.closed).toBeGreaterThan(0)
+  })
+})
+
+/** 服务fixture子进程：不真实启动进程或监听端口 */
+class FakeServiceChild {
+  pid = 4242
+  killed = 0
+  exited = false
+  killGroup(): void { this.killed += 1 }
+  hasExited(): boolean { return this.exited }
+  exitCode(): number | null { return this.exited ? 0 : null }
+}
+function fakeServiceDeps(child: FakeServiceChild, occupied: { port: boolean } = { port: false }) {
+  return {
+    spawnService: () => child,
+    probeLoopbackPort: async () => occupied.port,
+    requestReady: async () => ({ status: 200, nonceMatch: true }),
+    now: () => Date.now(),
+    sleep: async () => {},
+  }
+}
+
+test('Given 混合CLI辅助与browser-url验收 When 宿主运行 Then 服务批准后启动、专用tab一次done、结束必停服务', async () => {
+  setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prd: '# PRD\nUS-01 添加读书笔记' })
+  const root = join(fixtureRoot, 'project-p1')
+  mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+  writeFileSync(join(root, '08_APP/server.cjs'), '// 服务fixture，不真实启动')
+  writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+    schemaVersion: 1, target: { kind: 'web', platform: 'Browser', entry: 'index.html' }, artifacts: ['index.html', 'server.cjs'], build: '无需构建', run: '宿主启动服务后经loopback访问',
+    tests: [
+      { id: 'unit', layer: 'unit', adapter: 'cli-driver', target: 'index.html', command: '辅助检查', covers: [], requiresReal: false },
+      { id: 'served', layer: 'acceptance', adapter: 'browser-url', target: 'index.html', command: '经服务入口验证', covers: ['US-01'], requiresReal: false, scenarioFiles: ['features/us-01.steps.json'], service: { runtime: 'node', path: 'server.cjs', args: [], port: 18742, readyPath: '/', readyTimeoutMs: 500 } },
+    ],
+  }))
+  const approvals: string[] = []
+  const events: GwtProgressEvent[] = []
+  const openedUrls: string[] = []
+  const child = new FakeServiceChild()
+  const page = fullPassPage()
+  const base = makeMockController(page)
+  const controller: GwtBrowserAdapter = { ...base, createUrlTab: async (_s, url) => { openedUrls.push(url); return { tabId: 'tab-url-1', url } }, loadUrlInTab: async () => {} }
+  const { isRegisteredEngineeringServiceUrl } = await import('./nanju-engineering-service')
+  const outcome = await runNanjuGwtAcceptance({
+    workspaceSlug: 'ws', projectId: 'p1', projectName: '服务工程', projectMode: 'quick', sessionId: 's1', controller,
+    onProgress: (event) => events.push(event),
+    engineeringExecution: {
+      signal: new AbortController().signal,
+      serviceRuntimes: { nodePath: process.execPath },
+      serviceDeps: fakeServiceDeps(child),
+      services: {
+        approve: async ({ test }) => { approvals.push(test.id); return true },
+        drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => ({ testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: null, label: '辅助检查', expected: 'ok', actual: 'ok', evidence: ['fixture'] }] }) }],
+      },
+    },
+  })
+  expect(outcome.verdict).toBe('pass')
+  expect(approvals).toEqual(['unit', 'served'])
+  expect(openedUrls).toEqual(['http://127.0.0.1:18742/index.html'])
+  expect(events.filter((event) => event.phase === 'done')).toHaveLength(1)
+  expect(events.at(-1)?.scope).toBe('engineering')
+  expect(child.killed).toBeGreaterThan(0)
+  expect(isRegisteredEngineeringServiceUrl('http://127.0.0.1:18742/index.html')).toBe(false)
+  const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+  expect(report.entry).toBe('08_APP/index.html')
+  expect(report.executionContext).toBe('project-driver')
+  expect(report.engineeringEvidence.scenarios.length).toBe(1)
+  const scenarioEntry = report.scenarios.find((s: { feature: string }) => s.feature === 'us-01')
+  expect(scenarioEntry.status).toBe('pass')
+  // 场景变更失效：场景文件改动使交付证据失配
+  const { checkGwtDeliveryFacts } = await import('./nanju-gwt-runner')
+  const info = { deliveryAck: { reportRunId: report.runId, at: new Date(Date.parse(report.generatedAt) + 1000).toISOString() } }
+  const gateInput = { workspaceSlug: 'ws', projectId: 'p1', projectDir: root, reportJsonPath: outcome.reportJsonPath, info }
+  expect(checkGwtDeliveryFacts(gateInput)).toBeNull()
+  writeFileSync(join(root, '06_TESTS/features/us-01.steps.json'), PASSING_STEPS + '\n')
+  expect(checkGwtDeliveryFacts(gateInput)?.reason).toBe('engineering-changed')
+})
+
+test('Given 服务端口被占 When browser-url执行 Then 拒绝接管且不开浏览器不泄漏句柄', async () => {
+  setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prd: '# PRD\nUS-01 添加读书笔记' })
+  const root = join(fixtureRoot, 'project-p1')
+  mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+  writeFileSync(join(root, '08_APP/server.cjs'), '// 服务fixture')
+  writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+    schemaVersion: 1, target: { kind: 'web', platform: 'Browser', entry: 'index.html' }, artifacts: ['index.html', 'server.cjs'], build: '无需构建', run: '宿主启动服务',
+    tests: [{ id: 'served', layer: 'acceptance', adapter: 'browser-url', target: 'index.html', command: '经服务入口验证', covers: ['US-01'], requiresReal: false, scenarioFiles: ['features/us-01.steps.json'], service: { runtime: 'node', path: 'server.cjs', args: [], port: 18742, readyPath: '/', readyTimeoutMs: 500 } }],
+  }))
+  const child = new FakeServiceChild()
+  let urlTabs = 0
+  const base = makeMockController(fullPassPage())
+  const controller: GwtBrowserAdapter = { ...base, createUrlTab: async () => { urlTabs++; throw Error('不应打开URL标签') } }
+  const outcome = await runNanjuGwtAcceptance({
+    workspaceSlug: 'ws', projectId: 'p1', projectName: '端口占用', projectMode: 'quick', sessionId: 's1', controller,
+    engineeringExecution: {
+      signal: new AbortController().signal, serviceRuntimes: { nodePath: process.execPath },
+      serviceDeps: fakeServiceDeps(child, { port: true }),
+      services: { approve: async () => true, drivers: [] },
+    },
+  })
+  expect(outcome.verdict).toBe('blocked')
+  expect(outcome.blockedReason).toContain('端口已被占用')
+  expect(urlTabs).toBe(0)
+  expect(child.killed).toBe(0)
+})
+
+test('Given browser-url多场景中途出origin When 宿主运行 Then verdict fail不烧error计数（N1）', async () => {
+  const stepsB = JSON.stringify({
+    feature: 'us-01', scenario: 'US-01 读书笔记列表二次展示', skip: false, skipReason: null,
+    steps: [{ kind: 'then', text: '列表可见', op: { type: 'assert-count', selector: 'data-ai-id=view-note-list', count: 1 } }],
+  })
+  setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS, 'us-01b.steps.json': stepsB }, prd: '# PRD\nUS-01 添加读书笔记' })
+  const root = join(fixtureRoot, 'project-p1')
+  mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+  writeFileSync(join(root, '08_APP/server.cjs'), '// 服务fixture，不真实启动')
+  writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+    schemaVersion: 1, target: { kind: 'web', platform: 'Browser', entry: 'index.html' }, artifacts: ['index.html', 'server.cjs'], build: '无需构建', run: '宿主启动服务后经loopback访问',
+    tests: [{ id: 'served', layer: 'acceptance', adapter: 'browser-url', target: 'index.html', command: '经服务入口验证', covers: ['US-01'], requiresReal: false, scenarioFiles: ['features/us-01.steps.json', 'features/us-01b.steps.json'], service: { runtime: 'node', path: 'server.cjs', args: [], port: 18742, readyPath: '/', readyTimeoutMs: 500 } }],
+  }))
+  const child = new FakeServiceChild()
+  const base = makeMockController(fullPassPage())
+  let originChecks = 0
+  const controller: GwtBrowserAdapter = {
+    ...base,
+    createUrlTab: async (_s, url) => ({ tabId: 'tab-url-1', url }),
+    loadUrlInTab: async () => {},
+    // 第一次场景后校验出 origin（页面 JS 跳转外站），后续场景恢复在册 origin。
+    assertUrlTabOrigin: async () => { originChecks++; if (originChecks === 1) throw new Error('已离开宿主loopback地址') },
+  }
+  const outcome = await runNanjuGwtAcceptance({
+    workspaceSlug: 'ws', projectId: 'p1', projectName: '出origin', projectMode: 'quick', sessionId: 's1', controller,
+    engineeringExecution: {
+      signal: new AbortController().signal, serviceRuntimes: { nodePath: process.execPath },
+      serviceDeps: fakeServiceDeps(child),
+      services: { approve: async () => true, drivers: [] },
+    },
+  })
+  expect(outcome.verdict).toBe('fail')
+  expect(outcome.errorCount).toBe(0)
+  const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
+  expect(report.scenarios.map((s: { status: string }) => s.status)).toEqual(['fail', 'pass'])
+  expect(child.killed).toBeGreaterThan(0)
+})

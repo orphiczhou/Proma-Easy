@@ -169,6 +169,7 @@ export function getNanjuModelState(opts?: NanjuModelServiceOpts): NanjuModelSett
       ...(entry.fallbacks ? { fallbacks: [...entry.fallbacks] } : {}),
       ...(entry.acAttacker ? { acAttacker: { ...entry.acAttacker } } : {}),
       ...(entry.acDefender ? { acDefender: { ...entry.acDefender } } : {}),
+      ...(entry.visualReviewer ? { visualReviewer: { ...entry.visualReviewer } } : {}),
     }
   }
 
@@ -202,7 +203,7 @@ export function getNanjuModelState(opts?: NanjuModelServiceOpts): NanjuModelSett
 // ===== save（白名单校验 + 读-改-写层 1.5 + reload + shadowed 回读比对） =====
 
 const SAVE_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(['phases', 'acPresets', 'proxyCandidates'])
-const PHASE_FIELD_KEYS: ReadonlySet<string> = new Set(['channel', 'model', 'fallbacks', 'acAttacker', 'acDefender'])
+const PHASE_FIELD_KEYS: ReadonlySet<string> = new Set(['channel', 'model', 'fallbacks', 'acAttacker', 'acDefender', 'visualReviewer'])
 const AC_PRESET_KEYS: ReadonlySet<string> = new Set(['light', 'medium'])
 const AC_ROLE_KEYS: ReadonlySet<string> = new Set(['attacker', 'defender'])
 const PHASE_ID_SET: ReadonlySet<string> = new Set(NANJU_MODEL_PHASE_ORDER)

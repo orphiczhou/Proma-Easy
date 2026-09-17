@@ -9,6 +9,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, NANJU_MODEL_IPC } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
+  NanjuGwtProgressData,
   RuntimeStatus,
   GitRepoStatus,
   Channel,
@@ -1281,7 +1282,14 @@ export interface ElectronAPI {
   nanjuUpdateProject: (input: Record<string, unknown>) => Promise<unknown>
   nanjuGetProject: (input: Record<string, unknown>) => Promise<unknown>
   nanjuDeleteProject: (input: Record<string, unknown>) => Promise<boolean>
-  nanjuRecordEvent: (input: Record<string, unknown>) => Promise<unknown>
+  /** 南大埋点：事件类型/载荷由主进程 union 收口；sessionId 仅用于主进程解析归属项目 */
+  nanjuRecordEvent: (input: {
+    workspaceSlug: string
+    eventType: string
+    payload?: Record<string, unknown>
+    projectId?: string
+    sessionId?: string
+  }) => Promise<unknown>
   nanjuReadEvents: (input: Record<string, unknown>) => Promise<unknown[]>
 
   /** 南大项目：获取当前阶段 */
@@ -1359,30 +1367,8 @@ export interface ElectronAPI {
   offNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
 
   /** 南大向导 GWT 验收测试进度事件（P1 Sprint B） */
-  onNanjuGwtProgress: (callback: (event: unknown, data: {
-    sessionId: string
-    projectId: string
-    phase: 'start' | 'scenario-start' | 'scenario-end' | 'done'
-    current: number
-    total: number
-    scenario?: string
-    scenarioStatus?: 'pass' | 'fail' | 'skip'
-    passed: number
-    failed: number
-    skipped: number
-  }) => void) => void
-  offNanjuGwtProgress: (callback: (event: unknown, data: {
-    sessionId: string
-    projectId: string
-    phase: 'start' | 'scenario-start' | 'scenario-end' | 'done'
-    current: number
-    total: number
-    scenario?: string
-    scenarioStatus?: 'pass' | 'fail' | 'skip'
-    passed: number
-    failed: number
-    skipped: number
-  }) => void) => void
+  onNanjuGwtProgress: (callback: (event: unknown, data: NanjuGwtProgressData) => void) => void
+  offNanjuGwtProgress: (callback: (event: unknown, data: NanjuGwtProgressData) => void) => void
 
   /** 南大 R1（W1）：L2 委派生命周期状态事件（等待/进度 Toast 数据源；5s/30s 阈值在渲染端） */
   onNanjuDelegationStatus: (callback: (event: unknown, data: {
@@ -1412,6 +1398,10 @@ export interface ElectronAPI {
     projectId: string
     stage: string
     message: string
+    /** I-P7（B-e）：熔断上下文（可选，向后兼容；渲染端按 US-U07 通俗口径重建文案） */
+    mode?: 'quick' | 'iterative'
+    consecutiveCircuitCount?: number
+    rolledBack?: boolean
   }) => void) => void
   offNanjuGuardAlert: (callback: (event: unknown, data: {
     sessionId: string
@@ -1425,7 +1415,12 @@ export interface ElectronAPI {
   offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
 
   /** 点选纠错：预览 iframe 内点击事件转发（主进程 → 调度员会话消息）；panel-action 携带选项指令 */
-  reportClickToFix: (input: { workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string; action?: string; color?: string }) => Promise<unknown>
+  reportClickToFix: (input: {
+    workspaceSlug: string; sessionId: string; kind: string
+    id?: string; type?: string; text?: string; action?: string; color?: string
+    /** I-P3（B-e）：框选批量点选的元素清单（只含 data-ai-id 与类型，不含文本/坐标） */
+    items?: Array<{ id: string; type?: string }>
+  }) => Promise<unknown>
 
   // ===== Windows Agent Island =====
 

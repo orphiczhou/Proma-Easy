@@ -9,7 +9,7 @@
  * 2. 模板落位：推进到 coding 时把对应品类模板全文从 resources 复制到项目目录
  *    00_ENGINEERING_TEMPLATE/template.md（L2 确定可读的路径）。
  * 3. 注入构建：coding 委派任务中注入「工程品类」节——品类声明 + 精简工程要点内联
- *    + 模板全文路径引用 + 与 GWT 验收锚点的对齐说明（08_APP/index.html 浏览器载体不变）。
+ *    + 模板全文路径引用 + 与真实工程验收的对齐说明（产物由架构契约决定）。
  *
  * 设计取舍（token 预算）：
  * - 内联仅精简要点（每品类 ~40 行，约 1-1.5K tokens），指令密度不稀释；
@@ -43,7 +43,7 @@ export interface CategoryMeta {
   patterns: string[]
   /** 反模式警示（要点行） */
   antiPatterns: string[]
-  /** 08_APP/index.html 验收载体的品类化角色定义（与 GWT/预览锚点对齐） */
+  /** 品类交付与验收边界（字段名兼容已有消费者） */
   carrierRole: string[]
 }
 
@@ -52,35 +52,35 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
     label: 'Web 全栈应用',
     oneLiner: '浏览器访问的 Web 应用（前端 UI + 可选后端/数据），不是本地程序或命令行工具',
     stack: [
-      '零构建载体：纯 HTML/CSS/原生 JS（管线约束），单页多面板组织',
-      '长期演进锚点：Next.js App Router + TypeScript + Tailwind + Drizzle + tRPC（见模板全文）',
+      '按PRD选择静态页面或前后端工程，技术栈由架构确定，不施加零构建约束',
+      '技术栈参考：Next.js App Router + TypeScript + Tailwind + Drizzle + tRPC（见模板全文）',
     ],
     structure: [
-      '08_APP/：index.html 入口 + assets/ 资源 + js/ 模块（按 feature 分文件，不写单文件巨石）',
-      '状态与数据：stores/（状态）+ services/（数据访问），localStorage 键名加项目前缀',
+      '08_APP/：按架构组织前端、可选后端与构建配置（按feature分文件）',
+      '状态与数据：stores/（状态）+ services/（数据访问），持久化方案服从架构',
     ],
     patterns: [
       '组件与逻辑分离：UI 渲染层薄，业务逻辑集中在可独立测试的模块',
-      '环境差异：file:// 打开时无服务端，一切持久化走本地存储',
+      '环境差异：静态页面与真实服务分别测试；本地存储不得替代PRD要求的后端数据',
     ],
     antiPatterns: [
       '把整个应用写进一个 script 标签（>1000 行巨石）',
-      '假设有 Node/服务器环境（fetch 本地 json、require 等）',
+      '把未启动的后端服务或模拟响应当作实际运行成功',
     ],
     carrierRole: [
-      '08_APP/index.html 就是应用本体：全部用户故事在此实现，预览/点选纠错/GWT 验收都指向它',
+      '静态Web可用HTML本体验收；全栈Web必须测试真实前后端与持久化，不能统一使用file://替代服务。',
     ],
   },
   'api-backend': {
     label: 'API 后端服务',
     oneLiner: '为 Web/Mobile/第三方客户端提供接口的后端服务，核心资产是 API 与数据层，不是页面',
     stack: [
-      '长期演进锚点：Hono（TS）或 FastAPI（Python）+ PostgreSQL + Drizzle/SQLAlchemy + Zod/Pydantic',
+      '技术栈参考：Hono（TS）或 FastAPI（Python）+ PostgreSQL + Drizzle/SQLAlchemy + Zod/Pydantic',
       '统一契约：OpenAPI 文档自动生成；统一响应格式（data/meta/error + 错误码前缀）',
     ],
     structure: [
       '08_APP/server/：modules/<feature>/{routes,service,schema} 三件套 + middleware/（认证/限流/错误）',
-      '08_APP/index.html：API 演控台载体（见下）',
+      '08_APP/：真实服务入口、依赖与配置；可选API说明页不承担服务验收',
     ],
     patterns: [
       'feature-based 模块划分：每个业务域自带 routes/service/schema，禁止全局散落',
@@ -91,20 +91,19 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '无错误码体系的裸 throw；无验证直接透传用户输入',
     ],
     carrierRole: [
-      '08_APP/index.html = API 演控台（浏览器可打开）：端点清单 + 每个端点的参数/响应演示（用内置模拟数据）',
-      '演控台承担用户故事的验收演示；真实服务代码在 08_APP/server/ 按上述结构组织（可运行性由演控台模拟层展示）',
+      '交付真实API服务及其运行配置；必须向实际服务发送测试请求并验证响应和数据状态，演控台模拟不算服务验收。',
     ],
   },
   'mobile-app': {
     label: '移动应用',
     oneLiner: 'iOS/Android 移动应用（原生能力：相机/GPS/推送），不是响应式网页',
     stack: [
-      '长期演进锚点：React Native + Expo（Expo Router 文件路由）+ NativeWind + Zustand + TanStack Query',
+      '技术栈参考：React Native + Expo（Expo Router 文件路由）+ NativeWind + Zustand + TanStack Query',
       '存储：MMKV（KV）+ expo-sqlite（关系）；不是 localStorage',
     ],
     structure: [
       '08_APP/app/：Expo Router 文件路由（(tabs)/ 分组 + [id].tsx 动态路由）',
-      '08_APP/src/：components/ + hooks/ + stores/ + services/ + types/；08_APP/index.html 为验收载体（见下）',
+      '08_APP/src/：components/ + hooks/ + stores/ + services/ + types/；交付目标为移动应用构建产物',
     ],
     patterns: [
       '移动交互范式：底部 Tab 导航、原生手势、安全区适配（safe-area）',
@@ -115,24 +114,23 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '移动特性（手势/键盘避让/深链）完全缺席',
     ],
     carrierRole: [
-      '08_APP/index.html = 移动视口 UI 实现：以手机尺寸视口（如 390x844 框）呈现应用界面与交互',
-      '原生能力（相机/推送等）以清晰标注的模拟层呈现；RN/Expo 工程骨架按上述结构生成并存',
+      '交付实际移动构建产物；在对应模拟器或设备上验证界面与原生能力，手机尺寸网页不能替代移动验收。',
     ],
   },
   'desktop-app': {
     label: '桌面应用',
     oneLiner: '本地桌面程序（Windows/macOS/Linux），不是网站——不存在「部署上线」，运行在用户本机，有系统层能力',
     stack: [
-      '长期演进锚点：Tauri v2 + React + TypeScript（Vite + Tailwind + Zustand）；无 Rust 经验或重 Node 原生模块时备选 Electron',
+      '技术栈参考：Tauri v2 + React + TypeScript（Vite + Tailwind + Zustand）；无 Rust 经验或重 Node 原生模块时备选 Electron',
       '两层架构：UI 层（Web 技术，可浏览器渲染）+ 系统层（Rust/Node：文件/窗口/托盘/快捷键/输入法 hook 等，经 IPC 命令暴露）',
     ],
     structure: [
       '08_APP/src/：UI 层（components/layouts/features + stores + hooks，与 Web 前端同构）',
-      '08_APP/src-tauri/（或 electron/）：系统层骨架——commands/（IPC 命令清单与签名）、配置、权限声明（按模板组织）',
-      '08_APP/index.html：主窗口 UI 验收载体（见下）',
+      '08_APP/src-tauri/（或 electron/）：真实系统层——commands/（IPC 命令清单与签名）、配置、权限声明（按模板组织）',
+      '08_APP/：主窗口UI、原生壳与实际打包产物，清单见engineering.json',
     ],
     patterns: [
-      'IPC 边界：系统调用全部收敛到 commands 层（明确清单），UI 不直接触系统 API——载体与真实壳共用同一命令接口（载体中 mock 实现）',
+      'IPC 边界：系统调用全部收敛到 commands 层（明确清单），UI 不直接触系统 API——真实壳调用经批准的系统能力；mock仅用于隔离单测，不替代原生验收',
       '桌面惯例：自定义标题栏（macOS traffic lights 间距）、多窗口（主/设置/关于）、系统托盘、开机自启、自动更新',
       '安全：CSP 收紧、禁 eval、capabilities 按需授权（见模板 §4）',
     ],
@@ -142,21 +140,20 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '忽略离线/本地数据边界（桌面程序的数据在本机，不走云端）',
     ],
     carrierRole: [
-      '08_APP/index.html = 主窗口/设置界面的同构实现（零构建，浏览器直接打开）：桌面 UI 全部用户故事在此实现',
-      '系统层能力（托盘/全局快捷键/IME hook/文件访问等）在载体中以「模拟层」呈现（界面可见、标注为系统层 mock，经 commands 接口调用）',
-      '真实桌面工程骨架（src-tauri/ 或 electron/）按模板结构生成并存于 08_APP/，commands 签名与载体 mock 一致——后续接入真实壳时 UI 层零改动',
+      '交付真实桌面壳与系统层实现以及可运行产物；在目标桌面上测试全局快捷键、托盘或输入等PRD要求的能力。',
+      '浏览器同构UI只证明该UI上下文，系统mock不能证明原生链路。',
     ],
   },
   'cli-tool': {
     label: 'CLI 工具',
     oneLiner: '命令行工具（终端运行、参数驱动），不是图形界面应用',
     stack: [
-      '长期演进锚点：citty（unjs，声明式命令定义）+ unbuild + Vitest；或 Python/Go 按模板备选',
+      '技术栈参考：citty（unjs，声明式命令定义）+ unbuild + Vitest；或 Python/Go 按模板备选',
       '输出规范：chalk 颜色 + ora 进度 + 结构化退出码（0 成功/非 0 失败）',
     ],
     structure: [
       '08_APP/src/：index.ts 入口（命令树）+ commands/（子命令）+ lib/（可独立测试的核心逻辑）+ utils/',
-      '08_APP/index.html：命令演控台载体（见下）',
+      '08_APP/：CLI入口、参数帮助及可运行产物；命令演控台只可作为可选演示',
     ],
     patterns: [
       '命令薄、逻辑厚：commands/ 只做参数解析与输出编排，核心逻辑在 lib/ 可单测',
@@ -167,25 +164,24 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '无 --help 的命令；吞错误不输出',
     ],
     carrierRole: [
-      '08_APP/index.html = 命令演控台（浏览器可打开）：命令清单 + 参数说明 + 模拟执行演示（输入参数 → 展示输出）',
-      '用户故事的验收演示在演控台完成；真实 CLI 代码在 08_APP/src/ 按上述结构组织',
+      '交付实际CLI程序；驱动真实入口验证参数、标准输入输出、退出状态与实际副作用，演控台不是CLI验收。',
     ],
   },
   'ai-application': {
     label: 'AI 应用',
     oneLiner: '以 LLM 调用为核心逻辑的应用（聊天/生成/RAG/Agent），LLM 是主功能而非点缀',
     stack: [
-      '长期演进锚点：Vercel AI SDK（streamText/useChat）+ pgvector 或 LibSQL + Drizzle',
+      '技术栈参考：Vercel AI SDK（streamText/useChat）+ pgvector 或 LibSQL + Drizzle',
       'Prompt 管理：独立文件（.prompt/.md）+ {{placeholder}} 变量，Git 可追踪，不硬编码在代码里',
     ],
     structure: [
-      '08_APP/：index.html 入口 + prompts/（prompt 模板文件）+ js/（对话状态/流式渲染/护栏逻辑）',
-      '载体中 LLM 调用以本地模拟引擎呈现（见下），真实接入点集中在一个 provider 模块',
+      '08_APP/：按实际Web/桌面/CLI形态组织入口 + prompts/ + provider/ + 状态与交互层',
+      '真实模型接入集中在provider模块；模拟引擎只用于隔离测试，真实业务验收需实际端点证据',
     ],
     patterns: [
       '流式输出：逐 token 渲染 + 思考中指示；会话历史持久化（本地存储）',
       '护栏双端：输入（长度/注入检测）+ 输出（格式校验/敏感信息）',
-      '成本意识：每次调用记录 token 用量（模拟层也要展示用量概念）',
+      '成本意识：真实调用记录实际token用量，付费或外部发送必须经过用户确认',
     ],
     antiPatterns: [
       '在客户端/UI 层硬编码 API key',
@@ -193,8 +189,8 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '无长度/频率限制直接透传用户输入',
     ],
     carrierRole: [
-      '08_APP/index.html = 应用本体（AI 应用天然是 Web 形态）：聊天/生成界面全部用户故事在此实现',
-      'LLM 调用在载体中由「模拟引擎」承担（规则/模板生成，界面标注为演示模型），真实 provider 接入点预留为独立模块',
+      'AI应用不天然等于网页：平台和产物由PRD及架构决定；真实模型调用与数据链路须有对应测试证据。',
+      'mock只作明确标注的辅助测试，不可把规则生成替代实际ASR/LLM等主功能。',
     ],
   },
 }
@@ -327,14 +323,11 @@ export interface CategoryGuideInput {
 /**
  * 构建「工程品类」注入节（coding 委派任务专用）。
  *
- * 与下游验收链路的契约（不可破坏）：预览/点选纠错/GWT 的锚点始终是
- * 08_APP/index.html（零构建浏览器载体）；品类差异只改变载体的角色定义与
- * 工程骨架的组织方式，不改变验收锚点本身。
+ * 品类只提供工程参考；实际产物与执行方式以PRD和engineering.json为准。
  */
 export function buildCategoryGuideLines(input: CategoryGuideInput): string[] {
   const meta = CATEGORY_META[input.category]
   const isDefault = input.source === 'default'
-  const isWeb = input.category === 'web-fullstack'
 
   const lines: string[] = [
     '## 工程品类判定：' + input.category + '（' + meta.label + '）',
@@ -354,7 +347,7 @@ export function buildCategoryGuideLines(input: CategoryGuideInput): string[] {
     )
   }
 
-  lines.push('### 品类工程要点（源自工程模板；结构与选型按此组织）')
+  lines.push('### 品类工程要点（模板参考；架构结合PRD确定选型）')
   for (const s of meta.stack) lines.push('- 技术栈：' + s)
   for (const s of meta.structure) lines.push('- 目录：' + s)
   for (const s of meta.patterns) lines.push('- 模式：' + s)
@@ -366,26 +359,18 @@ export function buildCategoryGuideLines(input: CategoryGuideInput): string[] {
       '### 模板全文（按需精读）',
       '完整工程模板已复制到：' + input.templatePath,
       '包含目录结构逐文件注释、关键配置内容、代码示例与参考项目。生成工程骨架前建议 Read 一遍',
-      '（Web 品类模板较长时至少读目录结构与测试策略两节）；细节拿不准时以模板为准。',
+      '（Web 品类模板较长时至少读目录结构与测试策略两节）；细节拿不准时结合PRD与架构澄清，不得因模板缩减真实交付范围。',
       '',
     )
   }
 
   lines.push('### 验收载体对齐（重要——决定产出怎么被验收）')
   for (const s of meta.carrierRole) lines.push('- ' + s)
-  if (!isWeb) {
-    lines.push(
-      '- 无论品类：08_APP/index.html 必须零构建可直接浏览器打开（约束节另有要求），',
-      '  所有可交互 UI 元素标注 data-ai-id/data-ai-type——预览、点选纠错与 GWT 验收测试都锚定在该文件；',
-      '- 品类工程骨架（服务端/系统层/CLI 代码等）与载体并存于 08_APP/ 下，骨架代码服务于真实工程演进，',
-      '  用户故事的验收演示以载体为准；模板中的测试骨架（Vitest/cargo test 等）作为长期工程参考，',
-      '  管线内验收以 06_TESTS 的 GWT 场景（浏览器载体执行）为准。',
-    )
-  } else {
-    lines.push(
-      '- 所有可交互 UI 元素标注 data-ai-id/data-ai-type（约束节已有要求）——预览、点选纠错与 GWT 验收都锚定在该文件。',
-    )
-  }
+  lines.push(
+    '- 交付与测试对象以03_ARCHITECTURE/engineering.json为准；构建、单测、集成测试和GWT行为验收分别报告。',
+    '- HTML交互元素保留data-ai-id/data-ai-type用于点选和适用的浏览器测试；非HTML平台使用实际驱动。',
+    '- 环境或执行器不具备时明确阻塞，保留真人安装/权限/外部发送确认；不得以mock、骨架或历史截图宣称交付完成。',
+  )
   lines.push('')
   return lines
 }

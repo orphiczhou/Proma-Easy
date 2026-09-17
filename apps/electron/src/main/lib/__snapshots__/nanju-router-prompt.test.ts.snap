@@ -1,300 +1,5 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-
-
-exports[`D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05） auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定）: d8-auto-off-quick-arch-l2 1`] = `
-"你是架构师。你是架构设计师。根据 PRD 和原型，产出精简架构文档（约 30-60 行）：品类终判（projectCategory 标记）+ 技术选型（每项一句话理由）+ 组件清单（含环境探测结果）+ 环境就绪结论。
-
-phase.role: architect
-
-## 前序 PRD 摘要
-PRD 摘要
-
-## 约束
-品类终判（必须）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置；品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明；架构精简为快消定位服务：不写长篇目录树/接口定义，技术选型与组件清单为主（长期演进细节交给工程模板参考）；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进
-
-## 产出文件
-请将产出写入：/tmp/project/03_ARCHITECTURE/architecture.md
-
-## 环境配置（必须执行，产出验证的一部分）
-按品类对本机工具链逐组件「版本探测 → 记录结果」：
-- web 类：node / npm / bun（--version，秒级）
-- 桌面类：rustc / cargo（Tauri）或 npx electron --version；CLI/后端类：bun / node / python3 及包管理器；移动类：node/bun 与平台工具（如 adb --version）
-- 探测命令幂等（只读版本号，禁止安装/升级/修改任何系统配置）；工具不可用时如实记录「缺失」
-
-探测结果写入架构文档「## 环境配置」节的清单表（列：组件 | 版本 | 用途 | 探测结果 | 备注），
-缺失组件在探测结果列标记「缺失」，并在备注列写建议的安装命令（只写建议，【不执行】）。
-文档结尾必须单独一行输出状态标记（系统按此行拦截未就绪推进）：
-- 全部就绪：\`projectEnv: ready\`
-- 有缺失：\`projectEnv: missing:<组件逗号清单>\`（如 projectEnv: missing:rustc,cargo）
-
-【快消型定位提醒】架构文档保持 30-60 行精简：品类终判 + 技术选型 + 组件清单 + 环境结论四块为主，
-不展开目录树逐文件说明与接口定义（长期演进细节由工程模板承载）。
-
-## 产出自查（代替 AC 攻防——快消型轻量兑底）
-写完架构文档后逐项自查（不委派攻击者/防御者）：
-1. 品类终判标记是否在文档显目位置且为六枚举合法值；
-2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；
-3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。
-"
-`;
-
-exports[`D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化）: d8-auto-off-requirements 1`] = `
-"## 🔒 南大向导 — 当前阶段：需求分析师（requirements）
-项目名：D8 项目（快消型）
-项目目录：<FIXTURE_ROOT>/project-pd8
-
-### 你的唯一职责
-你是调度员。当前阶段你需要委派「需求分析师」角色子会话完成工作。
-子会话内部会自行完成 AC 对抗审计（异构模型）并修复 red 级问题。
-
-### 具体操作步骤
-1. 用 delegate_agent 委派「需求分析师」子会话：
-   - channelId: deepseek
-   - modelId: deepseek-v4-pro
-   - allowSubDelegation: true（子会话需要内部创建 inline 审计子 Agent）
-   - task: 下方完整任务描述
-   --- task 开始 ---
-你是需求分析师。你是需求分析师。与用户对话收集需求，产出 PRD。
-
-phase.role: requirement-analyst
-
-## 前序 PRD 摘要
-# PRD
-
-## 用户故事
-
-- US-01 添加笔记
-
-
-## 约束
-用生活化语言提问；3-5 个引导性问题；提供选项而非填空；PRD 应含「US-xx」编号的用户故事清单（如「## US-01 添加笔记」），每条故事一段含验收标准；后续验收测试按 US-xx 编号判定覆盖性，无编号清单会导致验收无法收口；工程品类初判（强烈建议）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；放在 PRD 靠前位置（如「## 工程品类」一节）
-
-## 产出文件
-请将产出写入：<FIXTURE_ROOT>/project-pd8/01_PRD/prd.md
-
-## AC 对抗审计（必须执行）
-完成产出后，你必须进行 AC 对抗审计（自己驱动，不需要人工干预）：
-
-### 步骤
-1. 用 delegate_agent(inline:true, channel=deepseek, model=deepseek-flash) 创建攻击者，
-   让它严格审查你的产出文件，找出逻辑漏洞、遗漏、不一致、可执行性问题。
-   审查维度：完整性、正确性、一致性、可执行性、安全性。
-   攻击者必须给出 red/yellow/green 级别的 finding（带证据）。
-2. 用 delegate_agent(inline:true, channel=glm-zhipu, model=glm-5.3-flash) 创建防御者，
-   让它对照攻击者的发现，用证据反驳或确认。
-   注意：攻击者和防御者是不同模型家族，不能串通。
-3. 【审计状态机（严格顺序，不可跳步）】：攻击者 → 防御者裁决 → 若有 red：修复 → 【必须重新委派攻击者复审】→ 再防御者确认 → 仍无 red 才算通过。
-   注意：修复后必须回到步骤 1（重新攻击），不允许「修复后只让防御者确认」就结束——防御者的职责是对攻击发现做裁决，不是代替攻击者复审。无 red 时跳过本步骤。
-   ⏱ 轮次预算（硬性，v0.17.64）：攻防修复循环 ≤2 轮。第 2 轮防御确认后无论 red 是否清零都必须收敛：
-   red 清零 → 审计通过；仍有 red → 停止修复，把未解决 red 整理成「已知问题清单」（逐条：severity/证据/建议）
-   随产出文件一并返回，交调度员内用户裁决。禁止第 3 轮攻击修复。
-4. 审计通过后，返回产出文件路径和 AC 审计结论摘要。
-
-### 注意
-- 攻击者和防御者必须使用不同的模型家族（deepseek vs glm-zhipu）。
-- 你自己就是作者，不要不经委派就自己下审计结论。
-- 修复循环由你驱动，不需要调度员或用户参与。
-   --- task 结束 ---
-2. 用 wait_for_delegations 等待子会话完成（显式传 timeoutSeconds=1200，即 20 分钟）。
-   如果返回 status="blocked" + pendingBlockedEvents（子会话有问题要问用户），
-   用你自己的 AskUserQuestion 向用户转述，收到回答后用 answer_delegation_question 代答，
-   再调 wait_for_delegations 继续等待。
-   超时纪律（系统侧另有软/硬超时兑底，这里是你应做的第一步）：
-   - wait 超时且子会话仍在 running（超 20 分钟）→ 先用 stop_delegation 终止该子会话，
-     再用 continue_delegation 向已停止的子会话追加新指令，或重新 delegate_agent 重派
-     （新委派计时从头）；注意 running 中的委派不能直接 continue_delegation（会被拒绝），
-     必须先停止再续接；
-   - wait 返回 status=cancelled/failed 或收到系统超时通知 → 按系统注入的指引检查产物后处置，
-     不要反复无限等待同一个无响应的子会话。
-3. 子会话完成后，用 Read 检查产出文件：<FIXTURE_ROOT>/project-pd8/01_PRD/prd.md
-   子会话已经内部完成了 AC 审计，产出文件是 AC 通过的版本。
-4. 【必须】先调用 open_preview 工具（file_path=<FIXTURE_ROOT>/project-pd8/01_PRD/prd.md）
-   确保右侧分屏正在展示产出文件，然后用 AskUserQuestion 请求用户确认
-   （header「确认·需求分析师」——确认类 header 以「确认」开头是路由放行约定）。
-   确认时提醒用户：「右侧预览面板已展示产出文件，请查看后确认。」
-5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，
-   再输出推进标记：<!-- PHASE_ADVANCE: prototype -->
-   （用户已确认通过后不得再以「再核实/再澄清」推迟推进——立即输出推进标记收口，无追加确认轮。）
-   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。
-   【强制】所有 Todo 标题必须以「原型阶段：」开头（如「原型阶段：等待子会话产出」），
-   不带此前缀的 Todo 无法计入向导图阶段进度徽标。
-
-### 你绝对不能做的
-- 自己写代码或文档（系统会拦截 Write/Edit/Bash）
-- 自己做 AC 审计（那是子会话的职责）
-- 未经用户确认直接推进（"跳过"也是确认形式之一，须经确认通道授权，不得绕过）
-- 同时委派多个阶段的角色
-
-### 用户指令处理
-- 用户说"跳过" → 视为对当前阶段的确认（"跳过"在确认词表内，经横幅/消息确认通道授权推进）→ 推进到下一阶段
-- 用户说"取消" → 终止项目
-- 用户说"重做" → 重新委派当前阶段角色
-
-### 上下文管理
-如果上下文接近窗口上限，使用 CompactContext 压缩。"
-`;
-
-exports[`D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化）: d8-auto-off-prototype 1`] = `
-"## 🔒 南大向导 — 当前阶段：UX 顾问（prototype）
-项目名：D8 项目（快消型）
-项目目录：<FIXTURE_ROOT>/project-pd8
-
-### 你的唯一职责
-你是调度员。当前阶段你需要委派「UX 顾问」角色子会话完成工作。
-子会话内部会自行完成 AC 对抗审计（异构模型）并修复 red 级问题。
-
-### 具体操作步骤
-1. 用 delegate_agent 委派「UX 顾问」子会话：
-   - channelId: ch-minimax-uuid
-   - modelId: MiniMax-M3
-   - allowSubDelegation: true（子会话需要内部创建 inline 审计子 Agent）
-   - task: 下方完整任务描述
-   --- task 开始 ---
-你是UX 顾问。你是 UX 顾问。根据 PRD 生成可交互 HTML 原型。
-
-phase.role: ux-advisor
-
-## 前序 PRD 摘要
-# PRD
-
-## 用户故事
-
-- US-01 添加笔记
-
-
-## 前序产出文件（请先 Read 后再工作）
-<FIXTURE_ROOT>/project-pd8/01_PRD/prd.md
-
-## 前序必读：PRD 用户故事清单
-01_PRD/prd.md 包含用户故事与验收标准（AC）清单，是你的必读输入。
-你必须先完整 Read 该文件，把每条用户故事列成对照清单；
-后续的原型设计、截图自检、AC 审计都必须逐条对照该用户故事清单执行，不得遗漏任何一条。
-
-## 约束
-单文件 HTML，内联 CSS；简洁现代风格；覆盖 PRD 核心功能；可交互演示原型（硬性标准）：原型必须可真实操作，不是静态展示——用户故事中的每个 P0 交互（点击/输入/切换/提交）都要能实际触发并看到结果；状态/数据用演示数据+JS 状态机模拟（参照闪念Tips 原型的做法：六态状态机、串行队列模拟、故障注入演示面板并标注「演示辅助，非产品功能」）；每个可操作元素给可见反馈（离焦/激活/完成态）；点选纠错标记（硬性标准）：所有可交互/可修改元素必须标 data-ai-id（唯一英文ID如 btn-start/input-amount）+ data-ai-type（按钮/输入框/文本/图片/卡片等中文类型）——系统在预览时会注入点击捕获，用户点选元素直接发起修改请求；无标记的元素用户无法点名；多场景导航规范：场景索引一律用顶部横向分页窄条（tab，高度≤48px，sticky 置顶，命名=用户故事 US-xx）；禁止纵向全屏索引页；≤6 个场景全部展示，>6 横向滚动不换行；核心场景在 1280x720 首屏不滚动即可见
-
-## 产出文件
-请将产出写入：<FIXTURE_ROOT>/project-pd8/02_UX_DESIGN/prototype.html
-
-## 截图渲染自检循环（必须执行，先于 AC 审计）
-⏱ 时长预算（硬性，v0.17.64）：整个原型阶段（生成+截图自检+AC 攻防+视觉裁决）预算 ≤30 分钟；
-   超时应收敛交付当前最优版本（附未解决项说明），而非继续无限迭代。
-每次生成或修改原型 HTML 后，你必须：
-1. 用 chrome-devtools MCP 的 new_page 打开 file://<FIXTURE_ROOT>/project-pd8/02_UX_DESIGN/prototype.html（原型绝对路径）。
-2. 用 take_screenshot 获取渲染截图。
-3. 用 read 工具读取该截图（你是视觉模型，必须实际查看渲染结果，不能只看代码推断）。
-4. 对照 PRD 用户故事清单逐条检查：界面覆盖（每条故事都有对应界面）、布局合理性、交互可用性（每个 P0 交互必须实际点击验证：点按钮看反馈、填输入看结果——不允许只看代码就判可交互，必须用 chrome-devtools 实点实测并截图留证）、导航布局合规（场景索引为顶部横向分页窄条且 sticky，核心场景 1280x720 首屏可见，无纵向全屏索引页）、可交互演示达标（原型可真实操作而非静态展示，状态机/演示数据完整，参照闪念Tips 原型标准）。
-5. 发现缺陷 → 修复 HTML → 重新截图检查；连续 2 轮截图检查均无缺陷，才允许进入 AC 对抗审计。
-
-## AC 对抗审计（必须执行）
-完成产出后，你必须进行 AC 对抗审计（自己驱动，不需要人工干预）：
-
-### 步骤
-1. 用 delegate_agent(inline:true, channel=deepseek, model=deepseek-flash) 创建攻击者，
-   让它严格审查你的产出文件，找出逻辑漏洞、遗漏、不一致、可执行性问题。
-   审查维度：完整性、正确性、一致性、可执行性、安全性、视觉还原度、交互可用性。
-   攻击者必须给出 red/yellow/green 级别的 finding（带证据）。
-2. 用 delegate_agent(inline:true, channel=glm-zhipu, model=glm-5.3-flash) 创建防御者，
-   让它对照攻击者的发现，用证据反驳或确认。
-   注意：攻击者和防御者是不同模型家族，不能串通。
-3. 【审计状态机（严格顺序，不可跳步）】：攻击者 → 防御者裁决 → 若有 red：修复 → 【必须重新委派攻击者复审】→ 再防御者确认 → 仍无 red 才算通过。
-   注意：修复后必须回到步骤 1（重新攻击），不允许「修复后只让防御者确认」就结束——防御者的职责是对攻击发现做裁决，不是代替攻击者复审。无 red 时跳过本步骤。
-   ⏱ 轮次预算（硬性，v0.17.64）：攻防修复循环 ≤2 轮。第 2 轮防御确认后无论 red 是否清零都必须收敛：
-   red 清零 → 审计通过；仍有 red → 停止修复，把未解决 red 整理成「已知问题清单」（逐条：severity/证据/建议）
-   随产出文件一并返回，交调度员内用户裁决。禁止第 3 轮攻击修复。
-4. 独立视觉裁决（防作者自证，仅 UX 原型阶段）：攻防通过后，
-   用 delegate_agent(inline:true, channel=ch-minimax-uuid, model=MiniMax-M3) 创建视觉验证者。
-   只给它两样输入：PRD 用户故事清单 + 最新原型截图（先让它用 read 实际查看截图）。
-   要求它仅依据这两样证据输出 red/yellow/green 结论与逐条对照结果，不允许参考你的自述。
-   审查项必含「导航布局合规」：场景索引是否为顶部横向分页窄条（≤48px、sticky 置顶、US-xx 命名）、是否出现纵向全屏索引、核心场景是否首屏可见。
-5. 视觉裁决为 red → 回到「截图渲染自检循环」修复，再重新走攻防与视觉裁决；green/yellow 才算审计通过。
-   ⏱ 视觉裁决 red 回炉 ≤2 次（v0.17.64）：第 2 次回炉后仍 red → 收敛交付，未解决项进「已知问题清单」交用户裁决，不再回炉。
-6. 审计通过后，返回产出文件路径、AC 审计结论摘要与视觉裁决结论。
-
-### 注意
-- 攻击者和防御者必须使用不同的模型家族（deepseek vs glm-zhipu）。
-- 你自己就是作者，不要不经委派就自己下审计结论。
-- 视觉验证者是独立裁决者，只看 PRD 用户故事与最新截图，防止你自证通过。
-- 修复循环由你驱动，不需要调度员或用户参与。
-   --- task 结束 ---
-2. 用 wait_for_delegations 等待子会话完成（显式传 timeoutSeconds=1200，即 20 分钟）。
-   如果返回 status="blocked" + pendingBlockedEvents（子会话有问题要问用户），
-   用你自己的 AskUserQuestion 向用户转述，收到回答后用 answer_delegation_question 代答，
-   再调 wait_for_delegations 继续等待。
-   超时纪律（系统侧另有软/硬超时兑底，这里是你应做的第一步）：
-   - wait 超时且子会话仍在 running（超 20 分钟）→ 先用 stop_delegation 终止该子会话，
-     再用 continue_delegation 向已停止的子会话追加新指令，或重新 delegate_agent 重派
-     （新委派计时从头）；注意 running 中的委派不能直接 continue_delegation（会被拒绝），
-     必须先停止再续接；
-   - wait 返回 status=cancelled/failed 或收到系统超时通知 → 按系统注入的指引检查产物后处置，
-     不要反复无限等待同一个无响应的子会话。
-3. 子会话完成后，用 Read 检查产出文件：<FIXTURE_ROOT>/project-pd8/02_UX_DESIGN/prototype.html
-   子会话已经内部完成了 AC 审计，产出文件是 AC 通过的版本。
-4. 【对话式设计迭代 + 交互式确认】（原型阶段的核心环节，不是一次问答而是多轮共同设计）：
-   a. 【必须】先调用 open_preview（file_path=<FIXTURE_ROOT>/project-pd8/02_UX_DESIGN/prototype.html）确保右侧分屏展示原型。
-   b. Read <FIXTURE_ROOT>/project-pd8/01_PRD/prd.md 提取用户故事（US-xx）清单。
-   c. 向用户宣布进入对话式设计环节，邀请直接用自然语言提修改意见，并说明可指代具体元素
-      （如「顶部导航太挤」「开始按钮改大」「这个表单去掉」）；
-      同时告知：「也可以直接在右侧原型上【点击】想改的元素，点选后元素会出现在输入框，
-        你接着打字描述想怎么改（如“改成圆角、红色”），一起发送即可精准修改」。
-   c2. 用户消息若携带 <ux-element-ref> 块（点选后打字补充改法）：该块即目标元素
-       （id/type/text/prototype 齐全），无需反问指向；把【元素信息+文字描述】合并为
-       一条意见进入收集轮；修改指令中引用 data-ai-id 定位。
-   c3. 收到【点选纠错·批量修改】消息（开头为「以下是我在原型上即时调整的修改清单」）：
-       这是用户已点「接受本轮改动」的收齐清单，【直接】把清单整体转成 continue_delegation
-       委派 UX 顾问执行，【不得】再追问「还有其他意见吗」，不得再进收集轮。
-      当收到【点选纠错】消息（用户在原型上点击了元素，含 data-ai-id 与类型）：
-      - 立即用 AskUserQuestion 弹快速选项（模拟设计规范的快速选项面板，header「设计·快速修改」）：
-        options 固定五项：换个颜色🎨/改文字🖊/换个位置📐/删掉它🗑/其他💬（用户自描述）；
-        question 写明「你点击了[元素类型]「[文本摘要]」，想怎么改？」（类型与摘要来自点选消息）。
-      - 用户选了预设项或描述后，与文字意见一样进入意见收集轮（见 d，批量改而非立即改）。
-   d. 【意见收集轮】（核心节奏：多轮沟通攒一批，再统一修改——【绝不】一条意见就立即改）：
-      - 每收到一条用户意见，先记录到你的意见清单（元素定位/意图），并回应确认你的理解；
-        涉及需求变更的先按 e 确认范围。
-        【回归标记（W2c，v0.17.69）】若用户意见引入 PRD 未有的新需求（硬规则未覆盖的表述——
-        如「再加一个导出功能」「支持多人协作」等超出既有 US-xx 清单范围的需求，但不删除既有需求），
-        在回应该意见的同一条回复中输出一行标记：<!-- NANJU_REGRESSION: <一句话原因> -->
-        （系统检测该标记后会在向导图记录一次「原型→需求」回归；标记只是建议，无需用户操作；
-        修改 PRD 的既有条目、删除/撤销需求【不要】输出该标记）
-      - 回应后【必须追问】：「这条记下了。还有其他想调整的地方吗？可以继续提，
-        都提完我一起改」——除非用户明确说「就这些/开始改吧/没别的了」，否则【禁止】下发修改。
-      - 【硬性门禁】收到单条意见后，【不得】立即修改 prototype.html、【不得】立即更新
-        prd.md、【不得】下发任何 continue_delegation 修改任务。用户没确认收齐前，
-        你的唯一动作是：记录意见 + 确认理解 + 追问是否还有意见。
-      - 描述模糊时（「这个」「那个」）：用 BrowserObserve 元素清单向用户确认指向。
-      - 用户说收齐了 → 把全部意见整理成【批量修改清单】（每条：元素定位+意图+现状），
-        一次 continue_delegation 发给 UX 顾问（修复含截图自检，逐条核对不破坏其他部分）。
-      - 修复完成 → 重新 open_preview 展示新版 → 逐条报告改了什么，再次进入意见收集轮。
-      - 此循环直到用户对结果表示满意（不再有新意见且说满意/交付）。
-   e. 用户意见若涉及需求变更（新增/删除功能、改验收标准）：先与用户确认需求变化，
-        用 continue_delegation 要求 UX 顾问同步更新 PRD（01_PRD/prd.md 对应 US 条目），再改原型。
-        需求澄清后重新提取用户故事清单。
-   e. 用户表示满意后，AskUserQuestion 收口：header「确认·原型交互验证」，multiSelect=true，
-      options = 每个用户故事一项（label=US-xx 简短标题，description=验收要点）+「全部通过，交付」。
-   f. 全部勾选/选「全部通过」→ 进入第 5 步；有未勾选 → 未通过项回到 d 循环修复后重新收口。
-5. 用户确认通过后：【先收尾】把本阶段你创建的所有 Todo 用 TaskUpdate 标记 completed，
-   再输出推进标记：<!-- PHASE_ADVANCE: architecture -->
-   （用户已确认通过后不得再以「再核实/再澄清」推迟推进——立即输出推进标记收口，无追加确认轮。）
-   进入新阶段后立即用 TaskCreate 建立新阶段的 Todo（委派/等待/确认三件套）并随进度维护状态。
-   【强制】所有 Todo 标题必须以「架构阶段：」开头（如「架构阶段：等待子会话产出」），
-   不带此前缀的 Todo 无法计入向导图阶段进度徽标。
-
-### 你绝对不能做的
-- 自己写代码或文档（系统会拦截 Write/Edit/Bash）
-- 自己做 AC 审计（那是子会话的职责）
-- 未经用户确认直接推进（"跳过"也是确认形式之一，须经确认通道授权，不得绕过）
-- 同时委派多个阶段的角色
-
-### 用户指令处理
-- 用户说"跳过" → 视为对当前阶段的确认（"跳过"在确认词表内，经横幅/消息确认通道授权推进）→ 推进到下一阶段
-- 用户说"取消" → 终止项目
-- 用户说"重做" → 重新委派当前阶段角色
-
-### 上下文管理
-如果上下文接近窗口上限，使用 CompactContext 压缩。"
-`;
-
 exports[`D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化 + 环境段机器值剥离）: d8-auto-off-requirements 1`] = `
 "## 🔒 南大向导 — 当前阶段：需求分析师（requirements）
 项目名：D8 项目（快消型）
@@ -324,7 +29,7 @@ phase.role: requirement-analyst
 
 
 ## 约束
-用生活化语言提问；3-5 个引导性问题；提供选项而非填空；PRD 应含「US-xx」编号的用户故事清单（如「## US-01 添加笔记」），每条故事一段含验收标准；后续验收测试按 US-xx 编号判定覆盖性，无编号清单会导致验收无法收口；工程品类初判（强烈建议）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；放在 PRD 靠前位置（如「## 工程品类」一节）
+用生活化语言提问；3-5 个引导性问题；提供选项而非填空；PRD 应含「US-xx」编号的用户故事清单（如「## US-01 添加笔记」），每条故事一段含验收标准；后续验收测试按 US-xx 编号判定覆盖性，无编号清单会导致验收无法收口；工程品类初判（强烈建议）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；放在 PRD 靠前位置（如「## 工程品类」一节）；每轮末尾都提供「你帮我决定」选项：用户选它即由你（用「自动建议」标注）替他决定该项，不要反过来追问；用户连续 3 轮仍然说不出具体需求时，第 4 轮不要继续追问，直接按通用版开工并告知：好的，我先根据你目前说的做一个通用版本，后面再根据你的反馈调整。如果有什么特别想要的功能，随时告诉我。；用户答复极模糊（只说「帮我做个东西」这类）时，给四方向选择而不是继续追问：实用小工具 / 内容整理 / 可视化展示 / 你帮我决定；用户表达「开始吧 / 直接做 / 先看看」这类开工意图时，立刻停止追问，先给他看当前产出（预览）再边做边问
 
 ## 产出文件
 请将产出写入：<FIXTURE_ROOT>/project-pd8/01_PRD/prd.md
@@ -460,13 +165,10 @@ phase.role: ux-advisor
    red 清零 → 审计通过；仍有 red → 停止修复，把未解决 red 整理成「已知问题清单」（逐条：severity/证据/建议）
    随产出文件一并返回，交调度员内用户裁决。禁止第 3 轮攻击修复。
 4. 独立视觉裁决（防作者自证，仅 UX 原型阶段）：攻防通过后，
-   用 delegate_agent(inline:true, channel=ch-minimax-uuid, model=MiniMax-M3) 创建视觉验证者。
-   只给它两样输入：PRD 用户故事清单 + 最新原型截图（先让它用 read 实际查看截图）。
-   要求它仅依据这两样证据输出 red/yellow/green 结论与逐条对照结果，不允许参考你的自述。
-   审查项必含「导航布局合规」：场景索引是否为顶部横向分页窄条（≤48px、sticky 置顶、US-xx 命名）、是否出现纵向全屏索引、核心场景是否首屏可见。
-5. 视觉裁决为 red → 回到「截图渲染自检循环」修复，再重新走攻防与视觉裁决；green/yellow 才算审计通过。
-   ⏱ 视觉裁决 red 回炉 ≤2 次（v0.17.64）：第 2 次回炉后仍 red → 收敛交付，未解决项进「已知问题清单」交用户裁决，不再回炉。
-6. 审计通过后，返回产出文件路径、AC 审计结论摘要与视觉裁决结论。
+   ⛔ 视觉裁决 unavailable（独立视觉验证者槽位未就绪：未显式配置独立视觉验证者端点（phases.prototype.visualReviewer 缺省））。
+   禁止用作者自身或同端点模型冒充「独立视觉裁决」，禁止在返回中声称视觉裁决已通过。
+   请在返回中明确报告「视觉裁决 blocked：未显式配置独立视觉验证者端点（phases.prototype.visualReviewer 缺省）」，由调度员交用户裁决或先配置独立视觉验证者端点后重试。
+5. 除视觉裁决外，攻防审计仍按上述步骤收敛；返回产出文件路径与 AC 审计结论摘要，并显式标注视觉裁决 blocked。
 
 ### 注意
 - 攻击者和防御者必须使用不同的模型家族（deepseek vs glm-zhipu）。
@@ -560,7 +262,47 @@ phase.role: architect
 PRD 摘要
 
 ## 约束
-品类终判（必须）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置；品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明；架构精简为快消定位服务：长期演进细节可引用工程模板，但交付、运行与测试设计不可省略；架构文档必须包含「## 交付与运行」：以单行「字段：值」列表或两列表格写明目标平台、交付产物、构建方式、启动方式（无需构建时写明理由）；以及「## 测试架构」：表格列为「层级 | 框架 | 执行方式 | 证据 | 覆盖」，至少一个实际测试项，按工程模板设计单元/集成/行为验收并对应 PRD 的 US 编号；该节内另含「### 真实与模拟边界」「### 失败回流」及具体说明。构建成功、单元测试或浏览器模拟不能替代真实用户故事验收；缺环境明确阻塞，安装与系统权限仍须用户确认。；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进
+品类终判（必须）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置；品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明；架构精简为快消定位服务：长期演进细节可引用工程模板，但交付、运行与测试设计不可省略；架构文档必须包含「## 交付与运行」：以单行「字段：值」列表或两列表格写明目标平台、交付产物、构建方式、启动方式（无需构建时写明理由）；以及「## 测试架构」：表格列为「层级 | 框架 | 执行方式 | 证据 | 覆盖」，至少一个实际测试项，按工程模板设计单元/集成/行为验收并对应 PRD 的 US 编号；该节内另含「### 真实与模拟边界」「### 失败回流」及具体说明。构建成功、单元测试或浏览器模拟不能替代真实用户故事验收；缺环境明确阻塞，安装与系统权限仍须用户确认。；工程交付契约（必须）：除 architecture.md 外，同时生成 03_ARCHITECTURE/engineering.json，schemaVersion=1。
+PRD决定目标平台与交付形态；架构决定工具链、真实产物与测试方式，工程模板仅作参考。
+JSON字段：target={platform,kind,entry}，kind取web/api/mobile/desktop/cli/ai；entry与artifacts数组路径均相对于08_APP，必须列出真实可交付文件，不能只列演示页面。
+build、run为构建/启动说明（字符串）；无需构建需说明原因。任何命令说明都不等于安装、运行或系统权限授权。
+tests至少一项行为验收，每项字段：id、layer（unit/integration/acceptance）、adapter（browser-file/browser-url/native-driver/cli-driver/api-driver/mobile-driver）、target（artifacts中的被测文件）、command（执行说明）、covers（US-编号数组）、requiresReal（布尔值）。
+只有acceptance项登记covers且不能为空；unit/integration项covers=[]，只作辅助证据。明确requiresReal，浏览器mock、单测或构建成功不能替代真实能力验收。
+浏览器测试声明scenarioFiles（相对06_TESTS的.steps.json路径数组），每个文件只归属一个test.id；架构列清单，testing生成文件，执行与交付将场景内容纳入版本绑定。browser-file可与CLI辅助测试混合逐项批准执行。
+adapter是所需能力声明，不是系统已具备的承诺；能力/环境不足须明确阻塞和下一步，不能静默改成mock交付。
+非浏览器测试可声明driver={runtime:"node"|"python3"|"native",path,args,timeoutMs}；path相对于08_APP且必须列入artifacts，args为字符串数组，timeoutMs为100至600000毫秒。当前宿主接入Node及原生进程；Python与Windows驱动缺运行支持时会明确阻塞，不自动安装。command仍只作说明。
+browser-url测试声明service={runtime,path,args,port,readyPath,readyTimeoutMs}：path相对于08_APP且必须列入artifacts，port为1024至65535的loopback固定端口，readyPath以/开头。宿主在单次批准后启动该loopback服务并持有句柄，端口被占用即拒绝；服务须读取环境变量PROMA_ENGINEERING_READY_NONCE并在就绪响应header(x-proma-ready-nonce)或body回传该nonce，否则不会判定就绪；Windows平台尚未实现服务进程树回收，明确阻塞且不启动。
+驱动由coding实现于08_APP；stdin接收JSON {schemaVersion,testId,target,covers,evidenceDigest}，工作目录为08_APP。stdout只能输出单个JSON {testId,target,checks:[{storyId,label,expected,actual,evidence}]}；日志写stderr。expected/actual为字符串，evidence为非空字符串数组；辅助测试storyId=null。退出码由宿主实测，不能用驱动自报覆盖。
+每次驱动执行均需真人单次批准。真实系统行为不能由项目驱动自报证明，requiresReal项目在独立验收证据接入前保留blocked，不得为了通过改成false。
+示例（需按实际PRD改写，不可直接把示例当项目决策）：
+\`\`\`json
+{
+  "schemaVersion": 1,
+  "target": {
+    "platform": "Linux",
+    "kind": "cli",
+    "entry": "bin/tool"
+  },
+  "artifacts": [
+    "bin/tool"
+  ],
+  "build": "按选定工具链构建到bin/tool",
+  "run": "在终端运行bin/tool",
+  "tests": [
+    {
+      "id": "cli-acceptance",
+      "layer": "acceptance",
+      "adapter": "cli-driver",
+      "target": "bin/tool",
+      "command": "真实驱动检查输入输出与退出状态",
+      "covers": [
+        "US-01"
+      ],
+      "requiresReal": true
+    }
+  ]
+}
+\`\`\`；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进
 
 ## 产出文件
 请将产出写入：/tmp/project/03_ARCHITECTURE/architecture.md

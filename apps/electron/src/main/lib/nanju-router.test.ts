@@ -385,8 +385,10 @@ describe('testing 阶段（P1 Sprint B：GWT 验收 + 裁判判定闭环）', ()
 
   test('testing 约束含映射前提（先读 08_APP 实码提 data-ai-id）与透明 skip 语义；不含自由 JS op（v0.17.63）', () => {
     const constraints = getPhaseNode('quick', 'testing')!.constraints.join('\n')
-    expect(constraints).toContain('先 Read 08_APP/index.html')
-    expect(constraints).toContain('禁止臆造 selector')
+    expect(constraints).toContain('先读architecture.md及engineering.json')
+    expect(constraints).toContain('从实际HTML及引用代码提取data-ai-id')
+    expect(constraints).toContain('独立核验真实对象和行为检查')
+    expect(constraints).toContain('禁止臆造selector')
     expect(constraints).toContain('unmapped')
     expect(constraints).toContain('禁止严格时刻断言')
     expect(constraints.includes('eval')).toBe(false) // 自由 JS op 已移除（AC G-001/G-002）

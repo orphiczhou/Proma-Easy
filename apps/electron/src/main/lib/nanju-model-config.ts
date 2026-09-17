@@ -68,6 +68,16 @@ export interface PhaseModelEntry {
   acAttacker?: NanjuACActor
   /** per-phase AC 防御者显式覆盖（家族多样性必查项：作者 glm 系阶段的防御者必须异族） */
   acDefender?: NanjuACActor
+  /**
+   * B2：独立视觉验证者覆盖（独立于 author；prototype 阶段专属，其他阶段可选）。
+   * 语义：原型阶段完成后需独立裁决者（visual validator）检查原型质量——与作者同端点
+   * 视为「同端点自证」（无独立裁决价值）。channel 可为 'minimax' 家族标记（运行时按
+   * 渠道记录解析为具体 UUID 渠道，见 nanju-router-prompt.resolveVisualValidatorSlot）。
+   *
+   * 与 author 同 channel+model 不允许同时生效：运行时 resolveVisualValidatorSlot 判为
+   * blocked，gate 拒绝该委派（同端点自证）。未配置时为清晰 blocked（不默认 minimax）。
+   */
+  visualReviewer?: NanjuACActor
 }
 
 /** AC 攻防预设条目 */
@@ -130,6 +140,11 @@ export const FALLBACK_PHASE_MODELS: Record<NanjuModelPhaseId, PhaseModelEntry> =
     channel: 'minimax',
     model: 'MiniMax-M3',
     fallbacks: ['glm-zhipu:glm-5.3-flash'],
+    // B2：visualReviewer 默认值不复盖为 minimax/MiniMax-M3——与 author 同家族标记运行时
+    // 解析后同 UUID 渠道（同端点自证）；用户在 nanju-model-config 中显式配置视觉验证者
+    // （异族端点）才启用 visualReviewer 槽位。未配置时 prototype 阶段 不渲染独立视觉
+    // 验证者，而是渲染可见 blocked（“⛔ 视觉裁决 unavailable” + 要求显式标注），
+    // **不是静默跳过**，也不硬阻断 prototype 阶段推进。
   },
   architecture: {
     channel: 'glm-zhipu',
@@ -287,6 +302,7 @@ function cloneFallback(): LoadedNanjuModelConfig {
       ...(entry.fallbacks ? { fallbacks: [...entry.fallbacks] } : {}),
       ...(entry.acAttacker ? { acAttacker: { ...entry.acAttacker } } : {}),
       ...(entry.acDefender ? { acDefender: { ...entry.acDefender } } : {}),
+      ...(entry.visualReviewer ? { visualReviewer: { ...entry.visualReviewer } } : {}),
     }
   }
   return {
@@ -385,6 +401,13 @@ function mergeFileLayer(base: LoadedNanjuModelConfig, file: NanjuModelConfigFile
         if (patch.acDefender !== undefined) {
           const actor = sanitizeActor(patch.acDefender, `${ctx}.acDefender`)
           if (actor) target.acDefender = actor
+        }
+        if (patch.visualReviewer !== undefined) {
+          // B2：visualReviewer 字段级覆盖（合法 {channel, model} 两键非空）；非法 warn
+          // 并保持低层值（与 acAttacker/acDefender 同样的容错口径——设置界面保存前已校验，
+          // 此处为参数文件手工编辑与内置文件层加载容错）。proto 默认已带 minimax/MiniMax-M3。
+          const actor = sanitizeActor(patch.visualReviewer, `${ctx}.visualReviewer`)
+          if (actor) target.visualReviewer = actor
         }
       }
     }
@@ -521,10 +544,17 @@ export interface ResolvedPhaseModelConfig {
   fallbacks: NanjuModelEndpoint[]
   acAttacker?: NanjuACActor
   acDefender?: NanjuACActor
+  /**
+   * B2：独立视觉验证者配置（prototype 阶段可选；其他阶段通常 undefined；**默认未配置**）。
+   * 运行时由 nanju-router-prompt.resolveVisualValidatorSlot 进一步解析（minimax 家族标记 → UUID
+   * 渠道，忽略 model 字段）并与 author 比较：未配置/同端点 → 清晰 blocked（渲染可见 blocked，
+   * 非跳过）。
+   */
+  visualReviewer?: NanjuACActor
 }
 
 /**
- * 解析某阶段的有效模型配置（channel/model/fallbacks + per-phase AC 覆盖位）。
+ * 解析某阶段的有效模型配置（channel/model/fallbacks + per-phase AC 覆盖位 + B2 visualReviewer）。
  * nanju-router.makeRoute 在模块加载期逐阶段调用（ROUTES 构建）。
  */
 export function resolvePhaseModelConfig(phaseId: NanjuModelPhaseId): ResolvedPhaseModelConfig {
@@ -536,6 +566,7 @@ export function resolvePhaseModelConfig(phaseId: NanjuModelPhaseId): ResolvedPha
     fallbacks: (entry.fallbacks ?? []).map(parseEndpoint),
     ...(entry.acAttacker ? { acAttacker: { ...entry.acAttacker } } : {}),
     ...(entry.acDefender ? { acDefender: { ...entry.acDefender } } : {}),
+    ...(entry.visualReviewer ? { visualReviewer: { ...entry.visualReviewer } } : {}),
   }
 }
 

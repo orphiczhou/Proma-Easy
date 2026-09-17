@@ -39,8 +39,9 @@ mock.module('./channel-manager', () => ({
   getChannelById: () => null,
 }))
 
-const { buildL2TaskWithAC, resolveMinimaxM3Channel, getNanjuRouterPrompt } = await import('./nanju-router-prompt')
+const { buildL2TaskWithAC, resolveMinimaxM3Channel, resolveMinimaxM3Actor, resolveVisualValidatorSlot, resolvePhaseDelegationSlots, validateVisualValidatorDelegation, isVisualValidatorEndpointTarget, applyConfigAutofix, getNanjuRouterPrompt } = await import('./nanju-router-prompt')
 const { getPhaseNode, resolveACActors } = await import('./nanju-router')
+const { reloadNanjuModelConfig } = await import('./nanju-model-config')
 
 /** 构造测试用渠道 */
 function makeChannel(overrides: Partial<Channel> = {}): Channel {
@@ -132,13 +133,28 @@ describe('L2 委派指令构建（视觉闭环）', () => {
     expect(task).toContain('视觉还原度、交互可用性')
   })
 
-  test('prototype 阶段包含独立视觉裁决（inline minimax，只看 PRD 用户故事 + 最新截图，red 回修复循环）', () => {
+  test('prototype 阶段 未配独立视觉端点 → 独立视觉裁决段为清晰 blocked，不退回作者端点冒充', () => {
     const phase = getPhaseNode('quick', 'prototype')!
+    // 不传 visualValidator（默认未配 visualReviewer）→ 必须 blocked，禁止同端点自证
     const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('独立视觉裁决')
-    expect(task).toContain('channel=' + authorUuid)
-    expect(task).toContain('model=MiniMax-M3')
+    expect(task).toContain('视觉裁决 unavailable')
+    expect(task).toContain('禁止用作者自身或同端点模型冒充')
+    // 关键回归：不再渲染以作者端点为视觉验证者的 delegate_agent 指令
+    expect(task).not.toContain('创建视觉验证者')
+    expect(task).not.toContain('channel=' + authorUuid + ', model=MiniMax-M3) 创建视觉验证者')
+  })
+
+  test('prototype 阶段 视觉验证者 resolved → inline 独立端点（只看 PRD 用户故事 + 最新截图，red 回修复循环）', () => {
+    const phase = getPhaseNode('quick', 'prototype')!
+    const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project', null, null, undefined, undefined,
+      { status: 'resolved', channelId: 'vision-ch', modelId: 'vision-model' })
+
+    expect(task).toContain('独立视觉裁决')
+    expect(task).toContain('用 delegate_agent(inline:true, channel=vision-ch, model=vision-model, title=「独立视觉裁决」) 创建视觉验证者')
+    // R1(a)：title 稳定锚点必须写进指令（gate 无 slot 时的识别依据）
+    expect(task).toContain('title 必须逐字写作「独立视觉裁决」')
     expect(task).toContain('PRD 用户故事清单 + 最新原型截图')
     expect(task).toContain('不允许参考你的自述')
     expect(task).toContain('回到「截图渲染自检循环」')
@@ -182,12 +198,12 @@ describe('L2 委派指令构建（视觉闭环）', () => {
 describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
   const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
 
-  test('coding 包含零构建约束、沙箱边界约束与入口产出路径', () => {
+  test('coding 包含架构驱动交付、目录边界与旧静态入口兼容', () => {
     const phase = getPhaseNode('quick', 'coding')!
     const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
 
-    expect(task).toContain('零构建约束')
-    expect(task).toContain('禁止触碰其他 project-')
+    expect(task).toContain('按engineering.json的artifacts清单')
+    expect(task).toContain('不得触碰其他项目')
     expect(task).toContain('请将产出写入：/tmp/project/08_APP/index.html')
     // 点选纠错标记与原型同构
     expect(task).toContain('data-ai-id')
@@ -202,13 +218,13 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
     expect(task).toContain('允许只读其结构与关键交互段')
   })
 
-  test('coding 自测指令：chrome-devtools new_page 打开入口实测 P0 交互，连续 1 轮无缺陷', () => {
+  test('coding 自测依据真实架构与受管工具，缺能力不宣称实测', () => {
     const phase = getPhaseNode('quick', 'coding')!
     const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
 
-    expect(task).toContain('chrome-devtools MCP 的 new_page 打开入口文件')
-    expect(task).toContain('实测每个 P0 交互')
-    expect(task).toContain('连续 1 轮无缺陷才算完成')
+    expect(task).toContain('使用受管浏览器预览工具')
+    expect(task).toContain('真实用户故事验证依照架构执行')
+    expect(task).toContain('不把人工读代码记为实测通过')
   })
 
   test('coding 不含 prototype 专属视觉闭环（截图自检/视觉裁决/视觉维度），沿用默认五维审计', () => {
@@ -354,7 +370,9 @@ describe('AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①�
 
   test('prototype 阶段：总预算 ≤30 分钟提示 + 视觉裁决 red 回炉 ≤2 次', () => {
     const phase = getPhaseNode('quick', 'prototype')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    // resolved 视觉端点才渲染回炉预算；blocked 时不冒充视觉裁决
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project', null, null, undefined, undefined,
+      { status: 'resolved', channelId: 'vision-ch', modelId: 'vision-model' })
     expect(task).toContain('整个原型阶段（生成+截图自检+AC 攻防+视觉裁决）预算 ≤30 分钟')
     expect(task).toContain('超时应收敛交付当前最优版本')
     expect(task).toContain('视觉裁决 red 回炉 ≤2 次（v0.17.64）')
@@ -1356,5 +1374,444 @@ describe('W23 配置级 autofix（getNanjuRouterPrompt 预检 + model.config-aut
       phase, { channel: 'deepseek', model: 'deepseek-flash' }, 'PRD', [], '/tmp/project',
     )
     expect(withoutOverride).toContain('channel=glm-zhipu, model=glm-5.3-flash') // testing 攻击者预设覆盖
+  })
+})
+
+test('Given 直接构建工程coding委派 When 不经过L1外层 Then 产出路径仍指向工程交付说明', () => {
+  fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-direct-coding-'))
+  mkdirSync(join(fixtureRoot, '03_ARCHITECTURE'))
+  writeFileSync(join(fixtureRoot, '03_ARCHITECTURE/engineering.json'), '{}')
+  const task = buildL2TaskWithAC(getPhaseNode('quick', 'coding')!, { channel: 'deepseek', model: 'deepseek-flash' }, 'fixture', [], fixtureRoot)
+  expect(task).toContain('请将产出写入：' + fixtureRoot + '/08_APP/DELIVERY.md')
+  expect(task).not.toContain('请将产出写入：' + fixtureRoot + '/08_APP/index.html')
+})
+
+// ═══════════════ W-B：模型优先级与 AC 配置实现（B1 红测与既有契约锁定）═══════════════
+//
+// 验收契约（W-B §任务包）：
+// - 显式 prototype 作者配置优先：用户显式设置 phase.prototype.channel≠'minimax' 时，
+//   prompt 委派值用 phase.channel/phase.model，不被 resolvePrototypeAuthor 默认 M3 覆盖
+// - 默认配置与 resolvePhaseModelConfig 来源一致：FALLBACK_PHASE_MODELS.prototype 与
+//   resolvePhaseModelConfig('prototype') 字段深等（layer 3 兜底 = 参数文件解析基底）
+// - AC 默认 flash 仅在无显式选择时使用：用户未显式配置 acAttacker/acDefender 时用预设
+//   （quick=light=flash；iterative=medium=pro/5.3），显式覆盖时按显式值（不被默认 flash 覆盖）
+// - 不可用显式配置清晰处理：用户显式配置不可用端点时 prompt 透传显式值（delegate_agent 层
+//   报错），不静默硬换到 family marker 或其他可用端点
+
+describe('W-B B1：显式 prototype 作者配置优先（不被默认 M3 覆盖）', () => {
+  /** reload nanju-model-config + 构造 prototype 项目 fixture 并返回 prompt */
+  async function buildPrototypePrompt(userLayer: Record<string, unknown> | null): Promise<string> {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    const root = mkdtempSync(join(tmpdir(), 'nanju-wb-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    if (userLayer) writeFileSync(userPath, JSON.stringify(userLayer))
+    reloadNanjuModelConfig(userLayer
+      ? { userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null }
+      : { userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-wb')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'wb-demo', name: 'WB 演示', mode: 'iterative', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-wb-demo',
+    }]))
+    const prompt = getNanjuRouterPrompt(root, 's-wb-demo')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(async () => {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('显式配置 channel=kimi model=k3（异族端点不踩中默认 M3）：prompt 委派值用 kimi:k3，不被 MiniMax-M3 覆盖', async () => {
+    // 选择 "kimi" 作为 prototype 作者（异族端点，不与默认 minimax/glm/deepseek 任一族重叠）；
+    // 修复前会调用 resolvePrototypeAuthor 覆盖为默认 M3 UUID → 失败；
+    // 修复后 resolvePrototypeAuthor 不被调用 → prompt 使用显式值。
+    // （使用 kimi 而非 glm-zhipu：避免 AC 家族多样性拋错——glm 作者与 medium 预设
+    // 防御者 glm-5.3 同族，证拋错亦为有效行为但本测不验证“拋错”，只验证“显式优先”。）
+    const prompt = await buildPrototypePrompt({
+      phases: { prototype: { channel: 'kimi', model: 'k3' } },
+    })
+    // 显式配置生效（红测关键断言：修复前会失败）
+    expect(prompt).toContain('channelId: kimi')
+    expect(prompt).toContain('modelId: k3')
+    // 不被默认 M3 覆盖
+    expect(prompt).not.toContain('modelId: MiniMax-M3')
+    expect(prompt).not.toContain('channelId: ' + makeChannel().id) // 不使用 makeChannel 默认 minimax UUID
+  })
+
+  test('默认配置 channel=minimax（family marker）：走 resolvePrototypeAuthor 解析 UUID（回归锁定）', async () => {
+    const prompt = await buildPrototypePrompt(null)
+    // 默认行为：family marker 触发 resolvePrototypeAuthor（modelId 必为 MiniMax-M3）
+    expect(prompt).toMatch(/channelId: [^\n]+\n.*modelId: MiniMax-M3/s)
+    // B2：默认未配独立 visualReviewer → 视觉裁决 blocked（不退回作者端点冒充独立裁决）
+    expect(prompt).toContain('视觉裁决 unavailable')
+  })
+
+  test('显式配置但端点不可用（未配置渠道）：prompt 透传显式值，不静默替换到 family marker 解析', async () => {
+    // 显式指向不存在的渠道（resolvePrototypeAuthor 会成功找到 minimax 渠道，
+    // 但 fix 后不应触发——作者应使用显式配置）
+    const prompt = await buildPrototypePrompt({
+      phases: { prototype: { channel: 'nonexistent-channel', model: 'nonexistent-model' } },
+    })
+    // 显式值透传
+    expect(prompt).toContain('channelId: nonexistent-channel')
+    expect(prompt).toContain('modelId: nonexistent-model')
+    // 不静默硬换到 M3 模型（family marker 解析不应被触发）
+    expect(prompt).not.toContain('modelId: MiniMax-M3')
+  })
+
+  test('显式配置 minimax 家族（保留 family marker）：仍走 resolvePrototypeAuthor 解析 UUID', async () => {
+    const prompt = await buildPrototypePrompt({
+      phases: { prototype: { channel: 'minimax', model: 'MiniMax-M3' } },
+    })
+    // 显式保留 family marker 仍触发解析（modelId 必为 MiniMax-M3）
+    expect(prompt).toMatch(/channelId: [^\n]+\n.*modelId: MiniMax-M3/s)
+  })
+})
+
+describe('W-B B1：默认配置与 resolvePhaseModelConfig 来源一致（层 3 兜底 = 参数文件解析基底）', () => {
+  test('FALLBACK_PHASE_MODELS.prototype === resolvePhaseModelConfig("prototype")（两层禁用态；来源同 = FALLBACK_PHASE_MODELS）', async () => {
+    const { reloadNanjuModelConfig, resolvePhaseModelConfig, FALLBACK_PHASE_MODELS } = await import('./nanju-model-config')
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    const resolved = resolvePhaseModelConfig('prototype')
+    // 字段逐一比对：source 一致 = 解析基底 = 层 3 兜底常量
+    expect(resolved.channel).toBe(FALLBACK_PHASE_MODELS.prototype.channel)
+    expect(resolved.model).toBe(FALLBACK_PHASE_MODELS.prototype.model)
+    expect(resolved.fallbacks).toEqual(
+      (FALLBACK_PHASE_MODELS.prototype.fallbacks ?? []).map((raw) => {
+        const idx = raw.indexOf(':')
+        return { channelId: raw.slice(0, idx), modelId: raw.slice(idx + 1) }
+      }),
+    )
+    // per-phase AC 覆盖位（prototype 无显式覆盖，与兜底一致）
+    expect(resolved.acAttacker).toBeUndefined()
+    expect(resolved.acDefender).toBeUndefined()
+  })
+
+  test('FALLBACK_PHASE_MODELS 全六阶段 === resolvePhaseModelConfig 全六阶段（端到端一致性锁定）', async () => {
+    const { reloadNanjuModelConfig, resolvePhaseModelConfig, FALLBACK_PHASE_MODELS, NANJU_MODEL_PHASE_ORDER } = await import('./nanju-model-config')
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    for (const phaseId of NANJU_MODEL_PHASE_ORDER) {
+      const resolved = resolvePhaseModelConfig(phaseId)
+      expect(resolved.channel).toBe(FALLBACK_PHASE_MODELS[phaseId].channel)
+      expect(resolved.model).toBe(FALLBACK_PHASE_MODELS[phaseId].model)
+      // fallbacks：兜底链解析形态与解析函数一致
+      expect(resolved.fallbacks).toEqual(
+        (FALLBACK_PHASE_MODELS[phaseId].fallbacks ?? []).map((raw) => {
+          const idx = raw.indexOf(':')
+          return { channelId: raw.slice(0, idx), modelId: raw.slice(idx + 1) }
+        }),
+      )
+    }
+  })
+})
+
+describe('W-B B1：AC 默认 flash 仅无显式选择时使用（显式覆盖不被默认 flash 替换）', () => {
+  test('用户未显式配置 AC：quick=light 用 flash 预设，iterative=medium 用 pro/5.3 预设', () => {
+    // prototype 阶段：quick 与 iterative 都无显式 acAttacker/acDefender 覆盖
+    for (const mode of ['quick', 'iterative'] as const) {
+      const phase = getPhaseNode(mode, 'prototype')!
+      const actors = resolveACActors(phase)
+      const expected = mode === 'quick'
+        ? { attacker: 'deepseek-flash', defender: 'glm-5.3-flash' } // light preset = flash
+        : { attacker: 'deepseek-v4-pro', defender: 'GLM-5.3' }      // medium preset = pro/5.3
+      expect(actors.attacker.model).toBe(expected.attacker)
+      expect(actors.defender.model).toBe(expected.defender)
+    }
+  })
+
+  test('用户显式配置 acAttacker=glm-zhipu:deepseek-v4-pro：覆盖 light 预设的 flash（不被默认 flash 替换）', async () => {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    const root = mkdtempSync(join(tmpdir(), 'nanju-wb-ac-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    // quick 模式默认 light 预设攻击者 = deepseek-flash；显式覆盖为 deepseek-v4-pro
+    writeFileSync(userPath, JSON.stringify({
+      phases: { prototype: { acAttacker: { channel: 'deepseek', model: 'deepseek-v4-pro' } } },
+    }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null })
+    const phase = getPhaseNode('quick', 'prototype')!
+    const actors = resolveACActors(phase)
+    expect(actors.attacker.channel).toBe('deepseek')
+    expect(actors.attacker.model).toBe('deepseek-v4-pro') // 显式覆盖生效
+    // 防御者未显式 → 仍用 light 预设 flash
+    expect(actors.defender.model).toBe('glm-5.3-flash')
+    // 收尾
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+  })
+
+  test('buildL2TaskWithAC：显式 acAttacker 透传到 L2 指令，不被默认 flash 替换', () => {
+    const phase = getPhaseNode('quick', 'prototype')!
+    const glmAuthor = { channel: 'ch-minimax-uuid', model: 'MiniMax-M3' }
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    // quick 模式默认 light 预设攻击者 = deepseek-flash（无显式 acAttacker）
+    expect(task).toContain('channel=deepseek, model=deepseek-flash')
+    // 防御者：family marker 'minimax'（PhaseNode 字面值）→ L2 指令中保留字面标记
+    // （family marker 实际解析仅在 getNanjuRouterPrompt 路径发生；buildL2TaskWithAC 直接消费 phase）
+    // 此处验证 prototype 默认无显式 acDefender → 使用 light 预设 defender = glm-5.3-flash
+    expect(task).toContain('channel=glm-zhipu, model=glm-5.3-flash')
+  })
+})
+
+
+// ═══════════════ W-B B2：显式内部 slot producer + 独立视觉槽位（capability 或清晰 blocked）══════════════
+
+const { resolveDelegationSlot, detectDelegationSlot } = await import('./nanju-delegate-guard')
+
+describe('W-B B2：slot producer（resolvePhaseDelegationSlots——slot 的唯一权威来源）', () => {
+  test('按 config 产出四槽位：author 用解析端点，AC 攻防来自 resolveACActors（非 title 文本猜测）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const slots = resolvePhaseDelegationSlots(phase, {
+      authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' },
+    })
+    expect(slots.author).toEqual({ channel: 'author-uuid', model: 'MiniMax-M3' })
+    // quick=light 预设：flash 攻 / 5.3-flash 防（config 驱动，与 title 无关）
+    expect(slots.acAttacker).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
+    expect(slots.acDefender).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
+    // 未配 visualReviewer → 清晰 blocked（不是默认 minimax、不是 null 静默跳过）
+    expect(slots.visualValidator.status).toBe('blocked')
+  })
+
+  test('authorResolved 缺省 → author 槽位回落 phase 字面配置', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const slots = resolvePhaseDelegationSlots(phase, { authorResolved: null })
+    expect(slots.author).toEqual({ channel: phase.channel, model: phase.model })
+  })
+
+  test('显式 visualReviewer 异端点（显式 capability）→ resolved，且与 author 解耦', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const slots = resolvePhaseDelegationSlots(phase, {
+      authorResolved: { channelId: 'kimi-uuid', modelId: 'k3' },
+    })
+    expect(slots.visualValidator).toEqual({
+      status: 'resolved', channelId: 'glm-zhipu', modelId: 'glm-5.3-vision',
+    })
+  })
+})
+
+describe('W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一）', () => {
+  test('非 prototype 阶段 → not-applicable', () => {
+    const phase = getPhaseNode('quick', 'coding')!
+    expect(resolveVisualValidatorSlot(phase, { authorResolved: null }).status).toBe('not-applicable')
+  })
+
+  test('未显式配置 → blocked（原因含「未显式配置」，非默认 minimax）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: null })
+    expect(r.status).toBe('blocked')
+    if (r.status === 'blocked') expect(r.reason).toContain('未显式配置')
+  })
+
+  test('显式配置但与作者同端点 → blocked（同端点自证）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const author = { channelId: 'glm-zhipu', modelId: 'glm-5.3-vision' }
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: author })
+    expect(r.status).toBe('blocked')
+    if (r.status === 'blocked') expect(r.reason).toContain('同端点')
+  })
+
+  test('family marker minimax 解析后与作者同 UUID → blocked（不按模型名猜视觉）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'minimax'
+    phase.visualReviewerModel = 'MiniMax-M3'
+    // minimax 渠道运行时解析（本文件最晚注册的 channel-manager mock）；用实际解析结果
+    // 作为作者端点 → 与 visualReviewer family marker 解析结果同 UUID → 同端点自证 blocked
+    const actor = resolveMinimaxM3Actor()
+    expect(actor).toBeTruthy()
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: actor })
+    expect(r.status).toBe('blocked')
+  })
+
+  test('family marker minimax + 作者端点未知 → blocked（无法证明异端点，不冒充独立能力）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'minimax'
+    phase.visualReviewerModel = 'MiniMax-M3'
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: null })
+    expect(r.status).toBe('blocked')
+  })
+
+  test('显式异端点 → resolved（视觉能力来自显式声明，非模型名匹配）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: { channelId: 'kimi-uuid', modelId: 'k3' } })
+    expect(r).toEqual({ status: 'resolved', channelId: 'glm-zhipu', modelId: 'glm-5.3-vision' })
+  })
+
+  test('channel 同但 model 不同 → resolved（非同端点）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: { channelId: 'glm-zhipu', modelId: 'GLM-5.3' } })
+    expect(r.status).toBe('resolved')
+  })
+})
+
+describe('W-B B2：validateVisualValidatorDelegation（gate 端权威校验）', () => {
+  test('未配置独立视觉端点 → ok:false（gate 拒绝，不静默放行）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const r = validateVisualValidatorDelegation({ phase, authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' } })
+    expect(r.ok).toBe(false)
+  })
+
+  test('端点为 resolved 但 target 不匹配（退回作者端点）→ ok:false', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = validateVisualValidatorDelegation({
+      phase,
+      authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' },
+      targetChannelId: 'author-uuid',
+      targetModelId: 'MiniMax-M3',
+    })
+    expect(r.ok).toBe(false)
+  })
+
+  test('target 与 producer resolved 端点完全一致 → ok:true', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = validateVisualValidatorDelegation({
+      phase,
+      authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' },
+      targetChannelId: 'glm-zhipu',
+      targetModelId: 'glm-5.3-vision',
+    })
+    expect(r.ok).toBe(true)
+  })
+})
+
+describe('W-B B2：resolveDelegationSlot（内部 slot 权威优先于 legacy 文本推断）', () => {
+  test('内部 slot=visual-validator 覆盖文本推断（即使文本不含视觉标记）', () => {
+    expect(resolveDelegationSlot('visual-validator', 'general')).toBe('visual-validator')
+  })
+
+  test('内部 slot 缺省/非法 → 回退 legacy 文本推断', () => {
+    expect(resolveDelegationSlot(undefined, 'author')).toBe('author')
+    expect(resolveDelegationSlot('not-a-slot', 'ac-attacker')).toBe('ac-attacker')
+  })
+
+  test('detectDelegationSlot 为 legacy 低信任：title 含视觉标记 → visual-validator', () => {
+    expect(detectDelegationSlot({ title: '独立视觉裁决：原型' }, 'prototype')).toBe('visual-validator')
+  })
+})
+
+describe('W-B B2 R1：isVisualValidatorEndpointTarget（端点到槽位检测）', () => {
+  test('resolved 且 target 完全一致 → true；缺 target/状态非 resolved → false', () => {
+    const resolved = { status: 'resolved' as const, channelId: 'kimi', modelId: 'k3-vision' }
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(true)
+    // 端点只差模型 / 只差渠道 → false（不得误判为同一独立端点）
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'kimi', targetModelId: 'other' })).toBe(false)
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'other', targetModelId: 'k3-vision' })).toBe(false)
+    // 未解析（blocked / not-applicable）→ false：未配置时不纳入端点门禁，交由 title 兜底
+    expect(isVisualValidatorEndpointTarget({ slot: { status: 'blocked', reason: 'x' }, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(false)
+    expect(isVisualValidatorEndpointTarget({ slot: { status: 'not-applicable' }, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(false)
+    // target 非字符串（继承/缺省）→ false
+    expect(isVisualValidatorEndpointTarget({ slot: resolved })).toBe(false)
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'kimi' })).toBe(false)
+  })
+})
+
+// ═══════════════ W-B B1-1（R6）：显式端点失效 → autofix 同族替换 + 遥测 ═══════════════
+
+describe('W-B B1-1（R6）：显式配置的 prototype 作者端点失效 → 同族替换 + 遥测（非静默硬换）', () => {
+  /** 渠道宇宙：deepseek 家族只剩新名 deepseek-flash（显式配置里的 deepseek-v4-flash 已下线） */
+  function mockRenameUniverse(): void {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'deepseek', name: 'DeepSeek', provider: 'deepseek' as Channel['provider'], models: [
+          { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: true },
+        ] }),
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+        ] }),
+        makeChannel(),
+      ],
+      getChannelById: () => null,
+    }))
+  }
+
+  afterEach(() => {
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [makeChannel()],
+      getChannelById: () => null,
+    }))
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('prototype 显式作者 deepseek:deepseek-v4-flash（已下线）→ prompt 委派值替换为同族 deepseek-flash + model.config-autofix 遥测', async () => {
+    mockRenameUniverse()
+    const root = mkdtempSync(join(tmpdir(), 'nanju-b1-autofix-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    writeFileSync(userPath, JSON.stringify({ phases: { prototype: { channel: 'deepseek', model: 'deepseek-v4-flash' } } }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-b1fix')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'b1fix', name: 'B1 autofix', mode: 'quick', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-b1fix',
+    }]))
+
+    const prompt = getNanjuRouterPrompt(root, 's-b1fix')
+    expect(prompt).toBeTruthy()
+    // autofix 生效：失效的显式端点被同族新名替换（本次 prompt 有效值，不落盘）
+    expect(prompt).toContain('modelId: deepseek-flash')
+    expect(prompt).not.toContain('modelId: deepseek-v4-flash')
+    // 遥测留痕：替换不是静默的（slot/from/to 可审计）
+    const { readTelemetry } = await import('./nanju-telemetry')
+    const events = readTelemetry(fixtureRoot, 'model.config-autofix')
+    expect(events.length).toBe(1)
+    expect(events[0]!.payload).toEqual({
+      slot: 'phases.prototype.primary',
+      from: 'deepseek:deepseek-v4-flash',
+      to: 'deepseek:deepseek-flash',
+      reason: 'same-channel-rename',
+    })
+  })
+
+  test('跨族候选存在但不同族 → 放弃替换保持原值（家族拓扑守卫，零遥测）', async () => {
+    // 渠道宇宙只有 glm 系（跨族候选），deepseek 失效端点无同族替换
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+        ] }),
+        makeChannel(),
+      ],
+      getChannelById: () => null,
+    }))
+    const root = mkdtempSync(join(tmpdir(), 'nanju-b1-autofix-x-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    writeFileSync(userPath, JSON.stringify({ phases: { prototype: { channel: 'deepseek', model: 'deepseek-v4-flash' } } }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-b1nofix')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'b1nofix', name: 'B1 no-autofix', mode: 'quick', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-b1nofix',
+    }]))
+
+    const prompt = getNanjuRouterPrompt(root, 's-b1nofix')
+    expect(prompt).toBeTruthy()
+    // 保持原值（透传）；跨族不换 → 既有 delegate_agent 层错误路径负责
+    expect(prompt).toContain('modelId: deepseek-v4-flash')
+    const { readTelemetry } = await import('./nanju-telemetry')
+    expect(readTelemetry(fixtureRoot, 'model.config-autofix')).toHaveLength(0)
   })
 })

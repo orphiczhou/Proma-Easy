@@ -1,3 +1,13 @@
+import { createEngineeringBrowserFileDriver, createEngineeringBrowserUrlDriver } from './nanju-engineering-browser-driver'
+import { startEngineeringService, createDefaultEngineeringServiceDeps, validateEngineeringServiceEnvironment } from './nanju-engineering-service'
+import type { EngineeringServiceRuntimes, EngineeringServiceDeps } from './nanju-engineering-service'
+import { detectEngineeringPython } from './nanju-engineering-runtime'
+import { EngineeringExecutionBlocked } from './nanju-engineering-execution'
+import { runEngineeringSuite } from './nanju-engineering-suite'
+// W-I B-f：真实能力证据门禁宿主接线层（registry/单时钟/收据签发/交付原子消费）
+import { commitDeliveryRealEvidence, resolveSuiteRealEvidence } from './nanju-engineering-real-gate'
+import type { EngineeringSuiteResult } from './nanju-engineering-suite'
+import type { EngineeringExecutionServices } from './nanju-engineering-execution'
 /**
  * GWT 验收测试执行器（Harness，P1 Sprint B：v0.17.62）
  *
@@ -31,6 +41,10 @@ import { PNG } from 'pngjs'
 import { writeJsonFileAtomic, writeTextFileAtomic } from './safe-file'
 import { getNanjuProjectDir } from './nanju-project'
 import type { NanjuProjectInfoFile } from './nanju-project'
+import { parseUserStories } from './nanju-user-stories'
+import { prepareEngineeringBrowserRun } from './nanju-engineering-preflight'
+import { captureEngineeringEvidence, ENGINEERING_CONTRACT_PATH, requiresEngineeringContract, parseEngineeringContract } from './nanju-engineering-contract'
+import type { EngineeringEvidence } from './nanju-engineering-contract'
 import { recordTelemetry } from './nanju-telemetry'
 
 // ===== steps.json schema =====
@@ -348,19 +362,7 @@ export function validateScenarioFileContent(raw: string): { scenario: GwtScenari
   }
 }
 
-/** 从 PRD 内容提取用户故事 ID（US-xx，有序去重；兜底 US-1 两位化） */
-export function parseUserStories(prdContent: string): string[] {
-  const seen = new Set<string>()
-  const stories: string[] = []
-  for (const m of prdContent.matchAll(/\bUS-(\d+)\b/gi)) {
-    const normalized = `US-${String(Number(m[1])).padStart(2, '0')}`
-    if (!seen.has(normalized)) {
-      seen.add(normalized)
-      stories.push(normalized)
-    }
-  }
-  return stories
-}
+export { parseUserStories } from './nanju-user-stories'
 
 /** 从场景标识提取用户故事 ID（feature 或 scenario 前缀匹配 US-xx） */
 export function scenarioUserStory(scenario: { feature: string; scenario: string }): string | null {
@@ -398,8 +400,13 @@ export function judgeGwtResult(results: Array<Pick<GwtScenarioResult, 'feature' 
 
 /** 机器可读报告（06_TESTS/report.json） */
 export interface GwtReportJson {
+  engineeringEvidence?: EngineeringEvidence
+  blockedReason?: string
+  /** 上一有效失败尚待一次修复重跑；blocked保留该事实，不增加轮次。 */
+  retryPending?: boolean
+
   generatedAt: string
-  verdict: 'pass' | 'fail' | 'error'
+  verdict: 'pass' | 'fail' | 'error' | 'blocked'
   /**
    * 本次测试运行唯一标识（W18 Wave2，v0.17.83）：交付 ack 绑定用的运行事实。
    * 旧报告（v0.17.82 及以前）无此字段 → 交付门禁按旧版格式拦截。
@@ -412,7 +419,8 @@ export interface GwtReportJson {
    */
   entryFingerprint?: { sha256: string; size: number }
   /** 执行上下文声明（W18 Wave2）：file:// 直载（预览协议 token 门控/注入差异不在覆盖内） */
-  executionContext?: 'file://'
+  executionContext?: 'file://' | 'project-driver'
+  engineeringSuite?: EngineeringSuiteResult
   /** 覆盖口径外事项（W18 Wave2，SHOULD-3 收口）：机器不背书的三口径诚实声明 */
   coverageUnverified?: string[]
   /** 失败构成（回炉分流，v0.17.63 AC L-001）：behavior/mapping/coverage；pass 时为 null */
@@ -492,7 +500,7 @@ export function hasGwtDeliverySchemaFields(report: {
 export type GwtDeliveryBlockReason =
   | 'legacy-schema' | 'fingerprint-mismatch' | 'no-ack' | 'ack-run-mismatch' | 'ack-stale'
   // D8 A2′（R7-02）：auto on 交付门第二事实（main 实跑 provenance）两分支
-  | 'no-main-run' | 'gwt-running'
+  | 'no-main-run' | 'gwt-running' | 'engineering-evidence-missing' | 'engineering-changed'
 
 export interface GwtDeliveryFactBlock {
   reason: GwtDeliveryBlockReason
@@ -514,12 +522,17 @@ export function checkGwtDeliveryFacts(input: {
   projectId: string
   reportJsonPath: string
   projectDir: string
-  info: NanjuProjectInfoFile | null
+  info: Pick<NanjuProjectInfoFile, 'deliveryAck'> | null
+  /** W-I B-f：工程真实能力证据门禁需要会话上下文（缺省时不放行 requiresReal 交付）。 */
+  sessionId?: string
 }): GwtDeliveryFactBlock | null {
   let report: (Parameters<typeof hasGwtDeliverySchemaFields>[0] & {
     runId?: string
     entryFingerprint?: { sha256: string; size: number }
     generatedAt?: string
+    engineeringEvidence?: EngineeringEvidence
+    engineeringSuite?: EngineeringSuiteResult
+    entry?: string
   }) | null
   try {
     report = JSON.parse(readFileSync(input.reportJsonPath, 'utf-8'))
@@ -535,6 +548,58 @@ export function checkGwtDeliveryFacts(input: {
     } catch { /* 埋点失败不阻断门禁 */ }
     return { reason, message }
   }
+  const hasEngineering = existsSync(join(input.projectDir, ENGINEERING_CONTRACT_PATH)) || requiresEngineeringContract(input.projectDir)
+  let engineeringEntry: string | null = null
+  if (hasEngineering) {
+    const captured = captureEngineeringEvidence(input.projectDir)
+    if (!captured.evidence || !report?.engineeringEvidence) {
+      return block('engineering-evidence-missing', '缺少完整工程验收绑定：' + (captured.problems.join('；') || '请重新执行工程测试'))
+    }
+    const parsed = parseEngineeringContract(readFileSync(join(input.projectDir, ENGINEERING_CONTRACT_PATH), 'utf-8')).contract
+    if (!parsed) return block('engineering-evidence-missing', '工程契约不可用，请补全后重跑')
+    const expectedEntry = '08_APP/' + parsed.target.entry
+    if (captured.evidence.digest !== report.engineeringEvidence.digest || report.entry !== expectedEntry) {
+      return block('engineering-changed', 'PRD、工程契约、测试对象或产物在通过后发生变化，请重跑验收。')
+    }
+    if (report.engineeringSuite) {
+      if (report.engineeringSuite.verdict !== 'pass'
+        || report.engineeringSuite.tests.length !== parsed.tests.length
+        || parsed.tests.some((test) => !report!.engineeringSuite!.tests.some((result) => result.testId === test.id && result.target === test.target && result.status === 'pass' && result.evidenceDigest === captured.evidence!.digest))) {
+        return block('engineering-evidence-missing', '工程测试或真实能力证据尚不完整，不能只凭项目驱动记录交付。')
+      }
+      // W-I B-f：`requiresReal` 从「一律硬拦」改为**逐项**走真实能力证据门禁。
+      // 交付提交路径 = validate + consume（同一同步块，函数内无 await；前后不得插 await 写盘/发事件）。
+      // 本波无真实 host-observer 登记 → 必为 requires-real-unattested，交付保持拒绝（能力未就绪，不是忘了接线）。
+      const realTests = parsed.tests.filter((test) => test.requiresReal)
+      if (realTests.length > 0) {
+        if (!input.sessionId) {
+          return block('engineering-evidence-missing', '缺少工程验收会话上下文，无法核验真实能力证据（不放行）。')
+        }
+        const gateScope = {
+          workspaceSlug: input.workspaceSlug,
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          projectDir: input.projectDir,
+        }
+        const gateTargets = realTests.map((test) => ({ testId: test.id, target: test.target, covers: test.covers }))
+        const consumed = commitDeliveryRealEvidence(gateScope, gateTargets)
+        if (consumed.rejection) {
+          return block('engineering-evidence-missing',
+            '真实能力证据未齐备，不能交付：' + consumed.rejection.message
+            + '（测试项 ' + (consumed.rejection.testId ?? realTests[0]!.id) + '）')
+        }
+      }
+    } else {
+      const preflight = prepareEngineeringBrowserRun(input.projectDir)
+      if (preflight.mode !== 'engineering-browser') return block('engineering-evidence-missing', '缺少可用的工程验收绑定：' + preflight.reason)
+    }
+    const provenance = report.runId ? lastGwtRunIds.get(input.projectId)?.get(report.runId) : null
+    if (!provenance || provenance.verdict !== 'pass' || provenance.engineeringDigest !== captured.evidence.digest) {
+      return block('no-main-run', '工程测试结果未经当前宿主实跑登记，请重跑验收。')
+    }
+    if (isGwtRunInProgress(input.projectId)) return block('gwt-running', '工程验收仍在运行，请等待本轮完成。')
+    engineeringEntry = expectedEntry
+  }
   // a. 旧版 schema
   if (!hasGwtDeliverySchemaFields(report)) {
     return block('legacy-schema',
@@ -547,7 +612,7 @@ export function checkGwtDeliveryFacts(input: {
     generatedAt: string
   }
   // b. 入口指纹（pass 后改应用）
-  const currentFingerprint = computeGwtEntryFingerprint(join(input.projectDir, '08_APP', 'index.html'))
+  const currentFingerprint = computeGwtEntryFingerprint(join(input.projectDir, engineeringEntry ?? '08_APP/index.html'))
   if (!currentFingerprint
     || currentFingerprint.sha256 !== valid.entryFingerprint.sha256
     || currentFingerprint.size !== valid.entryFingerprint.size) {
@@ -561,7 +626,7 @@ export function checkGwtDeliveryFacts(input: {
   // isDeliverFromTesting 特判（不经推进门第四形态）——testing 阶段的产出质量由本门
   // 上游的 GWT 裁判（verdict/schema/指纹校验）保证，第四形态不参与交付路径。
   // auto off（enabled≠true）路径逐字节保留 W18 c/d（D7 ack 机制不删）。
-  if (isAutoConfirmDeliveryProject(input.workspaceSlug, input.projectId)) {
+  if (!hasEngineering && isAutoConfirmDeliveryProject(input.workspaceSlug, input.projectId)) {
     if (!isGwtRunInProgress(input.projectId)) {
       // c'. main 实跑 provenance（§十方案 B）：runId∈登记集 ∧ 登记轮 verdict==='pass'
       // ∧ 登记指纹===当前入口实测——verdict 与指纹均以 main 内存登记为准，不读 report
@@ -579,7 +644,7 @@ export function checkGwtDeliveryFacts(input: {
       }
       // d''. 登记指纹 vs 当前实测（文件自述可伪造，登记值不可）——与 b 道独立：
       // b 查 report 自述 vs 实测，d'' 查登记 vs 实测（同步改写文件两字段时 b 过 d'' 拦）
-      const provenanceFingerprint = computeGwtEntryFingerprint(join(input.projectDir, '08_APP', 'index.html'))
+      const provenanceFingerprint = computeGwtEntryFingerprint(join(input.projectDir, engineeringEntry ?? '08_APP/index.html'))
       if (!provenanceFingerprint
         || provenanceFingerprint.sha256 !== record.fingerprintSha
         || provenanceFingerprint.size !== record.size) {
@@ -619,7 +684,7 @@ export function checkGwtDeliveryFacts(input: {
  * （verdict + 入口指纹 sha/size + generatedAt）。指纹取 GWT 运行时实测（report 内存
  * 对象构造值），**不信任 report.json 文件自述**（L2 可改写文件，改不了本登记）。
  */
-const lastGwtRunIds = new Map<string, Map<string, { verdict: string; fingerprintSha: string; size: number; generatedAt: string }>>()
+const lastGwtRunIds = new Map<string, Map<string, { verdict: string; fingerprintSha: string; size: number; generatedAt: string; engineeringDigest?: string }>>()
 
 /** GWT 运行中项目（runNanjuGwtAcceptance 入口登记/finally 清除；auto on 交付门 d' 消费） */
 const runningGwtProjectIds = new Set<string>()
@@ -631,6 +696,8 @@ export function isAutoConfirmDeliveryProject(workspaceSlug: string, projectId: s
     const { getNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
     const project = getNanjuProject(workspaceSlug, projectId)
     return project?.autoClarify?.enabled === true && project?.mode === 'quick' && project?.currentStage === 'testing'
+      && !existsSync(join(getNanjuProjectDir(workspaceSlug, projectId), ENGINEERING_CONTRACT_PATH))
+      && !requiresEngineeringContract(getNanjuProjectDir(workspaceSlug, projectId))
   } catch {
     return false
   }
@@ -645,11 +712,11 @@ export function isGwtRunInProgress(projectId: string): boolean {
 export function recordMainGwtRun(
   projectId: string,
   runId: string,
-  facts: { verdict: string; fingerprintSha: string; size: number; generatedAt: string },
+  facts: { verdict: string; fingerprintSha: string; size: number; generatedAt: string; engineeringDigest?: string },
 ): void {
   let map = lastGwtRunIds.get(projectId)
   if (!map) {
-    map = new Map<string, { verdict: string; fingerprintSha: string; size: number; generatedAt: string }>()
+    map = new Map<string, { verdict: string; fingerprintSha: string; size: number; generatedAt: string; engineeringDigest?: string }>()
     lastGwtRunIds.set(projectId, map)
   }
   map.set(runId, facts)
@@ -671,6 +738,8 @@ export function buildReportMarkdown(report: GwtReportJson, projectName: string):
   // 判定结果文案（AC U-001）：error/覆盖不全单独句式，不出现「0 个失败」与「未通过」并列的自相矛盾
   const verdictLabel = report.verdict === 'pass'
     ? '✅ 全部通过'
+    : report.verdict === 'blocked'
+      ? `⏸ 验收阻塞（${report.blockedReason ?? '所需执行能力不可用'}）`
     : report.verdict === 'error'
       ? `⚠️ 执行异常${report.errorReason ? `（${report.errorReason}）` : ''}`
       : report.failed === 0
@@ -681,6 +750,14 @@ export function buildReportMarkdown(report: GwtReportJson, projectName: string):
   lines.push(`- 用户故事覆盖：${report.coveredUs.length > 0 ? report.coveredUs.join('、') : '无'}${report.uncoveredUs.length > 0 ? `（未覆盖：${report.uncoveredUs.join('、')}）` : ''}`)
   if (report.prdUserStoriesMissing) lines.push('- ⚠ PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定（请补充 PRD 后重跑）')
   lines.push(`- 重试轮次：${report.retryCount}`)
+  if (report.engineeringSuite) {
+    lines.push('## 工程驱动记录')
+    for (const note of report.coverageUnverified ?? []) lines.push('- 证据边界：' + note)
+    for (const test of report.engineeringSuite.tests) {
+      lines.push(`- ${test.testId} → ${test.target}：${test.status}`)
+      for (const check of test.checks) lines.push(`  - ${check.storyId ?? '辅助测试'} ${check.label}：期望「${check.expected}」/ 实际「${check.actual}」；证据：${check.evidence.join('；')}`)
+    }
+  }
   if (report.warnings && report.warnings.length > 0) {
     lines.push('- ⚠ 视觉观察项（不影响判定）：')
     report.warnings.forEach((w) => lines.push(`  - ${w.replace(/\|/g, '\\|')}`))
@@ -728,6 +805,8 @@ export function buildSummaryText(judgement: GwtJudgement, reportPath: string): s
 // ===== 浏览器适配器（单测 mock 注入；生产实现为 browser-controller GWT 原语） =====
 
 export interface GwtBrowserAdapter {
+  /** 生产受管浏览器保留全局风险告知；隔离fixture可不提供。 */
+  hasRiskDisclaimerAcknowledged?(): boolean
   createLocalFileTab(sessionId: string, filePath: string): Promise<{ tabId: string; previousActiveTabId?: string | null }>
   loadFileInTab(sessionId: string, tabId: string, filePath: string): Promise<void>
   evaluateInTab(sessionId: string, tabId: string, expression: string, signal?: AbortSignal): Promise<unknown>
@@ -745,6 +824,12 @@ export interface GwtBrowserAdapter {
   closeTab(sessionId: string, tabId: string): Promise<unknown>
   /** 测试结束后恢复用户原活动标签（v0.17.63 AC Z-004；可选实现，未实现时保持现状） */
   restoreDisplayTab?(sessionId: string, tabId: string): void
+  /** W-C browser-url：打开专用 URL tab（仅宿主持有的 loopback 工程服务地址）。 */
+  createUrlTab?(sessionId: string, url: string): Promise<{ tabId: string; url: string; previousActiveTabId?: string | null }>
+  /** W-C browser-url：每场景重载专用 tab 到指定 URL（场景隔离，不复用 file 直载）。 */
+  loadUrlInTab?(sessionId: string, tabId: string, url: string): Promise<void>
+  /** W-C browser-url：校验测试 tab 实际 URL 仍在宿主持有 origin；出 origin 关闭并抛错（S9）。 */
+  assertUrlTabOrigin?(sessionId: string, tabId: string): Promise<void>
 }
 
 // ===== 执行器 =====
@@ -758,26 +843,22 @@ const POLL_INTERVAL_MS = 250
 const STEP_SETTLE_MS = 150
 
 /** 进度事件（IPC nanju:gwt-progress 载荷同型） */
-export interface GwtProgressEvent {
-  phase: 'start' | 'scenario-start' | 'scenario-end' | 'done'
-  current: number
-  total: number
-  scenario?: string
-  scenarioStatus?: GwtScenarioStatus
-  passed: number
-  failed: number
-  skipped: number
-}
+export type { NanjuGwtProgressEvent as GwtProgressEvent } from '@proma/shared'
+import type { NanjuGwtProgressEvent as GwtProgressEvent } from '@proma/shared'
 
 export interface GwtSuiteOptions {
   sessionId: string
-  entryHtmlPath: string
+  /** file:// 入口（与 entryUrl 二选一）；browser-file 通道使用。 */
+  entryHtmlPath?: string
+  /** served URL 入口（与 entryHtmlPath 二选一）；browser-url 通道使用。 */
+  entryUrl?: string
   scenarios: GwtScenarioFile[]
   controller: GwtBrowserAdapter
   screenshotDir: string | null
   /** W22 F4：assert-screenshot 基线目录（06_TESTS/_screenshots/；null 时该 op 降级为 warning） */
   baselineDir?: string | null
   onProgress?: (event: GwtProgressEvent) => void
+  signal?: AbortSignal
 }
 
 function sleep(ms: number): Promise<void> {
@@ -897,7 +978,7 @@ async function executeScenario(
   scenario: GwtScenarioFile,
 ): Promise<GwtScenarioResult> {
   const startedAt = Date.now()
-  const { controller, sessionId, entryHtmlPath } = options
+  const { controller, sessionId, entryHtmlPath, entryUrl } = options
   /** 场景级非阻塞警告（W22 F4：assert-screenshot 等 warning-only op 产出） */
   const stepWarnings: string[] = []
   const base: Omit<GwtScenarioResult, 'status' | 'reason'> = {
@@ -918,10 +999,28 @@ async function executeScenario(
     }
   }
 
-  // 场景隔离：每个场景重新 loadFile（同代码同结果，重试公平）。
+  // 场景隔离：每个场景重新载入（file 直载或 URL 重载，二选一），同代码同结果、重试公平。
   // v0.17.63（AC Z-001）：存储清理下沉到 BrowserController.loadFileInTab（重载前清
   // localStorage/sessionStorage，消除上一场景写入数据的串扰；indexedDB 清理归 Sprint C）。
-  await controller.loadFileInTab(sessionId, tabId, entryHtmlPath)
+  // N1：URL 重载出 origin（或标签缺失）不整轮 error，映射为该场景 fail（产品行为失败），
+  // 后续场景仍可重载回登记入口继续，本轮结束由 runGwtSuite 统一关标签。
+  if (entryUrl) {
+    try {
+      await controller.loadUrlInTab!(sessionId, tabId, entryUrl)
+    } catch (e) {
+      if (options.signal?.aborted) throw new EngineeringExecutionBlocked('浏览器测试已取消')
+      return {
+        ...base,
+        status: 'fail',
+        reason: `场景页面载入失败：${e instanceof Error ? e.message : String(e)}`,
+        failedStep: { index: 0, kind: 'given', text: '场景页面载入', expected: '载入本 session 登记的工程服务入口', actual: String(e instanceof Error ? e.message : e).slice(0, 200), category: 'channel' },
+        screenshot: null,
+        durationMs: Date.now() - startedAt,
+      }
+    }
+  } else {
+    await controller.loadFileInTab(sessionId, tabId, entryHtmlPath!)
+  }
   await sleep(300)
 
   // 逐步执行（v0.17.63 预检重构，AC Z-002/Z-003：不再做「初始 DOM 存在性」预检——
@@ -929,6 +1028,7 @@ async function executeScenario(
   // 改为 click/fill 执行期 8s 轮询等待目标出现，等不到才判 fail「等待超时未出现」。
   // 保留「不执行半截」语义：目标始终未出现时该步 fail，不动后续步骤。）
   for (let i = 0; i < scenario.steps.length; i++) {
+    if (options.signal?.aborted) throw new EngineeringExecutionBlocked('浏览器测试已取消')
     const step = scenario.steps[i]!
     const op = step.op
     if (!op) {
@@ -1209,6 +1309,23 @@ async function executeScenario(
     await sleep(STEP_SETTLE_MS)
   }
 
+  // S9：场景执行后校验实际 URL 仍在宿主持有 origin（页面 JS 跳转/重定向出站），出 origin 立即失败关闭。
+  if (entryUrl && controller.assertUrlTabOrigin) {
+    try {
+      await controller.assertUrlTabOrigin(sessionId, tabId)
+    } catch (e) {
+      return {
+        ...base,
+        status: 'fail',
+        reason: `场景执行后测试页离开宿主服务 origin：${e instanceof Error ? e.message : String(e)}`,
+        failedStep: { index: scenario.steps.length, kind: 'then', text: '页面停留于宿主服务', expected: '仍在本 session 登记的 loopback 地址', actual: String(e instanceof Error ? e.message : e).slice(0, 200), category: 'channel' },
+        screenshot: null,
+        durationMs: Date.now() - startedAt,
+        warnings: stepWarnings.length > 0 ? stepWarnings : undefined,
+      }
+    }
+  }
+
   return { ...base, status: 'pass', reason: null, durationMs: Date.now() - startedAt, warnings: stepWarnings.length > 0 ? stepWarnings : undefined }
 }
 
@@ -1456,15 +1573,31 @@ async function waitForFocusResult(
 
 /** 执行全套场景（不判定；判定归 judgeGwtResult） */
 export async function runGwtSuite(options: GwtSuiteOptions): Promise<GwtScenarioResult[]> {
-  const { controller, sessionId, entryHtmlPath, scenarios, onProgress } = options
+  const { controller, sessionId, entryHtmlPath, entryUrl, scenarios, onProgress } = options
   const results: GwtScenarioResult[] = []
-  const tab = await controller.createLocalFileTab(sessionId, entryHtmlPath)
+  if (options.signal?.aborted) throw new EngineeringExecutionBlocked('浏览器测试已取消')
+  const hasEntryUrl = typeof entryUrl === 'string' && entryUrl.length > 0
+  const hasEntryHtmlPath = typeof entryHtmlPath === 'string' && entryHtmlPath.length > 0
+  if (hasEntryUrl === hasEntryHtmlPath) throw new Error('entryUrl 与 entryHtmlPath 必须且只能指定其一作为唯一测试入口')
+  let tab: { tabId: string; previousActiveTabId?: string | null }
+  if (hasEntryUrl) {
+    if (typeof controller.createUrlTab !== 'function' || typeof controller.loadUrlInTab !== 'function') {
+      throw new Error('浏览器控制器未接入URL通道（createUrlTab/loadUrlInTab），不能执行 entryUrl 测试')
+    }
+    tab = await controller.createUrlTab(sessionId, entryUrl!)
+  } else {
+    tab = await controller.createLocalFileTab(sessionId, entryHtmlPath!)
+  }
+  const cancel = (): void => { void controller.closeTab(sessionId, tab.tabId).catch(() => {}) }
+  options.signal?.addEventListener('abort', cancel, { once: true })
   let passed = 0
   let failed = 0
   let skipped = 0
   try {
+    if (options.signal?.aborted) throw new EngineeringExecutionBlocked('浏览器测试已取消')
     onProgress?.({ phase: 'start', current: 0, total: scenarios.length, passed: 0, failed: 0, skipped: 0 })
     for (let i = 0; i < scenarios.length; i++) {
+      if (options.signal?.aborted) throw new EngineeringExecutionBlocked('浏览器测试已取消')
       const scenario = scenarios[i]!
       onProgress?.({ phase: 'scenario-start', current: i + 1, total: scenarios.length, scenario: scenario.scenario, passed, failed, skipped })
       const result = await executeScenario(options, tab.tabId, scenario)
@@ -1476,6 +1609,7 @@ export async function runGwtSuite(options: GwtSuiteOptions): Promise<GwtScenario
     }
     return results
   } finally {
+    options.signal?.removeEventListener('abort', cancel)
     try { await controller.closeTab(sessionId, tab.tabId) } catch { /* 标签清理失败不影响结果 */ }
     // 标签恢复（AC Z-004）：切回测试创建前的用户活动标签，不留在任意残留标签上
     if (tab.previousActiveTabId && tab.previousActiveTabId !== tab.tabId) {
@@ -1521,7 +1655,9 @@ export function classifyGwtFailure(results: Array<Pick<GwtScenarioResult, 'statu
 }
 
 export interface NanjuGwtOutcome {
-  verdict: 'pass' | 'fail' | 'error'
+  blockedReason?: string
+
+  verdict: 'pass' | 'fail' | 'error' | 'blocked'
   judgement: GwtJudgement
   reportJsonPath: string
   reportMdPath: string
@@ -1591,6 +1727,25 @@ export function resolveGwtDeliveryResumeMessage(autoClarifyEnabled: boolean): st
   return autoClarifyEnabled ? GWT_DELIVERY_ACCEPTANCE_AUTO_RESUME_MESSAGE : GWT_DELIVERY_ACCEPTANCE_RESUME_MESSAGE
 }
 
+/** 工程执行通道的宿主注入（W-C）：浏览器/CLI 驱动 + 可选服务运行时与依赖。 */
+export interface EngineeringGwtExecutionOptions {
+  services: EngineeringExecutionServices
+  signal: AbortSignal
+  /** browser-url 服务启动的运行时可探测结果；缺省时宿主自动探测 Node/Python3。 */
+  serviceRuntimes?: EngineeringServiceRuntimes
+  /** browser-url 服务启动依赖；缺省时用生产真实 spawn/探测；测试注入 fixture。 */
+  serviceDeps?: EngineeringServiceDeps
+}
+
+/** 缺省宿主服务运行时探测（W-C）：不读取项目 command，不在项目目录搜解释器。 */
+async function resolveDefaultEngineeringServiceRuntimes(): Promise<EngineeringServiceRuntimes> {
+  // node-detector 经 windows-env 引入 electron.app，惰性加载避免把主进程依赖拖进纯 Bun 测试。
+  const { detectNodeRuntime } = await import('./node-detector')
+  const node = await detectNodeRuntime()
+  const pythonPath = await detectEngineeringPython()
+  return { nodePath: node.available ? node.path ?? undefined : undefined, pythonPath }
+}
+
 export async function runNanjuGwtAcceptance(input: {
   workspaceSlug: string
   projectId: string
@@ -1599,6 +1754,7 @@ export async function runNanjuGwtAcceptance(input: {
   sessionId: string
   controller: GwtBrowserAdapter
   onProgress?: (event: GwtProgressEvent) => void
+  engineeringExecution?: EngineeringGwtExecutionOptions
 }): Promise<NanjuGwtOutcome> {
   // D8 A2′：GWT 运行中标记薄壳（交付门 d' 消费；finally 兜底清除——异常/提前 return
   // 路径不残留，防「running 残留 → auto 交付门永拦」死锁）
@@ -1618,6 +1774,7 @@ async function runNanjuGwtAcceptanceInner(input: {
   sessionId: string
   controller: GwtBrowserAdapter
   onProgress?: (event: GwtProgressEvent) => void
+  engineeringExecution?: EngineeringGwtExecutionOptions
 }): Promise<NanjuGwtOutcome> {
   const projectDir = getNanjuProjectDir(input.workspaceSlug, input.projectId)
   const featuresDir = join(projectDir, '06_TESTS', 'features')
@@ -1691,25 +1848,129 @@ async function runNanjuGwtAcceptanceInner(input: {
   let prevRetryCount = 0
   let prevErrorCount = 0
   let prevFailed = false
+  let retryPending = false
   if (existsSync(reportJsonPath)) {
     try {
-      const prev = JSON.parse(readFileSync(reportJsonPath, 'utf-8')) as { retryCount?: number; errorCount?: number; verdict?: string }
+      const prev = JSON.parse(readFileSync(reportJsonPath, 'utf-8')) as { retryCount?: number; errorCount?: number; verdict?: string; retryPending?: boolean }
       prevRetryCount = typeof prev.retryCount === 'number' ? prev.retryCount : 0
       prevErrorCount = typeof prev.errorCount === 'number' ? prev.errorCount : 0
       prevFailed = prev.verdict === 'fail' || prev.verdict === 'error'
+      if (prev.verdict === 'pass') prevRetryCount = 0
+      retryPending = prevFailed || (prev.verdict === 'blocked' && prev.retryPending === true)
     } catch { /* 损坏报告按首次处理 */ }
   }
-  const retryCount = prevFailed ? prevRetryCount + 1 : 0
+  const engineering = prepareEngineeringBrowserRun(projectDir)
+  let blockedReason = engineering.reason
+  let engineeringSuite: EngineeringSuiteResult | null = null
+  // 仅接收本轮宿主浏览器执行返回值，不从项目驱动的evidence字符串反序列化权威结果。
+  const browserResultsByTest = new Map<string, GwtScenarioResult[]>()
+  if (input.engineeringExecution && engineering.mode === 'blocked' && existsSync(join(projectDir, ENGINEERING_CONTRACT_PATH))) {
+    // S5：惰性解析服务运行时（仅契约含 browser-url 测试时探测），供预检校验与执行共用，避免双探测。
+    const declaredContract = parseEngineeringContract(readFileSync(join(projectDir, ENGINEERING_CONTRACT_PATH), 'utf-8')).contract
+    const needsBrowserUrl = declaredContract?.tests.some((test) => test.adapter === 'browser-url') ?? false
+    const serviceRuntimes: EngineeringServiceRuntimes | undefined = needsBrowserUrl
+      ? (input.engineeringExecution.serviceRuntimes ?? await resolveDefaultEngineeringServiceRuntimes())
+      : undefined
+    const browserDriver = createEngineeringBrowserFileDriver({
+      validate: validateScenarioFileContent,
+      browserPrerequisite: () => input.controller.hasRiskDisclaimerAcknowledged?.() === false
+        ? '尚未确认平台账号风险告知，请到浏览器面板阅读并确认后重跑；工程单次批准不能替代该告知。' : null,
+      run: async (execution, selectedScenarios) => {
+        const browserResults = await runGwtSuite({
+        sessionId: input.sessionId, entryHtmlPath: join(projectDir, '08_APP', execution.test.target),
+        scenarios: selectedScenarios, controller: input.controller,
+        screenshotDir: join(projectDir, '06_TESTS', 'screenshots'), baselineDir: join(projectDir, '06_TESTS', '_screenshots'),
+        signal: execution.signal,
+        })
+        browserResultsByTest.set(execution.test.id, browserResults)
+        return browserResults
+      },
+    })
+    const browserUrlDriver = createEngineeringBrowserUrlDriver({
+      validate: validateScenarioFileContent,
+      browserPrerequisite: () => input.controller.hasRiskDisclaimerAcknowledged?.() === false
+        ? '尚未确认平台账号风险告知，请到浏览器面板阅读并确认后重跑；工程单次批准不能替代该告知。' : null,
+      serviceEnvironment: (execution) => {
+        if (!serviceRuntimes) return '宿主未提供可用的服务运行时，browser-url 测试无法预检'
+        return validateEngineeringServiceEnvironment(execution, serviceRuntimes, process.platform)
+      },
+      startService: async (execution) => {
+        const runtimes = serviceRuntimes ?? input.engineeringExecution!.serviceRuntimes ?? await resolveDefaultEngineeringServiceRuntimes()
+        const deps = input.engineeringExecution!.serviceDeps ?? createDefaultEngineeringServiceDeps()
+        return startEngineeringService(execution, runtimes, deps, input.sessionId)
+      },
+      run: async (execution, selectedScenarios, url) => {
+        const browserResults = await runGwtSuite({
+          sessionId: input.sessionId, entryUrl: url,
+          scenarios: selectedScenarios, controller: input.controller,
+          screenshotDir: join(projectDir, '06_TESTS', 'screenshots'), baselineDir: join(projectDir, '06_TESTS', '_screenshots'),
+          signal: execution.signal,
+        })
+        browserResultsByTest.set(execution.test.id, browserResults)
+        return browserResults
+      },
+    })
+    const emitEngineeringProgress = (event: GwtProgressEvent): void => {
+      try { input.onProgress?.({ ...event, scope: 'engineering' }) } catch { /* 展示失败不改变执行事实 */ }
+    }
+    const progressCounts = { current: 0, total: 0, passed: 0, failed: 0, skipped: 0 }
+    emitEngineeringProgress({ phase: 'start', ...progressCounts })
+    engineeringSuite = await runEngineeringSuite(projectDir, {
+      ...input.engineeringExecution.services,
+      // W-I B-f：真实能力证据观察期门禁（宿主接线层；scope 绑定本次验收）。
+      // 未登记任何观察轮次时逐项返回 requires-real-unattested → suite 保持 blocked（不变相放行）。
+      resolveRealEvidence: (request) => resolveSuiteRealEvidence(
+        {
+          workspaceSlug: input.workspaceSlug,
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          projectDir: request.projectDir,
+        },
+        request.tests,
+      ),
+      approve: async (execution) => {
+        emitEngineeringProgress({ phase: 'approval', ...progressCounts, scenario: execution.test.id })
+        const approved = await input.engineeringExecution!.services.approve(execution)
+        if (approved) emitEngineeringProgress({ phase: 'scenario-start', ...progressCounts, scenario: execution.test.id })
+        return approved
+      },
+      drivers: [...input.engineeringExecution.services.drivers, browserDriver, browserUrlDriver],
+    }, input.engineeringExecution.signal, (progress) => {
+      Object.assign(progressCounts, progress)
+      emitEngineeringProgress({ phase: 'scenario-end', ...progressCounts })
+    })
+    blockedReason = engineeringSuite.verdict === 'blocked' ? engineeringSuite.reason : null
+  }
 
   // 4. 执行（三种确定态，均不向上抛异常：正常结果 / 覆盖性基准缺失 fail-fast / 执行异常 error）
-  const entryHtmlPath = join(projectDir, '08_APP', 'index.html')
+  let suiteContract: ReturnType<typeof parseEngineeringContract>['contract'] = null
+  if (engineeringSuite?.evidence) {
+    try { suiteContract = parseEngineeringContract(readFileSync(join(projectDir, ENGINEERING_CONTRACT_PATH), 'utf-8')).contract }
+    catch { blockedReason = '测试后工程契约不可读，本轮结果无法用于交付。' }
+  }
+  const entryRelativePath = suiteContract ? '08_APP/' + suiteContract.target.entry : engineering.entry || '08_APP/index.html'
+  const entryHtmlPath = join(projectDir, entryRelativePath)
   const screenshotDir = join(projectDir, '06_TESTS', 'screenshots')
   // W22 F4：截图基线目录（06_TESTS/_screenshots/；不进交付门内容口径——
   // checkGwtDeliveryFacts 只读 report.json 与 08_APP/index.html，不枚举本目录）
   const baselineDir = join(projectDir, '06_TESTS', '_screenshots')
   let results: GwtScenarioResult[] = []
   let errorReason: string | null = null
-  if (prdUserStoriesMissing) {
+  if (engineeringSuite) {
+    errorReason = engineeringSuite.verdict === 'error' ? engineeringSuite.reason : null
+    results = engineeringSuite.tests.flatMap((test): GwtScenarioResult[] => {
+      const browserResults = browserResultsByTest.get(test.testId)
+      if (browserResults) return browserResults
+      return test.checks.map((check) => ({
+        feature: test.testId, scenario: `${check.storyId ?? '辅助测试'} ${check.label}`,
+        status: check.passed && test.status === 'pass' ? 'pass' as const : 'fail' as const,
+        reason: !check.passed ? `期望「${check.expected}」实际「${check.actual}」` : test.status !== 'pass' ? test.reason : null,
+        failedStep: null, screenshot: null, durationMs: 0,
+      }))
+    })
+  } else if (blockedReason) {
+    // 不执行、不降级mock，不消耗代码修复预算。
+  } else if (prdUserStoriesMissing) {
     // PRD 缺 US-xx 清单：覆盖性无法判定，不执行浏览器步骤（fail-fast，AC F-002）
   } else if (scenarios.length > 0 && existsSync(entryHtmlPath)) {
     try {
@@ -1739,39 +2000,61 @@ async function runNanjuGwtAcceptanceInner(input: {
     }))
   }
   // W22 A1：schema 非法文件计 fail（不再静默 skip），与执行结果合并进裁判
-  if (schemaInvalidResults.length > 0) {
+  if (!engineeringSuite && !blockedReason && schemaInvalidResults.length > 0) {
     results = [...results, ...schemaInvalidResults]
   }
 
+  // 非 suite 的工程浏览器路径（engineering-browser 模式，无逐项 scenarioFiles 的 browser-file 契约）：
+  // 测试期间产物变化 → blocked。suite 路径（engineering.mode === 'blocked'）的等价 digest 重校由
+  // nanju-engineering-suite.ts 提供（彼时 prepareEngineeringBrowserRun 返回 evidence=null，本分支不进入）。
+  if (engineering.evidence) {
+    const after = captureEngineeringEvidence(projectDir)
+    if (after.evidence?.digest !== engineering.evidence.digest) {
+      blockedReason = '测试期间PRD、工程契约或产物发生变化，结果无法绑定当前版本，请停止修改后重新验收。'
+    }
+  }
+
+  // 执行后也可能因版本变化而阻塞；只有最终有效的一轮才消耗修复预算。
+  const retryCount = blockedReason ? prevRetryCount : retryPending ? prevRetryCount + 1 : prevRetryCount
   // 5. 规则裁判 + 报告
   const judgement = judgeGwtResult(results, userStories)
-  const failureKind = errorReason
+  if (engineeringSuite) {
+    judgement.coveredUs = engineeringSuite.coveredUs
+    judgement.uncoveredUs = engineeringSuite.uncoveredUs
+    // 工程结果包含辅助测试与执行状态，不能仅由映射后的checks数量重建结论。
+    judgement.verdict = engineeringSuite.verdict === 'pass' ? 'pass' : 'fail'
+  }
+  const failureKind = blockedReason || errorReason
     ? null
     : prdUserStoriesMissing
       ? 'coverage'
       : judgement.verdict === 'fail'
         ? classifyGwtFailure(results)
         : null
-  const verdict: NanjuGwtOutcome['verdict'] = errorReason ? 'error' : judgement.verdict
+  const verdict: NanjuGwtOutcome['verdict'] = blockedReason ? 'blocked' : errorReason ? 'error' : engineeringSuite?.verdict ?? judgement.verdict
   // 独立异常计数（#6）：仅 error 轮累计，pass 轮清零（与 retryCount 的非 pass 合计口径并存）
-  const errorCount = verdict === 'pass'
+  const errorCount = blockedReason ? prevErrorCount : verdict === 'pass'
     ? 0
     : verdict === 'error'
-      ? (prevFailed ? prevErrorCount : 0) + 1
-      : (prevFailed ? prevErrorCount : 0)
+      ? (retryPending ? prevErrorCount : 0) + 1
+      : (retryPending ? prevErrorCount : 0)
   const report: GwtReportJson = {
+    engineeringEvidence: engineeringSuite?.evidence ?? engineering.evidence ?? undefined,
+    engineeringSuite: engineeringSuite ?? undefined,
+    blockedReason: blockedReason ?? undefined,
+    retryPending: blockedReason ? retryPending : verdict === 'fail' || verdict === 'error',
     generatedAt: new Date().toISOString(),
     // W18 Wave2：交付事实字段（runId 每次运行新发；指纹为写盘时刻对入口实测；
     // 入口缺失的降级路径缺省指纹——门禁按旧版格式/指纹不符拦截，verdict 亦非 pass）
     runId: randomUUID(),
     entryFingerprint: computeGwtEntryFingerprint(entryHtmlPath) ?? undefined,
-    executionContext: 'file://',
-    coverageUnverified: [...GWT_COVERAGE_UNVERIFIED],
+    executionContext: engineeringSuite ? 'project-driver' : 'file://',
+    coverageUnverified: engineeringSuite?.coverageUnverified ?? [...GWT_COVERAGE_UNVERIFIED],
     verdict,
     failureKind,
     prdUserStoriesMissing: prdUserStoriesMissing || undefined,
     errorReason,
-    entry: '08_APP/index.html',
+    entry: engineeringSuite ? entryRelativePath : engineering.entry || '（真实执行器未就绪）',
     scenariosTotal: judgement.scenariosTotal,
     passed: judgement.passed,
     failed: judgement.failed,
@@ -1803,6 +2086,7 @@ async function runNanjuGwtAcceptanceInner(input: {
       && typeof report.entryFingerprint?.sha256 === 'string' && typeof report.entryFingerprint?.size === 'number') {
       // F1-1：登记 main 内存实测（GWT 运行时实测入口指纹 + 本轮 verdict）
       recordMainGwtRun(input.projectId, report.runId, {
+        engineeringDigest: report.engineeringEvidence?.digest,
         verdict: report.verdict,
         fingerprintSha: report.entryFingerprint.sha256,
         size: report.entryFingerprint.size,
@@ -1864,13 +2148,25 @@ async function runNanjuGwtAcceptanceInner(input: {
   }
 
   // 摘要口径（AC U-001/F-002）：PRD 缺 US 清单与执行异常用专用句式，不用普通 fail 文案
-  const summaryText = errorReason
+  const summaryText = blockedReason
+    ? `⏸ 验收测试已阻塞：${blockedReason} 本轮结果不用于交付，也不计入代码缺陷修复次数。测试报告：${reportMdPath}`
+    : errorReason
     ? `⚠️ 验收测试执行异常：${errorReason}。请检查 08_APP/index.html 与 06_TESTS/ 产物完整性后重跑。测试报告：${reportMdPath}`
     : prdUserStoriesMissing
       ? `❌ PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定（验收硬约束要求每条用户故事有可执行场景）。请补充 PRD 用户故事清单后重跑。测试报告：${reportMdPath}`
-      : buildSummaryText(judgement, reportMdPath)
+      : buildSummaryText(judgement, reportMdPath) + (engineeringSuite ? '\n证据边界：' + engineeringSuite.coverageUnverified.join('；') : '')
 
+  if (engineeringSuite) {
+    try {
+      input.onProgress?.({ phase: 'done', scope: 'engineering', verdict, reason: blockedReason ?? errorReason ?? engineeringSuite.reason ?? undefined,
+        current: engineeringSuite.tests.length, total: suiteContract?.tests.length ?? 0,
+        passed: engineeringSuite.tests.filter((test) => test.status === 'pass').length,
+        failed: engineeringSuite.tests.filter((test) => test.status === 'fail' || test.status === 'error').length,
+        skipped: engineeringSuite.tests.filter((test) => test.status === 'blocked').length })
+    } catch { /* 展示失败不改变报告裁决 */ }
+  }
   return {
+    blockedReason: blockedReason ?? undefined,
     verdict,
     judgement,
     reportJsonPath,

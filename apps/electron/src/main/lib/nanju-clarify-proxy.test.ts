@@ -535,7 +535,7 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
   test('auto on（D8 §九 B′/R7-09）：ux-advisor blocked 事件进代理代决——kind=decision + 代决准则模板 + 自报无效', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cat-'))
     writeNanjuProjectFixture({ stage: 'prototype' })
-    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-flash': true }
 
     // 提问委派：phase.role 显式 ux-advisor（即便任务文本混入 clarify 自称，映射仍按 role）
     const delegationId = await delegateAskingChild(
@@ -552,7 +552,7 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
     // D8：装载代决作答脚本（决策=维持现状倾向）
     scriptProxyAnswers(() => '维持现状：侧边导航（准则①保守优先，行为变化最小）')
     const result = await callClarifyProxy({ delegationId, blockedEventIds: [events[0]!.id as string] })
-    expect(result.status).toBe('answered')
+    expect(result.status, JSON.stringify(result)).toBe('answered')
     // R7-10：代决 kind='decision'
     expect(result.kind).toBe('decision')
     // R7-09：代理任务用代决准则模板分支（保守/维持现状/可逆性）
@@ -575,7 +575,7 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
   test('auto off（注册后执行前关闭，R7-01 auto off 基线）：design-preference 组维持 D7 fail-closed → fallback:"human"', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cat-off-'))
     writeNanjuProjectFixture({ stage: 'prototype' })
-    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-flash': true }
 
     const delegationId = await delegateAskingChild(
       'phase.role: ux-advisor\n你是UX 顾问。根据 PRD 生成可交互原型。',
@@ -621,8 +621,8 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
   test('反向：requirement-analyst 委派（requirements 阶段）→ 进代理并完成回注', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cat3-'))
     writeNanjuProjectFixture({ stage: 'requirements' })
-    // 提问委派 glm:GLM-5.3（提问方=glm）；代理候选仅 deepseek:v4-flash 可用（AC 家族 → 降级可用）
-    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
+    // 提问委派 glm:GLM-5.3（提问方=glm）；代理候选仅 deepseek:deepseek-flash 可用（AC 家族 → 降级可用）
+    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-flash': true }
 
     // 提问委派阶段保持默认脚本（不完成——委派须停在 running 才能产生 blocked 事件）
     const delegationId = await delegateAskingChild(
@@ -639,7 +639,7 @@ describe('类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——
     scriptProxyAnswers(() => '面向大学生的读书笔记管理')
 
     const result = await callClarifyProxy({ delegationId, blockedEventIds: [events[0]!.id as string] })
-    expect(result.status).toBe('answered')
+    expect(result.status, JSON.stringify(result)).toBe('answered')
     // R7-10：requirement-clarify → kind='answer'（代答，非代决）
     expect(result.kind).toBe('answer')
     expect((result.answers as Array<{ answer: string }>)[0]!.answer).toContain('读书笔记')
@@ -667,7 +667,7 @@ describe('代理委派生成：inline 最小 meta + 独立时钟标记', () => {
   test('代理子会话 meta patch 只含 {nanjuProxy:true}（不写 sourceDelegationId/parentSessionId）', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-meta-'))
     writeNanjuProjectFixture()
-    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-flash': true }
     scriptProxyAnswers(() => '答')
 
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要搜索功能吗？' }] })
@@ -696,7 +696,7 @@ describe('代理委派生成：inline 最小 meta + 独立时钟标记', () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-noch-'))
     writeNanjuProjectFixture()
     // 只有提问家族（deepseek=L1 渠道）端点可用 → 代理候选全被硬约束排除
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要导出吗？' }] })
     expect(result.status).toBe('fallback')
     // R7-01 路径④：auto on → auto-degrade（非 human）
@@ -712,7 +712,7 @@ describe('预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallb
   test('R7-01 主红测：budget=0 + design-preference blocked + auto on → auto-degrade（非 human）+ pending 登记 + 不建委派', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-budget-'))
     writeNanjuProjectFixture({ stage: 'prototype', autoClarify: { enabled: true, proxyBudget: 0 } })
-    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'glm-zhipu:GLM-5.3': true, 'deepseek:deepseek-flash': true }
 
     const delegationId = await delegateAskingChild('phase.role: ux-advisor\n你是UX 顾问。根据 PRD 生成原型。')
     emitBlocked((await pendingChild(delegationId)), 'req-r701', [
@@ -741,7 +741,7 @@ describe('预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallb
   test('budget=0 + questions 模式（auto on）→ auto-degrade（reason 同上路径分叉验证）', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-budget2-'))
     writeNanjuProjectFixture({ autoClarify: { enabled: true, proxyBudget: 0 } })
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要深色模式吗？' }] })
     expect(result.status).toBe('fallback')
     expect(result.fallback).toBe('auto-degrade')
@@ -758,7 +758,7 @@ describe('预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallb
       { kind: 'cannot-judge', qid: 'b' },
       { kind: 'cannot-judge', qid: 'c' },
     ])
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '要不要分页？' }] })
     expect(result.status).toBe('fallback')
     expect(result.fallback).toBe('auto-degrade')
@@ -770,7 +770,7 @@ describe('预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallb
   test('同组一次不重复：单次多题含「无法判断」→ 组行只记一条（计数=1）', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-cj2-'))
     writeNanjuProjectFixture()
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true, 'glm-zhipu:glm-5.3-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true, 'glm-zhipu:glm-5.3-flash': true }
     scriptProxyAnswers((qid) => (qid === 'q2' ? '无法确定，缺少用户规模数据' : '明确答案'))
     const result = await callClarifyProxy({
       questions: [
@@ -788,7 +788,7 @@ describe('工具侧等待兑底（R2′ F2-2：运行失败路径 auto on 统一
   test('代理委派失败（onError，渠道固定不降级）→ auto on 返回 auto-degrade（proxy-failed）+ 降级遥测', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-timeout-'))
     writeNanjuProjectFixture()
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true, 'glm-zhipu:glm-5.3-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true, 'glm-zhipu:glm-5.3-flash': true }
     // 代理委派立即失败（onError）→ 渠道固定不降级 → status=failed → fallback
     runScript = (_i, cb) => { cb.onError('模拟渠道故障') }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要登录吗？' }] })
@@ -801,7 +801,7 @@ describe('工具侧等待兑底（R2′ F2-2：运行失败路径 auto on 统一
   test('答案不可解析（fail-closed）→ auto on 返回 auto-degrade（answer-unparseable）', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-clarify-unparseable-'))
     writeNanjuProjectFixture()
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true, 'glm-zhipu:glm-5.3-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true, 'glm-zhipu:glm-5.3-flash': true }
     runScript = (_i, cb) => { cb.onComplete([{ role: 'assistant', content: '我拒绝按格式回答，没有 JSON 块。' }]) }
     const result = await callClarifyProxy({ questions: [{ id: 'q1', question: '需要导出吗？' }] })
     expect(result.status).toBe('fallback')

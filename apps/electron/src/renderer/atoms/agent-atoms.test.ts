@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'bun:test'
+import type { PermissionRequest } from '@proma/shared'
 import { createStore } from 'jotai/vanilla'
 import {
   agentSessionInputStreamStateAtomFamily,
   agentSessionStreamingStateAtomFamily,
   agentStreamingStatesAtom,
+  agentSessionIndicatorMapAtom,
+  allPendingPermissionRequestsAtom,
+  allPendingAskUserRequestsAtom,
+  unviewedCompletedSessionIdsAtom,
   applyAgentEvent,
   clearAgentStreamError,
   isRetryEventForCurrentStream,
@@ -383,5 +388,55 @@ describe('Agent 输入流状态订阅隔离', () => {
 
     expect(notifications).toBe(0)
     unsubscribe()
+  })
+})
+
+/** 最小可用的权限请求（侧栏指示只看 requestId/sessionId） */
+function pendingPermission(sessionId: string, requestId: string): PermissionRequest {
+  return {
+    requestId,
+    sessionId,
+    toolName: 'Bash',
+    toolInput: {},
+    description: '执行隔离 fixture 命令',
+    dangerLevel: 'normal',
+  }
+}
+
+describe('侧栏会话指示：跨 turn 的后台批准不能因流结束而消失', () => {
+  test('given 流已结束（turn 收尾）但仍有待处理权限 when 读取指示 then 标记 blocked', () => {
+    const store = createStore()
+    store.set(agentStreamingStatesAtom, new Map([['host-task-session', { ...createStreamState(), running: false }]]))
+    store.set(allPendingPermissionRequestsAtom, new Map([['host-task-session', [pendingPermission('host-task-session', 'approve-1')]]]))
+
+    expect(store.get(agentSessionIndicatorMapAtom).get('host-task-session')).toBe('blocked')
+  })
+
+  test('given 既有运行中会话又有仅后台待批准会话 when 读取指示 then 各自独立标记', () => {
+    const store = createStore()
+    store.set(agentStreamingStatesAtom, new Map([
+      ['running-session', createStreamState()],
+      ['background-session', { ...createStreamState(), running: false }],
+    ]))
+    store.set(allPendingPermissionRequestsAtom, new Map([['background-session', [pendingPermission('background-session', 'approve-2')]]]))
+
+    const indicators = store.get(agentSessionIndicatorMapAtom)
+    expect(indicators.get('running-session')).toBe('running')
+    expect(indicators.get('background-session')).toBe('blocked')
+  })
+
+  test('given 会话已完成但未查看且仍有待处理权限 when 读取指示 then blocked 优先于 completed', () => {
+    const store = createStore()
+    store.set(unviewedCompletedSessionIdsAtom, new Set(['finished-session']))
+    store.set(allPendingAskUserRequestsAtom, new Map([['finished-session', [{ requestId: 'ask-1', sessionId: 'finished-session', questions: [], toolInput: {} }]]]))
+
+    expect(store.get(agentSessionIndicatorMapAtom).get('finished-session')).toBe('blocked')
+  })
+
+  test('given 无运行流也无待处理请求 when 读取指示 then 不登记该会话（idle 不显示）', () => {
+    const store = createStore()
+    store.set(agentStreamingStatesAtom, new Map([['idle-session', { ...createStreamState(), running: false }]]))
+
+    expect(store.get(agentSessionIndicatorMapAtom).has('idle-session')).toBe(false)
   })
 })

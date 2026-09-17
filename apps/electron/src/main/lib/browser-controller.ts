@@ -14,6 +14,7 @@ import { buildPromaBrowserUserAgent } from './browser-identity'
 import { assertBrowserScript, buildBrowserDomActionExpression, type BrowserDomActionInput } from './browser-script-policy'
 import { getSettings } from './settings-service'
 import { isValidImageBytes } from './image-content-validation'
+import { isRegisteredEngineeringServiceUrl } from './nanju-engineering-service'
 
 const MAX_TRACE_ITEMS = 30
 /** 总数超限时只回收 Agent 创建且未在使用的标签，绝不自动关闭用户标签。 */
@@ -1396,6 +1397,56 @@ export class BrowserController {
       await withBrowserCdpTimeout(() => tab.view.webContents.loadFile(filePath), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000)
       this.updateNavigationState(browserSession, tab)
     })
+  }
+
+  /** W-C browser-url：创建专用标签并 loadURL 打开宿主 loopback 工程服务入口（仅宿主持有地址）。 */
+  async createUrlTab(sessionId: string, url: string): Promise<{ tabId: string; url: string; previousActiveTabId: string | null }> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    this.assertRiskDisclaimerAcknowledged()
+    // URL 门：只放行本 session 持有并登记在册的 127.0.0.1 工程服务地址，不接任意外部 URL。
+    if (!isRegisteredEngineeringServiceUrl(url, sessionId)) throw new Error('只能打开本 session 宿主持有的 loopback 工程服务地址，拒绝任意外部 URL：' + url)
+    // 标签恢复（AC Z-004）：记录测试创建前的用户活动标签，测试结束后由 GwtRunner 切回。
+    const previousActiveTabId = browserSession.activeTabId || null
+    const tab = this.createTab(browserSession, false, false)
+    this.activateDisplayTab(browserSession, tab)
+    this.trace(browserSession, tab, 'tab', `工程服务测试标签已创建：${url}`)
+    this.emit(browserSession)
+    await this.runTabOperation(browserSession, tab, undefined, async () => {
+      await withBrowserCdpTimeout(() => tab.view.webContents.loadURL(url), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000)
+      this.updateNavigationState(browserSession, tab)
+      return { tabId: tab.tabId, url: tab.state.url }
+    })
+    return { tabId: tab.tabId, url: tab.state.url, previousActiveTabId }
+  }
+
+  /** W-C browser-url：场景隔离——同一工程服务标签重新 loadURL（每场景重载，URL 门同前）。 */
+  async loadUrlInTab(sessionId: string, tabId: string, url: string): Promise<void> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    if (!isRegisteredEngineeringServiceUrl(url, sessionId)) throw new Error('只能打开本 session 宿主持有的 loopback 工程服务地址，拒绝任意外部 URL：' + url)
+    const tab = this.getAgentTab(browserSession, tabId)
+    await this.runTabOperation(browserSession, tab, undefined, async () => {
+      try {
+        await this.executePageExpression(tab, 'try{localStorage.clear();sessionStorage.clear()}catch(e){}', browserSession.agentAbortController.signal)
+      } catch { /* 存储不可用时不阻断重载 */ }
+      await withBrowserCdpTimeout(() => tab.view.webContents.loadURL(url), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000)
+      this.updateNavigationState(browserSession, tab)
+      // N1/S9：loadURL 后读取实际 URL，服务 302 重定向出 owner origin 则抛错让该场景判 fail；
+      // 不关闭标签（保留到本轮结束由 runGwtSuite 统一清理，避免后续场景标签缺失→整轮 error）。
+      if (!isRegisteredEngineeringServiceUrl(tab.state.url, sessionId)) {
+        throw new Error('工程服务测试页已离开宿主登记的 loopback 地址：' + tab.state.url)
+      }
+    })
+  }
+
+  /** W-C browser-url：每场景后校验测试 tab 实际 URL 仍在宿主持有 origin；出 origin 抛错不关标签（N1/S9）。 */
+  async assertUrlTabOrigin(sessionId: string, tabId: string): Promise<void> {
+    const browserSession = this.getOrCreateSession(sessionId, [], false)
+    const tab = this.getAgentTab(browserSession, tabId)
+    this.updateNavigationState(browserSession, tab)
+    if (!isRegisteredEngineeringServiceUrl(tab.state.url, sessionId)) {
+      // N1：出 origin 不关闭标签，只抛错让场景判 fail；标签由 runGwtSuite 本轮结束统一关闭。
+      throw new Error('工程服务测试页已离开宿主登记的 loopback 地址：' + tab.state.url)
+    }
   }
 
   /** GWT：恢复测试前的用户活动标签（AC Z-004：标签不存在时静默跳过）。 */

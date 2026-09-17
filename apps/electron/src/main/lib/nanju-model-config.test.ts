@@ -62,6 +62,9 @@ describe('FALLBACK_PHASE_MODELS / FALLBACK_AC_PRESETS（代码兜底常量，W13
     expect(FALLBACK_PHASE_MODELS.prototype).toEqual({
       channel: 'minimax', model: 'MiniMax-M3',
       fallbacks: ['glm-zhipu:glm-5.3-flash'],
+      // B2：visualReviewer 默认未设——与 author 同家族标记运行时解析同 UUID 渠道
+      // （同端点自证），默认不启用独立视觉验证者；用户在 nanju-model-config 中
+      // 显式配置 visualReviewer（异族端点）才启用该槽位
     })
     expect(FALLBACK_PHASE_MODELS.architecture).toEqual({
       channel: 'glm-zhipu', model: 'GLM-5.3',
@@ -228,6 +231,7 @@ describe('resolvePhaseModelConfig / resolveAcPreset', () => {
     expect(resolvePhaseModelConfig('prototype')).toEqual({
       channel: 'minimax', model: 'MiniMax-M3',
       fallbacks: [{ channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' }],
+      // B2：默认未设 visualReviewer（用户可显式配置启用）
     })
     expect(resolvePhaseModelConfig('architecture')).toEqual({
       channel: 'glm-zhipu', model: 'GLM-5.3',
@@ -499,5 +503,87 @@ describe('W23 配置代次（getConfigGeneration）', () => {
     expect(getConfigGeneration()).toBe(before + 1)
     reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
     expect(getConfigGeneration()).toBe(before + 2)
+  })
+})
+
+// ═══════════════ W-B B2：visualReviewer 独立槽位（参数文件加载与覆盖语义）══════════════
+
+describe('W-B B2：visualReviewer 独立槽位（与 author 解耦）', () => {
+  test('默认层 3 兜底：prototype.visualReviewer 默认未设；其他阶段无 visualReviewer', () => {
+    // B2：默认不复盖为 minimax/MiniMax-M3（同作者家族标记 → 同端点自证）——视觉验证者是
+    // 异族裁决槽位，必须用户显式配置异族端点才启用；未配置时不渲染视觉验证者。
+    expect(FALLBACK_PHASE_MODELS.prototype.visualReviewer).toBeUndefined()
+    for (const id of ['requirements', 'architecture', 'planning', 'coding', 'testing'] as const) {
+      expect(FALLBACK_PHASE_MODELS[id].visualReviewer).toBeUndefined()
+    }
+  })
+
+  test('resolvePhaseModelConfig：默认 prototype 不包含 visualReviewer；其他阶段也不包含', () => {
+    reloadNanjuModelConfig({ userConfigPath: null, builtinConfigPath: null })
+    expect(resolvePhaseModelConfig('prototype').visualReviewer).toBeUndefined()
+    for (const id of ['requirements', 'architecture', 'planning', 'coding', 'testing'] as const) {
+      expect(resolvePhaseModelConfig(id).visualReviewer).toBeUndefined()
+    }
+  })
+
+  test('用户覆盖可改写 visualReviewer（字段级独立覆盖；不与 author 同型合并）', () => {
+    const userPath = tmpConfigPath('b2-visualreviewer-user')
+    writeFileSync(userPath, JSON.stringify({
+      phases: {
+        prototype: {
+          channel: 'glm-zhipu', // 用户显式让作者走 glm 系
+          model: 'GLM-5.3',
+          // 视觉验证者显式异族端点（避免同端点自证）
+          visualReviewer: { channel: 'minimax', model: 'MiniMax-M3' },
+        },
+      },
+    }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, builtinConfigPath: null })
+    const resolved = resolvePhaseModelConfig('prototype')
+    expect(resolved.channel).toBe('glm-zhipu') // 作者被覆盖
+    expect(resolved.model).toBe('GLM-5.3')
+    expect(resolved.visualReviewer).toEqual({ channel: 'minimax', model: 'MiniMax-M3' }) // 视觉验证者独立覆盖生效
+  })
+
+  test('用户可显式设置 visualReviewer 为任意同族端点（与 author 跨族），参数文件不拒——同端点自证由 gate 接线检测', () => {
+    // 本文件仅验证参数文件加载容错；同端点拒绝是 gate 接线职责，不是 model-config 职责。
+    const userPath = tmpConfigPath('b2-visualreviewer-arbitrary')
+    writeFileSync(userPath, JSON.stringify({
+      phases: {
+        prototype: {
+          visualReviewer: { channel: 'kimi', model: 'k3-vision' },
+        },
+      },
+    }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, builtinConfigPath: null })
+    expect(resolvePhaseModelConfig('prototype').visualReviewer).toEqual({ channel: 'kimi', model: 'k3-vision' })
+  })
+
+  test('字段级校验容错：visualReviewer 非法（非 {channel, model} 两键）→ warn 并保持低层值', () => {
+    const userPath = tmpConfigPath('b2-visualreviewer-invalid')
+    writeFileSync(userPath, JSON.stringify({
+      phases: {
+        prototype: {
+          // channel 缺 model → 非法；channel 空串 → 非法；多余键 → 拒绝
+          visualReviewer: { channel: 'minimax' }, // 缺 model
+        },
+      },
+    }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, builtinConfigPath: null })
+    // 非法字段被丢弃 → visualReviewer 保持低层值（默认未设）
+    expect(resolvePhaseModelConfig('prototype').visualReviewer).toBeUndefined()
+  })
+
+  test('字段级校验容错：visualReviewer 空 channel → warn 并保持低层值（与 acAttacker/acDefender 同样容错口径）', () => {
+    const userPath = tmpConfigPath('b2-visualreviewer-empty-channel')
+    writeFileSync(userPath, JSON.stringify({
+      phases: {
+        prototype: {
+          visualReviewer: { channel: '', model: 'MiniMax-M3' },
+        },
+      },
+    }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, builtinConfigPath: null })
+    expect(resolvePhaseModelConfig('prototype').visualReviewer).toBeUndefined()
   })
 })

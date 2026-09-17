@@ -465,3 +465,122 @@ test('save 拒绝空数组 proxyCandidates（清空须用 null，与 fallbacks �
     { userConfigPath: null, overrideConfigPath: fixturePath('override-empty-proxy'), builtinConfigPath: null, listChannels: sampleChannels },
   )).toThrow('不允许空数组')
 })
+
+// ═══════════════ W-B B2：visualReviewer 独立槽位 save/reset/getState 接线 ═══════════════
+
+describe('W-B B2：visualReviewer 独立槽位 save/reset/getState 接线', () => {
+  test('save 接受 visualReviewer 字段（白名单 + assertActorObject 两键非空校验）', () => {
+    const override = fixturePath('override-b2-visualreviewer')
+    const opts = { userConfigPath: null, overrideConfigPath: override, builtinConfigPath: null, listChannels: sampleChannels }
+    // 合法 → 写入 + reload 生效
+    const resp = saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: { channel: 'glm-zhipu', model: 'glm-5.3-vision' } } } },
+      opts,
+    )
+    expect(resp.state.effective.phases.prototype!.visualReviewer).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-vision' })
+    // 层 1.5 文件落盘
+    const onDisk = JSON.parse(readFileSync(override, 'utf-8')) as Record<string, unknown>
+    expect(((onDisk.phases as Record<string, Record<string, unknown>>).prototype!).visualReviewer).toEqual({
+      channel: 'glm-zhipu', model: 'glm-5.3-vision',
+    })
+    // loadNanjuModelConfig 缓存同步生效
+    expect(loadNanjuModelConfig().phases.prototype.visualReviewer).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-vision' })
+  })
+
+  test('save 拒绝 visualReviewer 缺 model（白名单两键都需非空）', () => {
+    const override = fixturePath('override-b2-visualreviewer-invalid')
+    expect(() => saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: { channel: 'minimax' } as unknown as { channel: string; model: string } } } },
+      { userConfigPath: null, overrideConfigPath: override, builtinConfigPath: null, listChannels: sampleChannels },
+    )).toThrow('仅允许 channel/model 两键')
+    expect(existsSync(override)).toBe(false)
+  })
+
+  test('save 拒绝 visualReviewer 空 channel（同 acAttacker/acDefender 校验口径）', () => {
+    const override = fixturePath('override-b2-visualreviewer-empty')
+    expect(() => saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: { channel: '', model: 'x' } } } },
+      { userConfigPath: null, overrideConfigPath: override, builtinConfigPath: null, listChannels: sampleChannels },
+    )).toThrow('必须是非空字符串')
+  })
+
+  test('save 拒绝 visualReviewer 多余键（仅允许 channel/model 两键）', () => {
+    const override = fixturePath('override-b2-visualreviewer-extrakeys')
+    expect(() => saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: { channel: 'minimax', model: 'MiniMax-M3', extra: 'x' } as never } } },
+      { userConfigPath: null, overrideConfigPath: override, builtinConfigPath: null, listChannels: sampleChannels },
+    )).toThrow('仅允许 channel/model 两键')
+  })
+
+  test('save 接受 visualReviewer null = 删除该键覆盖（行级恢复）', () => {
+    const override = fixturePath('override-b2-visualreviewer-null')
+    const opts = { userConfigPath: null, overrideConfigPath: override, builtinConfigPath: null, listChannels: sampleChannels }
+    saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: { channel: 'kimi', model: 'k3' } } } },
+      opts,
+    )
+    expect(loadNanjuModelConfig().phases.prototype.visualReviewer).toEqual({ channel: 'kimi', model: 'k3' })
+    // null 删除后 override 文件整体移除（与其他阶段零覆盖语义一致）
+    const resp = saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: null } } },
+      opts,
+    )
+    expect(existsSync(override)).toBe(false)
+    // B2：默认未设 visualReviewer（同端点自证禁止默认复原）
+    expect(resp.state.effective.phases.prototype!.visualReviewer).toBeUndefined()
+  })
+
+  test('getState：effective.phases.prototype.visualReviewer 默认未设（视觉验证者异族槽位，用户须显式启用）', () => {
+    const state = getNanjuModelState(baseOpts(sampleChannels))
+    expect(state.effective.phases.prototype!.visualReviewer).toBeUndefined()
+    // 其他阶段不输出 visualReviewer 字段（避免 UI 选项冗余）
+    for (const id of ['requirements', 'architecture', 'planning', 'coding', 'testing'] as const) {
+      expect(state.effective.phases[id]!.visualReviewer).toBeUndefined()
+    }
+  })
+
+  test('getState：用户层 1.5 配置 visualReviewer 后，effective.visualReviewer 透传', () => {
+    const layer1 = fixturePath('b2-layer-1-visualreviewer')
+    writeJson(layer1, { phases: { prototype: { visualReviewer: { channel: 'kimi', model: 'k3-vision' } } } })
+    const state = getNanjuModelState({
+      userConfigPath: layer1,
+      overrideConfigPath: null,
+      builtinConfigPath: null,
+      listChannels: sampleChannels,
+    })
+    expect(state.effective.phases.prototype!.visualReviewer).toEqual({ channel: 'kimi', model: 'k3-vision' })
+    expect(state.handLayerPresent).toBe(true)
+  })
+
+  test('save 的 shadowed 链路：visualReviewer 被层 1 遮蔽时回传非空、含 path', () => {
+    const layer1 = fixturePath('b2-layer-1-shadow-visualreviewer')
+    writeJson(layer1, { phases: { prototype: { visualReviewer: { channel: 'kimi', model: 'k3-vision' } } } })
+    const override = fixturePath('b2-override-shadow-visualreviewer')
+    const resp = saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: { channel: 'glm-zhipu', model: 'glm-5.3-vision' } } } },
+      { userConfigPath: layer1, overrideConfigPath: override, builtinConfigPath: null, listChannels: sampleChannels },
+    )
+    expect(resp.shadowed.length).toBe(1)
+    expect(resp.shadowed[0]!.field).toBe('phases.prototype.visualReviewer')
+    expect(resp.shadowed[0]!.requested).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-vision' })
+    expect(resp.shadowed[0]!.effective).toEqual({ channel: 'kimi', model: 'k3-vision' })
+    expect(resp.shadowed[0]!.shadowSource).toBe('layer1')
+    expect(resp.shadowed[0]!.path).toBe(layer1)
+    expect(resp.state.effective.phases.prototype!.visualReviewer).toEqual({ channel: 'kimi', model: 'k3-vision' })
+  })
+
+  test('reset 后 visualReviewer 回落层 3 兜底（未设——视觉验证者需用户显式启用）', () => {
+    const override = fixturePath('b2-reset-visualreviewer')
+    const opts = { userConfigPath: null, overrideConfigPath: override, builtinConfigPath: null, listChannels: sampleChannels }
+    saveNanjuModelSettings(
+      { phases: { prototype: { visualReviewer: { channel: 'kimi', model: 'k3-vision' } } } },
+      opts,
+    )
+    expect(loadNanjuModelConfig().phases.prototype.visualReviewer).toEqual({ channel: 'kimi', model: 'k3-vision' })
+    const state = resetNanjuModelSettings(opts)
+    expect(existsSync(override)).toBe(false)
+    // B2：reset 后回落层 3 兜底 → 默认未设（visualReviewer 是显式启用槽位）
+    expect(state.effective.phases.prototype!.visualReviewer).toBeUndefined()
+    expect(loadNanjuModelConfig().phases.prototype.visualReviewer).toBeUndefined()
+  })
+})

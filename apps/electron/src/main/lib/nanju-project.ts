@@ -224,10 +224,14 @@ export const NANJU_GUARDS = {
   delegationPollIntervalMs: 60 * 1000,
   /**
    * 熔断阈值：阶段失败事件数（failCount 从 1 起累计）达到该值即熔断。
-   * 3 = 首次产出失败 1 次 + 回炉失败 2 次（与 testing GWT_RETRY_LIMIT=2 的回炉预算时点对齐；
-   * v0.17.65 AC Z-1：原值 2 会让首产失败后仅剩 1 次回炉，回炉预算被缩水 1 轮）。
+   *
+   * 4 = 首次产出失败 1 次 + **三次自动修复**各失败 1 次（wave3 A / I2-B-d 冻结裁决：
+   * 首产不计修复次数、修复 1/2/3 共三次）。修复预算的事实源是 `_repair-log.json`
+   * （`nanju-repair-loop.REPAIR_MAX_ATTEMPTS = 3`），本阈值只决定「何时停手转人工」，
+   * **不参与修复计数**（两计数独立：append attempt 不会改 phaseGuard，反之亦然）。
+   * 历史：v0.17.65 AC Z-1 曾为 3（1 首产 + 2 回炉，与旧 GWT_RETRY_LIMIT=2 对齐）。
    */
-  phaseFailBreakThreshold: 3,
+  phaseFailBreakThreshold: 4,
   /** 熔断阈值：阶段 errorCount 累计达到该值即熔断（执行异常重试无意义，1 次即熔断） */
   phaseErrorBreakThreshold: 1,
   /**

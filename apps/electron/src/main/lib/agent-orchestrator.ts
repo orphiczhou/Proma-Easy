@@ -297,6 +297,36 @@ export function resolveWorkspaceMismatchSelfHeal(input: {
   return requestedWorkspaceExists ? 'rebind' : 'reject'
 }
 
+/**
+ * 工程/验收测试启动文案（I1）：只描述本轮实际会发生的事。
+ *
+ * 缺 `03_ARCHITECTURE/engineering.json` 时 runner 不会进入逐项批准流程（只做条件检查并给出
+ * 阻塞原因），此时承诺「逐项请求真人批准」会让用户等一个永远不会到来的批准。
+ */
+export function buildNanjuTestingStartNotice(input: {
+  useEngineeringDrivers: boolean
+  engineeringContractReady: boolean
+}): string {
+  if (!input.useEngineeringDrivers) {
+    return '🧪 开始自动验收测试：系统将在应用内测试标签中逐场景执行（每个场景独立重载页面，避免状态串扰），完成后自动汇总裁判并给出测试报告。'
+  }
+  if (!input.engineeringContractReady) {
+    return '🧪 检查工程测试运行条件：当前工程尚缺可执行的测试契约，本轮只做条件检查并给出阻塞原因，不会请求逐项批准。'
+      + '补齐 03_ARCHITECTURE/engineering.json 与工程产物后重跑。'
+  }
+  return '🧪 准备工程测试：先检查运行条件，再逐项请求真人批准。项目驱动的检查记录不等于独立验证了真实系统行为；停止会话可取消。'
+}
+
+/**
+ * 同一项目重复声明 testing 推进时的可见提示（I1）。
+ *
+ * 旧行为只写 console 并 return，用户界面零反馈，且该次声明仍被记为已消费；
+ * 现改为注入可见消息，并把最常见的等待原因（待批准）写明。
+ */
+export function buildNanjuTestingAlreadyRunningNotice(projectName: string): string {
+  return `⏳ 验收测试已在进行中：${projectName}。它可能正在等待你处理上方待批准请求；请先处理该请求，无需重复声明推进 <!-- PHASE_ADVANCE: testing -->。`
+}
+
 export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
   private eventBus: AgentEventBus
@@ -317,6 +347,7 @@ export class AgentOrchestrator {
   private sessionPermissionModes = new Map<string, PromaPermissionMode>()
   /** 南大向导 GWT 验收：正在跑测试的项目（防同项目重复触发） */
   private runningGwtProjects = new Set<string>()
+  private engineeringGwtRuns = new Map<string, { sessionId: string; abort: AbortController }>()
 
   /**
    * 南大 L2 委派超时兑底（v0.17.64 Sprint C1，实证②：deepseek 渠道挂起 1h+ 零响应）。
@@ -587,8 +618,11 @@ export class AgentOrchestrator {
       if (!existsSync(reportPath)) {
         return '测试尚未执行（06_TESTS/report.json 不存在）。请先声明 <!-- PHASE_ADVANCE: testing --> 触发自动验收测试，全部通过后进入交付验收（用户确认满意交付后才交付）。'
       }
-      const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as { verdict?: string; passed?: number; scenariosTotal?: number; errorReason?: string | null }
+      const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as { verdict?: string; passed?: number; scenariosTotal?: number; errorReason?: string | null; blockedReason?: string }
       // error 报告（v0.17.63，AC Z-005/L-003）：给「重跑测试」指引而非裸拦截
+      if (report?.verdict === 'blocked') {
+        return '验收阻塞：' + (report.blockedReason ?? '所需测试驱动或环境不可用') + '。请先解决该条件，不要自动回炉修改代码。'
+      }
       if (report?.verdict === 'error') {
         return `验收测试执行异常（${report?.errorReason ?? '未知原因'}），测试结论不可用。请检查 08_APP/index.html 与 06_TESTS/ 产物后重跑测试（声明 <!-- PHASE_ADVANCE: testing -->）。`
       }
@@ -600,12 +634,15 @@ export class AgentOrchestrator {
       // delivery.gate.blocked 埋点含 reason 归因在其内部记录）
       const { checkGwtDeliveryFacts } = require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
       const { readProjectInfo } = require('./nanju-project') as typeof import('./nanju-project')
+      const deliveryInfo = readProjectInfo(workspaceSlug, projectId)
       const factBlock = checkGwtDeliveryFacts({
         workspaceSlug,
         projectId,
         reportJsonPath: reportPath,
         projectDir: getNanjuProjectDir(workspaceSlug, projectId),
-        info: readProjectInfo(workspaceSlug, projectId),
+        info: deliveryInfo,
+        // W-I B-f：真实能力证据与观察/收据同会话绑定（缺省则 requiresReal 交付一律拒绝）
+        sessionId: deliveryInfo?.sessionId ?? undefined,
       })
       return factBlock ? factBlock.message : null
     } catch (e) {
@@ -634,6 +671,24 @@ export class AgentOrchestrator {
 
 
   /**
+   * W-I B-d：修复环运行态（会话内内存；不持久化）。
+   *
+   * 为什么需要内存态：`_repair-log.json` 是预算事实源（跨重启恢复），但有两件事磁盘答不了——
+   * ① 上一次 append 是否落盘失败（写失败 ⇒ 磁盘计数陈旧 ⇒ 下一轮必须 fail-closed）；
+   * ② 同一阶段连续熔断次数（仅影响熔断文案强弱，不是预算）。
+   * 阶段变化时重置（换阶段不是「连续」）。
+   */
+  private repairRuntime = new Map<string, { stage: string; circuitOpens: number; logWriteFailed: boolean }>()
+
+  private getRepairRuntime(projectId: string, stage: string): { stage: string; circuitOpens: number; logWriteFailed: boolean } {
+    const existing = this.repairRuntime.get(projectId)
+    if (existing && existing.stage === stage) return existing
+    const fresh = { stage, circuitOpens: 0, logWriteFailed: false }
+    this.repairRuntime.set(projectId, fresh)
+    return fresh
+  }
+
+  /**
    * W17：PhaseAdvanceHooks 装配（消费器副作用注入——nanju-phase-advance-consumer 与
    * 编排器解耦的唯一粘合点；检测/消费逻辑见该模块）。
    */
@@ -656,6 +711,25 @@ export class AgentOrchestrator {
       triggerGwtRun: (input) => this.triggerNanjuGwtRun(input),
       checkGwtDeliveryGate: (workspaceSlug, projectId) => this.checkNanjuGwtDeliveryGate(workspaceSlug, projectId),
       finalizePhaseTodos: (sid) => this.finalizeNanjuPhaseTodos(sid),
+      // W-I B-c：阶段推进/交付成功后的工程检查点（三段式由本接线完成——消费器保持无 fs 依赖）。
+      // fire-and-forget：快照失败/耗时不得阻断推进；失败可见化（不静默）。
+      captureCheckpoint: (input) => {
+        void (async () => {
+          try {
+            const { createProjectCheckpoint } = require('./nanju-project-snapshots') as typeof import('./nanju-project-snapshots')
+            const result = await createProjectCheckpoint(
+              input.workspaceSlug, input.projectId, input.sessionId, input.description, input.triggerType,
+            )
+            this.injectNanjuAssistantMessage(input.sessionId, `🗂️ ${result.message}`)
+          } catch (e) {
+            console.warn('[南大快照] 检查点创建失败（不影响阶段推进）:', e instanceof Error ? e.message : String(e))
+            this.injectNanjuAssistantMessage(
+              input.sessionId,
+              `⚠️ 阶段检查点未创建（${e instanceof Error ? e.message : String(e)}）：本次推进仍已生效，但该阶段的工程文件回滚点缺失。`,
+            )
+          }
+        })()
+      },
     }
   }
 
@@ -705,11 +779,21 @@ export class AgentOrchestrator {
     resume: { channelId: string; modelId?: string; workspaceId?: string; permissionModeOverride?: PromaPermissionMode }
   }): void {
     const { workspaceSlug, projectId, projectName, projectMode, sessionId, resume } = input
+    const { prepareEngineeringBrowserRun } = require('./nanju-engineering-preflight') as typeof import('./nanju-engineering-preflight')
+    const { getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
+    const engineeringProjectDir = getNanjuProjectDir(workspaceSlug, projectId)
+    const engineering = prepareEngineeringBrowserRun(engineeringProjectDir)
+    // 工程阻塞分支进入受控驱动预检，由runner写出具体blocked报告；不冒充浏览器验收。
+    const useEngineeringDrivers = engineering.mode === 'blocked'
+    // 契约文件是 runner 走进逐项批准分支的前提（缺文件时它不跑 suite）：文案必须按实际能力措辞。
+    const { ENGINEERING_CONTRACT_PATH } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+    const engineeringContractReady = useEngineeringDrivers
+      && existsSync(join(engineeringProjectDir, ENGINEERING_CONTRACT_PATH))
     // 风险告知预检（v0.17.63，AC L-002）：quick 流程 coding 收口走 open_preview（预览协议），
     // 此前可能从未打开受管浏览器 → 未确认风险告知时直接给行动指引（含原文指引 + 人工预览降级
     // 出口），不进 GwtRunner 吃裸异常断链。
     try {
-      if (!browserController.hasRiskDisclaimerAcknowledged()) {
+      if (!useEngineeringDrivers && !browserController.hasRiskDisclaimerAcknowledged()) {
         this.injectNanjuAssistantMessage(
           sessionId,
           '⚠️ 尚未确认平台账号风险告知，浏览器验收测试无法启动。\n\n'
@@ -725,9 +809,13 @@ export class AgentOrchestrator {
     }
     if (this.runningGwtProjects.has(projectId)) {
       console.log(`[南大路由] GWT 验收已在进行中：${projectName}，忽略重复触发`)
+      // 静默吞掉会让用户以为已重跑：注入可见提示说明「在进行中/可能等待批准」。
+      this.injectNanjuAssistantMessage(sessionId, buildNanjuTestingAlreadyRunningNotice(projectName))
       return
     }
     this.runningGwtProjects.add(projectId)
+    const engineeringAbort = new AbortController()
+    this.engineeringGwtRuns.set(projectId, { sessionId, abort: engineeringAbort })
 
     // 进度 IPC：主窗广播（NANJU_PREVIEW_CHANNEL 同型模式）
     const emitProgress = (p: GwtProgressEvent): void => {
@@ -738,14 +826,36 @@ export class AgentOrchestrator {
       } catch { /* IPC 失败不影响测试执行 */ }
     }
 
+    const { createEngineeringProgressLifecycle } = require('./nanju-engineering-progress') as typeof import('./nanju-engineering-progress')
+    const engineeringProgress = createEngineeringProgressLifecycle(emitProgress)
+
     this.injectNanjuAssistantMessage(
       sessionId,
-      '🧪 开始自动验收测试：系统将在应用内测试标签中逐场景执行（每个场景独立重载页面，避免状态串扰），完成后自动汇总裁判并给出测试报告。',
+      buildNanjuTestingStartNotice({ useEngineeringDrivers, engineeringContractReady }),
     )
 
     void (async () => {
       try {
         const { runNanjuGwtAcceptance } = require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
+        let engineeringExecution: Parameters<typeof runNanjuGwtAcceptance>[0]['engineeringExecution']
+        if (useEngineeringDrivers) {
+          const { detectNodeRuntime } = require('./node-detector') as typeof import('./node-detector')
+          const { createEngineeringProcessDrivers } = require('./nanju-engineering-process-driver') as typeof import('./nanju-engineering-process-driver')
+          const { createEngineeringTestApproval } = require('./nanju-engineering-approval') as typeof import('./nanju-engineering-approval')
+          const { detectEngineeringPython } = require('./nanju-engineering-runtime') as typeof import('./nanju-engineering-runtime')
+          const [node, pythonPath] = await Promise.all([detectNodeRuntime(), detectEngineeringPython()])
+          // B-b（C-review-2 N8）：把已探测的运行时间时传给两者——runner 工程块缺省会自行再探测一次
+          //（detectNodeRuntime + python3 --version），两处探测同源合一是本次接线的目的。
+          const serviceRuntimes = { nodePath: node.available ? node.path ?? undefined : undefined, pythonPath }
+          engineeringExecution = { signal: engineeringAbort.signal, serviceRuntimes, services: {
+            drivers: createEngineeringProcessDrivers({ nodePath: node.available ? node.path ?? undefined : undefined, pythonPath }),
+            approve: createEngineeringTestApproval(sessionId, (request) => {
+              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
+            }, permissionService, (resolved) => {
+              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_resolved', ...resolved } })
+            }),
+          } }
+        }
         const outcome = await runNanjuGwtAcceptance({
           workspaceSlug,
           projectId,
@@ -753,8 +863,23 @@ export class AgentOrchestrator {
           projectMode,
           sessionId,
           controller: browserController,
-          onProgress: emitProgress,
+          onProgress: useEngineeringDrivers ? engineeringProgress.emit : emitProgress,
+          engineeringExecution,
         })
+        if (outcome.verdict === 'blocked') {
+          // 缺契约/环境不满足时 runner 不发出任何进度事件（无 start 也无 done），
+          // 这里补一个工程终态，避免测试卡片停在「运行中」。
+          if (useEngineeringDrivers) {
+            engineeringProgress.emit({
+              phase: 'done', scope: 'engineering', verdict: 'blocked',
+              reason: outcome.blockedReason ?? outcome.summaryText,
+              current: 0, total: 0, passed: 0, failed: 0, skipped: 0,
+            })
+          }
+          this.injectNanjuAssistantMessage(sessionId, outcome.summaryText)
+          // 环境/驱动阻塞不是代码失败；等待真人处理，不自动回炉或确认交付。
+          return
+        }
         // 熔断状态机接入（v0.17.64 Sprint C1）：GWT fail/error 轮次计入 phaseGuards.testing
         // （写入点收敛 updatePhaseGuard，与 report.json 的 retryCount/errorCount 同节奏写入），
         // pass 轮清零；failCount≥3（1 首产 + 2 回炉，AC Z-1）或 errorCount≥1 即熔断（NANJU_GUARDS 阈值）。
@@ -804,7 +929,111 @@ export class AgentOrchestrator {
         const circuitSuffix = gwtCircuitOpen
           ? `\n\n⛔ 该阶段已触发熔断（${gwtCircuitNarrative}），系统不再自动续接回炉。${humanDecisionLine}`
           : ''
+        // ===== W-I B-d：E 修复预算调度（`_repair-log.json` 为策略事实源）=====
+        // 位置选择：在 phaseGuard 计数（单一写入点，已包含本轮的 fail 事件）之后、
+        // 各裁决分支之前——保证「首产 + 修复 1/2/3 各失败一次」时 failCount 恰好到 4
+        // 而 guard 与修复预算在同一轮一起收口。
+        // 语义边界：
+        // - 只对 verdict='fail'（产出缺陷）走修复预算；'error'（执行异常）保持既有
+        //   「重试无意义 → 转人工」路径，也不烧修复预算（errorCount≥1 即熔断，与本预算无关）；
+        // - guard 已熔断时不再授权新修复（熔断即停手）；预算未耗尽的少数失步场景落到既有
+        //   `retryLimitReached || gwtCircuitOpen` 人工介入分支。
+        let repairAuthorized = false
+        if (outcome.verdict === 'fail') {
+          const { dispatchRepairDecision } = require('./nanju-repair-dispatch') as typeof import('./nanju-repair-dispatch')
+          const { createProjectFileRollbackPort, resolveRepairRollbackSnapshot } =
+            require('./nanju-project-snapshots') as typeof import('./nanju-project-snapshots')
+          const { planNextRepairForProject, readRepairLogState, appendRepairAttempt } =
+            require('./nanju-repair-loop') as typeof import('./nanju-repair-loop')
+          const runtime = this.getRepairRuntime(projectId, 'testing')
+          const rollbackTarget = resolveRepairRollbackSnapshot(workspaceSlug, projectId)
+          const decision = await dispatchRepairDecision({
+            mode: projectMode,
+            verdict: outcome.verdict,
+            failureKind: outcome.failureKind,
+            errorReason: outcome.errorReason,
+            evidence: outcome.failListText,
+            consecutiveCircuitCount: runtime.circuitOpens + 1,
+            // 可用性口径：有「已关联文件快照」的快照才真能恢复工程文件
+            fileRollbackAvailable: rollbackTarget !== null,
+            logWriteFailed: runtime.logWriteFailed,
+            snapshotLabel: rollbackTarget?.label,
+          }, {
+            // 规划与读盘同源（E R1 的 fail-closed by construction 入口）
+            plan: (request) => planNextRepairForProject(workspaceSlug, projectId, request),
+            readAttempts: () => readRepairLogState(workspaceSlug, projectId).attempts,
+            appendAttempt: (attempt) => appendRepairAttempt(workspaceSlug, projectId, attempt),
+            rollback: (snapshotId) => createProjectFileRollbackPort(workspaceSlug, projectId).rollback(snapshotId),
+            resolveSnapshotId: () => rollbackTarget?.snapshotId ?? null,
+          })
+          if (decision.action === 'notify-environment') {
+            console.log(`[南大自修复] 环境类失败不入修复预算（${projectName}）：${decision.failureClass}`)
+            try {
+              // #10 统一出口（B-e）：attempts 一律由接线层从 E 修复日志读取，调用方不传数字
+              const { emitRepairTriggered } = require('./nanju-quick-telemetry') as typeof import('./nanju-quick-telemetry')
+              emitRepairTriggered(workspaceSlug, projectId, 'environment-notify')
+            } catch { /* 埋点失败不影响主流程 */ }
+            this.injectNanjuAssistantMessage(sessionId, decision.message)
+            return
+          }
+          if (decision.action === 'circuit-break') {
+            runtime.circuitOpens += 1
+            console.warn(decision.logText)
+            try {
+              const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+              recordTelemetry(workspaceSlug, 'circuit_break', {
+                project_id: projectId,
+                stage: 'testing',
+                source: 'repair_budget',
+                reason: decision.exhausted ? 'repair-budget-exhausted' : 'repair-log-untrusted',
+                exhausted: decision.exhausted,
+                fail_closed: decision.failClosed,
+                rollback_outcome: decision.rollback === null ? 'not-attempted' : decision.rollback.ok ? 'succeeded' : 'failed',
+                retry_round: outcome.retryCount,
+              }, projectId)
+            } catch { /* 埋点失败不影响主流程 */ }
+            // 熔断广播（GuardAlertCard）：沿用单一常量消息出口；详细复盘在 assistant 消息里。
+            // I-P7：额外携带熔断上下文（mode/连续次数/是否已回滚），渲染端按 US-U07 通俗口径重建。
+            if (!gwtCircuitOpen) {
+              try {
+                const { emitGuardAlert, NANJU_GUARD_ALERT_MESSAGE } = require('./nanju-guard-alert') as typeof import('./nanju-guard-alert')
+                emitGuardAlert({
+                  sessionId, projectId, stage: 'testing', message: NANJU_GUARD_ALERT_MESSAGE,
+                  mode: projectMode,
+                  consecutiveCircuitCount: runtime.circuitOpens,
+                  // 只有结构化结果 ok=true 才算「已回滚」（null=未尝试、ok=false=失败，都不得声称已恢复）
+                  rolledBack: decision.rollback?.ok === true,
+                })
+              } catch { /* IPC 失败不影响结果处理 */ }
+            }
+            // #10 repair.triggered（PRD §12.4）：修复循环收尾事实——attempts 一律来自 E 的
+            // RepairAttempt[]（禁止伪造）；outcome 用 E 的 RepairOutcome 同域取值。
+            try {
+              // #10 统一出口（B-e）：与 environment/success 同一条路径，避免「三处各读一遍日志」
+              const { emitRepairTriggered } = require('./nanju-quick-telemetry') as typeof import('./nanju-quick-telemetry')
+              emitRepairTriggered(workspaceSlug, projectId, 'circuit-break')
+            } catch { /* 埋点失败不影响主流程 */ }
+            // AC U-1：三选项裁决单出口——熔断文案 + 决策出口各出现一次
+            this.injectNanjuAssistantMessage(sessionId, `${decision.message}\n\n${humanDecisionLine}`)
+            return
+          }
+          if (decision.action === 'repair') {
+            // 写失败 → 下一轮 fail-closed（不得从零重试）
+            runtime.logWriteFailed = decision.writeFailed
+            repairAuthorized = !gwtCircuitOpen
+            if (decision.writeFailed) {
+              console.warn(`[南大自修复] 修复记录未能落盘（${decision.writeReason ?? '未知'}）→ 下一轮 fail-closed`)
+            }
+            console.log(`[南大自修复] 第 ${decision.attempt.attempt} 次自动修复（策略 ${decision.attempt.strategy}，分类 ${decision.attempt.failureClass}）`)
+          }
+        }
         if (outcome.verdict === 'pass') {
+          // #10 repair.triggered（PRD §12.4）：本轮测试通过若**经历过自动修复**，则记一次
+          // 修复收尾事实（无 attempt 时 builder 侧不发射，首产即过不产生噪音）。
+          try {
+            const { emitRepairTriggered } = require('./nanju-quick-telemetry') as typeof import('./nanju-quick-telemetry')
+            emitRepairTriggered(workspaceSlug, projectId, 'success')
+          } catch { /* 埋点失败不影响交付验收 */ }
           // W12 交付验收两段化（用户 2026-09-03 23:39 裁决）：GWT-pass 不再直接 delivered。
           // 责任分工：故事覆盖与场景通过性由机器裁判背书（报告已落盘 verdict=pass），
           // 交付决定权交还用户（真正的交付验收环节后置到 GWT 后）：
@@ -883,7 +1112,7 @@ export class AgentOrchestrator {
               : '\n\n⛔ 测试执行异常（执行异常非代码缺陷，重试无意义），转为人工介入。')
             + (gwtCircuitOpen ? circuitSuffix : `\n\n${humanDecisionLine}`),
           )
-        } else if (outcome.retryLimitReached || gwtCircuitOpen) {
+        } else if ((outcome.retryLimitReached || gwtCircuitOpen) && !repairAuthorized) {
           // 重试超限 / 熔断（fail≥3 或 error≥1，AC Z-1）→ 人工介入（handlePhaseResult notify_user 语义的产品化落地）
           // v0.17.65 AC U-1：报告路径与三选项收敛到 circuitSuffix/humanDecisionLine 单出口
           this.injectNanjuAssistantMessage(
@@ -1018,15 +1247,25 @@ export class AgentOrchestrator {
           }, 1500)
         }
       } catch (e) {
+        if (useEngineeringDrivers) engineeringProgress.fail(e, engineeringAbort.signal.aborted)
+        // legacy 浏览器路径没有工程生命周期兜底：外层异常也要发一次终态，
+        // 否则卡片会停在「正在自动验收测试」。
+        else emitProgress({
+          phase: 'done', verdict: engineeringAbort.signal.aborted ? 'blocked' : 'error',
+          reason: engineeringAbort.signal.aborted ? '测试已取消' : e instanceof Error ? e.message : String(e),
+          current: 0, total: 0, passed: 0, failed: 0, skipped: 0,
+        })
         console.error(`[南大路由] GWT 验收执行异常:`, e)
         // v2.4 I2：异常指引含「重新声明推进 PHASE_ADVANCE: testing」——防御性登记
         this.registerSystemAdvance(workspaceSlug, projectId, 'testing')
         this.injectNanjuAssistantMessage(
           sessionId,
-          `⚠️ 验收测试执行异常：${e instanceof Error ? e.message : String(e)}。请检查 08_APP/index.html 与 06_TESTS/ 产物完整性，修复后重新声明推进 <!-- PHASE_ADVANCE: testing -->。`,
+          `⚠️ 验收测试执行异常：${e instanceof Error ? e.message : String(e)}。请检查 ${useEngineeringDrivers ? '03_ARCHITECTURE/engineering.json、08_APP/ 工程产物' : '08_APP/ 页面入口'} 与 06_TESTS/ 测试产物完整性，修复后重新声明推进 <!-- PHASE_ADVANCE: testing -->。`,
         )
       } finally {
         this.runningGwtProjects.delete(projectId)
+        engineeringAbort.abort()
+        this.engineeringGwtRuns.delete(projectId)
       }
     })()
   }
@@ -1036,16 +1275,27 @@ export class AgentOrchestrator {
   /**
    * L1 调用委派工具时登记超时观察哨（幂等；非委派工具/非活跃南大项目静默跳过）。
    * 只匹配项目关联会话：L2 会话内部的 inline AC 审计委派不是项目关联会话，不会被登记。
+   *
+   * B-a：同一分支兼做**主进程盖章**——按项目配置（producer 权威）判定独立视觉端点并登记到
+   * agent-collaboration-tools 的授权端点表；委派目标与该端点全等时，工具 execute 才会给
+   * record/meta 写 internal slot。模型无法伪造（公开 schema 无 slot 且入口剥离）。
    */
-  private registerNanjuDelegationWatch(workspaceSlug: string, sessionId: string, toolName: string): void {
+  private registerNanjuDelegationWatch(workspaceSlug: string, sessionId: string, toolName: string, toolInput?: Record<string, unknown>): void {
     try {
       if (
         toolName !== 'delegate_agent' && toolName !== 'mcp__collaboration__delegate_agent'
         && toolName !== 'delegate_agents' && toolName !== 'mcp__collaboration__delegate_agents'
       ) return
       if (!workspaceSlug) return
-      const { findNanjuProjectBySession } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
+      const { findNanjuProjectBySession, resolveVisualValidatorSlotForProject } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
       const project = findNanjuProjectBySession(workspaceSlug, sessionId)
+      const { registerAuthorizedVisualDelegationEndpoint } = require('./agent-collaboration-tools') as typeof import('./agent-collaboration-tools')
+      // 端点登记与观察哨同源：每次委派调用刷新，非活跃项目/无法解析一律撤销登记（防陈旧）。
+      const slot = project && project.status === 'active' ? resolveVisualValidatorSlotForProject(project) : null
+      registerAuthorizedVisualDelegationEndpoint(
+        sessionId,
+        slot && slot.status === 'resolved' ? { channelId: slot.channelId, modelId: slot.modelId } : null,
+      )
       if (!project || project.status !== 'active') return
       const watcher = this.ensureNanjuDelegationWatcher()
       watcher.register(workspaceSlug, sessionId, project.projectId)
@@ -2072,7 +2322,8 @@ export class AgentOrchestrator {
           }
           // L2 委派超时兑底（v0.17.64）：L1 发起委派时登记观察哨（软/硬超时见 NANJU_GUARDS）。
           // 只匹配项目关联会话：L2 会话内部的 inline AC 审计委派不会被登记。
-          this.registerNanjuDelegationWatch(workspaceSlug ?? '', sessionId, toolName)
+          // B-a：同一步顺带做视觉槽位的主进程盖章登记（toolInput 只用于审计，不写回入参）。
+          this.registerNanjuDelegationWatch(workspaceSlug ?? '', sessionId, toolName, input)
         }
 
         // ── Write 大文件 token 截断防护 ──
@@ -2312,6 +2563,13 @@ export class AgentOrchestrator {
         checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage, 'message', {
           humanOrigin: input.humanOrigin === true,
         })
+        // #2 dialog.submitted（PRD §12.4）：真用户消息提交即发射（隐私收敛——只发
+        // mode/turn/inputLength/vague/autoFilledCount，**不存原文**；见 F.md §9 父裁决）。
+        // 与上行同条件（非自动化/非委派/非系统续接、且确为新一轮输入）。
+        try {
+          const { emitDialogSubmitted } = require('./nanju-quick-telemetry') as typeof import('./nanju-quick-telemetry')
+          emitDialogSubmitted(workspaceSlug, sessionId, userMessage)
+        } catch { /* 埋点失败不影响对话 */ }
       }
 
       // 南大向导阶段门禁：注入当前阶段的硬性指令
@@ -3229,7 +3487,8 @@ export class AgentOrchestrator {
     } finally {
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       releaseActiveRun()
-      permissionService.clearSessionPending(sessionId)
+      // 工程测试由独立宿主任务与AbortSignal持有，不因发起它的turn结束而误拒批准。
+      permissionService.clearSessionPending(sessionId, { preserveHostTasks: true })
       // turn 结束后，本 run 发起的 AskUserQuestion 已不可能被有效响应：
       // 清理 pending 并广播 ask_user_resolved，让 renderer 横幅不再残留霸占输入
       // （若锁已被更新的 run 接管，其 pending 归新 run 所有，跳过）。
@@ -3254,6 +3513,7 @@ export class AgentOrchestrator {
    * 再调用 adapter.abort() 中止底层 SDK 进程。
    */
   stop(sessionId: string, stopBeforeRun = false): void {
+    for (const run of this.engineeringGwtRuns.values()) if (run.sessionId === sessionId) run.abort.abort()
     const runGeneration = this.activeSessions.get(sessionId)
     this.activeSessions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
@@ -3267,6 +3527,12 @@ export class AgentOrchestrator {
     }
     this.queuedMessageUuids.delete(sessionId)
     this.adapter.abort(sessionId)
+    // W-I B-f：会话停止即清理该会话的真实证据残留（记录/票据/收据），避免长会话积压；
+    // 清理失败不影响停止本身（门禁侧仍 fail-closed）。
+    try {
+      const { cleanupEngineeringRealEvidence } = require('./nanju-engineering-real-gate') as typeof import('./nanju-engineering-real-gate')
+      cleanupEngineeringRealEvidence(sessionId)
+    } catch { /* 清理失败不影响会话停止 */ }
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
   }
 
@@ -3278,6 +3544,7 @@ export class AgentOrchestrator {
    * 保证挂起的 AskUser 等主进程交互无残留。
    */
   abortPendingCapabilities(sessionId: string): void {
+    for (const run of this.engineeringGwtRuns.values()) if (run.sessionId === sessionId) run.abort.abort()
     this.adapter.abortPendingCapabilities?.(sessionId)
   }
 

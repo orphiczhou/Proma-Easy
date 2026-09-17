@@ -87,6 +87,8 @@ export interface CanUseToolOptions {
 
 /** 待处理的权限请求 */
 interface PendingPermission {
+  /** 宿主后台任务不随Agent turn结束，仍由其AbortSignal及会话删除取消。 */
+  lifetime?: 'turn' | 'host-task'
   resolve: (result: PermissionResult) => void
   request: PermissionRequest
 }
@@ -172,20 +174,32 @@ export class AgentPermissionService {
     input: Record<string, unknown>,
     options: CanUseToolOptions,
     sendToRenderer: (request: PermissionRequest) => void,
+    ownership: { lifetime: 'turn' | 'host-task' } = { lifetime: 'turn' },
   ): Promise<PermissionResult> {
+    if (options.signal.aborted) return Promise.resolve({ behavior: 'deny', message: '操作已中止' })
     const request: PermissionRequest = {
       ...this.buildPermissionRequest(sessionId, toolName, input, options),
       dangerLevel: 'dangerous',
       allowAlways: false,
     }
-    sendToRenderer(request)
     return new Promise<PermissionResult>((resolve) => {
-      this.pendingPermissions.set(request.requestId, { resolve, request })
-      options.signal.addEventListener('abort', () => {
+      const finish = (result: PermissionResult): void => {
+        options.signal.removeEventListener('abort', onAbort)
+        resolve(result)
+      }
+      const onAbort = (): void => {
         if (!this.pendingPermissions.has(request.requestId)) return
         this.pendingPermissions.delete(request.requestId)
-        resolve({ behavior: 'deny' as const, message: '操作已中止' })
-      }, { once: true })
+        finish({ behavior: 'deny', message: '操作已中止' })
+      }
+      // 先登记再发事件，使同步应答与取消均能找到该请求。
+      this.pendingPermissions.set(request.requestId, { resolve: finish, request, lifetime: ownership.lifetime })
+      options.signal.addEventListener('abort', onAbort, { once: true })
+      if (options.signal.aborted) { onAbort(); return }
+      try { sendToRenderer(request) } catch {
+        this.pendingPermissions.delete(request.requestId)
+        finish({ behavior: 'deny', message: '权限确认界面不可用' })
+      }
     })
   }
 
@@ -217,9 +231,9 @@ export class AgentPermissionService {
   /**
    * 清除指定会话的所有待处理请求（会话结束或中止时调用）
    */
-  clearSessionPending(sessionId: string): void {
+  clearSessionPending(sessionId: string, options: { preserveHostTasks?: boolean } = {}): void {
     for (const [requestId, pending] of this.pendingPermissions) {
-      if (pending.request.sessionId === sessionId) {
+      if (pending.request.sessionId === sessionId && !(options.preserveHostTasks && pending.lifetime === 'host-task')) {
         pending.resolve({ behavior: 'deny' as const, message: '会话已结束' })
         this.pendingPermissions.delete(requestId)
       }

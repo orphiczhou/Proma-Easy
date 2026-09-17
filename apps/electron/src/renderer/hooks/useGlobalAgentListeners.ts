@@ -1,3 +1,5 @@
+import { removeResolvedPermission } from '@/lib/permission-queue'
+import { mergePendingRequests } from '@/lib/pending-requests-backfill'
 /**
  * useGlobalAgentListeners — 全局 Agent IPC 监听器
  *
@@ -555,6 +557,25 @@ export function useGlobalAgentListeners(): void {
   const store = useStore()
 
   useEffect(() => {
+    // 待处理请求回填（v0.17.124 I1）：流式事件只在发布时到达，渲染进程重载后旧事件不会重放，
+    // 而主进程仍持有该请求（尤其跨 turn 存活的工程 host-task 批准）。这里在挂载时用主进程快照
+    // 回填三个队列；合并是「按 requestId 并集」，不覆盖流中刚到的事件。
+    const resolvedDuringBackfill = new Set<string>()
+    void window.electronAPI.getPendingRequests?.()
+      .then((snapshot) => {
+        if (!snapshot) return
+        unstable_batchedUpdates(() => {
+          store.set(allPendingPermissionRequestsAtom, (prev) => mergePendingRequests(prev, snapshot.permissions, resolvedDuringBackfill))
+          store.set(allPendingAskUserRequestsAtom, (prev) => mergePendingRequests(prev, snapshot.askUsers, resolvedDuringBackfill))
+          store.set(allPendingExitPlanRequestsAtom, (prev) => mergePendingRequests(prev, snapshot.exitPlans, resolvedDuringBackfill))
+        })
+        resolvedDuringBackfill.clear()
+      })
+      .catch((error: unknown) => {
+        // 缺少新 IPC（旧 preload）或主进程未就绪时不能阻断全局监听器。
+        console.warn('[GlobalAgentListeners] 待处理请求回填失败:', error instanceof Error ? error.message : String(error))
+      })
+
     // 南大向导：全局监听文件预览事件（不依赖 AppShell re-mount）
     const nanjuPreviewHandler = (_event: unknown, data: { filePath: string; fileName: string }): void => {
       if (!data?.filePath) return
@@ -619,6 +640,15 @@ export function useGlobalAgentListeners(): void {
           capturedAt: Date.now(),
         }
         store.set(pendingUxElementRefMapAtom, (prev) => new Map(prev).set(sessionId, ref))
+        // #7 click_to_fix（PRD §12.4，I-P3）：element-click 在渲染端就地处理、不到达主进程，
+        // 故埋点在此上报（经主进程按 sessionId 解析归属项目）。privacy：只报元素类型/是否含 id/
+        // 阶段，不报 id 本身、不报文本内容。
+        void window.electronAPI.nanjuRecordEvent?.({
+          workspaceSlug: workspace.slug,
+          eventType: 'click_to_fix',
+          payload: { elementType: ref.type, hasId: true, applied: false, stage: 'pick-color' },
+          sessionId,
+        }).catch(() => {})
         store.set(uxElementRefPoolMapAtom, (prev) => {
           const pool = (prev.get(sessionId) ?? []).filter((r) => r.id !== ref.id)
           pool.unshift(ref)
@@ -681,6 +711,22 @@ export function useGlobalAgentListeners(): void {
             appliedAt: Date.now(),
           }
           if (item.ref.id) {
+            // #7 click_to_fix：即时调整成功即上报（applied=true，阶段由动作派生）
+            void window.electronAPI.nanjuRecordEvent?.({
+              workspaceSlug: workspace.slug,
+              eventType: 'click_to_fix',
+              payload: {
+                elementType: item.ref.type,
+                hasId: true,
+                applied: true,
+                stage: item.action === 'color' ? 'pick-color'
+                  : item.action === 'delete' ? 'pick-delete'
+                    : item.action === 'text' ? 'pick-text'
+                      : item.action === 'move' ? 'pick-move'
+                        : 'pick-other',
+              },
+              sessionId,
+            }).catch(() => {})
             // 第一次改动产生即并列展示（聊天+原型分屏，边看边改）
             ensurePreviewSplit(store, sessionId)
             store.set(pendingCtfChangesMapAtom, (prev) => {
@@ -697,6 +743,32 @@ export function useGlobalAgentListeners(): void {
             })
           }
         }
+        return
+      }
+      // I-P3（B-e，接线顺序约束 R2）：框选多元素批量点选——必须在 catch-all 兜底**之前**
+      // 处理，否则会被误转发成 blank-click（文案「我点了空白处」完全错位）。
+      // 边界：只转发 id/type（隐私最小，与单点击一致），清单上限 24 防伪造刷爆；
+      // 空选不上报（脚本侧已保证空选不发消息，这里再兜一层）。
+      if (msg.kind === 'box-select') {
+        const boxFrame = previewFrames.find((f) => f.contentWindow === event.source)
+        if (boxFrame) rememberPreviewFrame(boxFrame)
+        const rawItems = (msg as { items?: Array<{ id?: unknown; type?: unknown }> }).items
+        const items = Array.isArray(rawItems)
+          ? rawItems
+              .map((item) => ({
+                id: sanitize(item?.id, 64),
+                type: sanitize(item?.type, 20) ?? '元素',
+              }))
+              .filter((item): item is { id: string; type: string } => Boolean(item.id))
+              .slice(0, 24)
+          : []
+        if (items.length === 0) return
+        void window.electronAPI.reportClickToFix({
+          workspaceSlug: workspace.slug,
+          sessionId,
+          kind: 'box-select',
+          items,
+        }).catch(() => {})
         return
       }
       // 空白点击：节流 2s（Y10：连点空白不反复注入会话）
@@ -1544,6 +1616,11 @@ export function useGlobalAgentListeners(): void {
                 : 'Agent 需要你的权限确认',
               'permissionRequest'
             )
+          } else if (event.type === 'permission_resolved') {
+            // 回填窗口内已结束的请求，不能因快照滞后被复活。
+            resolvedDuringBackfill.add(event.requestId)
+            // 后台工程取消、远端代答与本地点击都按requestId幂等出队。
+            store.set(allPendingPermissionRequestsAtom, (prev) => removeResolvedPermission(prev, sessionId, event.requestId))
           } else if (event.type === 'ask_user_request') {
             // AskUser 请求入队（统一通道，不区分当前/后台会话）
             store.set(allPendingAskUserRequestsAtom, (prev) => {
@@ -1560,6 +1637,7 @@ export function useGlobalAgentListeners(): void {
               'permissionRequest'
             )
           } else if (event.type === 'ask_user_resolved') {
+            resolvedDuringBackfill.add(event.requestId)
             // AskUser 可能由协作父会话代答，收到 resolved 后清理所有会话中的残留请求和草稿
             store.set(allPendingAskUserRequestsAtom, (prev) => {
               let changed = false

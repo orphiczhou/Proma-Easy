@@ -47,6 +47,21 @@ export interface PhaseAdvanceHooks {
   checkGwtDeliveryGate: (workspaceSlug: string, projectId: string) => string | null
   /** 阶段推进 Todo 兜底收尾 */
   finalizePhaseTodos: (sessionId: string) => void
+  /**
+   * W-I B-c：阶段推进成功后的工程检查点（会话快照 + 工程文件快照）。
+   *
+   * 为什么是注入项而不是消费器内直调：本模块保持无 fs/无快照依赖（纯消费器），
+   * 三段式（createSnapshot → captureFileSnapshot → linkFileSnapshot）由接线层（orchestrator）完成。
+   * **缺省不创建**（测试/未接线环境零行为变化）；实现必须自行吞错，不得影响推进。
+   */
+  captureCheckpoint?: (input: {
+    workspaceSlug: string
+    projectId: string
+    sessionId: string
+    /** `pre-modify` = 进入 coding 之前（即将开始改工程）；`confirm` = 其余阶段确认/交付 */
+    triggerType: 'init' | 'pre-modify' | 'confirm'
+    description: string
+  }) => void
 }
 
 // ═══ W22（G 域）：F5 拒收教育闭环 + R1 回炉文案（内部段/纯函数） ═══
@@ -399,6 +414,21 @@ function checkDeliveryConfirmation(
           at,
         }, project.projectId)
       } catch { /* 埋点失败不影响置位 */ }
+      // #12 satisfaction.marked（PRD §12.4，I-P8）：与 delivery.ack-recorded 同拍发射。
+      // 不做行为推断——verdict 直接来自本次 ack 的确认词；活跃时长 = 从交付问句登记
+      // （challenge.askedAt，交付门禁置位时刻）到用户应答（ack.at）的真实间隔，取不到时按 0 记。
+      try {
+        const { emitQuickEvent, buildSatisfactionPayload } = require('./nanju-quick-events') as typeof import('./nanju-quick-events')
+        const challengeAt = typeof challenge.askedAt === 'string' ? Date.parse(challenge.askedAt) : Number.NaN
+        const ackAt = Date.parse(at)
+        const activeMsSinceStart = Number.isFinite(challengeAt) && Number.isFinite(ackAt) && ackAt >= challengeAt
+          ? ackAt - challengeAt
+          : 0
+        emitQuickEvent(workspaceSlug, project.projectId, 'satisfaction.marked', buildSatisfactionPayload({
+          verdict: 'satisfied',
+          activeMsSinceStart,
+        }) as unknown as Record<string, unknown>)
+      } catch { /* 埋点失败不影响置位 */ }
       console.log(`[南大路由] 交付确认检测：登记 deliveryAck（runId=${reportRunId}，${project.name}）`)
     }
     return
@@ -581,6 +611,14 @@ hooks: PhaseAdvanceHooks,
               clearProjectConfirmPending(workspaceSlug, project.projectId)
             } catch { /* 清除失败不影响推进（残留提示无害，下次推进再清） */ }
             hooks.finalizePhaseTodos(sessionId)
+            // W-I B-c：交付确认检查点（会话快照 + 工程文件快照）；实现自行吞错，不影响交付
+            hooks.captureCheckpoint?.({
+              workspaceSlug,
+              projectId: project.projectId,
+              sessionId,
+              triggerType: 'confirm',
+              description: `交付确认：${project.name} → ${newStage ?? 'delivered'}`,
+            })
             // W2 S1 推进点 A：交付清空子步骤（delivered 无子步骤态）并广播。
             // write-then-emit；失败不阻断交付（渲染端 10s 轮询兑底）。
             try {
@@ -805,6 +843,37 @@ hooks: PhaseAdvanceHooks,
               // 不自动续接，待修复后重新声明推进（本轮照常 completeRun）。
               hooks.emitAssistantMessage(sessionId, `⚠️ 阶段推进被拦截：${verifyError}\n产出未达交付标准，请继续修复后重新声明推进。`)
             } else {
+              // #4 prd.confirmed / #5 prototype.confirmed（PRD §12.4，I-P5 归属修正版）：
+              // 归属在本消费器的「推进成功」分支（推进即事实），与 coding.executed/arch.executed 同口径。
+              // - requirements 收口（requirements→prototype）→ #4；
+              // - prototype 收口（prototype→architecture/coding）→ #5。
+              if (project.currentStage === 'requirements' || project.currentStage === 'prototype') {
+                try {
+                  const { emitQuickEvent } = require('./nanju-quick-events') as typeof import('./nanju-quick-events')
+                  emitQuickEvent(workspaceSlug, project.projectId,
+                    project.currentStage === 'requirements' ? 'prd.confirmed' : 'prototype.confirmed', {
+                      project_id: project.projectId,
+                      mode: project.mode,
+                      from_stage: project.currentStage,
+                      to_stage: newStage,
+                      // 产出验证已通过（本分支在 verifyError 为空时进入），此处只报事实
+                      verified: true,
+                    })
+                } catch { /* 埋点失败不影响推进 */ }
+              }
+              // #14 architecture.confirmed（PRD §12.4，I-P8）：与 arch.executed 同拍但语义不同——
+              // arch.executed = 架构师环节交付事实（含环境探测）；architecture.confirmed = 用户/门禁
+              // 对架构产出的确认收口事实（两条各自独立观测，不互为别名）。
+              if (project.currentStage === 'architecture') {
+                try {
+                  const { emitQuickEvent } = require('./nanju-quick-events') as typeof import('./nanju-quick-events')
+                  emitQuickEvent(workspaceSlug, project.projectId, 'architecture.confirmed', {
+                    project_id: project.projectId,
+                    mode: project.mode,
+                    to_stage: newStage,
+                  })
+                } catch { /* 埋点失败不影响推进 */ }
+              }
               // coding.executed 埋点（P1 Sprint A）：coding 阶段推进成功 = 用户已确认的可运行应用交付事实
               // （推进即事实；不用 verifyPhaseOutput 通过后记，避免把重试中的半成品计入）
               if (project.currentStage === 'coding') {
@@ -911,6 +980,15 @@ hooks: PhaseAdvanceHooks,
                   }
                   updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                   console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
+                  // W-I B-c：阶段确认检查点；进入 coding 前一刻属于「即将修改工程」→ pre-modify
+                  // （捕获的是 coding 开始前的工程内容，正是回滚到修复前所需的那份）。
+                  hooks.captureCheckpoint?.({
+                    workspaceSlug,
+                    projectId: project.projectId,
+                    sessionId,
+                    triggerType: newStage === 'coding' ? 'pre-modify' : 'confirm',
+                    description: `阶段推进：${project.name} → ${newStage}`,
+                  })
                   // W22（F5③）：推进成功——拒收防环计数清零（新阶段重新计数）+ 待纠正拒因登记清除
                   try {
                     const { resetAdvanceRejectCount, clearProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')

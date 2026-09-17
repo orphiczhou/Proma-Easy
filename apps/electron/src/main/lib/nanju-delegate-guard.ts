@@ -37,6 +37,7 @@
 import type { NanjuGuardStage } from './nanju-project'
 import type { ProjectMode } from './nanju-project'
 import { AC_PRESETS, channelFamily, getPhaseNode, resolveACActors, type ACActorConfig } from './nanju-router'
+import { isNanjuDelegationSlot } from '@proma/shared'
 
 // ===== 层一：阶段角色词表 =====
 
@@ -489,6 +490,96 @@ export function checkDelegationAgainstStage(
 }
 
 // ===== 层二：AC 攻/防识别与模型覆写 =====
+
+/**
+ * W24-8：各阶段**作者委派标题标记**（仅层二 AC 覆写的豁免判定用，不参与层一匹配）。
+ * L1 作者委派标题约定「{角色}：{项目} …」（router-prompt 模板）；AC 委派标题
+ * （攻击者/防御者/审计/复审）不含这些标记 → 不豁免 → 照常程序化覆写。
+ *
+ * W-B B2：从 router-gate.ts 迁移至此（detectDelegationSlot 复用；原调用点改为 import）。
+ * 每次迁移后必须确认调用方已 import，不得只删常量不补导入（否则运行期 ReferenceError）。
+ */
+export const STAGE_AUTHOR_TITLE_MARKERS: Record<string, readonly string[]> = {
+  requirements: ['需求分析师', '需求分析', 'analyst', 'requirement-analyst'],
+  prototype: ['UX 顾问', 'UX顾问', 'ux-advisor', '原型设计'],
+  architecture: ['架构师', 'architect', '环境探测'],
+  planning: ['工程经理', '项目经理', 'engineering-manager'],
+  coding: ['全栈开发', '开发工程师', 'fullstack-developer'],
+  testing: ['测试工程师', 'test-engineer', 'GWT'],
+}
+
+/**
+ * W-B B2：视觉验证者 title 标记表（独立作者/AC 槽位）。
+ *
+ * 设计：gate 端须区分 “视觉验证者”（prototype 阶段独立裁决）与 “作者委派”
+ * （标题含阶段作者标记）。本表仅供 detectDelegationSlot 识别 visual-validator
+ * 槽位使用，不参与层一/层二的阶段匹配（防与 prototype 阶段词重叠导致误拦）。
+ *
+ * 与 STAGE_AUTHOR_TITLE_MARKERS 的关键区别：
+ * - STAGE_AUTHOR_TITLE_MARKERS = 作者表 (L1 主委派，仅一阶段标记表，用于作者委派豁免)
+ * - VISUAL_VALIDATOR_TITLE_MARKERS = 视觉验证者表（独立槽位，仅 prototype 阶段可能命中）
+ *
+ * 中文 includes / 英文 \b 词边界，大小写不敏感（findKeyword 同型判定）。
+ */
+export const VISUAL_VALIDATOR_TITLE_MARKERS: readonly string[] = [
+  '独立视觉裁决', '独立视觉验证', '视觉验证者', '视觉裁决',
+  'visual judge', 'visual validator', 'visual review',
+]
+
+/**
+ * W-B B2：slot 分类（**legacy 低信任回退**）。
+ *
+ * 优先级：visual-validator > ac-attacker > ac-defender > author > general
+ * - title 命中视觉验证者标记表 → visual-validator（**必须先于 AC 判定**：中文标记
+ *   「视觉裁决」含 AC 防御词「裁决」，后置会被 AC 分支提前命中而永不生效）
+ * - 否则命中 AC 词 → ac-attacker/defender（仅在区分出攻防时；同词并存按攻方处理——与 detectACRole 同源）
+ * - 否则命中阶段作者标题表 → author
+ * - 其余 → general
+ *
+ * 信任边界（重要）：本函数仅从 title/task/expectedOutput 文本推断，属 **legacy 低信任**。
+ * slot 的权威来源是内部 producer（nanju-router-prompt.resolvePhaseDelegationSlots，
+ * config/schema 驱动），其输出经内部参数 DelegateAgentArgs.slot 写入 DelegationRecord
+ * 与 session meta。公开工具入口不暴露 slot，L1/L2 不能借文本伪造视觉槽位权威。
+ *
+ * gate 消费（nanju-router-gate.checkNanjuDelegateGuard）：
+ * - slot=visual-validator 的委派：与 producer 解析值比对（同端点/未配置一律拒绝）
+ * - slot=author 的委派：与 AC 攻防关键词交叠时不被劫持为 ac-actor（W24-8 既有逻辑保留）
+ *
+ * 语义：title 含多阶段标记时按优先级首次命中；未命中返回 'general'。
+ */
+export type DelegationSlot = 'author' | 'ac-attacker' | 'ac-defender' | 'visual-validator' | 'general'
+
+export function detectDelegationSlot(
+  source: DelegationMatchSource,
+  stage: NanjuGuardStage,
+): DelegationSlot {  // 1. 视觉验证者（独立于 author 与 AC）——仅在 title 含 VISUAL_VALIDATOR_TITLE_MARKERS
+  // 时命中。必须先于 AC 判定：「视觉裁决」含 AC 防御词「裁决」，后置会被误归为
+  // ac-defender（视觉槽位失效，与 B2 目标矛盾）。
+  if (typeof source.title === 'string') {
+    if (findKeyword(source.title, VISUAL_VALIDATOR_TITLE_MARKERS) !== undefined) return 'visual-validator'
+  }
+
+  // 2. AC 攻防识别（命中 AC 词且可区分攻/防 → ac-actor，以便层二覆写）
+  const acRole = detectACRole(source)
+  if (acRole === 'attacker') return 'ac-attacker'
+  if (acRole === 'defender') return 'ac-defender'
+
+  // 3. 阶段作者（既有 STAGE_AUTHOR_TITLE_MARKERS 检测——与 gate W24-8 作者豁免逻辑同源）
+  const authorMarkers = STAGE_AUTHOR_TITLE_MARKERS[stage] ?? []
+  if (typeof source.title === 'string' && findKeyword(source.title, authorMarkers) !== undefined) return 'author'
+
+  // 4. 兜底：通用委派（继承父会话渠道）
+  return 'general'
+}
+
+/**
+ * W-B B2：解析单个委派的**有效槽位**——内部 slot（传入的 args.slot）为权威，缺省/非法时
+ * 回退 legacy 文本推断结果（低信任）。gate 与委派记录共用此优先级，保证「公开工具无法
+ * 伪造 slot」：公开入口不暴露 slot，因此文本推断只是兼容回退。
+ */
+export function resolveDelegationSlot(trustedSlot: unknown, legacyTextSlot: DelegationSlot): DelegationSlot {
+  return isNanjuDelegationSlot(trustedSlot) ? trustedSlot : legacyTextSlot
+}
 
 /** AC 角色识别结果：attacker / defender / null（分不出攻防——如仅写「审计」，不覆写） */
 export function detectACRole(source: DelegationMatchSource): 'attacker' | 'defender' | null {

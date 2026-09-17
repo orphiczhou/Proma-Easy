@@ -50,6 +50,9 @@ export interface GuideRoutePhase {
   acAttackerModel?: string
   acDefenderChannel?: string
   acDefenderModel?: string
+  /** B2：独立视觉验证者配置（独立于 author；prototype 阶段消费）。主进程 slot producer resolvePhaseDelegationSlots 解析后附加。 */
+  visualReviewerChannel?: string
+  visualReviewerModel?: string
   /** resolveACActors(phase) 的解析结果（主进程附加，渲染端不复制 AC_PRESETS） */
   acActors: GuideACActors
 }
@@ -85,6 +88,12 @@ export interface NanjuModelSettingsState {
         fallbacks?: string[]
         acAttacker?: { channel: string; model: string }
         acDefender?: { channel: string; model: string }
+        /**
+         * B2：独立视觉验证者配置（prototype 阶段，可选项；其他阶段 undefined）。
+         * **默认不配置**——不做“默认 minimax/MiniMax-M3”的隐含自证（与 author 同端点 =
+         * 同端点自证）；未显式配置时 prototype 阶段渲染“视觉裁决 blocked”，不静默跳过。
+         */
+        visualReviewer?: { channel: string; model: string }
       }
     >
     acPresets: Record<
@@ -156,4 +165,73 @@ export interface NanjuModelRecommendResponse {
   changes: Array<{ slot: string; from: string; to: string; reason: string }>
   notes: string[]
   diversityViolations?: Array<{ slot: string; violation: string }>
+}
+
+// ===== W-B B2：南大向导 slot 分类契约 =====
+
+/**
+ * 协作委派 slot 分类（producer → schema → delegation record → gate 全链节点）。
+ *
+ * 设计语义（权威在内部 producer，不在文本）：
+ * - slot **不是**工具公开入参。权威来源是内部 producer
+ *   `nanju-router-prompt.resolvePhaseDelegationSlots`（config/schema 驱动），其输出经
+ *   内部参数 `DelegateAgentArgs.slot`（不暴露在 delegate_agent/delegate_agents 工具 schema）
+ *   写入 DelegationRecord 与 session meta（`delegationSlot`），gate 据此判定。
+ * - title/task 文本推断（nanju-delegate-guard.detectDelegationSlot）仅为 **legacy 低信任**
+ *   回退：公开工具入口会剥离 slot 字段，L1/L2 不能借文本伪造视觉槽位权威。
+ * - 视觉验证者（visual-validator）槽位：只有显式配置且与作者异端点时为 resolved，
+ *   否则为清晰 blocked；不得按模型名猜视觉、不得默认 null 跳过再宣称已验证。
+ */
+export type NanjuDelegationSlot =
+  | 'author'
+  | 'ac-attacker'
+  | 'ac-defender'
+  | 'visual-validator'
+  | 'general'
+
+/** slot 白名单（内部校验用；未知值一律视为 general）。 */
+export const NANJU_DELEGATION_SLOTS: readonly NanjuDelegationSlot[] = [
+  'author', 'ac-attacker', 'ac-defender', 'visual-validator', 'general',
+]
+
+/** slot 白名单校验（未知/非字符串一律 false——调用方回退 general）。 */
+export function isNanjuDelegationSlot(value: unknown): value is NanjuDelegationSlot {
+  return typeof value === 'string' && (NANJU_DELEGATION_SLOTS as readonly string[]).includes(value)
+}
+
+/**
+ * 独立视觉验证者槽位配置（与 acAttacker/acDefender 同型，独立于 author）。
+ *
+ * 语义：prototype 阶段专属（其他阶段不渲染视觉验证者）。channel 可为
+ * 'minimax' 家族标记（运行时按渠道记录解析为具体 UUID 渠道），或显式
+ * channelId（用户/调度员已声明）。
+ *
+ * 硬约束（gate 接线，shared 端仅契约声明）：
+ * - 与 author 配置（channel+model 均相同）禁止同时启用 → 视为“同端点自证”，
+ *   配置层与运行时层均拒绝/阻塞；不允许 null 静默自证。
+ * - 未显式配置时 **不是** 默认 minimax/MiniMax-M3——而是清晰 blocked（视觉裁决
+ *   明确标注 unavailable），避免与作者同端点自证后冒充独立裁决。
+ */
+export interface GuideVisualReviewerConfig {
+  channel: string
+  model: string
+}
+
+/** GWT进度仅用于展示，最终交付仍查宿主报告与批准事实。 */
+export interface NanjuGwtProgressEvent {
+  phase: 'start' | 'approval' | 'scenario-start' | 'scenario-end' | 'done'
+  current: number
+  total: number
+  scenario?: string
+  scenarioStatus?: 'pass' | 'fail' | 'skip'
+  passed: number
+  failed: number
+  skipped: number
+  scope?: 'engineering'
+  verdict?: 'pass' | 'fail' | 'error' | 'blocked'
+  reason?: string
+}
+export interface NanjuGwtProgressData extends NanjuGwtProgressEvent {
+  sessionId: string
+  projectId: string
 }

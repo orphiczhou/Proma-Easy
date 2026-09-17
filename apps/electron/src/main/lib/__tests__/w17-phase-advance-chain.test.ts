@@ -32,7 +32,7 @@ const testArchitectureDoc = `
  * 副作用经 hooks 注入）+ nanju-router-gate.collectPhaseAdvanceStages（纯函数）。
  * 编排器侧接线（事件流/入口/result 三处调用 + hooks 装配）以源码断言锁定防退化。
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test, setSystemTime } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1575,21 +1575,125 @@ describe('W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线
 
 describe('W22 M-9：autoClarify.lastToggledAt（updateNanjuProject 单一检测点，覆盖 IPC 直写路径）', () => {
   test('enabled 变化自动盖戳；同值更新（预算扣减）不刷新', () => {
-    const projects = readProjects() as Array<{ autoClarify?: { enabled?: boolean; lastToggledAt?: string } }>
-    expect(projects[0]?.autoClarify).toBeUndefined()
-    // 开启（模拟 IPC set-auto-clarify 直写 updateNanjuProject）
-    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } })
-    const afterOn = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
-    expect(typeof afterOn).toBe('string')
-    expect(Number.isNaN(Date.parse(afterOn!))).toBe(false)
-    // 同值更新（预算 20→19）不刷新时间戳
-    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 19, pendingQuestionIds: [] } })
-    const afterBudget = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
-    expect(afterBudget).toBe(afterOn)
-    // 关闭再次盖新戳
-    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: false, proxyBudget: 19, pendingQuestionIds: [] } })
-    const afterOff = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
-    expect(typeof afterOff).toBe('string')
-    expect(afterOff!).not.toBe(afterOn)
+    // 固定时钟验证更新时间，而非依赖磁盘写入自然跨过1毫秒。
+    setSystemTime(new Date('2026-09-14T00:00:00.000Z'))
+    try {
+      const projects = readProjects() as Array<{ autoClarify?: { enabled?: boolean; lastToggledAt?: string } }>
+      expect(projects[0]?.autoClarify).toBeUndefined()
+      // 开启（模拟 IPC set-auto-clarify 直写 updateNanjuProject）
+      updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } })
+      const afterOn = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+      expect(typeof afterOn).toBe('string')
+      expect(Number.isNaN(Date.parse(afterOn!))).toBe(false)
+      // 同值更新（预算 20→19）不刷新时间戳
+      updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 19, pendingQuestionIds: [] } })
+      const afterBudget = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+      expect(afterBudget).toBe(afterOn)
+      // 关闭再次盖新戳
+      setSystemTime(new Date('2026-09-14T00:00:01.000Z'))
+      updateNanjuProject(WS, 'p1', { autoClarify: { enabled: false, proxyBudget: 19, pendingQuestionIds: [] } })
+      const afterOff = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+      expect(typeof afterOff).toBe('string')
+      expect(afterOff!).not.toBe(afterOn)
+    } finally { setSystemTime() }
+  })
+})
+
+// ═══════════════ W-I B-c：阶段推进/交付检查点 hook 接线 ═══════════════
+
+describe('W-I B-c：captureCheckpoint hook（阶段推进即工程检查点）', () => {
+  type CheckpointCall = { workspaceSlug: string; projectId: string; sessionId: string; triggerType: string; description: string }
+  const captured: CheckpointCall[] = []
+  const withCheckpointHook = (): PhaseAdvanceHooks => ({
+    ...buildTestHooks(),
+    captureCheckpoint: (input) => { captured.push(input) },
+  })
+
+  /** 与 D8 A1′ 同形的最小 fixture：auto on + quick，产出按阶段达标 */
+  function setupBC(stage: string, opts: { acVerdict?: 'green' | 'red' } = {}): void {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-bc-'))
+    fixtureRoot = dir
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'p1',
+      name: 'B-c 测试项目',
+      mode: 'quick',
+      status: 'active',
+      currentStage: stage,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      sessionId: SESSION_ID,
+      workspaceSlug: WS,
+      autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] },
+    }]))
+    if (stage === 'requirements') {
+      mkdirSync(join(dir, 'project-p1', '01_PRD'), { recursive: true })
+      writeFileSync(join(dir, 'project-p1', '01_PRD', 'prd.md'),
+        '# 单位换算工具 PRD\n\n## 用户故事\n\n- US-1 用户输入数值完成单位换算\n'.repeat(3))
+    } else if (stage === 'architecture') {
+      mkdirSync(join(dir, 'project-p1', '03_ARCHITECTURE'), { recursive: true })
+      writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'architecture.md'),
+        '# 架构文档\n\nprojectCategory: web-fullstack\n\n## 技术选型\n\n- 纯前端单页应用（原生 JS）\n\n## 环境配置\n\n| 组件 | 版本 |\n|---|---|\n| node | 20 |\n\nprojectEnv: ready\n'.repeat(2) + testArchitectureDoc)
+      writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'ac-verdict.json'), JSON.stringify({
+        verdict: opts.acVerdict ?? 'green',
+        findings: opts.acVerdict === 'red' ? [{ severity: 'red', evidence: '品类终判与部署形态不符' }] : [],
+        attackerModel: 'glm-4.7',
+        ts: new Date().toISOString(),
+      }))
+    }
+  }
+
+  beforeEach(() => { captured.length = 0 })
+
+  test('普通阶段推进成功 → hook 收到 confirm 检查点请求（含工作区/项目/会话/描述）', () => {
+    setupBC('requirements')
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, withCheckpointHook())
+    expect(advanced).toBe('prototype')
+    expect(captured.length).toBe(1)
+    expect(captured[0]!.triggerType).toBe('confirm')
+    expect(captured[0]!.workspaceSlug).toBe(WS)
+    expect(captured[0]!.projectId).toBe('p1')
+    expect(captured[0]!.sessionId).toBe(SESSION_ID)
+    expect(captured[0]!.description).toContain('阶段推进')
+    expect(captured[0]!.description).toContain('prototype')
+  })
+
+  test('推进进入 coding → triggerType=pre-modify（捕获的是改动前工程内容）', () => {
+    setupBC('architecture', { acVerdict: 'green' })
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, withCheckpointHook())
+    expect(advanced).toBe('coding')
+    expect(captured.length).toBe(1)
+    expect(captured[0]!.triggerType).toBe('pre-modify')
+  })
+
+  test('推进被拒（产出/ac 拦截）→ 不请求检查点（不留假恢复点）', () => {
+    setupBC('architecture', { acVerdict: 'red' })
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, withCheckpointHook())
+    expect(advanced).toBe(null)
+    expect(captured.length).toBe(0)
+  })
+
+  test('未接线（缺省 hook）→ 零副作用，推进仍成功（纯消费器零依赖）', () => {
+    setupBC('requirements')
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, buildTestHooks())
+    expect(advanced).toBe('prototype')
+    expect(readProjects()[0]?.currentStage).toBe('prototype')
+  })
+
+  test('orchestrator 接线源码断言：hooks 装配注入三段式检查点且失败可见化', () => {
+    const source = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
+    const hooksBlock = source.slice(source.indexOf('private buildPhaseAdvanceHooks('), source.indexOf('v2.4（D7 §1 I2）'))
+    expect(hooksBlock).toContain('captureCheckpoint: (input) => {')
+    expect(hooksBlock).toContain('createProjectCheckpoint(')
+    expect(hooksBlock).toContain('检查点创建失败（不影响阶段推进）')
+    expect(hooksBlock).toContain('阶段检查点未创建')
+  })
+
+  test('IPC 接线源码断言：create-project/create-snapshot/rollback-snapshot 走快照网关', () => {
+    const source = readFileSync(new URL('../nanju-ipc.ts', import.meta.url), 'utf-8')
+    expect(source).toContain('createProjectCheckpoint(')
+    expect(source).toContain('rollbackProjectSnapshot(')
+    expect(source).toContain("'init',")
+    expect(source).not.toContain('return createSnapshot(input.workspaceSlug')
+    expect(source).not.toContain('return rollbackToSnapshot(input.workspaceSlug')
   })
 })

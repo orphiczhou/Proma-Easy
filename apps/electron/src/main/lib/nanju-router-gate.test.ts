@@ -40,7 +40,8 @@ mock.module('./agent-session-manager', () => ({
   },
 }))
 
-const { verifyPhaseOutput, validateAdvanceTarget, checkNanjuRouterGate } = await import('./nanju-router-gate')
+const { verifyPhaseOutput, validateAdvanceTarget, checkNanjuRouterGate, resolveVisualValidatorSlotForProject } = await import('./nanju-router-gate')
+const { reloadNanjuModelConfig } = await import('./nanju-model-config')
 
 const WORKSPACE_SLUG = 'test-ws'
 const PROJECT_ID = 'p1'
@@ -908,5 +909,202 @@ describe('Given 架构完成 When 推进阶段 Then 必须具备测试设计', (
       rmSync(fixtureRoot, { recursive: true, force: true })
       fixtureRoot = ''
     }
+  })
+})
+
+
+describe('Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物', () => {
+  function setupNativeContract(): string {
+    const ws = setupFixture({ stage: 'coding', html: htmlDoc('旧演示页不能作为原生交付') })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    mkdirSync(join(root, '01_PRD'), { recursive: true })
+    writeFileSync(join(root, '01_PRD/prd.md'), '# PRD\nUS-01 终端输出结果')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Linux', kind: 'cli', entry: 'main.ts' },
+      artifacts: ['main.ts'], build: 'Bun原生运行，无需编译', run: 'bun main.ts',
+      tests: [{ id: 'cli-output', layer: 'acceptance', adapter: 'cli-driver', target: 'main.ts', command: '调用实际程序检查输出', covers: ['US-01'], requiresReal: true }],
+    }))
+    writeFileSync(join(root, '08_APP/main.ts'), 'console.log("测试程序")')
+    writeFileSync(join(root, '08_APP/DELIVERY.md'), '# 交付说明\n\n## 构建与运行\nBun原生运行无需编译，启动main.ts。\n\n## 测试状态\n尚未通过真实行为验收；源文件存在不等于可交付。\n')
+    return ws
+  }
+  test('Then 真实产物及说明存在时无需网页入口', () => {
+    const ws = setupNativeContract()
+    rmSync(join(fixtureRoot, 'project-p1/08_APP/index.html'))
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'coding')).toBeNull()
+  })
+  test('Then 缺真实程序时明确报告路径，网页演示不能替代', () => {
+    const ws = setupNativeContract()
+    rmSync(join(fixtureRoot, 'project-p1/08_APP/main.ts'))
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'coding')).toContain('main.ts')
+  })
+  test('Then 损坏工程契约不能静默改成网页模式', () => {
+    const ws = setupNativeContract()
+    writeFileSync(join(fixtureRoot, 'project-p1/03_ARCHITECTURE/engineering.json'), '{}')
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'coding')).toContain('工程契约')
+  })
+})
+
+test('Given 非浏览器工程的场景与实际驱动 When 确认testing产出 Then 不强迫伪造DOM steps.json', () => {
+  const ws = setupFixture({ stage: 'testing', html: 'Feature: US-01 终端输出\nScenario: US-01 输出结果\nGiven 已构建实际程序\nWhen 使用项目驱动运行程序\nThen 返回预期结果\n' + '真实行为由宿主执行驱动，文档本身不代表通过。'.repeat(3) })
+  const root = join(fixtureRoot, 'project-p1')
+  mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+  mkdirSync(join(root, '08_APP'), { recursive: true })
+  mkdirSync(join(root, '01_PRD'), { recursive: true })
+  writeFileSync(join(root, '08_APP/app'), 'fixture')
+  writeFileSync(join(root, '08_APP/test.cjs'), '// fixture driver')
+  writeFileSync(join(root, '01_PRD/prd.md'), '# PRD\nUS-01 终端输出')
+  writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({ schemaVersion: 1, target: { kind: 'cli', platform: 'Linux', entry: 'app' }, artifacts: ['app', 'test.cjs'], build: 'fixture', run: 'fixture', tests: [{ id: 'cli', layer: 'acceptance', adapter: 'cli-driver', target: 'app', command: '驱动读取实际输出', covers: ['US-01'], requiresReal: true, driver: { runtime: 'node', path: 'test.cjs', args: [], timeoutMs: 1000 } }] }))
+  expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toBeNull()
+  rmSync(join(root, '08_APP/test.cjs'))
+  expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toContain('test.cjs')
+})
+
+// ═══════════════ W-B B2：视觉验证者委派门禁（内部 producer → gate）═══════════════
+
+describe('W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked）', () => {
+  test('红测：prototype 阶段视觉验证者委派（文本命中）但未配独立端点 → deny（不静默放行）', () => {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论与逐条对照结果。',
+      channelId: 'glm-zhipu',
+      modelId: 'glm-5.3-vision',
+    })
+    // 未显式配置 phases.prototype.visualReviewer → producer 返回 blocked → gate 拒绝
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('独立视觉裁决')
+    expect(result?.message).toContain('未显式配置')
+  })
+
+  test('内部 slot 权威：即使标题不含视觉标记，target.slot=visual-validator 也触发门禁', () => {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型界面',
+      task: '生成原型界面稿。',
+      slot: 'visual-validator',
+      channelId: 'glm-zhipu',
+      modelId: 'glm-5.3-vision',
+    })
+    expect(result?.behavior).toBe('deny')
+  })
+
+  test('对照：prototype 阶段普通作者委派（无视觉标记/slot）不被视觉门禁拦截', () => {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型设计',
+      task: '生成原型界面稿。',
+    })
+    expect(result).toBeNull()
+  })
+})
+
+// ═══════════════ W-B B2 R1：视觉委派的可靠触发（prompt 稳定标题 + 端点检测）═══════════════
+
+describe('W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底）', () => {
+  let visualCfgDir = ''
+
+  /** 写入用户层配置并 reload（ROUTES 按代次重建）；visual 省略 = 保持未配置 */
+  function setupVisualReviewer(visual?: { channel: string; model: string }): void {
+    visualCfgDir = mkdtempSync(join(tmpdir(), 'nanju-gate-visual-'))
+    const cfgPath = join(visualCfgDir, 'nanju-model-config.json')
+    writeFileSync(cfgPath, JSON.stringify({ phases: { prototype: visual ? { visualReviewer: visual } : {} } }))
+    reloadNanjuModelConfig({ userConfigPath: cfgPath, overrideConfigPath: null })
+  }
+
+  afterEach(() => {
+    if (visualCfgDir) rmSync(visualCfgDir, { recursive: true, force: true })
+    visualCfgDir = ''
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+  })
+
+  const VISUAL = { channel: 'kimi', model: 'k3-vision' }
+
+  test('机制一（title 兜底）：marker 标题 + 命中配置端点 → 放行（合法独立端点）', () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: '独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论。',
+      channelId: 'kimi',
+      modelId: 'k3-vision',
+    })
+    expect(result).toBeNull()
+  })
+
+  test('机制二（端点检测）：marker-less 标题但命中配置端点 → 同样纳入视觉门禁管辖', async () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    // 先证检测本身为真（无 slot、无标题标记也认得出来）
+    const { isVisualValidatorEndpointTarget, resolveVisualValidatorSlot } = await import('./nanju-router-prompt')
+    const { getPhaseNode } = await import('./nanju-router')
+    const phase = getPhaseNode('quick', 'prototype')!
+    const slot = resolveVisualValidatorSlot(phase, { authorResolved: { channelId: 'minimax', modelId: 'MiniMax-M3' } })
+    expect(slot).toEqual({ status: 'resolved', channelId: 'kimi', modelId: 'k3-vision' })
+    expect(isVisualValidatorEndpointTarget({ slot, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(true)
+    expect(isVisualValidatorEndpointTarget({ slot, targetChannelId: 'deepseek', targetModelId: 'deepseek-v4-pro' })).toBe(false)
+    // I 交接锚点：同一权威槽位可从 gate 侧解析（供 orchestrator 盖章内部 slot）
+    const { findNanjuProjectBySession } = await import('./nanju-router-gate')
+    const project = findNanjuProjectBySession(WORKSPACE_SLUG, 'session-1')
+    expect(resolveVisualValidatorSlotForProject(project!)).toEqual(slot)
+    // 再证端到端：标题无视觉标记，但因端点命中而受门禁管辖（端点合法 → 放行）
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型界面复核',
+      task: '生成原型界面稿。',
+      channelId: 'kimi',
+      modelId: 'k3-vision',
+    })
+    expect(result).toBeNull()
+  })
+
+  test('marker 标题 + 端点错（非配置的独立端点）→ 拒', () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: '独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论。',
+      channelId: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('独立视觉裁决')
+    expect(result?.message).toContain('端点与配置的独立视觉端点不一致')
+  })
+
+  test('marker 标题 + 端点=作者端点（同端点自证）→ 拒（不得削弱）', () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: '独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论。',
+      channelId: 'minimax',
+      modelId: 'MiniMax-M3',
+    })
+    expect(result?.behavior).toBe('deny')
+  })
+
+  test('未配置 visualReviewer：端点检测不误拦普通委派（marker-less → 放行）', () => {
+    setupVisualReviewer(undefined)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型设计',
+      task: '生成原型界面稿。',
+      channelId: 'kimi',
+      modelId: 'k3-vision',
+    })
+    expect(result).toBeNull()
+  })
+
+  test('未配置 visualReviewer：阶段推进不被视觉槽位硬阻断（L1 正常委派 + 阶段序放行）', () => {
+    setupVisualReviewer(undefined)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    // 视觉槽位 blocked 只影响「视觉裁决」这一个动作，不阻断阶段推进：
+    // L1 仍可委派作者（产出 prototype.html），阶段序校验也不受其影响。
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型设计',
+      task: '生成原型界面稿。',
+    })).toBeNull()
+    expect(validateAdvanceTarget('quick', 'prototype', 'architecture')).toEqual({ ok: true })
   })
 })

@@ -8,6 +8,8 @@ import * as React from 'react'
 import { Rocket, Building2, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+// I-P1（B-e）：两卡文案唯一真源（US-U01；F2 模块），禁止在本文件二次硬编码
+import { QUICK_MODE_CARD, ITERATIVE_MODE_CARD } from './quick-ux-model'
 
 type ProjectMode = 'quick' | 'iterative'
 
@@ -30,6 +32,11 @@ export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.Rea
   const [autoClarify, setAutoClarify] = React.useState(false)
   const autoClarifyAvailability = selectedMode ? resolveAutoClarifyAvailability(selectedMode) : 'hidden'
 
+  /**
+   * I-P1（父裁决 5）：卡片点击 = **选模式**（只置 selectedMode，不创建项目）。
+   * 选模式后出现的「项目名 + autoClarify 勾选 + 开始创建」是创建动作；
+   * quick 专属的 autoClarify 复选框不得因为换文案被跳过（见下方 available 分支）。
+   */
   const handleSelectMode = (mode: ProjectMode) => {
     setSelectedMode(mode)
     if (mode !== 'quick') setAutoClarify(false)
@@ -67,13 +74,13 @@ export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.Rea
             <Rocket className="w-7 h-7 text-blue-500" />
           </div>
           <div className="space-y-1 text-center">
-            <h2 className="text-lg font-medium text-foreground">快速做一个工具</h2>
+            <h2 className="text-lg font-medium text-foreground">{QUICK_MODE_CARD.title}</h2>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              一次性小应用、验证想法。快速实现，测试收口。
+              {QUICK_MODE_CARD.subtitle}
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5 justify-center">
-            {['小工具', '验证想法', '快速交付'].map((tag) => (
+            {QUICK_MODE_CARD.examples.map((tag) => (
               <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
                 {tag}
               </span>
@@ -96,13 +103,13 @@ export function ModeSelectView({ onSelectMode }: ModeSelectViewProps): React.Rea
             <Building2 className="w-7 h-7 text-purple-500" />
           </div>
           <div className="space-y-1 text-center">
-            <h2 className="text-lg font-medium text-foreground">长期迭代项目</h2>
+            <h2 className="text-lg font-medium text-foreground">{ITERATIVE_MODE_CARD.title}</h2>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              需要持续更新的项目。完整工程流程，版本管理。
+              {ITERATIVE_MODE_CARD.subtitle}
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5 justify-center">
-            {['完整文档', '架构设计', '版本管理'].map((tag) => (
+            {ITERATIVE_MODE_CARD.examples.map((tag) => (
               <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
                 {tag}
               </span>

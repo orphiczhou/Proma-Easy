@@ -9,7 +9,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
 import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, type NanjuProject, type ProjectStage } from './nanju-project'
-import { getPhaseNode, getNextPhase, type PhaseId, checkOutputFormat } from './nanju-router'
+import { getPhaseNode, getNextPhase, type PhaseId, type PhaseNode, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
 import {
   STAGE_ROLE_KEYWORDS,
@@ -18,6 +18,7 @@ import {
   checkDelegationAgainstStage,
   describeKeywordHit,
   detectACRole,
+  detectDelegationSlot,
   extractDelegationSources,
   injectStagePathConstraint,
   isDelegationTool,
@@ -25,9 +26,12 @@ import {
   matchStageKeyword,
   MINIMAX_REPAIR_GUIDANCE,
   resolveACOverride,
+  resolveDelegationSlot,
+  STAGE_AUTHOR_TITLE_MARKERS,
 } from './nanju-delegate-guard'
 import { recordTelemetry } from './nanju-telemetry'
 import { validateTestArchitecture } from './nanju-test-architecture'
+import type { ResolvedChannelModel, VisualValidatorResolution } from './nanju-router-prompt'
 
 // ===== 工具白名单（修正 Y9：移除 EnterPlanMode/ExitPlanMode） =====
 
@@ -274,19 +278,16 @@ function registerConfirmAskIfEligible(
  * （checkNanjuDelegateGuard——阶段匹配 deny / AC 模型覆写 / 路径约束注入）。
  */
 /**
- * W24-8：各阶段**作者委派标题标记**（仅层二 AC 覆写的豁免判定用，不参与层一匹配）。
- * L1 作者委派标题约定「{角色}：{项目} …」（router-prompt 模板）；AC 委派标题
- * （攻击者/防御者/审计/复审）不含这些标记 → 不豁免 → 照常程序化覆写。
+ * 南大向导路由门禁。
+ *
+ * 在 canUseTool 中调用，返回 null 表示放行（非南大会话或不限制），
+ * 返回 { behavior: 'deny', message } 表示拒绝。
+ * W8（v0.17.71）：白名单放行委派工具后追加参数级三层强制
+ * （checkNanjuDelegateGuard——阶段匹配 deny / AC 模型覆写 / 路径约束注入）。
+ *
+ * W-B B2：`STAGE_AUTHOR_TITLE_MARKERS` 已迁至 `nanju-delegate-guard.ts` 作为单一真源
+ * （`detectDelegationSlot` 复用），本文件改为 import——不再在本文件重复声明。
  */
-const STAGE_AUTHOR_TITLE_MARKERS: Record<string, readonly string[]> = {
-  requirements: ['需求分析师', '需求分析', 'analyst', 'requirement-analyst'],
-  prototype: ['UX 顾问', 'UX顾问', 'ux-advisor', '原型设计'],
-  architecture: ['架构师', 'architect', '环境探测'],
-  planning: ['工程经理', '项目经理', 'engineering-manager'],
-  coding: ['全栈开发', '开发工程师', 'fullstack-developer'],
-  testing: ['测试工程师', 'test-engineer', 'GWT'],
-}
-
 export function checkNanjuRouterGate(
   workspaceSlug: string | undefined,
   sessionId: string,
@@ -904,6 +905,33 @@ function checkNanjuDelegateGuard(
     const target = targets[index]
     if (!isRecord(target)) continue
 
+    // ── B2：视觉验证者槽位门禁（prototype 阶段专属）──
+    // 有效槽位以内部 slot（target.slot，公开工具入口不暴露）为权威，缺省回退 legacy
+    // 文本推断（detectDelegationSlot，低信任）；门禁以内部 producer
+    // （resolvePhaseDelegationSlots → resolveVisualValidatorSlot）的显式端点为权威：
+    // 未配置独立视觉端点 / 与作者同端点自证 / 端点不匹配 → 一律拒绝（清晰 blocked）。
+    if (guardStage === 'prototype') {
+      const targetRecord = target as Record<string, unknown>
+      // 机制一：内部 slot（权威，公开工具面不暴露）→ 缺省回退 legacy 文本推断（低信任）。
+      let effectiveSlot = resolveDelegationSlot(targetRecord.slot, detectDelegationSlot(source, guardStage))
+      // 机制二（R1(b)）：无 slot、标题也无视觉标记时，看委派目标是否命中显式配置的独立
+      // 视觉端点——命中同样纳入视觉门禁管辖（title 仅兜底）。未配置/同端点自证时
+      // slot.status !== 'resolved' → 不命中，仍保留渲染层可见 blocked 语义。
+      if (effectiveSlot !== 'visual-validator') {
+        const gateSlot = resolvePrototypeVisualSlot(project)
+        if (gateSlot && gateSlot.ok && gateSlot.matchesEndpoint({
+          targetChannelId: typeof targetRecord.channelId === 'string' ? targetRecord.channelId : undefined,
+          targetModelId: typeof targetRecord.modelId === 'string' ? targetRecord.modelId : undefined,
+        })) {
+          effectiveSlot = 'visual-validator'
+        }
+      }
+      if (effectiveSlot === 'visual-validator') {
+        const visualGate = checkVisualValidatorDelegationGate(project, target)
+        if (visualGate) return visualGate
+      }
+    }
+
     // 层二：AC 模型程序化覆写（命中 AC 词且能区分攻/防；不受层一判定顺序影响）
     // W22 O1：第三参 guardStage——per-phase acAttacker 覆盖位（testing 攻击者=glm 跨族）
     // 必须在此接线，否则被全局 preset 静默覆写回 deepseek（与新作者同族）。
@@ -992,6 +1020,97 @@ function checkNanjuDelegateGuard(
 }
 
 /**
+ * W-B B2：视觉验证者委派门禁（仅 prototype 阶段调用）。
+ *
+ * 把文本推断出的 visual-validator 委派与内部 producer（resolvePhaseDelegationSlots →
+ * resolveVisualValidatorSlot）的权威端点比对（懒加载避免与 router-prompt 静态环）：
+ * - 未显式配置独立视觉端点 / 与作者同端点自证 / 端点不匹配 → 拒绝（清晰 blocked，
+ *   不静默放行，也不退回作者端点冒充独立裁决）；
+ * - 命中显式独立端点且 target 与之一致 → 放行（返回 null）。
+ */
+function checkVisualValidatorDelegationGate(
+  project: NanjuProject,
+  target: Record<string, unknown>,
+): { behavior: 'deny'; message: string } | null {
+  const gateSlot = resolvePrototypeVisualSlot(project)
+  if (!gateSlot) return null
+  if (!gateSlot.ok) {
+    // fail-closed：无法确认独立能力时不放行
+    return {
+      behavior: 'deny',
+      message:
+        '🔒 南大向导门禁：无法裁定独立视觉验证者槽位（' + gateSlot.error + '），已拒绝（fail-closed）。',
+    }
+  }
+  const verdict = gateSlot.validate({
+    targetChannelId: typeof target.channelId === 'string' ? target.channelId : undefined,
+    targetModelId: typeof target.modelId === 'string' ? target.modelId : undefined,
+  })
+  if (verdict.ok) return null
+  return {
+    behavior: 'deny',
+    message:
+      `🔒 南大向导门禁：独立视觉裁决委派未就绪，已拒绝（不静默放行）。\n`
+      + `\n原因：${verdict.reason}\n`
+      + `\n视觉验证者必须由内部槽位管理：请在「设置 → 模型」为 prototype 阶段显式配置与作者异端点的 `
+      + `phases.prototype.visualReviewer，再重试；不得用作者自身或同端点模型冒充独立视觉裁决，`
+      + `也不得在未配置时声称视觉裁决已通过。`,
+  }
+}
+
+/**
+ * B2 R1 交接锚点（供 orchestrator 在 L1 委派工具调用上盖章内部 slot）。
+ *
+ * 返回 prototype 阶段生产者权威的视觉槽位（resolved / blocked / not-applicable）；
+ * 非 prototype 阶段或无法解析时返回 null。model 驱动的 delegate_agent 入参不可信，
+ * 但**该函数在主进程内调用**，其返回值可信用作内部 slot 盖章依据。
+ */
+export function resolveVisualValidatorSlotForProject(project: NanjuProject): VisualValidatorResolution | null {
+  const gateSlot = resolvePrototypeVisualSlot(project)
+  return gateSlot && gateSlot.ok ? gateSlot.slot : null
+}
+
+/**
+ * B2：解析 prototype 阶段的视觉槽位（producer 权威）——gate 两条识别机制与门禁校验共用。
+ *
+ * 懒 require('./nanju-router-prompt') 避免与 router-prompt 的静态循环依赖；解析或校验
+ * 抛错时返回 null（调用方据此 fail-closed 或跳过）。
+ */
+function resolvePrototypeVisualSlot(project: NanjuProject):
+  | {
+    ok: true
+    phase: PhaseNode
+    authorResolved: ResolvedChannelModel | null
+    slot: VisualValidatorResolution
+    validate: (args: { targetChannelId?: string; targetModelId?: string }) => { ok: true } | { ok: false; reason: string }
+    matchesEndpoint: (args: { targetChannelId?: string; targetModelId?: string }) => boolean
+  }
+  | { ok: false; error: string }
+  | null {
+  const phase = getPhaseNode(project.mode, 'prototype')
+  if (!phase) return null
+  try {
+    const promptModule = require('./nanju-router-prompt') as typeof import('./nanju-router-prompt')
+    // 作者端点：家族标记（minimax/MiniMax-M3）运行时解析 UUID；显式配置则取字面值
+    const isFamilyMarker = phase.channel === 'minimax' && phase.model === 'MiniMax-M3'
+    const authorResolved: ResolvedChannelModel | null = isFamilyMarker
+      ? (promptModule.resolveMinimaxM3Actor() ?? { channelId: phase.channel, modelId: phase.model })
+      : { channelId: phase.channel, modelId: phase.model }
+    const slot = promptModule.resolveVisualValidatorSlot(phase, { authorResolved })
+    return {
+      ok: true,
+      phase,
+      authorResolved,
+      slot,
+      validate: (args) => promptModule.validateVisualValidatorDelegation({ phase, authorResolved, ...args }),
+      matchesEndpoint: (args) => promptModule.isVisualValidatorEndpointTarget({ slot, ...args }),
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
  * 验证阶段产出文件（修正 F6 + Y5）。
  * Harness 代码在 PHASE_COMPLETE 检测后调用。
  *
@@ -1008,6 +1127,13 @@ export function verifyPhaseOutput(
     phaseId,
   )
   if (!phase || !phase.outputPath) return null
+
+  if (phaseId === 'coding') {
+    const { resolveCodingOutputPath, validateEngineeringCodingOutput, ENGINEERING_DELIVERY_PATH } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+    if (resolveCodingOutputPath(projectDir) === ENGINEERING_DELIVERY_PATH) {
+      return validateEngineeringCodingOutput(projectDir)
+    }
+  }
 
   const filePath = join(projectDir, phase.outputPath)
 
@@ -1045,6 +1171,21 @@ export function verifyPhaseOutput(
       })
       if (!hasScenarios) {
         return '缺少可执行场景：06_TESTS/features/ 下至少一个 .feature 需同时含 Feature: 与 Scenario:（index.feature 可为纯索引，场景允许分布在 us-XX.feature 分文件）'
+      }
+      const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract, captureEngineeringEvidence } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+      const contractPath = join(projectDir, ENGINEERING_CONTRACT_PATH)
+      if (existsSync(contractPath)) {
+        const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
+        if (!parsed.contract) return '工程测试契约不完整：' + parsed.problems.join('；')
+        if (parsed.contract.tests.some((test) => test.scenarioFiles)) {
+          const captured = captureEngineeringEvidence(projectDir)
+          if (!captured.evidence) return '工程测试文件绑定不完整：' + captured.problems.join('；')
+        }
+        if (parsed.contract.tests.every((test) => test.adapter !== 'browser-file' && test.adapter !== 'browser-url')) {
+          if (parsed.contract.tests.some((test) => !test.driver)) return '工程测试缺少driver执行计划，请回coding补齐真实驱动；不得伪造DOM步骤。'
+          const captured = captureEngineeringEvidence(projectDir)
+          return captured.evidence ? null : '工程驱动或被测产物不完整：' + captured.problems.join('；')
+        }
       }
       // AC I-1（v0.17.65）：占位产物拦截——至少一个 *.steps.json 可 JSON.parse 且解析后
       // feature/scenario 均为非空字符串（与 GwtRunner 执行期 schema 校验闭环；
@@ -1110,6 +1251,14 @@ export function verifyPhaseOutput(
           return `环境配置清单校验未通过：${validation.problems.join('；')}`
         }
       }
+    }
+    const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+    const contractPath = join(projectDir, ENGINEERING_CONTRACT_PATH)
+    if (existsSync(contractPath)) {
+      try {
+        const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
+        if (!parsed.contract) return '工程契约需补全：' + parsed.problems.join('；')
+      } catch { return '工程契约不可读，请补全：' + ENGINEERING_CONTRACT_PATH }
     }
     // 结构检查只证明设计资料齐全，不构成运行证据或权限授权。
     const testArchitecture = validateTestArchitecture(content)

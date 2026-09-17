@@ -55,6 +55,16 @@ export type TelemetryEventType =
   // W23（§六.3）：配置级 autofix——委派指令构建前预检失效端点并临时替换（区别于
   // 请求级 model.fallback.used：本事件在构建期触发，不落盘，仅本次指令生效）
   | 'model.config-autofix'
+  // W24-EF F2（v0.17.123）：PRD §12.4 事件表补齐——只追加 union 成员；既有发射点不动。
+  // #6 user.undo：用户主动撤销（区分系统侧 undo 与用户意图）；#7 click_to_fix：点选纠错单点
+  // 上报（按 nanju-quick-events.ts.buildClickToFixPayload 输出，privacy 最小 payload 仅含
+  // 元素类型/是否含 id/是否成功/阶段，绝不含原文/坐标）；#8 mode.switched：模式转换（快消→
+  // 长期）——独立事件，与 #3 role.switched（向导角色切换）语义不同，不得复用；#10
+  // repair.triggered：自动修复触发（按 E2 RepairAttempt[] 派生 payload，含
+  // attempts/strategies/outcome，attempt 数始终来自 E2 真实状态，禁止 I 端硬编码伪造）；
+  // #12 satisfaction.marked：用户主动标记满意交付（仅 AskUserQuestion 精确等值置位，
+  // message 来源不置位——W18 已固化）。
+  | 'user.undo' | 'click_to_fix' | 'mode.switched' | 'repair.triggered' | 'satisfaction.marked'
 
 export interface TelemetryEvent {
   eventId: string
