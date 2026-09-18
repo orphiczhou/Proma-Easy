@@ -353,6 +353,8 @@ describe('validateEnvChecklist（R2 第 4 层兜底）', () => {
     expect(validateEnvChecklist('desktop-app', ['xcodebuild']).ok).toBe(false)
     // mobile-app 白名单内合法
     expect(validateEnvChecklist('mobile-app', ['xcodebuild', 'node']).ok).toBe(true)
+    // v0.17.129：mobile 闭环实测新增组件过白名单（WiFi 调试 adb + 无 KVM 环境 QEMU TCG 替代路线，2026-09-19 实测）
+    expect(validateEnvChecklist('mobile-app', ['qemu-system-x86_64', 'qemu-img', 'aria2c']).ok).toBe(true)
   })
 
   test('空清单拦截（环境节缺失/表格为空）', () => {

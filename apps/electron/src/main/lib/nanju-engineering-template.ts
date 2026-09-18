@@ -419,7 +419,10 @@ const ENV_COMPONENTS_BY_CATEGORY: Record<ProjectCategory, Set<string>> = {
     'curl', 'httpie', 'postgresql', 'psql', 'pg_isready', 'redis', 'argon2', 'bcrypt', 'build-essential', 'node-gyp']),
   'mobile-app': new Set(['watchman', 'adb', 'xcodebuild', 'xcode-select', 'swift', 'pod', 'cocoapods', 'java', 'gradle',
     // P0-4：mobile v2 模板 §2.1 组件对齐（Expo/EAS/模拟器工具链；npx 为共享 npm 生态入口）
-    'expo', 'eas', 'eas-cli', 'avdmanager', 'sdkmanager', 'android-studio', 'npx']),
+    'expo', 'eas', 'eas-cli', 'avdmanager', 'sdkmanager', 'android-studio', 'npx',
+    // v0.17.129：mobile 真机/模拟器闭环实测回填（2026-09-19，WiFi 调试 adb 实测 + 无 KVM 环境 QEMU TCG 替代路线；
+    // aria2c 为 SF/GitHub 大镜像多连接下载工具；qemu-img 为 QEMU 配套工具超集预置，模版 §2.2 C4 路线实测必需）
+    'qemu-system-x86_64', 'qemu-img', 'aria2c']),
   // W24-10：补 Tauri v2 Linux 真实依赖（desktop-app 模板默认栈；架构师实测探测出
   // webkit2gtk-4.1/gtk+-3.0/libsoup-3.0/ayatana-appindicator3 被白名单误判幻觉包名）
   'desktop-app': new Set(['rustc', 'cargo', 'rustup', 'electron', 'pkg-config', 'cmake', 'clang', 'gcc', 'cc', 'make', 'python3',
