@@ -105,6 +105,48 @@ pnpm exec playwright test --trace on         # evidence: test-results/*.zip + �
 
 驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
 
+### 5.5 标杆测试闭环（本机可跑，B2 实证提炼）
+
+> 来源：平台知识库《标杆解析-v1/测试闭环汇总》§2.1（2026-09-18，cal.com / dub / create-t3-app / next-forge 四仓库 zread 实证）。命令在标杆仓库已验证，本品类模板未串跑，证据等级统一 [文证：标杆实证]。与 §5.2 的关系：§5.2 是首项目"从零搭"分步驱动闭环；本节是标杆固化的 package.json 门禁形态，生成项目应预置。
+
+**① 工具链与命令**（照抄可用 [文证：标杆实证]）
+
+```json
+// package.json scripts —— 一条命令全门禁 + 种子前置
+{
+  "test": "pnpm lint && pnpm typecheck && TZ=UTC vitest run --coverage",
+  "test:e2e": "pnpm db:seed && playwright test",
+  "db:seed": "tsx scripts/seed.ts"
+}
+```
+
+```bash
+SKIP_ENV_VALIDATION=true pnpm test        # 无密钥逃生门（t3 + next-forge 双实证）
+node -e "await import('./src/env.ts')"    # env 冒烟：createEnv 模块加载即校验
+```
+
+- 数据层：一份 schema 双 provider——单测走 SQLite/PGlite（Prisma `provider="sqlite"` / Drizzle sqlite），不碰 Postgres 容器；vitest 用 prismock 或 `vi.mock` Prisma client；`passWithNoTests: true` 保证新项目空测试不红（cal.com vitest.config.mts 实证）。
+- Playwright 配置要点：`webServer` 自起应用（CI 免手工起服务）；`storageState` 存登录态供双角色复用，免每条用例重走登录；`retries` + `trace: 'on-first-retry'` 自动取证。
+
+**② 证据形态**
+- `pnpm test` → vitest 终端摘要（N passed）+ `coverage/`；`test:e2e` → `test-results/` trace.zip + 失败截图 + `playwright-report/` HTML
+- env 缺失 → 启动即打印缺失变量清单（非堆栈）；`db:seed` → stdout 种子账号清单
+
+**③ 降级对照（一行表）**
+
+| 受限 | 标杆替代 [文证：标杆实证] |
+|---|---|
+| 无 Docker（Postgres） | SQLite/PGlite 进程内直连，无 compose 竞态 |
+| 无密钥 | `SKIP_ENV_VALIDATION=true`；单测零真实服务依赖 |
+| 无浏览器预装 | `npx playwright install chromium` 即可，无需容器 |
+
+**④ DoD 要点**（取自汇总 §5 七条，本品类相关 5 条）
+- `pnpm test` 一条命令跑完 lint+typecheck+单测，<60s，空测试也绿
+- env 缺失报清单而非堆栈；`SKIP_ENV_VALIDATION` 可逃生
+- 单测不碰网络/容器/真 key（SQLite + prismock）
+- e2e 至少 1 条冒烟链路（登录→核心动作），登录态 storageState 复用
+- `pnpm build` 产物存在；e2e 前置 `db:seed` 保证可复现
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。本品类高发触发点：
 - 新 ORM/新 Next.js 大版本的 breaking change 验证 [推断]
@@ -126,6 +168,7 @@ pnpm exec playwright test --trace on         # evidence: test-results/*.zip + �
 | dubinc/dub | `web/package.json`、playwright.config、global-setup | storageState 双角色 e2e+webServer 自起 | B2 已实证 ●（旧名 steven-tey/dub 已迁移） |
 | t3-oss/create-t3-app | cli/package.json、ci.yml/e2e.yml、extras 结构 | 矩阵 scaffold→build 闭环 | B2 已实证 ●（脚手架测试黄金样本） |
 | vercel/next-forge | `apps/app/env.ts`、`packages/database/keys.ts`、vitest.config | keys.ts extends 组合的 env 管理 | B2 已实证 ●（env.ts 不存在已实证，如实标注） |
+| vitest-dev/vitest | `test/README.md`、根 package.json、pnpm-workspace.yaml、`.github/workflows/ci.yml` | 测试组织范式：测试目录即分类（每类独立包）+fixture/驱动双层+故意失败样本是回归资产（对 monorepo 测试编排参考） | 二轮已实证 ●（2026-09-18，见 标杆解析-v1/二轮-vitest.md） |
 | shadcn-ui/taxonomy | `app/(marketing)/(dashboard)/` 路由组 | App Router 布局隔离 | 本轮未立项（非优先级）；二轮按需补解析 |
 
 > v1 §9 五项目清单已由 B2 解析回填（cal.com/dub/create-t3-app/next-forge 四项实证 + taxonomy 未立项）。各项目测试闭环事实标准与"本机可跑"改造方案详见平台知识库《标杆解析-v1/测试闭环汇总》（2026-09-18）。
@@ -136,6 +179,8 @@ v1 §7.3 DO/DON'T 表完整保留。[文证]
 ---
 ## CHANGELOG
 
+- v2.3（2026-09-18）：§8 补二轮标杆 1 项（vitest 测试组织范式，monorepo 测试编排参考，二轮已实证 ●），详见 标杆解析-v1/二轮-*。
+- v2.2（2026-09-18）：§5.5 标杆测试闭环并入——本机可跑门禁（工具链命令+证据形态+降级对照+DoD 要点），证据等级 [文证：标杆实证]；来源：平台知识库《标杆解析-v1/测试闭环汇总》。
 - v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0 判定/§2 组件环境/§5 闭环/§6 Spike/§7 坑库/§8 映射（标注解析状态）；v1 §1-§4、§6、§7、§9 保留沿用不重复。

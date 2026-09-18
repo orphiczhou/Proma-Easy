@@ -67,3 +67,12 @@ describe('W24-EF F2：nanju-telemetry union 追加回归', () => {
     }
   })
 })
+
+// ===== L3-7d（2026-09-18）：Spike 三埋点 union 追加 =====
+describe('L3-7d：Spike 三埋点枚举在场（spike.created / spike.verdict / spike.timebox_hit）', () => {
+  test('三事件均为合法 TelemetryEventType（timebox_hit 无可观测载体仅登记，不接假触发点）', () => {
+    // 类型标注为 TelemetryEventType[]：任一成员被从 union 移除会在此编译失败——即枚举在场被编译期锁定
+    const spikeEvents: TelemetryEventType[] = ['spike.created', 'spike.verdict', 'spike.timebox_hit']
+    expect(spikeEvents).toEqual(['spike.created', 'spike.verdict', 'spike.timebox_hit'])
+  })
+})

@@ -98,6 +98,41 @@ writeFileSync("evidence/rag_eval.json", JSON.stringify({ ts: Date.now(), evidenc
 
 驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
 
+### 5.5 标杆测试闭环（本机可跑，B2 实证提炼）
+
+> 来源：平台知识库《标杆解析-v1/测试闭环汇总》§2.7（2026-09-18，vercel/ai contributing/testing.md 全文实证）。[文证：标杆实证]，本品类模板未串跑。与 §5.4 的关系：§5.4"录制回放"是 [推断待验证] 概念条目；本节给出标杆实证的双命令机制——首个项目落地后可把 §5.4 升级为 [实证]。
+
+**① 工具链与命令** [文证：标杆实证]
+
+```json
+// vercel/ai 形态：test / test:update 双命令显式分离
+{
+  "test": "vitest run",              // 读 __fixtures__/ 回放，CI 零 API key
+  "test:update": "vitest run -u"     // 显式录制通道：本地一次性真 key 刷新 fixture
+}
+```
+- `__fixtures__/` 存真实响应原文（JSONL / SSE 格式按 provider 适配），fixtures 进 git——CI 与本机跑同一份证据。
+- 流式行为：mock server 按 chunk 序列回放 SSE，断言逐 chunk 结构而非只断最终聚合文本。
+- 结构化输出：zod schema 断言，确定性层严格校验（同 §5.3 分层断言）。
+- UI 对话链路无法回放 → 手工三例 checklist（generate / stream / UI 追问），真 key 本地人工跑，产物为 checklist 记录/截图。
+
+**② 证据形态**
+- 回放断言摘要（vitest）；新录 fixture 文件本身即证据（含请求/响应原文）
+- 与本模版证据链对接：回放跑完仍按 §5.3 写 `evidence/`（含 model 名、请求 id、ts、`mock: true` 标注）
+
+**③ 降级对照（一行表）**
+
+| 受限 | 标杆替代 [文证：标杆实证] |
+|---|---|
+| 无 key（CI） | fixtures 回放，**key 永不进 CI** |
+| 断网 | 同上（回放全离线） |
+| 无 Docker | 本品类天然无容器需求 |
+
+**④ DoD 要点**（取自汇总 §5 七条，本品类相关 3 条）
+- `pnpm test` 零 key 全绿（回放）；`test:update` 与 `test` 分离，fixtures 进 git
+- 单测不碰网络/容器/真 key
+- 流式断言到 chunk 级；结构化输出有 zod schema 校验
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。**本品类是 Spike 高发品类**：
 - 新模型/新端点可用性（昨晚教训直接来源）[实证]
@@ -116,7 +151,8 @@ writeFileSync("evidence/rag_eval.json", JSON.stringify({ ts: Date.now(), evidenc
 |------|-----------|---------|---------|
 | vercel/ai | `examples/` 各 provider 样例、contributing/testing.md | streamText/tool 标准形态；录制回放+test:update 双命令（测试与 key 解耦） | B2 已实证 ●（2026-09-18 平台标杆解析） |
 | langchain-ai/langchain-nextjs-template | package.json、app 结构 | 官方模板结构基线（无测试，如实记录已给补法） | B2 已实证 ● |
-| langgenius/dify | `api/core/workflow/`、`rag/` | 管线模块化（长期迭代型参考） | 本轮未立项——二轮候选（B2 README 优先级建议） |
+| langgenius/dify | `api/pytest.ini`+`conftest.py`、`core/workflow/nodes/`、`core/rag/`、Makefile、`tests/` 三层 | 平台型分层：workflow 节点即目录/RAG 管线分包；pytest 三层（unit/integration/containers）+compose 栈挂 pytest 钩子；VDB 四引擎矩阵；MOCK_SWITCH 零凭据可测 | ✅ 二轮已解析 · 二轮已实证 ●（2026-09-18，见 标杆解析-v1/二轮-dify.md） |
+| lobehub/lobe-chat | 根 package.json、`vitest.config.mts`、`e2e/` 独立包、`src/components/`、`packages/builtin-tool-*` | test-app/test-server 分域 vitest+Cucumber+Playwright e2e 标签分级（@smoke/@P0）；builtin-tool 一包一插件；dpdm+knip 门禁 | 二轮已实证 ●（2026-09-18，见 标杆解析-v1/二轮-lobe-chat.md） |
 
 ## 9. 常见模式与反模式
 v1 §5 反模式表完整保留。[文证] 追加一行：| 凭记忆写端点/模型名 | curl Spike + 卡片化已验证值 |
@@ -124,6 +160,8 @@ v1 §5 反模式表完整保留。[文证] 追加一行：| 凭记忆写端点/�
 ---
 ## CHANGELOG
 
+- v2.3（2026-09-18）：§8 补二轮标杆 2 项（dify 平台型分层/lobe-chat 插件化 monorepo，均二轮已实证 ●），原 dify「未立项」行更新为✅ 二轮已解析，详见 标杆解析-v1/二轮-*.md。
+- v2.2（2026-09-18）：§5.5 标杆测试闭环并入——vercel/ai 录制回放双命令（test/test:update 分离、fixtures 进 git、chunk 级流式断言），证据等级 [文证：标杆实证]；来源：平台知识库《标杆解析-v1/测试闭环汇总》。
 - v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0/§2（含 DashScope 交叉引用）/§5 分层断言/§6/§7/§8；v1 核心章节保留沿用。

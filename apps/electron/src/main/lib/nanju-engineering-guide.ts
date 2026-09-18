@@ -17,6 +17,13 @@ export const ENGINEERING_CONTRACT_GUIDE = [
   // 上行 driver 字段说明聚焦 schema 写法，本行聚焦「何时该声明」；DASHSCOPE 硬编码
   // 兑底移除后，云端密钥项目的唯一透传通道 = 此处声明的 env 清单）
   '涉及云端服务/外部 API 的项目：在契约 driver.env / service.env 声明所需环境变量名（如 ["DASHSCOPE_API_KEY"]）——值由宿主从自身环境注入子进程，不得写入契约或产物；何时声明/字段写法见上行 driver 与 service 字段说明。',
+  // L3-7c（2026-09-18）：spikes[]/envProbe 登记字段说明——spikes 由架构师按
+  // 00_SPIKES/INDEX.md 与各 Spike README 结论段人工登记（markdown 不做自动解析；
+  // 消费方式沿 03 §3.3：任务书注入 INDEX.md 路径+相关 Spike README 结论段）。
+  // verdict=结论方向，与状态 FULL/PARTIAL（完成度）、坑库 [推断]/[实证]（证据等级）
+  // 分属三个语义维度、互不替代。
+  '涉及关键技术不确定点：Spike 未决前架构文档该决策点标 PENDING(SPIKE-NNN)，不得写成确定性结论；全部 Spike 验收后更新结论并把 PENDING 替换为结论引用。契约可登记 spikes=[{slug,verdict,conclusion,decided_by,ts}]（仅v2，≤16项）：slug=SPIKE-NNN-短名或00_SPIKES目录名（≤64字符、不重复），由架构师按 00_SPIKES/INDEX.md 与各 Spike README 结论段人工登记（markdown不做自动解析）；verdict=confirmed/refuted/partial（结论方向：证实/证伪/部分成立，区别于状态FULL/PARTIAL完成度与坑库[推断]/[实证]证据等级）；conclusion=一句话结论；decided_by=登记主体；ts=ISO日期。',
+  '环境探测产出可在契约登记 envProbe={path,generatedAt}（仅v2；登记性字段不是执行指令——探测由项目启动钩子执行）：path 固定惯例 03_ARCHITECTURE/env_probe.json（可缺省），generatedAt 为生成时间。',
   '每次驱动执行均需真人单次批准。真实系统行为不能由项目驱动自报证明，requiresReal项目在独立验收证据接入前保留blocked，不得为了通过改成false。',
   '示例（需按实际PRD改写，不可直接把示例当项目决策）：',
   '```json',

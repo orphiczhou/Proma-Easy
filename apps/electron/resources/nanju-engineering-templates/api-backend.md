@@ -105,6 +105,54 @@ curl -s --max-time 10 -o evidence/user_create.json -w '{"http":%{http_code},"ts"
 
 驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
 
+### 5.5 标杆测试闭环（本机可跑，B2 实证提炼）
+
+> 来源：平台知识库《标杆解析-v1/测试闭环汇总》§2.2/§2.3（2026-09-18，hono / fastapi-full-stack-fastapi-template / fastapi-best-practices 实证）。命令照抄可用 [文证：标杆实证]，本品类模板未串跑。与 §5.2 的关系：§5.2 依赖容器起真库；本节是免容器的脚本门禁形态，与 §2.1 C1 降级替代（SQLite/进程内 map）同向。
+
+**① 工具链与命令** [文证：标杆实证]
+
+TS（Hono 路线）——双闸 + 进程内免起服务器：
+
+```json
+{ "test": "tsc --noEmit && vitest --run" }   // hono 双闸：类型不过则单测不跑
+```
+
+```ts
+// 单测直用 app.request()，免起真服务器、免监听端口
+const res = await app.request('/api/users', {
+  method: 'POST', body: JSON.stringify(payload),
+});
+expect(res.status).toBe(201);
+```
+- 数据层 DI 注入 SQLite/内存 KV：测试库与生产库同一 schema 不同 provider。
+
+Python（FastAPI 路线）——uv + ruff + pytest + TestClient：
+
+```bash
+uv sync                                                          # .venv 就绪
+bash scripts/lint.sh                                             # ruff check --fix src && ruff format src
+FASTAPI_ENV=test coverage run -m pytest tests/ && coverage report
+```
+- conftest.py 三 fixture（标杆全文可抄）：session 级 `db`（init_db 种子→测后清理）、`superuser_token_headers` / `normal_user_token_headers`（认证分层）；DB 用 SQLite 文件替代 PG——TestClient 进程内同步调用，无容器即无 pre_start 轮询需求。
+- tests/ 目录域镜像 src/ 域（api/ crud/ 一一对应），目录即测试清单。
+
+**② 证据形态**
+- TS：tsc 退出码 + vitest 摘要；Python：pytest 摘要 + coverage 报告（`htmlcov/` 可落盘）
+- 驱动脚本证据仍按 §5.3 写 `evidence/api_log.jsonl`（门禁与 §5.2 驱动闭环互补，不替代）
+
+**③ 降级对照（一行表）**
+
+| 受限 | 标杆替代 [文证：标杆实证] |
+|---|---|
+| 无 Docker | TS：SQLite/内存 KV；Py：TestClient + SQLite 文件（conftest fixture） |
+| 无网 | `app.request()` / TestClient 全进程内，零外部调用 |
+| 无密钥 | 认证 fixture 自生成 token，不依赖真实 IdP |
+
+**④ DoD 要点**（取自汇总 §5 七条，本品类相关 3 条）
+- `pnpm test` / `pytest` 一条命令跑完类型+单测，新项目空测试也绿
+- 单测不碰网络/容器/真 key（进程内 TestClient + SQLite）
+- `pnpm build` 产物存在且 `test` 已前置依赖最新产物
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。高发触发点：鉴权库真实行为验证、第三方 API 端点/格式确认、限流策略在真实 Redis 的行为。[推断]
 
@@ -128,6 +176,7 @@ v1 §5 安全清单（8 项 checklist）保留作交付门禁。[文证]
 ---
 ## CHANGELOG
 
+- v2.2（2026-09-18）：§5.5 标杆测试闭环并入——Hono/FastAPI 双路线本机可跑门禁（双闸命令+conftest fixture+降级对照+DoD），证据等级 [文证：标杆实证]；来源：平台知识库《标杆解析-v1/测试闭环汇总》。
 - v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0/§2/§5/§6/§7/§8；v1 §1-§3、§5 保留沿用。

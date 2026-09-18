@@ -111,6 +111,74 @@ describe('Given 架构工程契约，When 解析声明，Then 不把设计当执
     const v1Same = { ...v2, schemaVersion: 1 }
     expect(parseEngineeringContract(JSON.stringify(v1Same)).contract).toBeNull()
   })
+  // ===== L3-7c（2026-09-18）：schema v2 spikes[]/envProbe 登记字段校验 =====
+  describe('Given L3-7c schema v2 契约，When 登记 spikes/envProbe，Then 宽松校验且 v1 拒新字段', () => {
+    const spikes = [
+      { slug: 'SPIKE-001-x11-cjk-injection', verdict: 'confirmed', conclusion: 'XkbSetMap 注入对 GTK 应用生效', decided_by: 'architect-session-a', ts: '2026-09-18' },
+      { slug: 'SPIKE-002-wayland-ime', verdict: 'partial', decided_by: 'architect-session-a' },
+    ]
+    test('Then v2 合法 spikes + envProbe 正常解析（path 可缺省）', () => {
+      const v2 = { ...contract, schemaVersion: 2, spikes, envProbe: { generatedAt: '2026-09-18T09:00:00+08:00' } }
+      const result = parseEngineeringContract(JSON.stringify(v2))
+      expect(result.problems).toEqual([])
+      expect(result.contract?.spikes?.[0]?.verdict).toBe('confirmed')
+      expect(result.contract?.spikes?.[1]?.conclusion).toBeUndefined()
+      expect(result.contract?.envProbe?.path).toBeUndefined()
+    })
+    test('Then v1 契约出现 spikes/envProbe 字段视为校验错误（与 env 同规则）', () => {
+      for (const extra of [{ spikes }, { envProbe: { path: '03_ARCHITECTURE/env_probe.json' } }]) {
+        const result = parseEngineeringContract(JSON.stringify({ ...contract, ...extra }))
+        expect(result.contract).toBeNull()
+        expect(result.problems.some((x) => x.includes('仅 schemaVersion=2'))).toBe(true)
+      }
+    })
+    test('Then verdict 非法枚举拒绝（confirmed/refuted/partial 三选一，不接受 FULL/PARTIAL 混维度）', () => {
+      for (const verdict of ['FULL', 'PARTIAL', 'unknown', '', null]) {
+        const result = parseEngineeringContract(JSON.stringify({ ...contract, schemaVersion: 2, spikes: [{ slug: 'SPIKE-001', verdict }] }))
+        expect(result.contract).toBeNull()
+        expect(result.problems.some((x) => x.includes('confirmed/refuted/partial'))).toBe(true)
+      }
+    })
+    test('Then slug 空/超64/重复拒绝；数组超16项或空数组拒绝', () => {
+      for (const badSpikes of [
+        [{ slug: '', verdict: 'confirmed' }],
+        [{ slug: 'x'.repeat(65), verdict: 'confirmed' }],
+        [{ slug: 'SPIKE-001', verdict: 'confirmed' }, { slug: 'SPIKE-001', verdict: 'refuted' }],
+        Array.from({ length: 17 }, (_, i) => ({ slug: `SPIKE-${String(i).padStart(3, '0')}`, verdict: 'confirmed' as const })),
+        [],
+      ]) {
+        const result = parseEngineeringContract(JSON.stringify({ ...contract, schemaVersion: 2, spikes: badSpikes }))
+        expect(result.contract).toBeNull()
+        expect(result.problems.length).toBeGreaterThan(0)
+      }
+    })
+    test('Then conclusion 超200/decided_by 超64/ts 非ISO 拒绝；合法宽松 ts 形态放行', () => {
+      for (const bad of [
+        { slug: 'SPIKE-001', verdict: 'confirmed', conclusion: '长'.repeat(201) },
+        { slug: 'SPIKE-001', verdict: 'confirmed', conclusion: '   ' },
+        { slug: 'SPIKE-001', verdict: 'confirmed', decided_by: 'a'.repeat(65) },
+        { slug: 'SPIKE-001', verdict: 'confirmed', ts: '2026/09/18' },
+        { slug: 'SPIKE-001', verdict: 'confirmed', ts: 'yesterday' },
+      ]) {
+        const result = parseEngineeringContract(JSON.stringify({ ...contract, schemaVersion: 2, spikes: [bad] }))
+        expect(result.contract).toBeNull()
+        expect(result.problems.length).toBeGreaterThan(0)
+      }
+      for (const ts of ['2026-09-18', '2026-09-18T09:00:00Z', '2026-09-18 09:00:00', '2026-09-18T09:00:00.123+08:00']) {
+        const result = parseEngineeringContract(JSON.stringify({ ...contract, schemaVersion: 2, spikes: [{ slug: 'SPIKE-001', verdict: 'refuted', ts }] }))
+        expect(result.problems).toEqual([])
+      }
+    })
+    test('Then envProbe 宽松校验：空对象/惯例路径合法；非法相对路径与非ISO时间拒绝', () => {
+      expect(parseEngineeringContract(JSON.stringify({ ...contract, schemaVersion: 2, envProbe: {} })).problems).toEqual([])
+      expect(parseEngineeringContract(JSON.stringify({ ...contract, schemaVersion: 2, envProbe: { path: '03_ARCHITECTURE/env_probe.json', generatedAt: '2026-09-18' } })).problems).toEqual([])
+      for (const badProbe of [{ path: '/abs/env_probe.json' }, { path: '../escape.json' }, { path: '03/./env_probe.json' }, { generatedAt: 'not-a-date' }, { path: 123 }]) {
+        const result = parseEngineeringContract(JSON.stringify({ ...contract, schemaVersion: 2, envProbe: badProbe }))
+        expect(result.contract).toBeNull()
+        expect(result.problems.length).toBeGreaterThan(0)
+      }
+    })
+  })
   test('Then 产物、入口和测试对象必须相互对应', () => {
     for (const changed of [
       { ...contract, artifacts: [] },

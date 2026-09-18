@@ -95,6 +95,42 @@ adb exec-out screencap -p > evidence/screen.png  # 补充证据
 
 驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
 
+### 5.5 标杆测试闭环（本机可跑，B2 实证提炼）
+
+> 来源：平台知识库《标杆解析-v1/测试闭环汇总》§2.4（2026-09-18，react-native-community/template / create-t3-turbo 实证）。[文证：标杆实证]，本品类模板未串跑。与 §5.2 闭环 A 的关系：闭环 A 是该形态的展开；本节补齐模板应预置的最小必绿配置。
+
+**① 工具链与命令** [文证：标杆实证]
+
+```js
+// jest.config.js —— 一行 preset，零额外配置
+module.exports = { preset: 'react-native' };
+```
+- 模板自带 1 个必绿组件冒烟测试（`App.test.tsx`，react-test-renderer 渲染即断言）——新项目 `npm test` 永不空跑。
+
+```bash
+npm test                                   # jest 摘要即证据；零模拟器需求
+pnpm typecheck                             # turbo 逐包 tsc --noEmit，跨端第一门禁（create-t3-turbo）
+```
+- **标杆盲区如实标注**：create-t3-turbo 只有 typecheck+lint 无单测——本模板以 RN 官方模板的 jest 冒烟补位，二者合璧。
+- UI e2e（Maestro/Detox）需模拟器/真机，本机不可跑 → 只留 CI 设备农场钩子，不进本机门禁（与 §5.4 `skipped: no-device` 落盘规则一致）。
+
+**② 证据形态**
+- jest 终端摘要 + `coverage/`；`tsc --noEmit` 输出重定向落盘 `evidence/typecheck.txt`（同 §5.2 闭环 A）
+- e2e 录屏/截图仅 CI 产出；本机侧所有 skipped 证据必须落盘写明原因
+
+**③ 降级对照（一行表）**
+
+| 受限 | 标杆替代 [文证：标杆实证] |
+|---|---|
+| 无模拟器/真机 | jest + react-test-renderer 组件冒烟；e2e 留 CI 钩子 |
+| 无网 | Metro 本地跑，测试不碰网络 |
+| 无原生工具链 | `expo export --platform web` 先行验证逻辑层（§5.2 闭环 A） |
+
+**④ DoD 要点**（取自汇总 §5 七条，本品类相关 3 条）
+- `npm test` 一条命令组件冒烟全绿，新项目自带必绿测试
+- typecheck 全包通过（turbo），作为跨端第一门禁
+- 模板自身：每次改动跑"生成→test→typecheck"冒烟（create-t3-app 矩阵思想最小版）
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。本品类特有触发点：
 - 首个项目开始前：**环境可用性 Spike**（本机能否起 Android 模拟器 / Expo Go 通路是否可用）——建议作为该品类首个强制 Spike [推断]
@@ -125,6 +161,7 @@ adb exec-out screencap -p > evidence/screen.png  # 补充证据
 ---
 ## CHANGELOG
 
+- v2.2（2026-09-18）：§5.5 标杆测试闭环并入——jest 冒烟+turbo typecheck 本机门禁（含 create-t3-turbo 无单测盲区标注），证据等级 [文证：标杆实证]；来源：平台知识库《标杆解析-v1/测试闭环汇总》。
 - v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0/§2（标注本机可验证性列）/§5（双闭环）/§6（环境可用性强制 Spike）/§7（品类级盲区声明）；v1 选型与结构保留沿用。

@@ -42,6 +42,33 @@ const TARGET_KINDS = ['web', 'api', 'mobile', 'desktop', 'cli', 'ai'] as const
 const TEST_ADAPTERS = ['browser-file', 'browser-url', 'native-driver', 'cli-driver', 'api-driver', 'mobile-driver'] as const
 const TEST_LAYERS = ['unit', 'integration', 'acceptance'] as const
 
+/** L3-7c（2026-09-18）：Spike 结论方向三选一（字段名与枚举以 03 §3.1 英文字段为准）。
+ * 三套词表分属三个语义维度、互不替代：verdict=结论方向；02 §4 状态 FULL/PARTIAL=
+ * 完成度；坑库 [推断]/[实证]=证据等级。 */
+const SPIKE_VERDICTS = ['confirmed', 'refuted', 'partial'] as const
+
+export interface EngineeringSpikeRecord {
+  /** Spike 标识：SPIKE-NNN-短名 或 00_SPIKES 目录名（≤64 字符，spikes[] 内唯一）。 */
+  slug: string
+  /** 结论方向：confirmed=证实 / refuted=证伪 / partial=部分成立。 */
+  verdict: typeof SPIKE_VERDICTS[number]
+  /** 一句话结论（中文允许，≤200 字符）；由架构师按 Spike README 结论段人工登记。 */
+  conclusion?: string
+  /** 登记主体：架构师/会话标识（≤64 字符）。 */
+  decided_by?: string
+  /** 结论时间（ISO 日期宽松形态：日期或完整时间戳）。 */
+  ts?: string
+}
+
+/** L3-7c（2026-09-18）：env_probe.json 登记性字段——只登记探测产出的存在与生成时间，
+ * 不构成执行指令（执行探测的是项目启动钩子，非契约；探测本身属 env-probe 模块职责）。 */
+export interface EngineeringEnvProbeRegistration {
+  /** 探测产物路径；固定惯例 03_ARCHITECTURE/env_probe.json，可缺省。 */
+  path?: string
+  /** 生成时间（ISO 日期宽松形态）。 */
+  generatedAt?: string
+}
+
 export interface EngineeringDriverPlan {
   /** 固定运行时；native直接执行项目内程序，不解释shell字符串。 */
   runtime: 'node' | 'python3' | 'native'
@@ -93,6 +120,13 @@ export interface EngineeringContract {
   build: string
   run: string
   tests: EngineeringTestPlan[]
+  /** L3-7c（2026-09-18，schema v2）：Spike 登记清单（≤16 项）；由架构师按
+   * 00_SPIKES/INDEX.md 与各 Spike README 结论段人工登记（markdown→JSON 不做自动
+   * 解析——中文断句不稳定，消费方为 LLM 会话/人工直读）。仅 v2 可声明（v1 带字段拒）。 */
+  spikes?: EngineeringSpikeRecord[]
+  /** L3-7c（2026-09-18，schema v2）：env_probe 探测产出登记（宽松校验——登记性
+   * 字段不是执行指令）；仅 v2 可声明（v1 带字段拒）。 */
+  envProbe?: EngineeringEnvProbeRegistration
 }
 export interface EngineeringFileFingerprint {
   path: string
@@ -145,6 +179,69 @@ function declaredEnvList(owner: Record<string, unknown>, label: string, schemaVe
     if (!envVarName(name)) { problems.push(label + ' env 含非法环境变量名（须为字母/下划线开头、字母数字下划线、≤64字符）：' + JSON.stringify(name)); continue }
     if (seen.has(name)) { problems.push(label + ' env 变量名不得重复：' + name); continue }
     seen.add(name)
+  }
+}
+
+/** L3-7c（2026-09-18）：ISO 日期宽松形态——日期（2026-09-18）或日期+时间
+ * （含可选秒/毫秒/时区偏移，T 或空格分隔）；拒绝首尾空白与非数字段。 */
+function isoLooseDate(value: unknown): value is string {
+  return typeof value === 'string' && value === value.trim()
+    && /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/.test(value)
+}
+
+/** L3-7c（schema v2，2026-09-18）：Spike 登记清单校验（仅 v2 可声明；v1 带字段拒——
+ * 与 env 同规则）。spikes[] 由架构师按 00_SPIKES/INDEX.md 与各 Spike README 结论段
+ * 人工登记，markdown→JSON 不做自动解析（中文断句不稳定，消费方为 LLM/人工直读）。 */
+function declaredSpikeList(value: Record<string, unknown>, schemaVersion: unknown, problems: string[]): void {
+  if (value.spikes === undefined) return
+  if (schemaVersion !== 2) {
+    problems.push('spikes 字段仅 schemaVersion=2 契约可声明；在途 v1 工程请显式将 schemaVersion 改为 2 后再声明')
+    return
+  }
+  if (!Array.isArray(value.spikes) || value.spikes.length === 0 || value.spikes.length > 16) {
+    problems.push('spikes 必须为1至16项的 Spike 登记数组（无 Spike 时省略该字段，不要留空数组）')
+    return
+  }
+  const seen = new Set<string>()
+  for (const [index, row] of value.spikes.entries()) {
+    const label = `spikes[${index}]`
+    if (!record(row)) { problems.push(label + ' 必须为 Spike 登记对象'); continue }
+    if (!text(row.slug) || row.slug.length > 64) {
+      problems.push(label + ' slug 必须为非空且≤64字符的 Spike 标识（SPIKE-NNN-短名或00_SPIKES目录名）'); continue
+    }
+    if (seen.has(row.slug)) { problems.push(label + ' slug 不得重复：' + row.slug); continue }
+    seen.add(row.slug)
+    if (!member(row.verdict, SPIKE_VERDICTS)) {
+      problems.push(label + ' verdict 必须为 confirmed/refuted/partial 三选一（结论方向维度，区别于状态FULL/PARTIAL完成度与坑库[推断]/[实证]证据等级）')
+    }
+    if (row.conclusion !== undefined && (typeof row.conclusion !== 'string' || row.conclusion.trim().length === 0 || row.conclusion.length > 200)) {
+      problems.push(label + ' conclusion 须为非空、≤200字符的一句话结论')
+    }
+    if (row.decided_by !== undefined && (typeof row.decided_by !== 'string' || row.decided_by.trim().length === 0 || row.decided_by.length > 64)) {
+      problems.push(label + ' decided_by 须为非空、≤64字符的登记主体标识')
+    }
+    if (row.ts !== undefined && !isoLooseDate(row.ts)) {
+      problems.push(label + ' ts 须为 ISO 日期形态（如 2026-09-18 或 2026-09-18T09:00:00+08:00）')
+    }
+  }
+}
+
+/** L3-7c（schema v2，2026-09-18）：envProbe 登记性字段宽松校验（仅 v2 可声明，与
+ * spikes 同规则）。宽松=只验形态不验文件存在——它是登记性字段不是执行指令，探测
+ * 产出存在性由 env-probe 链路自己保证，不在此加文件系统检查。 */
+function declaredEnvProbe(value: Record<string, unknown>, schemaVersion: unknown, problems: string[]): void {
+  if (value.envProbe === undefined) return
+  if (schemaVersion !== 2) {
+    problems.push('envProbe 字段仅 schemaVersion=2 契约可声明；在途 v1 工程请显式将 schemaVersion 改为 2 后再声明')
+    return
+  }
+  if (!record(value.envProbe)) { problems.push('envProbe 必须为对象（可含 path 与 generatedAt，均为可选）'); return }
+  const probe = value.envProbe
+  if (probe.path !== undefined && (typeof probe.path !== 'string' || !artifactPath(probe.path) || probe.path.length > 256)) {
+    problems.push('envProbe.path 须为规范相对路径（固定惯例 03_ARCHITECTURE/env_probe.json，一般可缺省）')
+  }
+  if (probe.generatedAt !== undefined && !isoLooseDate(probe.generatedAt)) {
+    problems.push('envProbe.generatedAt 须为 ISO 日期形态')
   }
 }
 
@@ -241,6 +338,10 @@ export function parseEngineeringContract(raw: string): { contract: EngineeringCo
     }
   }
   if (!hasAcceptance) problems.push('tests 必须包含 acceptance 行为验收设计')
+  // L3-7c（schema v2，2026-09-18）：可选登记字段——spikes[]/envProbe（仅 v2 可声明，
+  // v1 带字段拒，与 env 同规则；登记项不参与指纹绑定，仅为效果度量与继承注入的元数据）。
+  declaredSpikeList(value, schemaVersion, problems)
+  declaredEnvProbe(value, schemaVersion, problems)
   if (problems.length) return { contract: null, problems }
   // 以上逐字段检查完成；返回经过检查的 JSON 数据，不填充静默默认值。
   return { contract: value as unknown as EngineeringContract, problems: [] }

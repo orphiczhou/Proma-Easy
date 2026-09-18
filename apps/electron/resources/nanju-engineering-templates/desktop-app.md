@@ -296,6 +296,38 @@ PY
 | 无 GUI 会话（ssh/cron） | pynput 不可用 [实证]；改测非 X 逻辑层（ASR/状态机），X 相关标 SKIPPED 并落盘原因 | [实证]+[推断] |
 | 无 key/断网 | mock ASR 响应打通驱动链路，真实调用标 PENDING | [推断待验证] |
 
+### 5.5 标杆测试闭环（本机可跑，B2 实证提炼）
+
+> 来源：平台知识库《标杆解析-v1/测试闭环汇总》§2.5（2026-09-18，tauri 官方 examples 实证）。[文证：标杆实证]，本品类模板未串跑。与 §5.2-5.4 的关系：§5.2 是本品类 [实证] 的音频回环驱动闭环；本节补代码级门禁（cargo/vitest/打包），二者互补不重叠。
+
+**① 工具链与命令** [文证：标杆实证]
+
+```bash
+cargo check && cargo test        # Rust 门禁：装了 rust 工具链即可跑，无需容器/GUI
+pnpm test                        # 前端层 vitest，同 web-fullstack 品类形态
+pnpm tauri build                 # 打包冒烟：Linux 需一次性 apt 安装 webkit2gtk 等系统包 ⚠
+```
+- 配置校验：tauri.conf.json 顶层 `$schema` IDE 校验 + `tauri build` 构建期再校验——配置错误在编辑期/构建期拦截，不进运行期。
+- tauri-driver（WebDriver UI e2e）属进阶，不进本机底线门禁。
+- **如实标注**：tauri 官方示例未演示 Rust 单测与 e2e，此为生态普遍现状——本品类适配补位：用"驱动脚本 + 证据落盘"（§5.2-5.3 形态）直接验证平台能力，不依赖框架测试设施；与 hono/FastAPI 的"框架自带测试设施"路线形成对照。
+
+**② 证据形态**
+- cargo 测试摘要（stdout）+ `target/` 构建产物存在；vitest 摘要 + coverage
+- `tauri build` → bundle 产物存在性即证据；驱动类验证仍按 §5.3 落 `evidence/*.json`
+
+**③ 降级对照（一行表）**
+
+| 受限 | 标杆替代 [文证：标杆实证] |
+|---|---|
+| 无 Rust 工具链 | 前端 vitest + §5.2 音频回环先行；Rust 门禁标 SKIPPED 落盘 |
+| 无系统包（webkit2gtk） | `tauri build` 标 SKIPPED；cargo check/test 仍可跑 |
+| 无 GUI 会话 | §5.4 已定：X 相关标 SKIPPED，测非 X 逻辑层 |
+
+**④ DoD 要点**（取自汇总 §5 七条，本品类相关 3 条）
+- 一条命令门禁（vitest + cargo test，pnpm -r 或 turbo 串起），空测试也绿
+- `tauri build` 产物存在；`test` 前置依赖最新构建
+- 模板自身：每次改动跑"生成→test→build"冒烟
+
 ---
 
 ## 6. Spike 实验协议（引用正文：`02-Spike实验协议.md`）
@@ -380,6 +412,7 @@ PY
 | 项目 | 看什么文件 | 验证什么 | 解析状态 |
 |------|-----------|---------|---------|
 | tauri-apps/tauri examples | `examples/` 各平台示例、`core/` 权限模型 | P2 路径 IPC 与 capabilities 写法 | B2 已实证 ●（结构+关键文件原文，2026-09-18 平台标杆解析） |
+| tauri-apps/create-tauri-app | `templates/_base_/`、`.scripts/generate-templates-matrix.js`、`.github/workflows/templates-test.yml`、Cargo.toml | 脚手架测试闭环：CLI cargo test 双轨（MSRV+stable）+模板三维动态矩阵+验收=scaffold 真项目→install→`tauri build --no-bundle`；条件文件名编码 `%(v2)%`/`%(pm)%` 约定 | 二轮已实证 ●（GitHub API 通道，zread 不可达；2026-09-18，见 标杆解析-v1/二轮-create-tauri-app.md） |
 | ~~dannysmith/tauri-template~~ | — | 已实测 404（B2，REFERENCE_PROJECTS #14）；"P2 工程化模板基准"职责由 tauri-apps/tauri examples 承接（B2 替代决策） | ✖ 已淘汰，勿解析 <!-- fix: ATK-I-008 --> |
 | （建议新增）xdotool 源码 | `xdo.c` 的 key 注入实现 | 理解 XTEST 与 keymap 的关系，支撑 SPIKE-001 | 待下载待解析 |
 | （建议新增）GNOME pyatspi 示例仓库 | AtspiEditableText 用法 | 支撑 SPIKE-002 | 待下载待解析 |
@@ -400,6 +433,8 @@ PY
 
 ## CHANGELOG
 
+- v2.3（2026-09-18）：§8 补二轮标杆 1 项（create-tauri-app 脚手架测试闭环，GitHub API 通道实证），详见 标杆解析-v1/二轮-*。
+- v2.2（2026-09-18）：§5.5 标杆测试闭环并入——cargo/vitest/tauri build 三层本机门禁（含 tauri 生态无 Rust 单测示例的如实标注与品类适配补位），证据等级 [文证：标杆实证]；来源：平台知识库《标杆解析-v1/测试闭环汇总》。
 - v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。

@@ -1201,3 +1201,68 @@ describe('L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目�
     expect(validateEvidenceRecordSection('# 架构\n\n## 证据升级与检索记录汇总\n普通内容')).toBeNull() // 前缀扩展节头容忍
   })
 })
+
+// ═══════════════ L3-7d（2026-09-18）：Spike 埋点接线（verifyPhaseOutput architecture 挂点）════════════════
+
+describe('L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断）', () => {
+  const { resetSpikeTelemetryState } = require('./nanju-spike-telemetry') as typeof import('./nanju-spike-telemetry')
+
+  /** 合法 v2 契约（含 spikes 登记与 envProbe）；architecture 分支只 parse 不做产物存在性检查 */
+  const spikeContract = {
+    schemaVersion: 2,
+    target: { platform: 'Linux', kind: 'desktop', entry: 'bin/tool' },
+    artifacts: ['bin/tool'],
+    build: '无需构建，脚手架产物', run: '终端运行 bin/tool',
+    tests: [{ id: 'acc-1', layer: 'acceptance', adapter: 'cli-driver', target: 'bin/tool', command: '驱动验收', covers: ['US-01'], requiresReal: true }],
+    spikes: [{ slug: 'SPIKE-001-ime-injection', verdict: 'confirmed', decided_by: 'architect-a', ts: '2026-09-18' }],
+    envProbe: { generatedAt: '2026-09-18' },
+  }
+  const archDocWithPending = (decision: string): string =>
+    `# 架构文档（L3-7d Spike 埋点接线用例）\n\n## 技术选型\n\n- 输入注入方案：${decision}\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档内容。\n\n${testArchitectureDoc}`
+
+  beforeEach(() => { resetSpikeTelemetryState() })
+  afterEach(() => { resetSpikeTelemetryState() })
+
+  test('文档含 PENDING 标记 + 契约含 spikes 登记 → 门禁放行且双事件落盘（created=文档侧 / verdict=登记值）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'quick',
+      html: archDocWithPending('PENDING(SPIKE-001-ime-injection)'),
+      files: { 'engineering.json': JSON.stringify(spikeContract) },
+    })
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+    const spikeEvents = readTelemetryEvents().filter((e) => e.eventType.startsWith('spike.'))
+    expect(spikeEvents.map((e) => e.eventType).sort()).toEqual(['spike.created', 'spike.verdict'])
+    const created = spikeEvents.find((e) => e.eventType === 'spike.created')
+    const verdict = spikeEvents.find((e) => e.eventType === 'spike.verdict')
+    expect(created?.payload).toMatchObject({ slug: 'SPIKE-001-ime-injection', source: 'pending-mark' })
+    expect(verdict?.payload).toMatchObject({ slug: 'SPIKE-001-ime-injection', verdict: 'confirmed', source: 'contract-registration' })
+  })
+
+  test('同一文档重复推进不重复埋；PENDING 替换为结论后埋 verdict（resolved + pending-removed）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'quick',
+      html: archDocWithPending('PENDING(SPIKE-001-ime-injection)'),
+      files: { 'engineering.json': JSON.stringify(spikeContract) },
+    })
+    verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    verifyPhaseOutput(ws, PROJECT_ID, 'architecture') // 快照无变化：不重复埋
+    expect(readTelemetryEvents().filter((e) => e.eventType.startsWith('spike.'))).toHaveLength(2)
+    // 文档更新：PENDING 替换为结论引用（契约不变）
+    writeFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '03_ARCHITECTURE', 'architecture.md'), archDocWithPending('SPIKE-001 结论——注入生效（结论引用）'))
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+    const resolved = readTelemetryEvents().filter((e) => e.eventType === 'spike.verdict')
+    expect(resolved).toHaveLength(2) // contract-registration + pending-removed
+    expect(resolved[1]?.payload).toMatchObject({ slug: 'SPIKE-001-ime-injection', verdict: 'resolved', source: 'pending-removed' })
+  })
+
+  test('埋点写盘失败不阻断门禁（_telemetry 被同名文件占据 → 门禁仍放行）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'quick',
+      html: archDocWithPending('PENDING(SPIKE-001-ime-injection)'),
+      files: { 'engineering.json': JSON.stringify(spikeContract) },
+    })
+    // 占位文件使 mkdirSync/appendFileSync 失败：recordTelemetry 内部 try-catch 只告警，门禁不受影响
+    writeFileSync(join(fixtureRoot, '_telemetry'), 'not-a-directory')
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+})

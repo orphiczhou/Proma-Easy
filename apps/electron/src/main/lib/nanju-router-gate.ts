@@ -1271,6 +1271,13 @@ export function verifyPhaseOutput(
   // architecture 阶段（W7，v0.17.69）：品类幻觉拦截 + 环境清单规则校验 + envReady 门禁
   // （R4 终裁挂点：拦 architecture→coding（quick）/ architecture→planning（iterative）推进）。
   if (phaseId === 'architecture') {
+    // L3-7d（2026-09-18）：Spike 埋点·文档侧观察——architecture.md 的 PENDING(SPIKE-NNN)
+    // 标记与内存快照对比（新增→spike.created / 消失→spike.verdict resolved+pending-removed）。
+    // 纯观察不阻断门禁：模块自身不抛（recordTelemetry 写失败只告警），此处 try/catch 再兑底。
+    try {
+      const { recordSpikeTelemetryFromDoc } = require('./nanju-spike-telemetry') as typeof import('./nanju-spike-telemetry')
+      recordSpikeTelemetryFromDoc(workspaceSlug, projectId, content)
+    } catch { /* 埋点观察失败不影响门禁判定 */ }
     const {
       resolveProjectCategoryForCoding,
       extractRawCategoryMarker,
@@ -1319,6 +1326,15 @@ export function verifyPhaseOutput(
       try {
         const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
         if (!parsed.contract) return '工程契约需补全：' + parsed.problems.join('；')
+        // L3-7d（2026-09-18）：Spike 埋点·契约侧观察——契约校验通过后 spikes[] 登记变化
+        // → spike.verdict（verdict 取登记值，source:contract-registration；与文档侧
+        // pending-removed 互补：此处可知结论方向）。选点理由：契约校验通过才可信为登记，
+        // 此处是读契约成功的唯一自然点；spike.timebox_hit 无可观测载体不在此接（见
+        // nanju-spike-telemetry.ts 头注诚实边界③）。try/catch 兑底不阻断门禁。
+        try {
+          const { recordSpikeTelemetryFromContract } = require('./nanju-spike-telemetry') as typeof import('./nanju-spike-telemetry')
+          recordSpikeTelemetryFromContract(workspaceSlug, projectId, parsed.contract)
+        } catch { /* 埋点观察失败不影响门禁判定 */ }
       } catch { return '工程契约不可读，请补全：' + ENGINEERING_CONTRACT_PATH }
     }
     // 结构检查只证明设计资料齐全，不构成运行证据或权限授权。

@@ -100,6 +100,47 @@ echo "{\"exit\":$?,\"ts\":$(date +%s)}" > evidence/build_result.json
 
 驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
 
+### 5.5 标杆测试闭环（本机可跑，B2 实证提炼）
+
+> 来源：平台知识库《标杆解析-v1/测试闭环汇总》§2.6（2026-09-18，citty / tsx 实证）。[文证：标杆实证]，本品类模板未串跑。与 §5.2 的关系：§5.2 是 vitest 内联用例与独立驱动脚本；本节是标杆固化的三段式门禁 + 产物黑盒形态。
+
+**① 工具链与命令** [文证：标杆实证]
+
+```json
+// citty 形态：test 一条命令串完三段，release 链内嵌 test
+{
+  "test": "pnpm lint && pnpm test:types && vitest run --coverage",
+  "play": "node playground/index.mjs"
+}
+```
+
+```bash
+# tsx 形态：test 永远测刚构建的产物 + 产物黑盒
+pnpm build && node dist/cli.mjs --help > evidence/help_snapshot.txt
+echo "exit=$?" >> evidence/help_snapshot.txt   # --help 快照 + 退出码即黑盒证据
+```
+- specs 按能力域拆分（tsx：一个能力一个 spec 文件），新命令加文件不改存量。
+- 交互测试（node-pty 伪终端）是进阶钩子，默认不启用；日常用 `execa` `input:` 注入（同 §5.3）。
+- playground/ 目录供 `pnpm play` 人工试用——黑盒证据的轻量补充。
+
+**② 证据形态**
+- vitest 摘要 + `coverage/`；`--help` 快照文件 + 退出码进 `evidence/`
+- 独立驱动跑法仍按 §5.2/5.3 落 `evidence/build_stdout.txt` + `build_result.json`
+
+**③ 降级对照（一行表）**
+
+| 受限 | 标杆替代 [文证：标杆实证] |
+|---|---|
+| 无网 | 纯本地文件处理用例优先（fs-fixture 临时目录），网络命令标 SKIPPED |
+| 无密钥 | CLI 不应依赖密钥；确需 → env 注入用例走 mock |
+| 无 Docker | 本品类天然无容器需求，全部进程内 |
+
+**④ DoD 要点**（取自汇总 §5 七条，本品类相关 4 条）
+- `pnpm test` 一条命令三段（lint+types+单测），<60s，空测试也绿
+- `pnpm build` 产物存在且 `test` 已前置依赖最新产物（tsx 实证：`"test": "pnpm build && ..."`）
+- 产物黑盒：`dist/cli.mjs --help` 快照断言 + 退出码
+- 模板自身：每次改动跑"生成→测试→构建"冒烟（citty release 链思想）
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。高发触发点：目标运行环境（不同 shell/OS）行为差异、跨平台路径/编码问题。[推断]
 
@@ -114,6 +155,8 @@ echo "{\"exit\":$?,\"ts\":$(date +%s)}" > evidence/build_result.json
 |------|-----------|---------|---------|
 | unjs/citty | `src/` 全部（极小）、package.json 全文 | 声明式命令定义；三段式 test+playground | B2 已实证 ●（2026-09-18 平台标杆解析） |
 | privatenumber/tsx | package.json 全文、构建配置 | bin+双格式发布；自跑自测+specs 分域+pty | B2 已实证 ●（CLI 测试基建范本） |
+| cli/cli | Makefile、go.mod、`.github/workflows/go.yml`、acceptance/README.md、`pkg/cmd/` 命令树 | Go 分支参考：build tag 三档（默认/integration/acceptance）+testscript+txtar 剧本验收+CI 三 OS -race；cmd 薄壳+pkg/cmd 命令树 | 二轮已实证 ●（2026-09-18，见 标杆解析-v1/二轮-cli.md） |
+| vitest-dev/vitest | `test/README.md`、根 package.json、pnpm-workspace.yaml、`.github/workflows/ci.yml` | 测试组织范式：测试目录即分类（每类独立包）+fixture/驱动双层+故意失败样本是回归资产 | 二轮已实证 ●（2026-09-18，见 标杆解析-v1/二轮-vitest.md） |
 
 ## 9. 常见模式与反模式
 | DON'T ❌ | DO ✅ |
@@ -125,6 +168,8 @@ echo "{\"exit\":$?,\"ts\":$(date +%s)}" > evidence/build_result.json
 ---
 ## CHANGELOG
 
+- v2.3（2026-09-18）：§8 补二轮标杆 2 项（cli/cli Go 分支测试范式、vitest 测试组织范式，均二轮已实证 ●），详见 标杆解析-v1/二轮-*。
+- v2.2（2026-09-18）：§5.5 标杆测试闭环并入——citty 三段式门禁 + tsx 产物黑盒快照（含 test 前置 build、fs-fixture 降级），证据等级 [文证：标杆实证]；来源：平台知识库《标杆解析-v1/测试闭环汇总》。
 - v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0/§2/§5（闭环升级）/§6/§7/§8；v1 选型与结构保留沿用。

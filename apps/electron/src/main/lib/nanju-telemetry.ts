@@ -65,6 +65,14 @@ export type TelemetryEventType =
   // #12 satisfaction.marked：用户主动标记满意交付（仅 AskUserQuestion 精确等值置位，
   // message 来源不置位——W18 已固化）。
   | 'user.undo' | 'click_to_fix' | 'mode.switched' | 'repair.triggered' | 'satisfaction.marked'
+  // L3-7d（2026-09-18，工程模版体系改进）：Spike 效果度量三埋点（03 §6 定义，PRD
+  // §12.7 归档对照承接）。事件名沿枚举点分小写惯例（对齐 env.check.executed）。
+  // spike.created / spike.verdict 由 nanju-spike-telemetry.ts 按 architecture.md 的
+  // PENDING(SPIKE-NNN) 标记快照对比与契约 spikes[] 登记变化派生（观察点=verifyPhaseOutput
+  // architecture 分支）；spike.timebox_hit 无可观测载体（时间盒命中发生在 Spike 子会话
+  // 内部，文档/契约均无创建时间戳可比对）——仅登记枚举不接假触发点，真实触发依赖
+  // 未来 Spike 子会话自报通道或登记字段扩展（见 nanju-spike-telemetry.ts 头注）。
+  | 'spike.created' | 'spike.verdict' | 'spike.timebox_hit'
 
 export interface TelemetryEvent {
   eventId: string
