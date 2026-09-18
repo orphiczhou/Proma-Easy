@@ -410,6 +410,13 @@ export function buildL2TaskWithAC(
    * 调用方应使用 resolvePhaseDelegationSlots(phase, { authorResolved }) 产出。
    */
   visualValidator?: VisualValidatorResolution | null,
+  /**
+   * L2-4 J2（2026-09-18）：已知环境事实注入行（仅 architecture 阶段消费）。
+   * - string[]：注入「## 已知环境事实」段（runEnvProbe 产出：探测摘要或失败说明）；
+   * - null/undefined：不注入（非 architecture 阶段，或调用方不接探测——向后兼容）。
+   * ATK-F-005 裁决：注入时点 = 架构师任务书生成时，环境事实先于架构师首次决策。
+   */
+  envProbeLines?: string[] | null,
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
@@ -547,6 +554,16 @@ export function buildL2TaskWithAC(
   // （U3：用户显式确认后安装，安装指令由 L1 确认后续接委派）；结尾 projectEnv 标记行
   // 由主进程解析置位 envReady（write-then-gate，见 agent-orchestrator）。
   if (phase.id === 'architecture') {
+    // L2-4 J2（2026-09-18）：已知环境事实段（探测产出，先于架构师首次决策）。
+    // envProbeLines 由 getNanjuRouterPrompt 调用 runEnvProbe 产出（幂等：
+    // env_probe.json 已存在则沿用）；探测失败时为失败说明行（不阻断任务书生成）。
+    if (envProbeLines !== null && envProbeLines !== undefined && envProbeLines.length > 0) {
+      parts.push('## 已知环境事实（探测产出，先于你的决策）')
+      parts.push(...envProbeLines)
+      parts.push('探测为跨品类通用集（脚本 00_ENGINEERING_TEMPLATE/check_env.sh，完整输出存于 03_ARCHITECTURE/env_probe.json）；品类专用探测项按品类模版 §2.3 自行补测。')
+      parts.push('CP-A 环境普查对照：对照品类模版 §2 组件清单，缺失的必须级组件须决定安装或降级替代，写入架构文档环境约束相关结论。')
+      parts.push('')
+    }
     const isQuick = phase.taskWeight === 'light'
     parts.push('## 环境配置（必须执行，产出验证的一部分）')
     parts.push('按品类对本机工具链逐组件「版本探测 → 记录结果」：')
@@ -564,6 +581,14 @@ export function buildL2TaskWithAC(
       parts.push('【快消型定位提醒】架构文档保持精简：品类终判 + 技术选型 + 组件清单 + 环境结论 + 交付与运行 + 测试架构，')
       parts.push('不展开目录树逐文件说明与接口定义（长期演进细节由工程模板承载）。')
     }
+    // L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档载体指令。
+    // 三形态完整条文在约束节（nanju-router ARCHITECT_SPIKE_CONSTRAINTS）；此处为
+    // 产出载体格式（推进门禁据产物检查：无凭证视为未执行，verifyPhaseOutput 拦截）。
+    parts.push('## 证据升级与检索记录（架构文档必须含此节）')
+    parts.push('架构文档必须含「## 证据升级与检索记录」小节（表格或列表，逐条：结论点 | 证据等级变化或新增 | 来源 URL | 检索日期）：')
+    parts.push('- 网络检索使结论从 [推断] 升级为 [实证]/[文证]，或直接新增 [实证]/[文证] 条目 → 每条必须附来源引用（URL+检索日期）；缺 URL 的 [实证]/[文证] 条目会被推进门禁拦截；')
+    parts.push('- 保持 [推断] 的结论点 → 注明「已检索无结论（关键词+日期）」或「未触发检索条件」——检索行为发生在你的推理内部、事前不可观测，此形态为自我申报（平台事后抽检追责，不得伪造申报）；')
+    parts.push('- 本轮无任何升级/新增 → 节内显式声明「本轮无证据升级；未触发检索条件」（或列出已检索无结论项）。')
     parts.push('')
   }
 
@@ -896,9 +921,23 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   const authorResolvedForSlots: ResolvedChannelModel = authorOverride ?? { channelId: authorChannel, modelId: authorModel }
   const phaseSlots = resolvePhaseDelegationSlots(phase, { authorResolved: authorResolvedForSlots })
 
+  // L2-4 J2（2026-09-18）：architecture 任务书生成时执行通用环境探测（注入时点 = 任务书
+  // 生成时，环境事实先于架构师首次决策——ATK-F-005 裁决）。幂等：env_probe.json 已存在
+  // 则直接沿用；探测失败/超时不阻断 prompt 构建（runEnvProbe 内部退化失败说明行）。
+  // lazy require 规避模块环（nanju-env-probe → nanju-project 同源静态导入，无环风险，
+  // 但与库内惯例一致：探测失败说明本身也注入——诚实退化优于静默无段）。
+  let envProbeLines: string[] | null = null
+  if (stage === 'architecture') {
+    try {
+      const { runEnvProbe } = require('./nanju-env-probe') as typeof import('./nanju-env-probe')
+      envProbeLines = runEnvProbe(workspaceSlug, project.projectId).lines
+    } catch { /* 探测异常不阻断 prompt 构建（无注入即无段，诚实退化） */ }
+  }
+
   // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导；
   // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击；
-  // B2：prototype 阶段 视觉验证者使用 slot producer 产出的独立端点/blocked 结论）
+  // B2：prototype 阶段 视觉验证者使用 slot producer 产出的独立端点/blocked 结论；
+  // L2-4：architecture 阶段注入已知环境事实段（探测产出，先于架构师首次决策））
   const l2Task = buildL2TaskWithAC(
     phase,
     { channel: authorChannel, model: authorModel },
@@ -910,6 +949,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     autoClarifyEnabled,
     autofix.attacker,
     phaseSlots.visualValidator,
+    envProbeLines,
   )
 
   // M7（AC 审计 A9-timing，v0.17.69）：主进程预校验——architecture 阶段构建 L1 指令时

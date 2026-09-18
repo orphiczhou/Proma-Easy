@@ -928,6 +928,73 @@ describe('runNanjuGwtAcceptance', () => {
     expect(events.every((e) => e.payload.verdict === 'fail')).toBe(true)
   })
 
+  // ===== L2-6（L2 批，2026-09-18）：坑库回填——强制复盘指令段注入 summaryText =====
+  describe('Given 验收收敛轮次超过 3 轮，When 结果汇总，Then summaryText 注入「强制复盘」指令段', () => {
+    const run = (): Promise<NanjuGwtOutcome> => runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: '读书笔记', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+    })
+
+    test('Then fail 轮 retryCount>3 触发：含清单三问/回填格式/双位置/五字段，且品类从 prd 标记提取', async () => {
+      // 注：集成用 web-fullstack 标记——非 web 品类标记会触发 requiresEngineeringContract
+      // 走工程契约路径（本 fixture 无 engineering.json 会 blocked）；desktop-app 等品类入文
+      // 由 nanju-pit-reflow.test 单测覆盖，标记提取→指令段传递在本测试验证同一管线。
+      setupProjectFixture({
+        stepsFiles: { 'us-01.steps.json': FAILING_STEPS },
+        prd: '# PRD\nprojectCategory: web-fullstack\n## US-01 添加读书笔记\n## US-02 删除读书笔记\n',
+        prevReport: { verdict: 'fail', retryCount: 5, errorCount: 2, retryPending: true },
+      })
+      const outcome = await run()
+      expect(outcome.verdict).toBe('fail')
+      expect(outcome.retryCount).toBe(6)
+      expect(outcome.summaryText).toContain('L2-6 强制复盘')
+      expect(outcome.summaryText).toContain('当时模版里没有的知识')
+      expect(outcome.summaryText).toContain('品类：web-fullstack')
+      // 品类标记已提取成功 → 不带兜底补标提示（与无标记 fixture 的区别断言）
+      expect(outcome.summaryText).not.toContain('projectCategory')
+      expect(outcome.summaryText).toContain('~/projects/nanju-guide/09_工程模板/')
+      expect(outcome.summaryText).toContain('同版本号同步更新')
+      expect(outcome.summaryText).toContain('品类 / 收敛轮次 / error 轮数 / 透传命中轮数 / 备注')
+      // 指令段不进报告文件（只随消息透传，报告保持裁判事实口径）
+      const report = JSON.parse(readFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), 'utf-8'))
+      expect(JSON.stringify(report)).not.toContain('强制复盘')
+    })
+
+    test('Then 边界（RED-1 修正口径）：retryCount=2 不触发、retryCount=3（总轮次 4）触发；无标记时兜底 web-fullstack 并提示补标', async () => {
+      setupProjectFixture({
+        stepsFiles: { 'us-01.steps.json': FAILING_STEPS },
+        prevReport: { verdict: 'fail', retryCount: 1, retryPending: true },
+      })
+      const notTriggered = await run()
+      expect(notTriggered.retryCount).toBe(2) // 总轮次 3，健康带内不触发
+      expect(notTriggered.summaryText).not.toContain('强制复盘')
+
+      // 同一 fixture 内推进到 retryCount=3（总轮次 4——RED-1 修正口径的触发边界）
+      writeFileSync(join(fixtureRoot, 'project-p1', '06_TESTS', 'report.json'), JSON.stringify({ verdict: 'fail', retryCount: 2, retryPending: true }))
+      const triggered = await run()
+      expect(triggered.retryCount).toBe(3)
+      expect(triggered.summaryText).toContain('强制复盘')
+      // 本 fixture prd 无 projectCategory 标记 → 兜底 web-fullstack + 补标提示
+      expect(triggered.summaryText).toContain('品类：web-fullstack')
+      expect(triggered.summaryText).toContain('projectCategory')
+    })
+
+    test('Then pass 轮也触发（RED-1 修正）：4+ 轮收敛后 pass 的项目注入终局复盘指令，随交付验收消息可见', async () => {
+      const bothUs = (us: string): string => JSON.stringify({
+        feature: us.toLowerCase(), scenario: `${us} 场景`, skip: false, skipReason: null,
+        steps: [{ kind: 'then', text: '列表可见', op: { type: 'assert-visible', selector: 'data-ai-id=view-note-list' } }],
+      })
+      setupProjectFixture({
+        stepsFiles: { 'us-01.steps.json': bothUs('US-01'), 'us-02.steps.json': bothUs('US-02') },
+        prevReport: { verdict: 'fail', retryCount: 5, retryPending: true },
+      })
+      const outcome = await run()
+      expect(outcome.verdict).toBe('pass')
+      expect(outcome.retryCount).toBe(6)
+      expect(outcome.summaryText).toContain('强制复盘') // 终局复盘：项目收敛判定落位即记录
+    })
+  })
+
   test('重试计数语义：上轮 fail 后重跑通过 → retryCount 继承（第 2 次重跑）；pass 后再跑 → 归零', async () => {
     const bothUs = (us: string): string => JSON.stringify({
       feature: us.toLowerCase(), scenario: `${us} 场景`, skip: false, skipReason: null,
@@ -2278,4 +2345,18 @@ test('Given browser-url多场景中途出origin When 宿主运行 Then verdict f
   const report = JSON.parse(readFileSync(outcome.reportJsonPath, 'utf-8'))
   expect(report.scenarios.map((s: { status: string }) => s.status)).toEqual(['fail', 'pass'])
   expect(child.killed).toBeGreaterThan(0)
+})
+
+// ===== L2-6（审计 RED-1 补，2026-09-18）：orchestrator 两早退分支补接 summaryText（复盘指令段不丢） =====
+describe('L2-6/RED-1：orchestrator 早退分支携带复盘指令段（源码断言防退化）', () => {
+  test('notify-environment 与 circuit-break 两早退分支的消息注入均经 gwtSummaryTail 拼接', () => {
+    const source = readFileSync(new URL('./agent-orchestrator.ts', import.meta.url), 'utf-8')
+    const notifyBranch = source.slice(source.indexOf("decision.action === 'notify-environment'"), source.indexOf("decision.action === 'circuit-break'"))
+    expect(notifyBranch).toContain('decision.message + gwtSummaryTail(outcome)')
+    const breakBranch = source.slice(source.indexOf("decision.action === 'circuit-break'"), source.indexOf("decision.action === 'repair'"))
+    expect(breakBranch).toContain('gwtSummaryTail(outcome)')
+    // gwtSummaryTail 语义：shouldTrigger 才追加（其余轮零变化）
+    const helper = source.slice(source.indexOf('function gwtSummaryTail'), source.indexOf('function gwtSummaryTail') + 700)
+    expect(helper).toContain('shouldTriggerPitReflow')
+  })
 })

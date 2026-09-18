@@ -103,6 +103,8 @@ pnpm exec playwright test --trace on         # evidence: test-results/*.zip + �
 ### 5.4 降级验证
 无 Postgres：SQLite 快速路径；无浏览器：Vitest 单测证据先行。
 
+驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。本品类高发触发点：
 - 新 ORM/新 Next.js 大版本的 breaking change 验证 [推断]
@@ -133,6 +135,8 @@ v1 §7.3 DO/DON'T 表完整保留。[文证]
 
 ---
 ## CHANGELOG
+
+- v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0 判定/§2 组件环境/§5 闭环/§6 Spike/§7 坑库/§8 映射（标注解析状态）；v1 §1-§4、§6、§7、§9 保留沿用不重复。
 - v1.0（2026-07-17）：初始 530 行版本。

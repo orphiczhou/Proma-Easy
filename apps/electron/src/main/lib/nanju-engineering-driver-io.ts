@@ -86,6 +86,48 @@ export class DriverIoTailBuffer {
   }
 }
 
+// ===== Y-01（L2 批，2026-09-18）：驱动尾部密钥脱敏 =====
+
+/** 已知敏感值掩码下限（字符数）：短串（如 DISPLAY=":0"）不掩，防误伤正常日志。 */
+export const DRIVER_IO_SECRET_MIN_CHARS = 8
+
+/**
+ * 通用密钥模式（Y-01 (b)）：sk- 前缀 / Bearer 凭据 / Authorization 头。
+ * 三处均加 \b 词边界：防 "task-runner-xxx"（内嵌 sk-）这类正常标识符被误掩——
+ * 真实密钥前导字符（空格/引号/等号/行首/汉字）处词边界恒成立，不影响命中。
+ */
+const GENERIC_SECRET_RE = /\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._-]{8,}|\bAuthorization:\s*\S{8,}/g
+
+/**
+ * Y-01：驱动尾部脱敏（纯函数，便于单测）。
+ *
+ * 掩码值集合两路：
+ * (a) knownValues——平台在 buildDriverEnv 处精确知道的本进程注入值集合（契约 declared
+ *     ∪ DASHSCOPE 兜底的实际值），精确整串替换 → "***"，零误伤；短于 8 字符的值跳过
+ *     （防 DISPLAY=":0" 之类短值把日志打花）。
+ * (b) 通用密钥模式——驱动自身回显的未知密钥（如调试残留 print(os.environ)），
+ *     保留可识别前缀 + "***"（sk-*** / Bearer *** / Authorization: ***）。
+ *
+ * 应用位置=process-driver driverIo() 收集处（最上游）：stderr/stdout 尾部进入透传链
+ * （error 摘要 / 旁挂 log / report.json / summaryText / telemetry）之前统一掩码。
+ */
+export function maskDriverIoSecrets(text: string, knownValues: readonly string[]): string {
+  let out = text
+  // (a) 已知注入值：整串替换（split/join 免正则转义，含 . * $ 等字符的值也安全）
+  for (const value of knownValues) {
+    if (typeof value !== 'string' || value.length < DRIVER_IO_SECRET_MIN_CHARS) continue
+    if (!out.includes(value)) continue
+    out = out.split(value).join('***')
+  }
+  // (b) 通用密钥模式：保留前缀 + ***（密文整体掩掉；掩码后 *** 不会再被重复命中）
+  out = out.replace(GENERIC_SECRET_RE, (match) => {
+    if (match.startsWith('sk-')) return 'sk-***'
+    if (/^Bearer\s/.test(match)) return 'Bearer ***'
+    return 'Authorization: ***'
+  })
+  return out
+}
+
 /** 驱动 IO 捕获（execution 结果与 gwt 报告间的数据形态）。 */
 export interface EngineeringDriverIo {
   stdoutTail: string

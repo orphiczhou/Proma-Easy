@@ -280,6 +280,13 @@ export function getProjectTemplateDir(workspaceSlug: string, projectId: string):
  * opts.annotateInitialGuess（W7 R3 前移契约，v0.17.69）：prototype→architecture 推进
  * 钩子的前移落位传 true——模板头部注入一行「⏳ 初判参考，以架构师终判为准」标注；
  * coding 推进钩子的权威落位不传（无标注）。已存在旧模板时覆盖重写（源相同幂等）。
+ *
+ * L2-4 J2（2026-09-18，v0.17.127+）：随模板落位同时把通用环境探测脚本
+ * resources/nanju-engineering-templates/check_env.sh 复制到项目
+ * 00_ENGINEERING_TEMPLATE/check_env.sh（同时机同机制——前移落位与权威落位
+ * 两条路径都带；品类无关的通用版，幂等覆盖重写。项目创建时品类未知故落通用版，
+ * 品类专用探测项由架构师按品类模版 §2.3 自行补测，任务书注入段明示）。
+ * 脚本复制失败不影响模板落位返回值（探测执行侧有「脚本未落位」退化路径）。
  */
 export function materializeEngineeringTemplate(
   workspaceSlug: string,
@@ -289,10 +296,20 @@ export function materializeEngineeringTemplate(
   opts?: { annotateInitialGuess?: boolean },
 ): string | null {
   try {
-    const src = join(resolveEngineeringTemplatesDir(explicitBase), `${category}.md`)
+    const templatesDir = resolveEngineeringTemplatesDir(explicitBase)
+    const src = join(templatesDir, `${category}.md`)
     if (!existsSync(src)) return null
     const destDir = getProjectTemplateDir(workspaceSlug, projectId)
     if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+    // L2-4 J2：check_env.sh 随模板落位（内层容错——脚本缺失/复制失败不影响模板落位）
+    // L2-5（审计 RED-2，2026-09-18）：驱动自检骨架双文件同段落位——模版 §5.3/§5 指引
+    // 「与本文件同目录/随模版分发」，不拷贝则真实项目内引用不可达（分发链最后一公里）。
+    for (const sharedFile of ['check_env.sh', 'driver-skeleton.py', 'driver-skeleton.cjs'] as const) {
+      try {
+        const sharedSrc = join(templatesDir, sharedFile)
+        if (existsSync(sharedSrc)) copyFileSync(sharedSrc, join(destDir, sharedFile))
+      } catch { /* 共享资源落位失败不阻断模板落位（探测/骨架侧有退化路径） */ }
+    }
     const dest = join(destDir, 'template.md')
     if (opts?.annotateInitialGuess) {
       // 标注行注入：首行标题后插入（保留原首行锚点，标注以注释形式紧跟其后）

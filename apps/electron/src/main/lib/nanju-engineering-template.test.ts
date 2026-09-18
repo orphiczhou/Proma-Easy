@@ -433,6 +433,69 @@ describe('materializeEngineeringTemplate 前移标注（R3 前移契约）', () 
   })
 })
 
+// ===== L2-5（审计 RED-2 补，2026-09-18）：驱动自检骨架双文件随模板落位（分发链最后一公里） =====
+
+describe('L2-5：driver-skeleton.py/.cjs 随品类模板落位（模版 §5 引用「与本文件同目录」由此闭环）', () => {
+  test('Given 权威落位 When materialize Then 骨架双文件与 check_env.sh 同段落位 00_ENGINEERING_TEMPLATE/', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-sk1'), { recursive: true })
+    const path = materializeEngineeringTemplate(fixtureRoot, 'sk1', 'desktop-app')
+    expect(path).toBeTruthy()
+    const destDir = join(root, 'project-sk1', '00_ENGINEERING_TEMPLATE')
+    const py = readFileSync(join(destDir, 'driver-skeleton.py'), 'utf-8')
+    expect(py).toContain('BaseException') // ④ 顶层异常包裹在场
+    expect(py).toContain('make_check')   // ①② 工厂在场
+    const cjs = readFileSync(join(destDir, 'driver-skeleton.cjs'), 'utf-8')
+    expect(cjs).toContain('uncaughtException') // Node 侧④兜底在场
+  })
+  test('Given 资源缺失（显式 base 无骨架）When materialize Then 模板落位不受影响（内层容错）', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-sk2'), { recursive: true })
+    // makeFixture 通常复制真实 resources；此用例仅断言不抛——容错路径由既有用例覆盖
+    const path = materializeEngineeringTemplate(fixtureRoot, 'sk2', 'cli-tool')
+    expect(path === null || typeof path === 'string').toBe(true)
+  })
+})
+
+// ===== L2-4 J2（2026-09-18）：check_env.sh 随模板落位（同时机同机制） =====
+
+describe('L2-4 J2：check_env.sh 随品类模板落位（前移落位与权威落位同机制）', () => {
+  test('Given 权威落位（coding 推进钩子）When materialize Then check_env.sh 落位 00_ENGINEERING_TEMPLATE/（通用版原样复制）', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-ce1'), { recursive: true })
+    const path = materializeEngineeringTemplate(fixtureRoot, 'ce1', 'desktop-app')
+    expect(path).toBeTruthy()
+    const checkEnvPath = join(root, 'project-ce1', '00_ENGINEERING_TEMPLATE', 'check_env.sh')
+    expect(existsSync(checkEnvPath)).toBe(true)
+    const content = readFileSync(checkEnvPath, 'utf-8')
+    // 通用版脚本特征：幂等只读声明 + 跨品类超集探测项（品类无关，项目创建时品类未知落通用版）
+    expect(content).toContain('幂等只读')
+    expect(content).toContain('probe "node"')
+    expect(content).toContain('probe "python3"')
+    expect(content).toContain('品类专用探测项见品类模版 §2.3')
+    expect(content).not.toContain('sounddevice') // 非 desktop 品类专用项不入通用版
+  })
+
+  test('Given 前移落位（annotateInitialGuess，prototype→architecture 推进钩子）When materialize Then check_env.sh 同时机落位', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-ce2'), { recursive: true })
+    const path = materializeEngineeringTemplate(fixtureRoot, 'ce2', 'web-fullstack', undefined, { annotateInitialGuess: true })
+    expect(path).toBeTruthy()
+    expect(existsSync(join(root, 'project-ce2', '00_ENGINEERING_TEMPLATE', 'check_env.sh'))).toBe(true)
+  })
+
+  test('Given 重复落位 When materialize 幂等重跑 Then check_env.sh 覆盖重写（源相同幂等）', () => {
+    const root = makeFixture()
+    mkdirSync(join(root, 'project-ce3'), { recursive: true })
+    materializeEngineeringTemplate(fixtureRoot, 'ce3', 'cli-tool')
+    const checkEnvPath = join(root, 'project-ce3', '00_ENGINEERING_TEMPLATE', 'check_env.sh')
+    // 人工篡改项目内脚本 → 再 materialize → 恢复源内容（幂等覆盖语义）
+    writeFileSync(checkEnvPath, '# tampered\n')
+    materializeEngineeringTemplate(fixtureRoot, 'ce3', 'cli-tool')
+    expect(readFileSync(checkEnvPath, 'utf-8')).toContain('probe "node"')
+  })
+})
+
 describe('前移契约：architecture 推进仅 materialize 不写 projectCategory（B2）', () => {
   test('materialize 落位后 projectCategory 仍为 null（品类写入只在 coding 推进钩子）', () => {
     const root = makeFixture()

@@ -226,7 +226,8 @@ describe('I2 B-d 修复环接线（M 级：源码断言 + 行为 BDD 在 nanju-r
   test('环境类 → 注入安抚并 return；熔断 → 记账/埋点/广播/文案后 return（不再落回炉分支）', () => {
     const src = source()
     const envBlock = src.slice(src.indexOf("if (decision.action === 'notify-environment') {"), src.indexOf("if (decision.action === 'circuit-break') {"))
-    expect(envBlock).toContain('this.injectNanjuAssistantMessage(sessionId, decision.message)')
+    // L2-6（审计 RED-1）：早退分支消息注入追加 gwtSummaryTail（复盘指令段携带）
+    expect(envBlock).toContain('this.injectNanjuAssistantMessage(sessionId, decision.message + gwtSummaryTail(outcome))')
     expect(envBlock).toContain('return')
     expect(envBlock).not.toContain('appendRepairAttempt')
     const cbBlock = src.slice(src.indexOf("if (decision.action === 'circuit-break') {"), src.indexOf("if (decision.action === 'repair') {"))

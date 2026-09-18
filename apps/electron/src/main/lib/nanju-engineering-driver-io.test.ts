@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   applyDriverIoTailPipeline, summarizeDriverIo, buildDriverIoLogFile, DriverIoTailBuffer,
   DRIVER_IO_TAIL_LINES, DRIVER_IO_LINE_MAX_BYTES, DRIVER_IO_TOTAL_MAX_BYTES, DRIVER_IO_DIAG_MAX_BYTES,
+  maskDriverIoSecrets, DRIVER_IO_SECRET_MIN_CHARS,
 } from './nanju-engineering-driver-io'
 
 /**
@@ -121,5 +122,78 @@ describe('Given 旁挂落盘内容构建，When 生成 log 文本，Then 分节�
   test('Then 空通道标注（空）而非空节', () => {
     const text = buildDriverIoLogFile({ stdoutTail: '', stderrTail: '' }, { testId: 't', generatedAt: 'g' })
     expect(text).toContain('（空）')
+  })
+})
+
+// ===== Y-01（L2 批，2026-09-18）：驱动尾部密钥脱敏（测试均用构造假值，不含真实密钥） =====
+describe('Given 驱动尾部文本与已知注入值集合，When 调用 maskDriverIoSecrets，Then 已知值整串掩码且零误伤', () => {
+  test('Then 已知长值（≥8 字符）整串替换为 ***，多次出现均掩', () => {
+    const fakeKey = 'y01-fake-secret-value-1234567890'
+    const text = `DEBUG env dump: ${fakeKey} 再一次 ${fakeKey}`
+    const masked = maskDriverIoSecrets(text, [fakeKey])
+    expect(masked).not.toContain(fakeKey)
+    expect(masked).toBe('DEBUG env dump: *** 再一次 ***')
+  })
+  test('Then 短于 8 字符的已知值不掩（DISPLAY=":0" 类防误伤）', () => {
+    expect(DRIVER_IO_SECRET_MIN_CHARS).toBe(8)
+    // /usr/bin 恰 8 字符属可掩范围；此处用真正短于 8 的值验证豁免
+    expect(maskDriverIoSecrets('PATH /bin DISPLAY :0', [':0', '/bin'])).toBe('PATH /bin DISPLAY :0')
+  })
+  test('Then 含正则元字符的已知值也安全（split/join 免转义）', () => {
+    const fake = 'y01$a*b+c.d{8}'
+    expect(maskDriverIoSecrets('token=' + fake, [fake])).toBe('token=***')
+  })
+  test('Then 空集合与空文本不报错', () => {
+    expect(maskDriverIoSecrets('plain', [])).toBe('plain')
+    expect(maskDriverIoSecrets('', ['abcdefgh1234'])).toBe('')
+  })
+})
+
+describe('Given 驱动自身回显未知密钥，When 通用密钥模式掩码，Then 保留前缀+***', () => {
+  test('Then sk- 前缀密钥掩为 sk-***', () => {
+    expect(maskDriverIoSecrets('key=sk-AbcdefgH1234567890 done', [])).toBe('key=sk-*** done')
+  })
+  test('Then Bearer 凭据掩为 Bearer ***（含点号 JWT 形态）', () => {
+    expect(maskDriverIoSecrets('Authorization failed: Bearer abc.def.ghi1234567890', []))
+      .toBe('Authorization failed: Bearer ***')
+  })
+  test('Then Authorization 头掩为 Authorization: ***（直接携带 ≥8 字符 token 形态；两段式 Basic/Bearer 由 Bearer 分支兜住）', () => {
+    expect(maskDriverIoSecrets('Authorization: abcdefgh1234567890xyz', []))
+      .toBe('Authorization: ***')
+    // Authorization: Bearer <token≥8> —— token 部分由 Bearer 分支掩掉
+    expect(maskDriverIoSecrets('Authorization: Bearer abcdefgh1234567890xyz', []))
+      .toBe('Authorization: Bearer ***')
+  })
+  test('Then 词边界防误伤：task-runner-abcdefgh1234 这类内嵌 sk- 的正常标识符不掩', () => {
+    expect(maskDriverIoSecrets('task-runner-abcdefgh12345678 loaded', [])).toBe('task-runner-abcdefgh12345678 loaded')
+  })
+})
+
+describe('Given 正常驱动日志（G3b 实测样本句式），When 脱敏，Then 不受伤', () => {
+  test('Then HTTP 400 / Traceback / 录音诊断样本句式均原样保留', () => {
+    const normal = [
+      'ERROR: HTTP 400 from dashscope: model not found',
+      'Traceback (most recent call last):',
+      '  File "check.py", line 10, in <module>',
+      'recording peak=0.31 duration=4.2s',
+    ].join('\n')
+    expect(maskDriverIoSecrets(normal, [])).toBe(normal)
+  })
+})
+
+describe('Given 掩码后的尾部文本，When 继续走诊断摘要与旁挂 log 管道，Then 仍正常工作', () => {
+  test('Then Traceback 锚点仍命中，摘要与 log 内密钥均为掩码形态', () => {
+    const fakeKey = 'y01-fake-secret-value-1234567890'
+    const stderrTail = maskDriverIoSecrets(
+      `DEBUG env dump: ${fakeKey}\nTraceback (most recent call last):\n  File "check.py", line 3\nValueError: bad request sk-AbcdefgH1234567890`,
+      [fakeKey],
+    )
+    const diag = summarizeDriverIo('', stderrTail)
+    expect(diag).toContain('Traceback (most recent call last):')
+    expect(diag).not.toContain(fakeKey)
+    expect(diag).toContain('sk-***')
+    const logText = buildDriverIoLogFile({ stdoutTail: '', stderrTail }, { testId: 't', generatedAt: 'g' })
+    expect(logText).not.toContain(fakeKey)
+    expect(logText).toContain('sk-***')
   })
 })

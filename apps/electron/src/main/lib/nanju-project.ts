@@ -207,6 +207,14 @@ export interface NanjuProjectInfoFile {
     /** 登记时的累计拒收次数 */
     count: number
   }
+  /**
+   * L2-4（2026-09-18，v0.17.127+ 创建的新项目）：架构凭证门禁存量兼容标记——
+   * createNanjuProject 写 true；router-gate 的「## 证据升级与检索记录」节门禁
+   * 仅对本标记为 true 的项目生效，存量项目（undefined，旧版本创建）豁免。
+   * 存量兼容方案裁决：门禁要确定性，不用「无实证/文证迹象时放行」宽松策略；
+   * 用显式标记而非 createdAt 时间戳比对（版本发布时刻依赖脆弱）。
+   */
+  archEvidenceGate?: boolean
 }
 
 /**
@@ -325,6 +333,8 @@ export function createNanjuProject(input: {
   }
 
   // 创建项目背景信息文件
+  // L2-4（2026-09-18）：archEvidenceGate=true——新项目启用架构凭证门禁
+  //（「## 证据升级与检索记录」节检查；存量项目无该字段豁免，见 nanju-router-gate）
   const projectInfo = {
     projectId: uniqueId,
     name: input.name,
@@ -334,6 +344,7 @@ export function createNanjuProject(input: {
     workspaceSlug: input.workspaceSlug,
     projectDir: `project-${uniqueId}`,
     docDirs,
+    archEvidenceGate: true,
   }
   writeJsonFileAtomic(join(projectDir, '_project-info.json'), projectInfo)
 

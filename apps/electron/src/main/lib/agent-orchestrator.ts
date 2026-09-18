@@ -59,6 +59,17 @@ import { getNanjuRouterPrompt } from './nanju-router-prompt'
 import { checkNanjuRouterGate, verifyPhaseOutput, collectPhaseAdvanceStages } from './nanju-router-gate'
 import { findNanjuProjectBySession } from './nanju-phase-gate'
 import { checkConfirmAdvanceInput, consumePhaseAdvanceMarks } from './nanju-phase-advance-consumer'
+import { shouldTriggerPitReflow } from './nanju-pit-reflow'
+
+/** L2-6（审计 RED-1，2026-09-18）：早退分支的复盘指令段携带器——仅在触发条件满足时
+ * （总轮次≥4：retryCount≥3；blocked 不触发）把 outcome.summaryText（含强制复盘指令段）
+ * 作为尾注拼接，其余轮零变化。 */
+function gwtSummaryTail(outcome: { verdict: string; retryCount: number; summaryText: string }): string {
+  try {
+    return shouldTriggerPitReflow(outcome.verdict, outcome.retryCount, outcome.verdict === 'blocked')
+      ? `\n\n${outcome.summaryText}` : ''
+  } catch { return '' }
+}
 import { NANJU_GUARDS, type NanjuGuardStage } from './nanju-project'
 import type { GwtProgressEvent } from './nanju-gwt-runner'
 import { resolveProjectInstructions } from './project-instruction-resolver'
@@ -973,7 +984,9 @@ export class AgentOrchestrator {
               const { emitRepairTriggered } = require('./nanju-quick-telemetry') as typeof import('./nanju-quick-telemetry')
               emitRepairTriggered(workspaceSlug, projectId, 'environment-notify')
             } catch { /* 埋点失败不影响主流程 */ }
-            this.injectNanjuAssistantMessage(sessionId, decision.message)
+            // L2-6（审计 RED-1）：早退分支补接 summaryText——复盘指令段随 summaryText 携带，
+            // 此前只注入 decision.message 会在 retryCount 长尾轮静默丢弃强制复盘指令。
+            this.injectNanjuAssistantMessage(sessionId, decision.message + gwtSummaryTail(outcome))
             return
           }
           if (decision.action === 'circuit-break') {
@@ -1014,7 +1027,8 @@ export class AgentOrchestrator {
               emitRepairTriggered(workspaceSlug, projectId, 'circuit-break')
             } catch { /* 埋点失败不影响主流程 */ }
             // AC U-1：三选项裁决单出口——熔断文案 + 决策出口各出现一次
-            this.injectNanjuAssistantMessage(sessionId, `${decision.message}\n\n${humanDecisionLine}`)
+            // L2-6（审计 RED-1）：熔断早退分支同拍补接 summaryText（含强制复盘指令段）。
+            this.injectNanjuAssistantMessage(sessionId, `${decision.message}\n\n${humanDecisionLine}` + gwtSummaryTail(outcome))
             return
           }
           if (decision.action === 'repair') {

@@ -4,7 +4,7 @@ import { accessSync, constants, lstatSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { EngineeringExecutionBlocked } from './nanju-engineering-execution'
 import type { EngineeringExecutionInput, EngineeringRegisteredDriver } from './nanju-engineering-execution'
-import { DriverIoTailBuffer, type EngineeringDriverIo } from './nanju-engineering-driver-io'
+import { DriverIoTailBuffer, maskDriverIoSecrets, type EngineeringDriverIo } from './nanju-engineering-driver-io'
 
 /** P0-2：错误携带驱动 IO 尾部（process-driver reject → execution catch → suite/tests →
  * gwt 报告；内存透传，不落盘）。 */
@@ -47,6 +47,23 @@ function buildDriverEnv(declared?: readonly string[]): NodeJS.ProcessEnv {
   return env
 }
 
+/**
+ * Y-01（L2 批，2026-09-18）：收集 buildDriverEnv 实际注入的敏感值集合——
+ * DASHSCOPE 兼底 ∪ 契约 declared 中在宿主进程环境真实存在者的「值」（仅内存传递，
+ * 不落盘不打日志；固定白名单 PATH/HOME 等非敏感不在集合内）。
+ * 与 buildDriverEnv 同源维护：两处变量名清单必须同步增减。
+ */
+function collectInjectedDriverSecretValues(declared?: readonly string[]): string[] {
+  const values: string[] = []
+  const pushIfPresent = (name: string): void => {
+    const value = process.env[name]
+    if (typeof value === 'string' && value.length > 0) values.push(value)
+  }
+  pushIfPresent('DASHSCOPE_API_KEY') // 过渡期兼底（P0-1 落地顺序②），与 buildDriverEnv 内注释同步
+  for (const name of declared ?? []) pushIfPresent(name)
+  return values
+}
+
 /** 固定argv、项目cwd、有限输出与执行时间；不是OS沙箱，项目脚本副作用须由单次批准承担。 */
 async function executeProcess(input: EngineeringExecutionInput, runtimes: EngineeringProcessRuntime): Promise<unknown> {
   const executable = resolveExecutable(input, runtimes)
@@ -76,7 +93,14 @@ async function executeProcess(input: EngineeringExecutionInput, runtimes: Engine
     // P0-2：驱动 stdout/stderr 尾部捕获（stderr 此前只计数不保存——G3b 5 轮盲修根因）
     const stdoutTailBuf = new DriverIoTailBuffer()
     const stderrTailBuf = new DriverIoTailBuffer()
-    const driverIo = (): EngineeringDriverIo => ({ stdoutTail: stdoutTailBuf.tail(), stderrTail: stderrTailBuf.tail() })
+    // Y-01：尾部进入透传链（error 摘要/旁挂 log/report/summary/telemetry）前统一脱敏——
+    // 掩码值集合=(a) 本进程注入值（buildDriverEnv declared ∪ DASHSCOPE 兼底的实际值）
+    // ∪ (b) 通用密钥模式（sk-/Bearer/Authorization），见 nanju-engineering-driver-io。
+    const injectedSecretValues = collectInjectedDriverSecretValues(plan.env)
+    const driverIo = (): EngineeringDriverIo => ({
+      stdoutTail: maskDriverIoSecrets(stdoutTailBuf.tail(), injectedSecretValues),
+      stderrTail: maskDriverIoSecrets(stderrTailBuf.tail(), injectedSecretValues),
+    })
     const rejectWithIo = (error: Error): void => {
       (error as DriverIoError).driverIo = driverIo()
       reject(error)

@@ -143,6 +143,41 @@ process.stdout.write('not-json'); process.exit(1);`
   })
 })
 
+// ===== Y-01（L2 批，2026-09-18）：驱动尾部密钥脱敏（行为法：子进程真实回显 env，假值不入断言外任何地方） =====
+describe('Given 契约声明 env 且驱动调试残留回显环境变量，When 驱动执行，Then 尾部透传前已脱敏', () => {
+  test('Then 已知注入值在 stderr 尾部被掩为 ***，正常诊断行不受伤', async () => {
+    const fakeKey = 'y01-fake-secret-value-1234567890' // 构造假值，非真实密钥
+    const saved = process.env['NANJU_Y01_FAKE_KEY']
+    process.env['NANJU_Y01_FAKE_KEY'] = fakeKey
+    try {
+      const echoScript = `const fs=require('node:fs'); const request=JSON.parse(fs.readFileSync(0,'utf8'));
+console.error('DEBUG env dump: ' + (process.env.NANJU_Y01_FAKE_KEY ?? 'MISSING'));
+console.error('ERROR: HTTP 400 from dashscope: model not found');
+console.error('token sk-AbcdefgH1234567890 rejected');
+console.log(JSON.stringify({testId:request.testId,target:request.target,checks:[{storyId:'US-01',label:'脱敏',expected:'x',actual:'x',evidence:['y01']}]}));`
+      fixture(echoScript)
+      const raw = JSON.parse(readFileSync(join(root, '03_ARCHITECTURE/engineering.json'), 'utf-8'))
+      raw.schemaVersion = 2
+      raw.tests[0].driver.env = ['NANJU_Y01_FAKE_KEY']
+      writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify(raw))
+      const input2: EngineeringExecutionInput = { projectDir: root, test: parseEngineeringContract(JSON.stringify(raw)).contract!.tests[0]!, evidence: captureEngineeringEvidence(root).evidence!, signal: new AbortController().signal }
+      const result = await runRegisteredEngineeringTest(input2, { drivers: drivers(), approve: async () => true })
+      const stderrTail = result.driverIo?.stderrTail ?? ''
+      // 已知注入值（a 路）：整串掩码，原始值不进尾部透传链
+      expect(stderrTail).toContain('DEBUG env dump: ***')
+      expect(stderrTail).not.toContain(fakeKey)
+      // 通用密钥模式（b 路）：驱动回显的未知 sk- 密钥保留前缀掩码
+      expect(stderrTail).toContain('sk-***')
+      expect(stderrTail).not.toContain('sk-AbcdefgH1234567890')
+      // 正常诊断行零误伤：G3b 样本句式原样在场
+      expect(stderrTail).toContain('ERROR: HTTP 400 from dashscope: model not found')
+    } finally {
+      if (saved === undefined) delete process.env['NANJU_Y01_FAKE_KEY']
+      else process.env['NANJU_Y01_FAKE_KEY'] = saved
+    }
+  })
+})
+
 test('Given 已启动的测试子进程 When 用户取消 Then 进程结束且结果为blocked', async () => {
   const input = fixture('setInterval(()=>{},1000)', 5000)
   const abort = new AbortController()

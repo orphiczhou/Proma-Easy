@@ -48,6 +48,9 @@ import { captureEngineeringEvidence, ENGINEERING_CONTRACT_PATH, requiresEngineer
 import { summarizeDriverIo, buildDriverIoLogFile } from './nanju-engineering-driver-io'
 import type { EngineeringEvidence } from './nanju-engineering-contract'
 import { recordTelemetry } from './nanju-telemetry'
+// L2-6（L2 批，2026-09-18）：坑库回填——强制复盘指令段（纯文本，无会话创建）
+import { buildPitReflowDirective, shouldTriggerPitReflow } from './nanju-pit-reflow'
+import { resolveProjectCategoryForCoding } from './nanju-engineering-template'
 
 // ===== steps.json schema =====
 
@@ -1694,6 +1697,18 @@ export async function runGwtSuite(options: GwtSuiteOptions): Promise<GwtScenario
   }
 }
 
+/**
+ * L2-6：品类解析（architecture.md > prd.md 优先序，同 coding 推进口径）。
+ * 读取失败或无标记返回 null——指令段内按 web-fullstack 兜底并提示补标，不阻断测试主流程。
+ */
+function resolveGwtProjectCategory(workspaceSlug: string, projectId: string): string | null {
+  try {
+    return resolveProjectCategoryForCoding(workspaceSlug, projectId)?.category ?? null
+  } catch {
+    return null
+  }
+}
+
 // ===== 编排入口（orchestrator 调用；读文件→执行→判定→报告→埋点） =====
 
 /** GWT 测试重试上限（PRD §9.3：快消型退回上限 2 次；与 PhaseNode.retryLimit 一致） */
@@ -2255,13 +2270,26 @@ async function runNanjuGwtAcceptanceInner(input: {
   }
 
   // 摘要口径（AC U-001/F-002）：PRD 缺 US 清单与执行异常用专用句式，不用普通 fail 文案
-  const summaryText = blockedReason
+  // L2-6（2026-09-18）坑库回填触发：验收收敛 >3 轮（retryCount>3，对照 G3b 基线 8 轮）
+  // 且本轮非 pass → 「强制复盘」指令段注入 summaryText 尾部。
+  // 注入位置选 summaryText（而非 failListText）的理由：summaryText 是 outcome 中被
+  // orchestrator 非 pass 分支（error 熔断 / retryLimit 转人工 / coverage / mapping /
+  // behavior 回炉续接）与 pass 分支（交付验收消息）共同携带的字段——G3b 的 5 轮盲修
+  // 正是 error 轮（只走 summaryText 分支）；审计 RED-1 后触发口径=总轮次≥4（retryCount≥3
+  // 含 pass 轮，随交付验收消息注入）且 notify-environment/circuit-break 两早退分支已由
+  // orchestrator 补接 summaryText。blocked 轮不触发：blocked 摘要显式声明「本轮不计入
+  // 修复次数」，注入强制复盘段与该声明自相矛盾（shouldTriggerPitReflow 内排除）。
+  const pitReflowText = shouldTriggerPitReflow(verdict, retryCount, Boolean(blockedReason))
+    ? buildPitReflowDirective(resolveGwtProjectCategory(input.workspaceSlug, input.projectId), { retryCount, errorCount })
+    : null
+  const summaryText = (blockedReason
     ? `⏸ 验收测试已阻塞：${blockedReason} 本轮结果不用于交付，也不计入代码缺陷修复次数。测试报告：${reportMdPath}`
     : errorReason
     ? `⚠️ 验收测试执行异常：${errorReason}。请检查 08_APP/index.html 与 06_TESTS/ 产物完整性后重跑。测试报告：${reportMdPath}`
     : prdUserStoriesMissing
       ? `❌ PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定（验收硬约束要求每条用户故事有可执行场景）。请补充 PRD 用户故事清单后重跑。测试报告：${reportMdPath}`
-      : buildSummaryText(judgement, reportMdPath) + (engineeringSuite ? '\n证据边界：' + engineeringSuite.coverageUnverified.join('；') : '')
+      : buildSummaryText(judgement, reportMdPath) + (engineeringSuite ? '\n证据边界：' + engineeringSuite.coverageUnverified.join('；') : ''))
+    + (pitReflowText ? '\n\n' + pitReflowText : '')
 
   if (engineeringSuite) {
     try {

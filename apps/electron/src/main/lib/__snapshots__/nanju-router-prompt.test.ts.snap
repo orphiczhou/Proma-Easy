@@ -273,6 +273,7 @@ adapter是所需能力声明，不是系统已具备的承诺；能力/环境不
 非浏览器测试可声明driver={runtime:"node"|"python3"|"native",path,args,timeoutMs,env}；path相对于08_APP且必须列入artifacts，args为字符串数组，timeoutMs为100至600000毫秒。env（可选，v2新增）为驱动所需环境变量名清单（如["DASHSCOPE_API_KEY"]，仅变量名不含值；值由宿主从自身环境注入，不得把密钥值写进契约或产物；须真实需要才声明）。当前宿主接入Node及原生进程；Python与Windows驱动缺运行支持时会明确阻塞，不自动安装。command仍只作说明。
 browser-url测试声明service={runtime,path,args,env,port,readyPath,readyTimeoutMs}：path相对于08_APP且必须列入artifacts，port为1024至65535的loopback固定端口，readyPath以/开头，env语义同driver（服务进程所需环境变量名清单，v2新增）。宿主在单次批准后启动该loopback服务并持有句柄，端口被占用即拒绝；服务须读取环境变量PROMA_ENGINEERING_READY_NONCE并在就绪响应header(x-proma-ready-nonce)或body回传该nonce，否则不会判定就绪；Windows平台尚未实现服务进程树回收，明确阻塞且不启动。
 驱动由coding实现于08_APP；stdin接收JSON {schemaVersion,testId,target,covers,evidenceDigest}，工作目录为08_APP。stdout只能输出单个JSON {testId,target,checks:[{storyId,label,expected,actual,evidence}]}；日志写stderr。expected/actual为字符串，evidence为非空字符串数组；辅助测试storyId=null。退出码由宿主实测，不能用驱动自报覆盖。
+涉及云端服务/外部 API 的项目：在契约 driver.env / service.env 声明所需环境变量名（如 ["DASHSCOPE_API_KEY"]）——值由宿主从自身环境注入子进程，不得写入契约或产物；何时声明/字段写法见上行 driver 与 service 字段说明。
 每次驱动执行均需真人单次批准。真实系统行为不能由项目驱动自报证明，requiresReal项目在独立验收证据接入前保留blocked，不得为了通过改成false。
 示例（需按实际PRD改写，不可直接把示例当项目决策）：
 \`\`\`json
@@ -302,7 +303,7 @@ browser-url测试声明service={runtime,path,args,env,port,readyPath,readyTimeou
     }
   ]
 }
-\`\`\`；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进；工程模版必读（J1）：Read 00_ENGINEERING_TEMPLATE/template.md 后再选型，重点 §2 组件环境清单（组件/探测/安装/已知坑；§2.3 探测脚本可照抄）与 §7 坑库（按 [实证]/[推断] 证据等级引用，[推断] 条目不得当作已验证结论写入架构）。；Spike 派发权（J3）：架构师有权对本机可验证的技术不确定点派子会话做架构探索实验（Spike），同一阶段可并行多个；单 Spike 时间盒快消型≤30 分钟、返工≤1 轮，部分结论也必须落盘（标 PARTIAL）。；Spike 触发判据（J4，T1-T3 同时满足必须派发，不得凭记忆拍板）：T1 知识缺口——决策点不在模版 §2/§7/§8 覆盖范围或仅 [推断] 级；T2 决策影响——影响架构选型、组件选型或验收方案（非实现细节）；T3 可时间盒——时间盒内能设计出可判定实验。；Spike 产物落位（J5）：一律写入工程目录 00_SPIKES/spike-<NNN>-<slug>/（README 报告/NOTES 试错轨迹/env-manifest/setup.sh/probe 脚本/evidence/ 六件套），索引写 00_SPIKES/INDEX.md；该目录已注册为合法产物目录。实验资料与环境留给后续开发与测试阶段消费。；知识边界硬性条文：模版与坑库无 [实证] 知识支撑的关键决策（新端点/新模型/新平台能力），必须主动网络搜索求证，不得仅凭训练记忆断言；架构文档凡依据网络检索的结论须附来源引用（URL+检索日期），已检索无结论的标注「已检索无结论（关键词+日期）」。
+\`\`\`；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进；工程模版必读（J1）：Read 00_ENGINEERING_TEMPLATE/template.md 后再选型，重点 §2 组件环境清单（组件/探测/安装/已知坑；§2.3 探测脚本可照抄）与 §7 坑库（按 [实证]/[推断] 证据等级引用，[推断] 条目不得当作已验证结论写入架构）。；Spike 派发权（J3）：架构师有权对本机可验证的技术不确定点派子会话做架构探索实验（Spike），同一阶段可并行多个；单 Spike 时间盒快消型≤30 分钟、返工≤1 轮，部分结论也必须落盘（标 PARTIAL）。；Spike 触发判据（J4，T1-T3 同时满足必须派发，不得凭记忆拍板）：T1 知识缺口——决策点不在模版 §2/§7/§8 覆盖范围或仅 [推断] 级；T2 决策影响——影响架构选型、组件选型或验收方案（非实现细节）；T3 可时间盒——时间盒内能设计出可判定实验。；Spike 产物落位（J5）：一律写入工程目录 00_SPIKES/spike-<NNN>-<slug>/（README 报告/NOTES 试错轨迹/env-manifest/setup.sh/probe 脚本/evidence/ 六件套），索引写 00_SPIKES/INDEX.md；该目录已注册为合法产物目录。实验资料与环境留给后续开发与测试阶段消费。；知识边界硬性条文（三形态凭证规则，L2-4 补完整）：模版与坑库无 [实证] 知识支撑的关键决策（新端点/新模型/新平台能力），必须主动网络搜索求证，不得仅凭训练记忆断言。凡依据网络检索的结论须附来源引用（URL+检索日期），覆盖三形态：①[推断]→[实证]/[文证] 升级、②直接新增 [实证]/[文证] 条目——两形态每条须附「URL+检索日期」，无凭证视为未执行（推进门禁拦截）；③保持 [推断] 者须注明「已检索无结论（关键词+日期）」或「未触发检索条件」——检索行为在推理内部不可观测，此形态为自我申报+事后抽检追责，不得伪造。凭证记录统一写入架构文档「## 证据升级与检索记录」节。
 
 ## 产出文件
 请将产出写入：/tmp/project/03_ARCHITECTURE/architecture.md
@@ -321,6 +322,11 @@ browser-url测试声明service={runtime,path,args,env,port,readyPath,readyTimeou
 
 【快消型定位提醒】架构文档保持精简：品类终判 + 技术选型 + 组件清单 + 环境结论 + 交付与运行 + 测试架构，
 不展开目录树逐文件说明与接口定义（长期演进细节由工程模板承载）。
+## 证据升级与检索记录（架构文档必须含此节）
+架构文档必须含「## 证据升级与检索记录」小节（表格或列表，逐条：结论点 | 证据等级变化或新增 | 来源 URL | 检索日期）：
+- 网络检索使结论从 [推断] 升级为 [实证]/[文证]，或直接新增 [实证]/[文证] 条目 → 每条必须附来源引用（URL+检索日期）；缺 URL 的 [实证]/[文证] 条目会被推进门禁拦截；
+- 保持 [推断] 的结论点 → 注明「已检索无结论（关键词+日期）」或「未触发检索条件」——检索行为发生在你的推理内部、事前不可观测，此形态为自我申报（平台事后抽检追责，不得伪造申报）；
+- 本轮无任何升级/新增 → 节内显式声明「本轮无证据升级；未触发检索条件」（或列出已检索无结论项）。
 
 ## 产出自查（代替 AC 攻防——快消型轻量兑底）
 写完架构文档后逐项自查（不委派攻击者/防御者）：

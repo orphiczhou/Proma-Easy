@@ -200,7 +200,7 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
 
   test('coding 包含架构驱动交付、目录边界与旧静态入口兼容', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('按engineering.json的artifacts清单')
     expect(task).toContain('不得触碰其他项目')
@@ -211,7 +211,7 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
 
   test('coding 强调 PRD 用户故事清单必读（自测对照基准）+ 原型大文件取舍提示', () => {
     const phase = getPhaseNode('iterative', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('前序必读：PRD 用户故事清单')
     expect(task).toContain('代码生成、运行自测、AC 审计')
@@ -220,7 +220,7 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
 
   test('coding 自测依据真实架构与受管工具，缺能力不宣称实测', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('使用受管浏览器预览工具')
     expect(task).toContain('真实用户故事验证依照架构执行')
@@ -229,7 +229,7 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
 
   test('coding 不含 prototype 专属视觉闭环（截图自检/视觉裁决/视觉维度），沿用默认五维审计', () => {
     const phase = getPhaseNode('iterative', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('完整性、正确性、一致性、可执行性、安全性。')
     expect(task).not.toContain('截图渲染自检循环')
@@ -243,7 +243,7 @@ describe('coding 工程品类注入（W3，v0.17.66）', () => {
 
   test('未传品类时降级 web-fullstack 并注入品类自检（旧签名兼容 + 第二道防线）', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('工程品类判定：web-fullstack（Web 全栈应用）')
     expect(task).toContain('降级默认值')
@@ -360,7 +360,7 @@ describe('AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①�
   test('AC 审计状态机注入轮次预算：攻防修复 ≤2 轮 + 未清零收敛为已知问题清单（所有阶段）', () => {
     for (const stage of ['prototype', 'coding', 'testing'] as const) {
       const phase = getPhaseNode('quick', stage)!
-      const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+      const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
       expect(task).toContain('轮次预算（硬性，v0.17.64）：攻防修复循环 ≤2 轮')
       expect(task).toContain('第 2 轮防御确认后无论 red 是否清零都必须收敛')
       expect(task).toContain('已知问题清单')
@@ -381,7 +381,7 @@ describe('AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①�
 
   test('非 prototype 阶段不含 prototype 专属时长预算（内环预算仍注入）', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
     expect(task).not.toContain('预算 ≤30 分钟')
     expect(task).not.toContain('视觉裁决 red 回炉')
   })
@@ -895,7 +895,7 @@ describe('架构师阶段：quick 变体同样必读工程模板（与 iterative
 
   test('quick architecture L2 任务含「品类终判前 Read 00_ENGINEERING_TEMPLATE/template.md」指令', () => {
     const phase = getPhaseNode('quick', 'architecture')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
     expect(task).toContain('00_ENGINEERING_TEMPLATE/template.md')
     expect(task).toContain('初判')
     // 模板缺失的降级容忍（与 iterative 同语义：无文件时按品类自行降级判定）
@@ -904,7 +904,7 @@ describe('架构师阶段：quick 变体同样必读工程模板（与 iterative
 
   test('iterative architecture L2 任务仍含既有模板前移契约（回归锁定）', () => {
     const phase = getPhaseNode('iterative', 'architecture')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
     expect(task).toContain('品类终判前必读工程模板')
     expect(task).toContain('00_ENGINEERING_TEMPLATE/template.md')
   })
@@ -1813,5 +1813,148 @@ describe('W-B B1-1（R6）：显式配置的 prototype 作者端点失效 → �
     expect(prompt).toContain('modelId: deepseek-v4-flash')
     const { readTelemetry } = await import('./nanju-telemetry')
     expect(readTelemetry(fixtureRoot, 'model.config-autofix')).toHaveLength(0)
+  })
+})
+
+// ===== L2-4（2026-09-18）：架构师任务书注入·余三件（已知环境事实段 + 凭证三形态 + env 提示） =====
+
+describe('L2-4 J2：architecture 任务书「已知环境事实」段注入（ATK-F-005：环境事实先于架构师首次决策）', () => {
+  const authorUuid = 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd'
+  const glmAuthor = { channel: 'glm-zhipu', model: 'GLM-5.3' }
+
+  test('Given architecture + 探测摘要行 When 构建任务 Then 注入「已知环境事实」段（摘要+通用集说明+品类补测提示+CP-A）', () => {
+    const phase = getPhaseNode('iterative', 'architecture')!
+    const task = buildL2TaskWithAC(
+      phase, glmAuthor, 'PRD 摘要', [], '/tmp/project',
+      null, null, false, null, null,
+      ['探测时间：2026-09-18T10:00:00.000Z', '- node：可用（v22.0.0）', '- rustc：缺失/不可用（command not found）'],
+    )
+    expect(task).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(task).toContain('- node：可用（v22.0.0）')
+    expect(task).toContain('- rustc：缺失/不可用（command not found）')
+    expect(task).toContain('03_ARCHITECTURE/env_probe.json')
+    expect(task).toContain('品类专用探测项按品类模版 §2.3 自行补测')
+    expect(task).toContain('CP-A 环境普查对照')
+    expect(task).toContain('缺失的必须级组件须决定安装或降级替代')
+  })
+
+  test('Given 探测失败说明行 When 构建任务 Then 失败说明注入（不阻断任务书生成的诚实退化）', () => {
+    const phase = getPhaseNode('quick', 'architecture')!
+    const task = buildL2TaskWithAC(
+      phase, glmAuthor, 'PRD 摘要', [], '/tmp/project',
+      null, null, false, null, null,
+      ['探测失败（执行超时）：无平台侧环境事实可注入。', '请架构师在「## 环境配置」环节自行逐组件探测，不得因本段缺失跳过探测。'],
+    )
+    expect(task).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(task).toContain('探测失败（执行超时）')
+    expect(task).toContain('不得因本段缺失跳过探测')
+  })
+
+  test('Given envProbeLines 未传（null/undefined）When 构建任务 Then 无「已知环境事实」段（向后兼容旧调用）', () => {
+    const phase = getPhaseNode('iterative', 'architecture')!
+    const taskNull = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    const taskUndefined = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project', null, null, false, null, null, null)
+    expect(taskNull).not.toContain('已知环境事实')
+    expect(taskUndefined).not.toContain('已知环境事实')
+  })
+
+  test('Given 非 architecture 阶段 + 探测行 When 构建任务 Then 不注入（段仅 architecture 消费）', () => {
+    const phase = getPhaseNode('iterative', 'planning')!
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project', null, null, false, null, null, ['- node：可用'])
+    expect(task).not.toContain('已知环境事实')
+  })
+})
+
+describe('L2-4②：网络检索凭证三形态条文 + 证据记录节载体指令（ATK-G-002/G-007/U-006）', () => {
+  const glmAuthor = { channel: 'glm-zhipu', model: 'GLM-5.3' }
+
+  test('Given architecture 任务书 When 构建 Then 三形态条文完整（①②URL 凭证 + ③自我申报+事后抽检追责）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const phase = getPhaseNode(mode, 'architecture')!
+      const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+      // 三形态完整条文（约束节，nanju-router ARCHITECT_SPIKE_CONSTRAINTS）
+      expect(task).toContain('①[推断]→[实证]/[文证] 升级、②直接新增 [实证]/[文证] 条目')
+      expect(task).toContain('「已检索无结论（关键词+日期）」或「未触发检索条件」')
+      expect(task).toContain('自我申报+事后抽检追责，不得伪造')
+      expect(task).toContain('无凭证视为未执行')
+      // 架构文档载体指令（architecture 块）
+      expect(task).toContain('## 证据升级与检索记录（架构文档必须含此节）')
+      expect(task).toContain('结论点 | 证据等级变化或新增 | 来源 URL | 检索日期')
+      expect(task).toContain('缺 URL 的 [实证]/[文证] 条目会被推进门禁拦截')
+      expect(task).toContain('本轮无证据升级；未触发检索条件')
+    }
+  })
+
+  test('Given 非 architecture 阶段 When 构建 Then 不含证据记录节指令（阶段专属）', () => {
+    const phase = getPhaseNode('iterative', 'prototype')!
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
+    expect(task).not.toContain('证据升级与检索记录')
+  })
+})
+
+describe('L2-4③：契约 env 声明字段提示（P0-1 schema v2 字段的提示词增补）', () => {
+  test('Given architecture 任务书 When 构建 Then 含云端服务 env 声明提示行（变量名清单，不落密钥）', () => {
+    const phase = getPhaseNode('iterative', 'architecture')!
+    const task = buildL2TaskWithAC(phase, { channel: 'glm-zhipu', model: 'GLM-5.3' }, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('涉及云端服务/外部 API 的项目：在契约 driver.env / service.env 声明所需环境变量名')
+    expect(task).toContain('DASHSCOPE_API_KEY')
+    expect(task).toContain('值由宿主从自身环境注入子进程，不得写入契约或产物')
+  })
+})
+
+describe('L2-4 J2 集成：getNanjuRouterPrompt 在 architecture 阶段执行探测并注入', () => {
+  /** 构造项目 fixture 并返回 prompt（同文件既有 buildPromptFor 模式，项目 id 独立） */
+  function buildArchPrompt(projectId: string, sessionId: string, checkEnvScript?: string): string | undefined {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-l24-'))
+    fixtureRoot = root
+    const projectDir = join(root, `project-${projectId}`)
+    mkdirSync(projectDir, { recursive: true })
+    if (checkEnvScript !== undefined) {
+      mkdirSync(join(projectDir, '00_ENGINEERING_TEMPLATE'), { recursive: true })
+      writeFileSync(join(projectDir, '00_ENGINEERING_TEMPLATE', 'check_env.sh'), checkEnvScript)
+    }
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId, name: 'L2-4 集成项目', mode: 'iterative', status: 'active',
+      currentStage: 'architecture', createdAt: '', updatedAt: '', sessionId,
+    }]))
+    return getNanjuRouterPrompt('test-ws', sessionId)
+  }
+
+  test('Given 项目内 check_env.sh 在场 When 生成 architecture prompt Then 执行探测：env_probe.json 落盘 + 已知环境事实段注入', () => {
+    const { existsSync, readFileSync } = require('node:fs') as typeof import('node:fs')
+    const prompt = buildArchPrompt(
+      'l24a', 's-l24a',
+      '#!/usr/bin/env bash\necho \'{"component":"node","status":"ok","version":"v22.0.0","detail":"v22"}\'\n',
+    )
+    expect(prompt).toBeTruthy()
+    expect(prompt).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(prompt).toContain('- node：可用（v22.0.0）')
+    const probePath = join(fixtureRoot, 'project-l24a', '03_ARCHITECTURE', 'env_probe.json')
+    expect(existsSync(probePath)).toBe(true)
+    expect((JSON.parse(readFileSync(probePath, 'utf-8')) as { components: unknown[] }).components).toHaveLength(1)
+  })
+
+  test('Given 项目内 check_env.sh 缺失（旧项目/前移钩子失败）When 生成 prompt Then 诚实退化注入失败说明，不阻断生成', () => {
+    const prompt = buildArchPrompt('l24b', 's-l24b', undefined)
+    expect(prompt).toBeTruthy()
+    expect(prompt).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(prompt).toContain('探测失败')
+    expect(prompt).toContain('自行逐组件探测')
+    expect(prompt).not.toContain('- node：') // 无探测事实混入
+  })
+
+  test('Given 非 architecture 阶段 When 生成 prompt Then 无已知环境事实段（探测仅 architecture 触发）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-l24-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-l24c')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'l24c', name: 'L2-4 非架构项目', mode: 'quick', status: 'active',
+      currentStage: 'requirements', createdAt: '', updatedAt: '', sessionId: 's-l24c',
+    }]))
+    const prompt = getNanjuRouterPrompt('test-ws', 's-l24c')
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('已知环境事实')
   })
 })

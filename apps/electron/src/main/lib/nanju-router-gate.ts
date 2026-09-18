@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
-import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, type NanjuProject, type ProjectStage } from './nanju-project'
+import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, readProjectInfo, type NanjuProject, type ProjectStage } from './nanju-project'
 import { getPhaseNode, getNextPhase, type PhaseId, type PhaseNode, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
 import {
@@ -1112,6 +1112,65 @@ function resolvePrototypeVisualSlot(project: NanjuProject):
   }
 }
 
+/** 证据记录节标题匹配（容忍 #~### 级别与后缀括号注释——同库内环境节头惯例） */
+const EVIDENCE_RECORD_SECTION_RE = /^#{1,3}[ \t]*证据升级与检索记录/m
+
+/** 节内 [实证]/[文证] 条目标记（升级/新增形态①②的产物特征） */
+const EVIDENCE_BADGE_RE = /\[(实证|文证)\]/
+
+/** 宽松 URL 形态判存（http(s)://，ATK-G-007 规格——不验可达性只验凭证在场） */
+const URL_LOOSE_RE = /https?:\/\//
+
+/**
+ * L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档产物检查（纯函数）。
+ *
+ * 三形态判定（推进门禁据产物检查，无凭证视为未执行）：
+ * - 缺「## 证据升级与检索记录」节 → 拦（新项目已注入任务书要求，缺节即未执行）；
+ * - 节内含 [实证]/[文证] 升级/新增条目（形态①②）而条目行无 URL（http(s):// 宽松形态）
+ *   → 拦并指明条目（本节语义 = 记录本轮证据变化，凡在此节出现的实证/文证标记
+ *   均视为本轮升级/新增条目）；
+ * - 纯声明行（「本轮无证据升级；未触发检索条件」/「已检索无结论」）不含实证/文证
+ *   标记 → 放行（形态③为自我申报，不做事前拦截——事后抽检追责，不在此门）。
+ *
+ * 存量兼容：本函数只对 _project-info.json 带 archEvidenceGate=true（v0.17.127+ 创建）
+ * 的项目生效（调用方判定）；旧项目豁免。
+ */
+export function validateEvidenceRecordSection(content: string): string | null {
+  const headerMatch = content.match(EVIDENCE_RECORD_SECTION_RE)
+  if (!headerMatch || headerMatch.index === undefined) {
+    return '架构文档缺少「## 证据升级与检索记录」节：凡依据网络检索的结论须逐条附来源引用（URL+检索日期）；'
+      + '保持 [推断] 的结论点须注明「已检索无结论（关键词+日期）」或「未触发检索条件」；'
+      + '本轮无升级时也须显式声明「本轮无证据升级；未触发检索条件」。请补齐该节后重新推进。'
+  }
+  // 节体 = 节头行到下一节头（同库内 parseEnvChecklistFromDoc 截取惯例）
+  const after = content.slice(headerMatch.index)
+  const bodyStart = after.indexOf('\n') + 1
+  const nextSection = after.slice(bodyStart).search(/^#{1,3}\s/m)
+  const section = nextSection === -1 ? after : after.slice(0, bodyStart + nextSection)
+
+  const missing: string[] = []
+  const lines = section.split('\n')
+  // Y-2（审计，2026-09-18）：多行条目容忍——徽记行无 URL 时向下看最多 2 行（URL 另起一
+  // 行/表格条目跨行的常见写法），仍无 URL 才拦；防「徽记行与 URL 行分行」整批误拦。
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (!EVIDENCE_BADGE_RE.test(line)) continue
+    if (URL_LOOSE_RE.test(line)) continue
+    const nextLine = lines[i + 1] ?? ''
+    const nextNextLine = lines[i + 2] ?? ''
+    if (URL_LOOSE_RE.test(nextLine) || URL_LOOSE_RE.test(nextNextLine)) continue
+    // 条目标识：表格行取首列，列表/普通行取行首截断（拦截消息指明条目用）
+    const trimmed = line.trim().replace(/^\|\s*/, '')
+    const label = (trimmed.split('|')[0] ?? '').trim() || trimmed.slice(0, 40)
+    if (label) missing.push(label)
+  }
+  if (missing.length > 0) {
+    return '证据记录凭证缺失：以下 [实证]/[文证] 条目未附来源 URL（须「URL+检索日期」，http(s):// 形态）：'
+      + `${missing.join('；')}。请补来源引用或降级为 [推断] 并按形态③申报（已检索无结论/未触发检索条件）。`
+  }
+  return null
+}
+
 /**
  * 验证阶段产出文件（修正 F6 + Y5）。
  * Harness 代码在 PHASE_COMPLETE 检测后调用。
@@ -1266,6 +1325,16 @@ export function verifyPhaseOutput(
     const testArchitecture = validateTestArchitecture(content)
     if (!testArchitecture.ok) {
       return '架构交付与测试设计不完整，请补全后再确认：' + testArchitecture.problems.join('；')
+    }
+    // L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档须含
+    // 「## 证据升级与检索记录」节，且节内 [实证]/[文证] 升级/新增条目附 URL；
+    // 纯声明（未触发/已检索无结论）放行（形态③自我申报，事后抽检不在此门）。
+    // 存量兼容：仅 _project-info.json 带 archEvidenceGate=true（v0.17.127+ 创建）的
+    // 项目生效，旧项目豁免（标记由 createNanjuProject 写入；非时间戳比对——版本
+    // 发布时刻依赖脆弱，显式标记确定性）。
+    if (readProjectInfo(workspaceSlug, projectId)?.archEvidenceGate === true) {
+      const evidenceError = validateEvidenceRecordSection(content)
+      if (evidenceError) return evidenceError
     }
   }
 

@@ -274,32 +274,19 @@ PY
 
 判读规则 [实证]：`verdict == "captured"` 才算链路通；`silent` 时检查 pactl 模块与默认 sink。
 
-### 5.3 驱动断言规范（三条硬规则，全部源于昨晚教训 [实证]）
+### 5.3 驱动断言规范（三条硬规则，全部源于昨晚教训 [实证]；三条均由驱动骨架的运行时自检机制承载）
 
-1. **expected/actual 严格同串**：断言目标字符串必须逐字节一致，禁止意译比对（例：期望"语音输入已开启"就不能拿"语音输入打开"当通过）。驱动脚本里 expected 作为常量写在文件头，actual 来自真实探测。
-2. **结果可见性：证据必须落盘**：驱动结果写 `evidence/*.json`（含 ts、expected、actual、verdict），**不得**只 print 到 stdout、不得只依赖通知气泡或进程存活来"证明成功"。
-3. **被测进程崩溃隔离**：被测 engine 崩溃时，驱动脚本必须仍能产出证据（捕获退出码、tail 日志文件、`subprocess` + `timeout` 包裹），verdict 记 `engine_crashed` 而非静默无输出。**昨晚"engine 崩溃驱动结果不可见"即违反本条 [实证]**。
+1. **expected/actual 严格同串**：断言目标字符串必须逐字节一致，禁止意译比对（例：期望"语音输入已开启"就不能拿"语音输入打开"当通过）。驱动脚本里 expected 作为常量写在文件头，actual 来自真实探测。——由骨架自检② 同源生成承载：`make_check`/`makeCheck` 的 actual 参数传 probe 函数、`assert_same_source`/`assertSameSource` 断言 actual 只能由探测产生。
+2. **结果可见性：证据必须落盘**：驱动结果写 `evidence/*.json`（含 ts、expected、actual、verdict），**不得**只 print 到 stdout、不得只依赖通知气泡或进程存活来"证明成功"。——由骨架自检③ 输出 schema 校验承载：evidence 必须是非空字符串数组、stdout 只输出单个宿主协议 JSON；落盘文件仍按本条规则写 `evidence/`。
+3. **被测进程崩溃隔离**：被测 engine 崩溃时，驱动脚本必须仍能产出证据（捕获退出码、tail 日志文件、`subprocess` + `timeout` 包裹），verdict 记 `engine_crashed` 而非静默无输出。**昨晚"engine 崩溃驱动结果不可见"即违反本条 [实证]**。——由骨架自检④ 顶层异常包裹承载：崩溃也产出结构化 error JSON（含 type、exit code、traceback 摘要）并以非零码退出，不再静默。
 
-驱动脚本骨架（照抄即用）：
+完整自检骨架随模版分发：**`driver-skeleton.py` / `driver-skeleton.cjs`**（与本文件同目录）——照抄到 `08_APP/drivers/` 后填充 `run_probes` / `runProbes` 中的探测逻辑即可使用。骨架内置五项运行时自检（非静态文本检查，运行时真实拦截）：
 
-```python
-#!/usr/bin/env python3
-# drivers/drv_inject_text.py —— 注入驱动：目标窗口注入 CJK 字符串并验证
-import json, subprocess, time
-EXPECTED = "你好世界"          # 规则1：严格同串
-actual, verdict = "", "unknown"
-try:
-    # ...置焦目标窗口（xdotool search/windowactivate）...
-    # ...执行注入（策略可换：core/xkb/atspi/clipboard，见 §7）...
-    actual = read_back_text_from_target()      # 从目标窗口真实回读
-    verdict = "pass" if actual == EXPECTED else "mismatch"
-except Exception as e:
-    verdict = f"engine_crashed: {e}"           # 规则3：崩溃隔离
-finally:
-    json.dump({"ts": time.time(), "expected": EXPECTED, "actual": actual,
-               "verdict": verdict},               # 规则2：落盘
-              open("evidence/inject_result.json", "w"), ensure_ascii=False, indent=2)
-```
+- ① **storyId 非空校验**（R2 类）：acceptance 驱动（covers 非空）的检查 storyId 空串/缺失 → 拦截为结构化 error（消息含 R2 指引），不产出无 storyId 的 checks；辅助测试 storyId 必须为 null。
+- ② **expected/actual 同源生成**（A3 类）：actual 必须由 probe 探测函数产生，`assert_same_source` 断言同源——禁止手写同义文案（本节规则 1 的机制化）。
+- ③ **输出 JSON schema 校验 + 退出码表**：序列化前自校验宿主协议形态；退出码 0=全部 pass / 1=存在 fail 或驱动异常 / 2=自检拦截（环境缺失/结构违规）。
+- ④ **顶层异常包裹**（R3 类）：`except BaseException`（含 `SystemExit`，覆盖 `sys.exit` 路径；Node 侧为同步/异步异常 + `uncaughtException` 兜底）→ 结构化 error JSON（含 exit code 与 traceback 摘要）后按原退出码非零退出——崩溃也产出可判读输出，而非静默无输出。
+- ⑤ **环境前置自检**：DISPLAY / 密钥类变量缺失 → 输出"环境前置自检"检查项并 exit 2（blocked），环境问题不伪装成产品 error。
 
 ### 5.4 无头/受限环境降级验证
 
@@ -412,6 +399,8 @@ finally:
 ---
 
 ## CHANGELOG
+
+- v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0 补充：AC 审计 F6 两条并入——托盘无 SNI 环境"人工清单不计 fail"验收规则（PIT-DA-010）、云端服务存量 config 迁移策略（PIT-DA-011），均 [实证] 级（G3b #83/R7 支撑）

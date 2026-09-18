@@ -103,6 +103,8 @@ curl -s --max-time 10 -o evidence/user_create.json -w '{"http":%{http_code},"ts"
 ### 5.4 降级验证
 无 Docker：SQLite 路径；无网络：全部用例本地闭环（本品类天然优势）。
 
+驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。高发触发点：鉴权库真实行为验证、第三方 API 端点/格式确认、限流策略在真实 Redis 的行为。[推断]
 
@@ -125,6 +127,8 @@ v1 §5 安全清单（8 项 checklist）保留作交付门禁。[文证]
 
 ---
 ## CHANGELOG
+
+- v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0/§2/§5/§6/§7/§8；v1 §1-§3、§5 保留沿用。
 - v1.0（2026-07-17）：初始 195 行版本。

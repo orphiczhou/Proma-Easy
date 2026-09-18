@@ -93,6 +93,8 @@ adb exec-out screencap -p > evidence/screen.png  # 补充证据
 - 同串断言：单测/类型检查层严格比对；UI 层用元素存在性断言（Maestro `assertVisible`）而非像素比对 [推断]
 - 证据落盘：截图/录屏/测试报告进 `evidence/`；**真机不可得时证据文件必须写明 `skipped: no-device`**，不得以"代码写完了"替代验证 [推断——v2 规范 §5.3 在本品类最重要的应用]
 
+驱动骨架：`driver-skeleton.py` / `driver-skeleton.cjs`（随模版分发，含五项运行时自检：storyId 校验 / expected-actual 同源 / 输出 schema+退出码表 / 顶层异常包裹 / 环境前置自检）。
+
 ## 6. Spike 实验协议
 引用 `02-Spike实验协议.md`。本品类特有触发点：
 - 首个项目开始前：**环境可用性 Spike**（本机能否起 Android 模拟器 / Expo Go 通路是否可用）——建议作为该品类首个强制 Spike [推断]
@@ -122,6 +124,8 @@ adb exec-out screencap -p > evidence/screen.png  # 补充证据
 
 ---
 ## CHANGELOG
+
+- v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
 - v2.0（2026-09-18）：迁移定稿入运行时快照 `nanju-engineering-templates/` 与模版源头 `nanju-guide/09_工程模板/`（平台 v0.17.126）；§8 标杆映射按 B2 标杆解析（2026-09-18，14 仓库实证）回填实测状态、剔除/替代 404 条目。
 - v2.0-draft（2026-09-18，草案）：新增 §0/§2（标注本机可验证性列）/§5（双闭环）/§6（环境可用性强制 Spike）/§7（品类级盲区声明）；v1 选型与结构保留沿用。
 - v1.0（2026-07-17）：初始 137 行版本。

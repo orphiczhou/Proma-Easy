@@ -1108,3 +1108,96 @@ describe('W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅�
     expect(validateAdvanceTarget('quick', 'prototype', 'architecture')).toEqual({ ok: true })
   })
 })
+
+// ===== L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁（产物检查 + 存量兼容） =====
+
+describe('L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免）', () => {
+  const { validateEvidenceRecordSection } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
+  const { writeFileSync: wfs } = require('node:fs') as typeof import('node:fs')
+
+  /** 合法架构文档（品类合法 + 环境清单 + ready 标记 + 测试架构节 + 可选证据记录节） */
+  const archDocWithEvidence = (evidenceSection: string): string =>
+    `# 架构文档\n\n## 技术选型\n\nWeb 全栈。\n\nprojectCategory: web-fullstack\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n| node | 20 | 运行时 | 就绪 | - |\n\nprojectEnv: ready\n${testArchitectureDoc}\n${evidenceSection}`
+
+  /** 写 _project-info.json（archEvidenceGate 开关——新项目 true / 存量项目无字段） */
+  function setEvidenceGate(slug: string, enabled: boolean | undefined): void {
+    const info: Record<string, unknown> = {
+      projectId: PROJECT_ID, name: '凭证门禁项目', mode: 'iterative',
+      createdAt: '2026-09-18T00:00:00.000Z', workspaceSlug: slug,
+      projectDir: `project-${PROJECT_ID}`, docDirs: [],
+    }
+    if (enabled !== undefined) info.archEvidenceGate = enabled
+    wfs(join(fixtureRoot, `project-${PROJECT_ID}`, '_project-info.json'), JSON.stringify(info))
+  }
+
+  test('Given 新项目（archEvidenceGate=true）文档缺「## 证据升级与检索记录」节 When 推进 Then 拦截（无凭证视为未执行）', () => {
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: archDocWithEvidence('') })
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('缺少「## 证据升级与检索记录」节')
+    expect(error).toContain('URL+检索日期')
+    expect(error).toContain('本轮无证据升级；未触发检索条件')
+  })
+
+  test('Given 新项目 + 节内 [实证] 条目带 URL When 推进 Then 放行（形态①②凭证在场）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'iterative',
+      html: archDocWithEvidence('## 证据升级与检索记录\n| 结论点 | 证据等级变化 | 来源 URL | 检索日期 |\n| --- | --- | --- | --- |\n| Node 20 LTS 支持策略 | [推断]→[实证] | https://nodejs.org/en/about/previous-releases | 2026-09-18 |\n'),
+    })
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('Given 新项目 + 节内 [实证]/[文证] 条目无 URL When 推进 Then 拦截并指明条目', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'iterative',
+      html: archDocWithEvidence('## 证据升级与检索记录\n- Tauri v2 Linux 依赖清单：新增 [实证]（凭训练记忆，未检索）\n- DashScope ASR 端点：[推断]→[文证] 来源缺失\n'),
+    })
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('证据记录凭证缺失')
+    expect(error).toContain('http(s)://')
+    expect(error).toContain('Tauri v2 Linux 依赖清单')
+    expect(error).toContain('DashScope ASR 端点')
+  })
+
+  test('Given 新项目 + 纯申报（未触发检索条件/已检索无结论）When 推进 Then 放行（形态③自我申报不做事前拦截）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'iterative',
+      html: archDocWithEvidence('## 证据升级与检索记录\n本轮无证据升级；未触发检索条件。\n- X11 注入边界：已检索无结论（关键词：XkbSetMap CJK，2026-09-18），保持 [推断]。\n'),
+    })
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('Given 存量项目（无 archEvidenceGate 字段）文档缺节 When 推进 Then 豁免放行（v0.17.127 前创建豁免）', () => {
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: archDocWithEvidence('') })
+    setEvidenceGate(ws, undefined) // 旧版本创建：无标记字段
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('Given 正文含 [实证] 引用（模版坑库既有条目）但节内无条目 When 推进 Then 不误拦（只查证据记录节内条目）', () => {
+    // 正文引用放在证据节【之前】（另一节的正文）——门禁只扫「## 证据升级与检索记录」节体
+    const doc = '# 架构文档\n\n## 技术选型\n\n> 引用坑库既有条目：通知守护进程静默失败 [实证]（见模版 §7，非本轮新增）\n\nprojectCategory: web-fullstack\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n| node | 20 | 运行时 | 就绪 | - |\n\nprojectEnv: ready\n' + testArchitectureDoc + '\n## 证据升级与检索记录\n本轮无证据升级；未触发检索条件。\n'
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: doc })
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  // validateEvidenceRecordSection 纯函数边界
+  test('纯函数：### 级节头与后缀括号注释容忍；节体到下一节头截断（下一节的实证条目不计入）', () => {
+    const doc = [
+      '# 架构',
+      '### 证据升级与检索记录（本轮）',
+      '- 无升级条目',
+      '## 交付与运行',
+      '- 附录引用 [实证] 无 URL（属其他节，不计入本节检查）',
+    ].join('\n')
+    expect(validateEvidenceRecordSection(doc)).toBeNull()
+  })
+
+  test('纯函数：节头匹配为「证据升级与检索记录」前缀形态，不误配相近词', () => {
+    expect(validateEvidenceRecordSection('# 架构\n\n## 环境配置\n普通内容')).toContain('缺少「## 证据升级与检索记录」节')
+    expect(validateEvidenceRecordSection('# 架构\n\n## 证据升级与检索记录汇总\n普通内容')).toBeNull() // 前缀扩展节头容忍
+  })
+})

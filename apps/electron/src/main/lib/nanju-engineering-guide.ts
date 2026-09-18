@@ -13,6 +13,10 @@ export const ENGINEERING_CONTRACT_GUIDE = [
   '非浏览器测试可声明driver={runtime:"node"|"python3"|"native",path,args,timeoutMs,env}；path相对于08_APP且必须列入artifacts，args为字符串数组，timeoutMs为100至600000毫秒。env（可选，v2新增）为驱动所需环境变量名清单（如["DASHSCOPE_API_KEY"]，仅变量名不含值；值由宿主从自身环境注入，不得把密钥值写进契约或产物；须真实需要才声明）。当前宿主接入Node及原生进程；Python与Windows驱动缺运行支持时会明确阻塞，不自动安装。command仍只作说明。',
   'browser-url测试声明service={runtime,path,args,env,port,readyPath,readyTimeoutMs}：path相对于08_APP且必须列入artifacts，port为1024至65535的loopback固定端口，readyPath以/开头，env语义同driver（服务进程所需环境变量名清单，v2新增）。宿主在单次批准后启动该loopback服务并持有句柄，端口被占用即拒绝；服务须读取环境变量PROMA_ENGINEERING_READY_NONCE并在就绪响应header(x-proma-ready-nonce)或body回传该nonce，否则不会判定就绪；Windows平台尚未实现服务进程树回收，明确阻塞且不启动。',
   '驱动由coding实现于08_APP；stdin接收JSON {schemaVersion,testId,target,covers,evidenceDigest}，工作目录为08_APP。stdout只能输出单个JSON {testId,target,checks:[{storyId,label,expected,actual,evidence}]}；日志写stderr。expected/actual为字符串，evidence为非空字符串数组；辅助测试storyId=null。退出码由宿主实测，不能用驱动自报覆盖。',
+  // L2-4（2026-09-18）：契约 env 声明字段提示（P0-1 schema v2 字段的提示词增补——
+  // 上行 driver 字段说明聚焦 schema 写法，本行聚焦「何时该声明」；DASHSCOPE 硬编码
+  // 兑底移除后，云端密钥项目的唯一透传通道 = 此处声明的 env 清单）
+  '涉及云端服务/外部 API 的项目：在契约 driver.env / service.env 声明所需环境变量名（如 ["DASHSCOPE_API_KEY"]）——值由宿主从自身环境注入子进程，不得写入契约或产物；何时声明/字段写法见上行 driver 与 service 字段说明。',
   '每次驱动执行均需真人单次批准。真实系统行为不能由项目驱动自报证明，requiresReal项目在独立验收证据接入前保留blocked，不得为了通过改成false。',
   '示例（需按实际PRD改写，不可直接把示例当项目决策）：',
   '```json',
