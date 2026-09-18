@@ -357,6 +357,30 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       + '或 `projectEnv: missing:<组件逗号清单>`（有缺失）——系统按此标记拦截未就绪推进',
   ]
 
+  /**
+   * P0-5（L1，2026-09-18）：架构师任务书注入四件（J1/J3/J4/J5，B1 03 §7 P0 定级），
+   * 两变体共用。用户指令「架构师派子会话做架构探索实验+留工程化资料」的机制入口；
+   * 与模版迁移同批（J1 引用模版 §2/§7，模版不迁则注入无对象）。知识边界条文（模版无
+   * [实证] 知识须主动网络检索+来源引用）为提示词级；凭证门禁（三形态+事后抽检）在
+   * L2-4 承接。00_SPIKES/ 已注册进工程目录规范合法产物目录集（docDirs/写放行清单）。
+   */
+  const ARCHITECT_SPIKE_CONSTRAINTS = [
+    '工程模版必读（J1）：Read 00_ENGINEERING_TEMPLATE/template.md 后再选型，重点 §2 组件环境清单'
+      + '（组件/探测/安装/已知坑；§2.3 探测脚本可照抄）与 §7 坑库（按 [实证]/[推断] 证据等级引用，'
+      + '[推断] 条目不得当作已验证结论写入架构）。',
+    'Spike 派发权（J3）：架构师有权对本机可验证的技术不确定点派子会话做架构探索实验（Spike），'
+      + '同一阶段可并行多个；单 Spike 时间盒快消型≤30 分钟、返工≤1 轮，部分结论也必须落盘（标 PARTIAL）。',
+    'Spike 触发判据（J4，T1-T3 同时满足必须派发，不得凭记忆拍板）：T1 知识缺口——决策点不在模版'
+      + ' §2/§7/§8 覆盖范围或仅 [推断] 级；T2 决策影响——影响架构选型、组件选型或验收方案（非实现细节）；'
+      + 'T3 可时间盒——时间盒内能设计出可判定实验。',
+    'Spike 产物落位（J5）：一律写入工程目录 00_SPIKES/spike-<NNN>-<slug>/（README 报告/NOTES 试错轨迹'
+      + '/env-manifest/setup.sh/probe 脚本/evidence/ 六件套），索引写 00_SPIKES/INDEX.md；该目录已注册为'
+      + '合法产物目录。实验资料与环境留给后续开发与测试阶段消费。',
+    '知识边界硬性条文：模版与坑库无 [实证] 知识支撑的关键决策（新端点/新模型/新平台能力），必须主动'
+      + '网络搜索求证，不得仅凭训练记忆断言；架构文档凡依据网络检索的结论须附来源引用（URL+检索日期），'
+      + '已检索无结论的标注「已检索无结论（关键词+日期）」。',
+  ]
+
   // architecture 节点（W7，v0.17.69：两模式统一必经，按 mode 输出变体——复用同一
   // PhaseNode 与 defaultWeight 惯例，quick 轻量化方案 A + 四层兑底，用户 U1-U5 已确认）：
   // - quick 变体：免 AC 攻防；用户确认与环境就绪合并为一次（一条消息看架构摘要+环境清单）。
@@ -386,6 +410,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
         TEST_ARCHITECTURE_GUIDE,
         ENGINEERING_CONTRACT_GUIDE,
         ...ENV_PROBE_CONSTRAINTS,
+        ...ARCHITECT_SPIKE_CONSTRAINTS, // P0-5：架构师任务书注入四件（J1/J3/J4/J5）
       ],
       requiresUserConfirmation: true, // 合并确认：架构摘要 + 环境清单一条消息确认（U1 方案 A）
       requiresAC: false,              // 免 AC 攻防；兜底 = 规则校验层（R2）+ 合并确认 + envReady 门禁
@@ -418,6 +443,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
         '架构文档必含「## 环境配置」节：清单表（列：组件 | 版本 | 用途 | 安装命令 | 验证命令），'
           + '按品类列全运行时/包管理器/构建工具；环境探测结果与缺失标记写入验证命令列备注',
         ...ENV_PROBE_CONSTRAINTS,
+        ...ARCHITECT_SPIKE_CONSTRAINTS, // P0-5：架构师任务书注入四件（J1/J3/J4/J5）
       ],
       requiresUserConfirmation: true,
       requiresAC: true,

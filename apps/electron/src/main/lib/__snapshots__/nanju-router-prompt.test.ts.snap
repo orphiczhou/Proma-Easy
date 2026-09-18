@@ -262,7 +262,7 @@ phase.role: architect
 PRD 摘要
 
 ## 约束
-品类终判（必须）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置；品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明；架构精简为快消定位服务：长期演进细节可引用工程模板，但交付、运行与测试设计不可省略；架构文档必须包含「## 交付与运行」：以单行「字段：值」列表或两列表格写明目标平台、交付产物、构建方式、启动方式（无需构建时写明理由）；以及「## 测试架构」：表格列为「层级 | 框架 | 执行方式 | 证据 | 覆盖」，至少一个实际测试项，按工程模板设计单元/集成/行为验收并对应 PRD 的 US 编号；该节内另含「### 真实与模拟边界」「### 失败回流」及具体说明。构建成功、单元测试或浏览器模拟不能替代真实用户故事验收；缺环境明确阻塞，安装与系统权限仍须用户确认。；工程交付契约（必须）：除 architecture.md 外，同时生成 03_ARCHITECTURE/engineering.json，schemaVersion=1。
+品类终判（必须）：工程品类标注（后续 coding 按品类加载工程模板）：文档中包含一行 \`projectCategory: <品类>\`，品类限 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一（本地桌面程序=desktop-app，纯后端服务=api-backend，命令行工具=cli-tool，移动应用=mobile-app，以 LLM 为核心=ai-application，浏览器访问的网站/Web 应用=web-fullstack）；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置；品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明；架构精简为快消定位服务：长期演进细节可引用工程模板，但交付、运行与测试设计不可省略；架构文档必须包含「## 交付与运行」：以单行「字段：值」列表或两列表格写明目标平台、交付产物、构建方式、启动方式（无需构建时写明理由）；以及「## 测试架构」：表格列为「层级 | 框架 | 执行方式 | 证据 | 覆盖」，至少一个实际测试项，按工程模板设计单元/集成/行为验收并对应 PRD 的 US 编号；该节内另含「### 真实与模拟边界」「### 失败回流」及具体说明。构建成功、单元测试或浏览器模拟不能替代真实用户故事验收；缺环境明确阻塞，安装与系统权限仍须用户确认。；工程交付契约（必须）：除 architecture.md 外，同时生成 03_ARCHITECTURE/engineering.json，schemaVersion=2（新工程默认；存量 v1 档案原样有效，不迁移不重写）。
 PRD决定目标平台与交付形态；架构决定工具链、真实产物与测试方式，工程模板仅作参考。
 JSON字段：target={platform,kind,entry}，kind取web/api/mobile/desktop/cli/ai；entry与artifacts数组路径均相对于08_APP，必须列出真实可交付文件，不能只列演示页面。
 build、run为构建/启动说明（字符串）；无需构建需说明原因。任何命令说明都不等于安装、运行或系统权限授权。
@@ -270,14 +270,14 @@ tests至少一项行为验收，每项字段：id、layer（unit/integration/acc
 只有acceptance项登记covers且不能为空；unit/integration项covers=[]，只作辅助证据。明确requiresReal，浏览器mock、单测或构建成功不能替代真实能力验收。
 浏览器测试声明scenarioFiles（相对06_TESTS的.steps.json路径数组），每个文件只归属一个test.id；架构列清单，testing生成文件，执行与交付将场景内容纳入版本绑定。browser-file可与CLI辅助测试混合逐项批准执行。
 adapter是所需能力声明，不是系统已具备的承诺；能力/环境不足须明确阻塞和下一步，不能静默改成mock交付。
-非浏览器测试可声明driver={runtime:"node"|"python3"|"native",path,args,timeoutMs}；path相对于08_APP且必须列入artifacts，args为字符串数组，timeoutMs为100至600000毫秒。当前宿主接入Node及原生进程；Python与Windows驱动缺运行支持时会明确阻塞，不自动安装。command仍只作说明。
-browser-url测试声明service={runtime,path,args,port,readyPath,readyTimeoutMs}：path相对于08_APP且必须列入artifacts，port为1024至65535的loopback固定端口，readyPath以/开头。宿主在单次批准后启动该loopback服务并持有句柄，端口被占用即拒绝；服务须读取环境变量PROMA_ENGINEERING_READY_NONCE并在就绪响应header(x-proma-ready-nonce)或body回传该nonce，否则不会判定就绪；Windows平台尚未实现服务进程树回收，明确阻塞且不启动。
+非浏览器测试可声明driver={runtime:"node"|"python3"|"native",path,args,timeoutMs,env}；path相对于08_APP且必须列入artifacts，args为字符串数组，timeoutMs为100至600000毫秒。env（可选，v2新增）为驱动所需环境变量名清单（如["DASHSCOPE_API_KEY"]，仅变量名不含值；值由宿主从自身环境注入，不得把密钥值写进契约或产物；须真实需要才声明）。当前宿主接入Node及原生进程；Python与Windows驱动缺运行支持时会明确阻塞，不自动安装。command仍只作说明。
+browser-url测试声明service={runtime,path,args,env,port,readyPath,readyTimeoutMs}：path相对于08_APP且必须列入artifacts，port为1024至65535的loopback固定端口，readyPath以/开头，env语义同driver（服务进程所需环境变量名清单，v2新增）。宿主在单次批准后启动该loopback服务并持有句柄，端口被占用即拒绝；服务须读取环境变量PROMA_ENGINEERING_READY_NONCE并在就绪响应header(x-proma-ready-nonce)或body回传该nonce，否则不会判定就绪；Windows平台尚未实现服务进程树回收，明确阻塞且不启动。
 驱动由coding实现于08_APP；stdin接收JSON {schemaVersion,testId,target,covers,evidenceDigest}，工作目录为08_APP。stdout只能输出单个JSON {testId,target,checks:[{storyId,label,expected,actual,evidence}]}；日志写stderr。expected/actual为字符串，evidence为非空字符串数组；辅助测试storyId=null。退出码由宿主实测，不能用驱动自报覆盖。
 每次驱动执行均需真人单次批准。真实系统行为不能由项目驱动自报证明，requiresReal项目在独立验收证据接入前保留blocked，不得为了通过改成false。
 示例（需按实际PRD改写，不可直接把示例当项目决策）：
 \`\`\`json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "target": {
     "platform": "Linux",
     "kind": "cli",
@@ -302,7 +302,7 @@ browser-url测试声明service={runtime,path,args,port,readyPath,readyTimeoutMs}
     }
   ]
 }
-\`\`\`；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进
+\`\`\`；工程环境探测（必须）：按品类探测本机工具链版本（命令幂等，只读不装）：web 类 node/npm/bun；桌面类 rustc/cargo（Tauri）或 npx electron --version；CLI/后端类 bun/node/python3 --version 及对应包管理器；移动类 node/bun 与平台工具（如 adb）；缺失项只报告不擅自安装（硬性）：把探测结果写入环境清单（就绪/缺失标记），缺失组件等待用户确认后再装；文档结尾单独一行输出标记：\`projectEnv: ready\`（全部就绪）或 \`projectEnv: missing:<组件逗号清单>\`（有缺失）——系统按此标记拦截未就绪推进；工程模版必读（J1）：Read 00_ENGINEERING_TEMPLATE/template.md 后再选型，重点 §2 组件环境清单（组件/探测/安装/已知坑；§2.3 探测脚本可照抄）与 §7 坑库（按 [实证]/[推断] 证据等级引用，[推断] 条目不得当作已验证结论写入架构）。；Spike 派发权（J3）：架构师有权对本机可验证的技术不确定点派子会话做架构探索实验（Spike），同一阶段可并行多个；单 Spike 时间盒快消型≤30 分钟、返工≤1 轮，部分结论也必须落盘（标 PARTIAL）。；Spike 触发判据（J4，T1-T3 同时满足必须派发，不得凭记忆拍板）：T1 知识缺口——决策点不在模版 §2/§7/§8 覆盖范围或仅 [推断] 级；T2 决策影响——影响架构选型、组件选型或验收方案（非实现细节）；T3 可时间盒——时间盒内能设计出可判定实验。；Spike 产物落位（J5）：一律写入工程目录 00_SPIKES/spike-<NNN>-<slug>/（README 报告/NOTES 试错轨迹/env-manifest/setup.sh/probe 脚本/evidence/ 六件套），索引写 00_SPIKES/INDEX.md；该目录已注册为合法产物目录。实验资料与环境留给后续开发与测试阶段消费。；知识边界硬性条文：模版与坑库无 [实证] 知识支撑的关键决策（新端点/新模型/新平台能力），必须主动网络搜索求证，不得仅凭训练记忆断言；架构文档凡依据网络检索的结论须附来源引用（URL+检索日期），已检索无结论的标注「已检索无结论（关键词+日期）」。
 
 ## 产出文件
 请将产出写入：/tmp/project/03_ARCHITECTURE/architecture.md

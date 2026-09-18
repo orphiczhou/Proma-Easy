@@ -25,6 +25,11 @@ const script = `const fs=require('node:fs'); const request=JSON.parse(fs.readFil
 const nodePath = Bun.which('node')
 if (!nodePath || !isAbsolute(nodePath)) throw new Error('真实进程fixture需要已安装的系统Node；禁止自动安装或用Bun替代')
 const drivers = () => createEngineeringProcessDrivers({ nodePath })
+/** Y-05：当前 fixture 的执行输入（fixture() 返回值被上一用例消费后 root 仍指向最新 fixture） */
+function input2OfCurrentFixture(): EngineeringExecutionInput {
+  const raw = readFileSync(join(root, '03_ARCHITECTURE/engineering.json'), 'utf-8')
+  return { projectDir: root, test: parseEngineeringContract(raw).contract!.tests[0]!, evidence: captureEngineeringEvidence(root).evidence!, signal: new AbortController().signal }
+}
 
 describe('Given 明确批准的隔离工程fixture，When 使用注册进程驱动，Then 执行并收集实际结果', () => {
   test('Then 真实node子进程读取目标，宿主使用实际退出码', async () => {
@@ -50,6 +55,91 @@ describe('Given 明确批准的隔离工程fixture，When 使用注册进程驱�
     const result = await runRegisteredEngineeringTest(fixture(script), { drivers: createEngineeringProcessDrivers({}), approve: async () => true })
     expect(result.status).toBe('blocked')
     expect(result.reason).toContain('运行时')
+  })
+})
+
+// ===== P0-1（2026-09-18）：契约声明式 env 透传（行为法验证——子进程回显 env，
+// 不用 /proc/environ：Chromium 会擦除 environ 视图，G3b 实证假阳性教训） =====
+describe('Given schema v2 契约声明 driver.env，When 驱动执行，Then 白名单∪契约 env 生效', () => {
+  test('Then 声明的环境变量透传到子进程（子进程行为回显，非 /proc 读取）', async () => {
+    const savedToken = process.env['NANJU_P01_TEST_TOKEN']
+    process.env['NANJU_P01_TEST_TOKEN'] = 'p1-透传验证-通过'
+    try {
+      const echoScript = `const fs=require('node:fs'); const request=JSON.parse(fs.readFileSync(0,'utf8'));
+const token=process.env.NANJU_P01_TEST_TOKEN ?? 'MISSING';
+console.log(JSON.stringify({testId:request.testId,target:request.target,checks:[{storyId:'US-01',label:'env透传',expected:'p1-透传验证-通过',actual:token,evidence:['子进程回显 env 值:'+token]}]}));`
+      fixture(echoScript)
+      const raw = JSON.parse(readFileSync(join(root, '03_ARCHITECTURE/engineering.json'), 'utf-8'))
+      raw.schemaVersion = 2
+      raw.tests[0].driver.env = ['NANJU_P01_TEST_TOKEN']
+      writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify(raw))
+      const input2: EngineeringExecutionInput = { projectDir: root, test: parseEngineeringContract(JSON.stringify(raw)).contract!.tests[0]!, evidence: captureEngineeringEvidence(root).evidence!, signal: new AbortController().signal }
+      const result = await runRegisteredEngineeringTest(input2, { drivers: drivers(), approve: async () => true })
+      expect(result.status).toBe('pass')
+      expect(result.checks[0]?.actual).toBe('p1-透传验证-通过')
+    } finally {
+      if (savedToken === undefined) delete process.env['NANJU_P01_TEST_TOKEN']
+      else process.env['NANJU_P01_TEST_TOKEN'] = savedToken
+    }
+  })
+  test('Then 未声明的变量不透传（白名单∪契约 env，不是全量继承）', async () => {
+    const savedLeak = process.env['NANJU_P01_SECRET_LEAK']
+    process.env['NANJU_P01_SECRET_LEAK'] = 'must-not-pass'
+    try {
+      const echoScript = `const fs=require('node:fs'); const request=JSON.parse(fs.readFileSync(0,'utf8'));
+const leak=process.env.NANJU_P01_SECRET_LEAK ?? 'NOT_PRESENT';
+console.log(JSON.stringify({testId:request.testId,target:request.target,checks:[{storyId:'US-01',label:'env隔离',expected:'NOT_PRESENT',actual:leak,evidence:['未声明变量不透传:'+leak]}]}));`
+      fixture(echoScript)
+      const raw = JSON.parse(readFileSync(join(root, '03_ARCHITECTURE/engineering.json'), 'utf-8'))
+      raw.schemaVersion = 2
+      // 不声明 NANJU_P01_SECRET_LEAK
+      writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify(raw))
+      const input2: EngineeringExecutionInput = { projectDir: root, test: parseEngineeringContract(JSON.stringify(raw)).contract!.tests[0]!, evidence: captureEngineeringEvidence(root).evidence!, signal: new AbortController().signal }
+      const result = await runRegisteredEngineeringTest(input2, { drivers: drivers(), approve: async () => true })
+      expect(result.status).toBe('pass')
+      expect(result.checks[0]?.actual).toBe('NOT_PRESENT')
+    } finally {
+      if (savedLeak === undefined) delete process.env['NANJU_P01_SECRET_LEAK']
+      else process.env['NANJU_P01_SECRET_LEAK'] = savedLeak
+    }
+  })
+  test('Then 过渡期兜底：DASHSCOPE_API_KEY 仍透传（防空窗；触发件满足后独立提交移除）', async () => {
+    // Y-05：保存/恢复原值（测试机若 source 过 secrets.sh 持有真实键，不得被永久删除）
+    const savedKey = process.env['DASHSCOPE_API_KEY']
+    process.env['DASHSCOPE_API_KEY'] = 'dashscope-transition-fallback'
+    try {
+      const echoScript = `const fs=require('node:fs'); const request=JSON.parse(fs.readFileSync(0,'utf8'));
+const token=process.env.DASHSCOPE_API_KEY ? 'present' : 'MISSING'; // 只断言存在性，不回显值
+console.log(JSON.stringify({testId:request.testId,target:request.target,checks:[{storyId:'US-01',label:'过渡兜底',expected:'present',actual:token,evidence:['DASHSCOPE 过渡透传在场（存在性断言，值不回显）']}]}));`
+      fixture(echoScript)
+      const result = await runRegisteredEngineeringTest(input2OfCurrentFixture(), { drivers: drivers(), approve: async () => true })
+      expect(result.status).toBe('pass')
+    } finally {
+      if (savedKey === undefined) delete process.env['DASHSCOPE_API_KEY']
+      else process.env['DASHSCOPE_API_KEY'] = savedKey
+    }
+  })
+})
+
+// ===== P0-2（2026-09-18）：驱动 IO 尾部随结果/错误透传 =====
+describe('Given 驱动写 stderr，When 执行完成或失败，Then IO 尾部进结果', () => {
+  test('Then 成功返回但检查缺失（invalid 路径）时 driverIo 随结果透传', async () => {
+    // 驱动正常返回 JSON 但缺 checks（interpret invalid：G3b 固定句场景）——stderr 诊断须在场
+    const badScript = `const fs=require('node:fs'); const request=JSON.parse(fs.readFileSync(0,'utf8'));
+console.error('ERROR: HTTP 400 from dashscope: model not found');
+console.log(JSON.stringify({testId:request.testId,target:request.target,checks:[]}));`
+    const result = await runRegisteredEngineeringTest(fixture(badScript), { drivers: drivers(), approve: async () => true })
+    expect(result.status).toBe('error')
+    expect(result.reason).toContain('测试驱动结果不可用') // invalid 固定句（G3b 盲修场景同路径）
+    expect(result.driverIo?.stderrTail).toContain('HTTP 400')
+  })
+  test('Then 驱动崩溃（非法 JSON 输出，exit 1）时 driverIo 随错误透传', async () => {
+    const crashScript = `const fs=require('node:fs'); fs.readFileSync(0,'utf8');
+console.error('Traceback (most recent call last): simulated');
+process.stdout.write('not-json'); process.exit(1);`
+    const result = await runRegisteredEngineeringTest(fixture(crashScript), { drivers: drivers(), approve: async () => true })
+    expect(result.status).toBe('error')
+    expect(result.driverIo?.stderrTail).toContain('Traceback')
   })
 })
 

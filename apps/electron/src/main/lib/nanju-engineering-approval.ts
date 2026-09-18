@@ -17,10 +17,15 @@ export function createEngineeringTestApproval(
     // B-b（C-review-2 N8/S3）：browser-url 测试无 driver 字段，批准文案必须展示真实服务计划
     // （runtime/path/argv/port/readyPath），否则用户看到的是「驱动：未声明」却在批准一个本地服务。
     const servicePlanLine = test.service ? describeEngineeringServicePlan(test.service) : null
+    // P0-1（AC 审计 Y-02）：env 注入清单必须在单次批准文案中透明展示（仅变量名；
+    // 值取宿主环境，不落盘）——用户批准时可见密钥注入面。
+    const envNames = [...new Set([...(test.driver?.env ?? []), ...(test.service?.env ?? [])])]
+    const envLine = envNames.length > 0 ? `环境变量注入：${envNames.join('、')}（仅变量名；值取宿主环境注入子进程，不写入任何文件）` : null
     const description = [
       `工程测试：${test.id}（${test.layer} / ${test.adapter}）`,
       `项目：${projectDir}；被测产物：08_APP/${test.target}`,
       ...(servicePlanLine ? [servicePlanLine] : []),
+      ...(envLine ? [envLine] : []),
       `运行时：${test.driver?.runtime ?? '注册驱动'}；驱动：${test.driver?.path ?? '未声明'}；参数：${JSON.stringify(test.driver?.args ?? [])}`,
       `说明：${test.command}；用户故事：${test.covers.join('、') || '辅助测试，不计用户故事覆盖'}`,
       `批准绑定版本：${evidence.digest}`,

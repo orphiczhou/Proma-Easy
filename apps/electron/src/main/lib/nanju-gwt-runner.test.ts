@@ -1595,6 +1595,89 @@ describe('W22 收尾：reload op', () => {
   })
 })
 
+describe('P0-2/Y-03：error 轮端到端——errorReason 内联诊断摘要 + driver-io 旁挂落盘 + report.md 嵌入（AC 审计 Y-03 补链）', () => {
+  test('Then 驱动 error 轮：诊断摘要在 errorReason/summaryText、旁挂 log 落盘、md 报告嵌尾部全文（fence 安全）', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prd: '# PRD\n## US-01 添加读书笔记\n' })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(root, '08_APP/native-bin'), '真实产物fixture，仅用于宿主单测')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 2, target: { platform: 'Linux', kind: 'desktop', entry: 'native-bin' }, artifacts: ['native-bin', 'drv.cjs'],
+      build: '按桌面工具链构建', run: '双击native-bin',
+      tests: [{ id: 'native-err', layer: 'acceptance', adapter: 'native-driver', target: 'native-bin', command: '真实桌面驱动', covers: ['US-01'], requiresReal: true, driver: { runtime: 'node', path: 'drv.cjs', args: [], timeoutMs: 3000 } }],
+    }))
+    writeFileSync(join(root, '08_APP/drv.cjs'), '// fixture 驱动占位（真实执行经注入桩）')
+    // 桩驱动：正常返回 JSON 但 checks 缺 US-01（invalid error 路径）+ 携带 driverIo（云端错误类 stderr）
+    const stderrTail = [
+      'info: recording 3s @16kHz',
+      'DEBUG: building request body',
+      'ERROR: dashscope responded HTTP 400: model not found',
+      'hint: check model name',
+    ].join('\n')
+    const outcome = await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: 'error透传fixture', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+      engineeringExecution: { signal: new AbortController().signal, services: { approve: async () => true, drivers: [{
+        adapter: 'native-driver',
+        execute: async () => ({ testId: 'native-err', target: 'native-bin', exitCode: 1, checks: [], driverIo: { stdoutTail: '{}', stderrTail } }),
+      }] } },
+    })
+    expect(outcome.verdict).toBe('error')
+    // ① errorReason 判定行内联自适应诊断摘要（命中最后关键行 ERROR→至末尾）+ 旁挂路径注明
+    expect(outcome.errorReason).toContain('测试驱动结果不可用')
+    expect(outcome.errorReason).toContain('驱动诊断（stderr 尾部自适应摘要）：ERROR: dashscope responded HTTP 400: model not found')
+    expect(outcome.errorReason).toContain('06_TESTS/driver-io-')
+    expect(outcome.summaryText).toContain('执行异常')
+    // ② 旁挂文件实际落盘（平台侧写入）且分节标注
+    const report = JSON.parse(readFileSync(join(root, '06_TESTS/report.json'), 'utf-8'))
+    expect(report.verdict).toBe('error')
+    expect(report.driverIo.testId).toBe('native-err')
+    const logFiles = readdirSync(join(root, '06_TESTS')).filter((f) => f.startsWith('driver-io-') && f.endsWith('.log'))
+    expect(logFiles.length).toBe(1)
+    const logText = readFileSync(join(root, '06_TESTS', logFiles[0]!), 'utf-8')
+    expect(logText).toContain('testId: native-err')
+    expect(logText).toContain('## stderr 尾部')
+    expect(logText).toContain('HTTP 400')
+    // ③ report.md 嵌入尾部全文（含旁挂路径行与 stderr/stdout 分节）
+    const mdFiles = readdirSync(join(root, '06_TESTS')).filter((f) => /^report-.*\.md$/.test(f))
+    expect(mdFiles.length).toBe(1)
+    const mdText = readFileSync(join(root, '06_TESTS', mdFiles[0]!), 'utf-8')
+    expect(mdText).toContain('驱动输出旁挂：06_TESTS/driver-io-')
+    expect(mdText).toContain('### 驱动输出尾部（stderr）')
+    expect(mdText).toContain('ERROR: dashscope responded HTTP 400')
+    expect(mdText).toContain('### 驱动输出尾部（stdout）')
+  })
+  test('Then fence 安全：尾部含三反引号不闭合 ```text 代码块（Y-04）', async () => {
+    setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prd: '# PRD\n## US-01 添加读书笔记\n' })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    writeFileSync(join(root, '08_APP/native-bin'), '真实产物fixture，仅用于宿主单测')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 2, target: { platform: 'Linux', kind: 'desktop', entry: 'native-bin' }, artifacts: ['native-bin', 'drv.cjs'],
+      build: '按桌面工具链构建', run: '双击native-bin',
+      tests: [{ id: 'native-err', layer: 'acceptance', adapter: 'native-driver', target: 'native-bin', command: '真实桌面驱动', covers: ['US-01'], requiresReal: true, driver: { runtime: 'node', path: 'drv.cjs', args: [], timeoutMs: 3000 } }],
+    }))
+    writeFileSync(join(root, '08_APP/drv.cjs'), '// fixture 驱动占位')
+    const attack = 'ERROR: boom\n```\n# 逃逸标题\n<img src=x>'
+    await runNanjuGwtAcceptance({
+      workspaceSlug: 'ws', projectId: 'p1', projectName: 'fence安全fixture', projectMode: 'quick',
+      sessionId: 's1', controller: makeMockController(fullPassPage()),
+      engineeringExecution: { signal: new AbortController().signal, services: { approve: async () => true, drivers: [{
+        adapter: 'native-driver',
+        execute: async () => ({ testId: 'native-err', target: 'native-bin', exitCode: 1, checks: [], driverIo: { stdoutTail: '', stderrTail: attack } }),
+      }] } },
+    })
+    const mdFiles = readdirSync(join(root, '06_TESTS')).filter((f) => /^report-.*\.md$/.test(f))
+    const mdText = readFileSync(join(root, '06_TESTS', mdFiles[0]!), 'utf-8')
+    // 三反引号被压为两个 → 不提前闭合 ```text fence；逃逸内容降级为代码块内文本
+    const fenced = mdText.split('### 驱动输出尾部（stderr）')[1]!.split('### 驱动输出尾部（stdout）')[0]!
+    expect(fenced.match(/```/g)?.length).toBe(2) // 恰好开+闭一对；内容中的 ``` 已压为 ``，无第三个 fence
+    expect(fenced).toContain('# 逃逸标题') // 原内容保留（在代码块内，不再构成 markdown 标题）
+    expect(fenced).toContain('``')
+    expect(mdText.match(/```text/g)?.length).toBe(2) // stderr+stdout 两节恰好各一对 fence
+  })
+})
+
 describe('Given 工程契约要求真实驱动，When 当前仅注册浏览器，Then 诚实阻塞', () => {
   test('Then 不触发浏览器，不消耗已有修复次数，并写blocked报告', async () => {
     setupProjectFixture({ stepsFiles: { 'us-01.steps.json': PASSING_STEPS }, prevReport: { verdict: 'fail', retryCount: 1, errorCount: 0 } })

@@ -226,12 +226,62 @@ export function buildGwtBehaviorFailReworkResumeMessage(
  *   AgentSendInput.humanOrigin 透传（真 UI 人类输入=true）；事件流路径缺省不传
  *   （false——事件流 user 消息实际为工具注入，入口路径已覆盖真用户初始输入）
  */
+export interface CheckConfirmAdvanceOptions {
+  humanOrigin?: boolean
+  /** P0-3：确认词命中但未构成授权时，向 UI 注入三态拒因提示（复用 notice/助手消息
+   * 通道；调用方 orchestrator 接 injectNanjuAssistantMessage）。G3b 实测 7 次文字确认
+   * 无效且仅落日志（×9），授权阻塞态必须显式化。 */
+  notifyDenial?: (text: string) => void
+}
+
+/** P0-3：构建授权阻塞态三态拒因提示文本（数据源=平台既有授权判定路径：活跃收口问句
+ * 登记+10min TTL+目标匹配；期望/实际即问句期望推进目标 vs 当前合法下一阶段）。 */
+function buildConfirmDenialNotice(opts: {
+  workspaceSlug: string
+  projectId: string
+  currentStage: string
+  kind: 'no-active-ask' | 'ask-not-matching' | 'scatter-no-auth'
+  expectedFromAsk?: string
+  harnessExpected?: string | null
+}): string {
+  try {
+    const { getConfirmAskDiagnostics } = require('./nanju-project') as typeof import('./nanju-project')
+    const diag = getConfirmAskDiagnostics(opts.workspaceSlug, opts.projectId, opts.currentStage)
+    const last = diag.lastRegistration
+    const lastText = last
+      ? `上次登记：${last.stage} 阶段 → 目标 ${last.expectedTarget}（${new Date(last.ts).toLocaleString('zh-CN')}，${last.by}）`
+      : '本项目（本次进程内）从未登记过收口确认问句'
+    const lines: string[] = ['🔒 推进授权未生效（当前确认不构成推进授权）']
+    if (opts.kind === 'ask-not-matching' && opts.expectedFromAsk) {
+      // 态③：问句在场但目标不匹配（附期望/实际）
+      lines.push(`原因：活跃收口问句的期望推进目标与当前阶段不一致（期望 → ${opts.expectedFromAsk}，实际合法下一阶段 → ${opts.harnessExpected ?? '未知'}）。请等当前阶段的收口确认问句弹出后再应答。`)
+    } else if (diag.active) {
+      // 态②：已登记未确认（附剩余时间）。注（AC 审计 Y-06）：当前三个调用点的
+      // kind 推导下本分支为防御性代码（no-active-ask/scatter 时 active 必空、
+      // ask-not-matching 时走态③）——态②的常态呈现路径在 GWT 交付拦截的授权状态
+      // 附注（下方 isDeliverFromTesting gateError 分支的 authStateNote）。
+      const remainMin = Math.ceil(diag.active.remainingMs / 60000)
+      lines.push(`原因：收口确认问句已登记但尚未收到有效应答（目标 → ${diag.active.expectedTarget}，剩余有效期约 ${remainMin} 分钟）。请在向导会话弹出「确认·阶段收口」横幅时点确认，或直接回复确认词。`)
+    } else if (diag.lastRegistration) {
+      // 态②另一形态：曾有登记但已消费或超过 10 分钟 TTL 过期
+      lines.push(`原因：收口确认问句不在有效期（已应答消费或超过 10 分钟 TTL）。${lastText}。需要重新触发一次收口确认问句（推进到本阶段产出确认环节时自动弹出）后再确认。`)
+    } else {
+      // 态①：无活跃收口问句（附本阶段登记数+上次登记信息）
+      lines.push(`原因：当前无活跃的收口确认问句（本阶段「${opts.currentStage}」登记 0 次；${lastText}）。散点确认词不构成推进授权——请等待向导流程在阶段产出达标后弹出「确认·阶段收口」问句，或让向导 Agent 重新发起收口确认。`)
+    }
+    lines.push(`登记数据：本阶段登记 ${diag.stageRegisteredCount} 次。授权链口径=阶段收口类问句登记（10 分钟 TTL）+ 确认词应答；中间类确认（如环境安装）不登记、不授权。`)
+    return lines.join('\n')
+  } catch {
+    return '🔒 推进授权未生效：当前无活跃的收口确认问句，本次确认不构成推进授权（详见向导日志）。'
+  }
+}
+
 export function checkConfirmAdvanceInput(
   sessionId: string,
   workspaceSlug: string,
   userText: string,
   source: 'message' | 'ask-answer' = 'message',
-  opts?: { humanOrigin?: boolean },
+  opts?: CheckConfirmAdvanceOptions,
 ): void {
   if (userText.trim() === '') return
   try {
@@ -296,6 +346,15 @@ export function checkConfirmAdvanceInput(
               }, project.projectId)
             } catch { /* 域点失败不影响 */ }
             console.log(`[南大路由] ask-answer 无匹配活跃收口问句（${ask ? '目标不匹配' : installWhitelisted ? 'install-only 横幅白名单豁免' : '无问句'}），不授权（${project.name}）`)
+            // P0-3：拒因提升到 UI（态③目标不匹配/态①无问句；install-only 白名单豁免属
+            // 正常路径不注入拒因提示）
+            if (!installWhitelisted) {
+              opts?.notifyDenial?.(buildConfirmDenialNotice({
+                workspaceSlug, projectId: project.projectId, currentStage: String(project.currentStage),
+                kind: ask ? 'ask-not-matching' : 'no-active-ask',
+                expectedFromAsk: ask?.expectedTarget, harnessExpected,
+              }))
+            }
           }
         } else if (opts?.humanOrigin === true) {
           // I1-②：真 UI 人类消息 + 活跃收口问句绑定（R4-02：散点确认词不授权）
@@ -313,6 +372,12 @@ export function checkConfirmAdvanceInput(
               }, project.projectId)
             } catch { /* 埋点失败不影响 */ }
             console.log(`[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，${project.name}）`)
+            // P0-3（ATK-L-002）：原「不提示」改为显式注入——G3b 实测 testing 8 轮从未
+            // 登记问句、指挥官 7 次文字确认全部无效；仅落日志的拒因必须提升到 UI。
+            opts?.notifyDenial?.(buildConfirmDenialNotice({
+              workspaceSlug, projectId: project.projectId, currentStage: String(project.currentStage),
+              kind: 'scatter-no-auth',
+            }))
           }
         }
         // 其余（source='message' 且 humanOrigin≠true）：send_message/HTTP bridge/事件流
@@ -569,7 +634,17 @@ hooks: PhaseAdvanceHooks,
           const gateError = hooks.checkGwtDeliveryGate(workspaceSlug, project.projectId)
           if (gateError) {
             console.log(`[南大路由] GWT 交付门禁拦截，不推进: ${gateError}`)
-            hooks.injectAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}`)
+            // P0-3：交付拦截时附带授权链状态（testing 阶段无活跃收口问句的常态显式化
+            //——G3b 实测 8 轮从未登记问句；用户此时手动确认推进也不会生效，提前告知）
+            let authStateNote = ''
+            try {
+              const { getConfirmAskDiagnostics } = require('./nanju-project') as typeof import('./nanju-project')
+              const diag = getConfirmAskDiagnostics(workspaceSlug, project.projectId, 'testing')
+              authStateNote = diag.active
+                ? `\n📋 授权链状态：收口确认问句在位（目标 → ${diag.active.expectedTarget}，剩余约 ${Math.ceil(diag.active.remainingMs / 60000)} 分钟）。`
+                : `\n📋 授权链状态：当前无活跃收口确认问句（testing 阶段登记 ${diag.stageRegisteredCount} 次）——此时聊天框发送确认词不构成推进授权；交付需等待 GWT 验收 verdict=pass 后按向导流程收口。`
+            } catch { /* 诊断失败不阻断拦截提示 */ }
+            hooks.injectAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}${authStateNote}`)
           } else {
             // W18 Wave2：交付成功单次写双字段（currentStage=delivered + status=completed
             // 同拍落库）；finishedFirstTime 守门幂等——跨 run 重复 delivered 声明不重复计埋点

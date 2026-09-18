@@ -529,3 +529,22 @@ describe('Given quick 或 iterative When 架构师接单', () => {
     }
   })
 })
+
+describe('Given P0-5 架构师任务书注入（L1，2026-09-18）When 构建架构阶段约束', () => {
+  test('Then J1/J3/J4/J5 四件注入两变体（模版必读/Spike 派发权/T1-T3/00_SPIKES 落位）+ 知识边界条文', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const constraints = getPhaseNode(mode, 'architecture')!.constraints.join('\n')
+      expect(constraints).toContain('工程模版必读（J1）')
+      expect(constraints).toContain('§2 组件环境清单')
+      expect(constraints).toContain('§7 坑库')
+      expect(constraints).toContain('Spike 派发权（J3）')
+      expect(constraints).toContain('Spike 触发判据（J4')
+      expect(constraints).toContain('T1 知识缺口')
+      expect(constraints).toContain('Spike 产物落位（J5）')
+      expect(constraints).toContain('00_SPIKES/spike-<NNN>-<slug>/')
+      expect(constraints).toContain('00_SPIKES/INDEX.md')
+      expect(constraints).toContain('知识边界硬性条文')
+      expect(constraints).toContain('URL+检索日期')
+    }
+  })
+})

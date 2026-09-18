@@ -262,7 +262,7 @@ function registerConfirmAskIfEligible(
     const { getNextPhase } = require('./nanju-router') as typeof import('./nanju-router')
     const expected = getNextPhase(project.mode, stage as import('./nanju-router').PhaseId)
     if (!expected) return
-    setActiveConfirmAsk(workspaceSlug, project.projectId, expected)
+    setActiveConfirmAsk(workspaceSlug, project.projectId, expected, String(stage)) // P0-3：登记历史带阶段（三态拒因数据源）
     console.log(`[南大路由] 登记活跃确认问句（expectedTarget=${expected}，10min TTL）: ${project.name}`)
   } catch (e) {
     console.warn('[南大路由] activeConfirmAsk 登记异常（不影响放行）:', e instanceof Error ? e.message : String(e))
@@ -389,9 +389,11 @@ export function findNanjuProjectBySession(workspaceSlug: string, sessionId: stri
 /** 写类工具（工单口径：Write/Edit/NotebookEdit；Bash 按命令文本保守拦截，单独判定） */
 const UNBOUND_WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 
-/** 项目脚手架阶段目录（nanju-project.ts createNanjuProject 的 docDirs 同源清单） */
+/** 项目脚手架阶段目录（nanju-project.ts createNanjuProject 的 docDirs 同源清单；
+ *  P0-5：含 00_SPIKES——Spike 实验产物目录，未绑定普通会话写入同样归因拦截，
+ *  委派子会话（Spike 子会话）按 isDelegationChildSession 豁免不受影响） */
 const STAGE_DIR_NAMES = new Set([
-  '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE', '04_API_SPEC',
+  '00_SPIKES', '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE', '04_API_SPEC',
   '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS', '08_APP',
 ])
 
@@ -566,7 +568,7 @@ function findUnboundBashHit(
   // 2) 裸阶段目录前缀（echo x > 01_PRD/y 类；08_APP 仅全 delivered 工作区放行）。
   //    落在已豁免项目路径提及范围内的阶段目录不重复计数（cat project-dlv/08_APP/x 的
   //    08_APP/ 已在第 1 步按项目归属豁免）
-  const stageDirRe = /\b(01_PRD|02_UX_DESIGN|03_ARCHITECTURE|04_API_SPEC|05_PROJECT_PLAN|06_TESTS|07_VERSIONS|08_APP)\//g
+  const stageDirRe = /\b(00_SPIKES|01_PRD|02_UX_DESIGN|03_ARCHITECTURE|04_API_SPEC|05_PROJECT_PLAN|06_TESTS|07_VERSIONS|08_APP)\//g
   for (const match of command.matchAll(stageDirRe)) {
     const start = match.index ?? 0
     if (exemptRanges.some(([s, e]) => start >= s && start < e)) continue

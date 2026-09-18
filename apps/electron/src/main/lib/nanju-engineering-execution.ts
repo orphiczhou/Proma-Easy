@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { captureEngineeringEvidence, ENGINEERING_CONTRACT_PATH, parseEngineeringContract } from './nanju-engineering-contract'
 import type { EngineeringEvidence, EngineeringTestPlan } from './nanju-engineering-contract'
+import { isEngineeringDriverIo, type EngineeringDriverIo } from './nanju-engineering-driver-io'
 
 export class EngineeringExecutionBlocked extends Error {}
 
@@ -64,6 +65,8 @@ export interface EngineeringExecutionResult {
   coveredUs: string[]
   checks: EngineeringCheckResult[]
   evidenceDigest: string
+  /** P0-2：驱动 stdout/stderr 尾部（管道后）；error 轮由 gwt 报告层生成诊断摘要与旁挂。 */
+  driverIo?: EngineeringDriverIo
 }
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -78,6 +81,8 @@ function normalizeStory(value: string): string {
 /** 结果必须绑定已批准的测试对象；US来源于契约，不能由驱动任意扩大覆盖。 */
 function interpret(input: EngineeringExecutionInput, raw: unknown): EngineeringExecutionResult {
   const base: EngineeringExecutionResult = { testId: input.test.id, target: input.test.target, status: 'error', reason: null, coveredUs: [], checks: [], evidenceDigest: input.evidence.digest }
+  // P0-2：driverIo 由宿主 process-driver 附加（非驱动自报）；形态异常时静默丢弃不阻断判定。
+  if (object(raw) && isEngineeringDriverIo(raw.driverIo)) base.driverIo = raw.driverIo
   const invalid = (reason: string): EngineeringExecutionResult => ({ ...base, reason: '测试驱动结果不可用：' + reason })
   if (!object(raw) || raw.testId !== input.test.id || raw.target !== input.test.target) return invalid('测试编号或被测产物不对应')
   if (typeof raw.exitCode !== 'number' || !Number.isInteger(raw.exitCode)) return invalid('缺少实际退出状态')
@@ -134,6 +139,9 @@ export async function runRegisteredEngineeringTest(input: EngineeringExecutionIn
   } catch (error) {
     if (input.signal.aborted) return blocked('测试已取消')
     if (error instanceof EngineeringExecutionBlocked) return blocked(error.message)
-    return { ...blocked('测试执行异常：' + (error instanceof Error ? error.message : String(error))), status: 'error' }
+    // P0-2：进程驱动错误携带的 IO 尾部随 error 轮结果透传（崩溃/超时/非法 JSON 同样有尾部）
+    const carrier = error instanceof Error ? (error as unknown as { driverIo?: unknown }) : null
+    const io = carrier && isEngineeringDriverIo(carrier.driverIo) ? carrier.driverIo : undefined
+    return { ...blocked('测试执行异常：' + (error instanceof Error ? error.message : String(error))), status: 'error', ...(io ? { driverIo: io } : {}) }
   }
 }

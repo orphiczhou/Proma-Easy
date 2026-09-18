@@ -111,9 +111,11 @@ export function __resetEngineeringServiceRegistryForTests(): void {
  * C 只导出稳定描述；approval 侧接线归 I（S3）。
  */
 export function describeEngineeringServicePlan(service: EngineeringServicePlan): string {
+  // P0-1（AC 审计 Y-02）：service.env 注入清单进批准文案（仅变量名）
+  const envPart = service.env && service.env.length > 0 ? `；环境变量注入：${service.env.join('、')}（仅变量名，值取宿主环境）` : ''
   return `服务运行时：${service.runtime}；服务文件：${service.path}；参数：${JSON.stringify(service.args)}；` +
     `端口：127.0.0.1:${service.port}；就绪路径：${service.readyPath}；就绪超时：${service.readyTimeoutMs}ms` +
-    '（宿主在批准后先启动该 loopback 服务，端口被占用即拒绝，不接管他人服务）'
+    '（宿主在批准后先启动该 loopback 服务，端口被占用即拒绝，不接管他人服务）' + envPart
 }
 
 function resolveExecutable(input: EngineeringExecutionInput, runtimes: EngineeringServiceRuntimes): string {
@@ -169,12 +171,18 @@ export async function startEngineeringService(input: EngineeringExecutionInput, 
   const handleId = randomUUID()
   const baseUrl = `http://127.0.0.1:${plan.port}`
   // 不继承渠道密钥；nonce 作为唯一「本进程身份」随 env 下发，服务需要的网络/设备副作用由单次批准内容说明。
-  const child = deps.spawnService(executable, plan.args, cwd, {
+  // P0-1（2026-09-18）：service.env 契约声明式透传（仅变量名，值取宿主环境，不落盘；
+  // 与驱动侧 buildDriverEnv 同语义）。
+  const serviceEnv: NodeJS.ProcessEnv = {
     PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG, TMPDIR: process.env.TMPDIR,
     DISPLAY: process.env.DISPLAY, WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
     DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, PULSE_SERVER: process.env.PULSE_SERVER,
     [SERVICE_READY_NONCE_ENV]: readyNonce,
-  })
+  }
+  for (const name of plan.env ?? []) {
+    if (process.env[name] !== undefined) serviceEnv[name] = process.env[name]
+  }
+  const child = deps.spawnService(executable, plan.args, cwd, serviceEnv)
   let stopped = false
   const teardown = (): void => {
     if (stopped) return

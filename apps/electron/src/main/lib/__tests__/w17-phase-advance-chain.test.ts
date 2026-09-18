@@ -427,7 +427,8 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
   const orchestratorSource = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
 
   test('事件流路径：user 消息检测调用 checkConfirmAdvanceInput（共用同一实现，未复制逻辑）', () => {
-    expect(orchestratorSource).toContain('checkConfirmAdvanceInput(sessionId, workspaceSlug, userText)')
+    // P0-3：事件流路径调用新增 notifyDenial（授权拒因 UI 注入）；断言锚定函数调用头部
+    expect(orchestratorSource).toMatch(/checkConfirmAdvanceInput\(sessionId, workspaceSlug, userText/)
     expect(orchestratorSource).toMatch(/msg\.type === 'user' && workspaceSlug && !automationContext/)
   })
 
@@ -477,7 +478,8 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
     expect(orchestratorSource).toContain("askToolUseNames.get(block.tool_use_id) !== 'AskUserQuestion'")
     // 答案文本（answers 值）送同一 checkConfirmAdvanceInput（三路径共用；W18 起横幅答案
     // 额外传 source='ask-answer'——唯一可置位交付 ack 的来源）
-    expect(orchestratorSource).toContain("checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText, 'ask-answer')")
+    // P0-3：横幅答案路径调用新增 notifyDenial；断言锚定函数调用头部
+    expect(orchestratorSource).toMatch(/checkConfirmAdvanceInput\(sessionId, workspaceSlug, answerText, 'ask-answer'/)
   })
 
   test('W17-AC-M2（A2 系统消息豁免）：systemInitiated 续接不进用户意图检测，且不用 triggeredBy 替代', () => {
@@ -1695,5 +1697,91 @@ describe('W-I B-c：captureCheckpoint hook（阶段推进即工程检查点）',
     expect(source).toContain("'init',")
     expect(source).not.toContain('return createSnapshot(input.workspaceSlug')
     expect(source).not.toContain('return rollbackToSnapshot(input.workspaceSlug')
+  })
+})
+
+// ═══════════════ P0-3（L1，2026-09-18）：授权阻塞态显式化（三态拒因） ═══════════════
+// AC 审计 Y-06：GWT 交付门禁拦截时的授权链状态附注（态②在位/无问句常态的呈现路径）
+describe('P0-3/Y-06：交付门禁拦截附带授权链状态', () => {
+  test('gateError 时注入消息含授权链状态（无活跃问句常态显式化——G3b testing 8 轮未登记场景）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({ stage: 'testing' })
+    const base = buildTestHooks()
+    const injected = base.injected
+    // 构造 gateError：checkGwtDeliveryGate 返回拦截理由
+    const marks = consumePhaseAdvanceMarks(SESSION_ID, WS, ['delivered'],
+      { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
+      { ...base, checkGwtDeliveryGate: () => '需要 verdict=pass 的测试报告' })
+    expect(marks).toBeNull() // 未推进
+    const deliveryNotice = injected.find((x) => x.includes('交付被拦截'))
+    expect(deliveryNotice).toBeTruthy()
+    expect(deliveryNotice).toContain('需要 verdict=pass 的测试报告')
+    expect(deliveryNotice).toContain('授权链状态：当前无活跃收口确认问句')
+    expect(deliveryNotice).toContain('testing 阶段登记 0 次')
+  })
+  test('问句在场时 gateError 附注显示态②（在位+剩余时间）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({ stage: 'testing' })
+    mod.setActiveConfirmAsk(WS, 'p1', 'delivered', 'testing')
+    const base = buildTestHooks()
+    const injected = base.injected
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['delivered'],
+      { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
+      { ...base, checkGwtDeliveryGate: () => '需要 verdict=pass 的测试报告' })
+    const deliveryNotice = injected.find((x) => x.includes('交付被拦截'))
+    expect(deliveryNotice).toContain('收口确认问句在位（目标 → delivered')
+    expect(deliveryNotice).toContain('剩余约')
+    mod.clearActiveConfirmAsk(WS, 'p1')
+  })
+})
+
+
+describe('P0-3：收口问句登记历史与三态拒因诊断', () => {
+  test('登记历史：setActiveConfirmAsk 带 stage 追加历史，getConfirmAskDiagnostics 可观测', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    mod.setActiveConfirmAsk(WS, 'p1', 'coding', 'architecture')
+    const diag = mod.getConfirmAskDiagnostics(WS, 'p1', 'architecture')
+    expect(diag.stageRegisteredCount).toBe(1)
+    expect(diag.active?.expectedTarget).toBe('coding')
+    expect(diag.active?.remainingMs).toBeGreaterThan(0)
+    expect(diag.lastRegistration?.stage).toBe('architecture')
+    expect(diag.lastRegistration?.expectedTarget).toBe('coding')
+    mod.clearActiveConfirmAsk(WS, 'p1')
+  })
+  test('散点确认（无活跃问句）→ notifyDenial 注入三态拒因提示（态①：本阶段登记 0 次）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({}) // requirements 阶段（verify 通过、确认词可命中的既有可跑形态）
+    const notices: string[] = []
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进', 'message', {
+      humanOrigin: true,
+      notifyDenial: (text) => notices.push(text),
+    })
+    expect(notices.length).toBe(1)
+    expect(notices[0]).toContain('推进授权未生效')
+    expect(notices[0]).toContain('无活跃的收口确认问句')
+    expect(notices[0]).toContain('登记 0 次')
+  })
+  test('横幅答案目标不匹配 → notifyDenial 态③（附期望/实际）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({}) // requirements 阶段；合法下一阶段=prototype
+    mod.setActiveConfirmAsk(WS, 'p1', 'coding', 'requirements') // 期望目标 coding ≠ 合法下一阶段 prototype → 目标不匹配
+    const notices: string[] = []
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进', 'ask-answer', {
+      notifyDenial: (text) => notices.push(text),
+    })
+    expect(notices.length).toBe(1)
+    expect(notices[0]).toContain('期望推进目标与当前阶段不一致')
+    expect(notices[0]).toContain('coding')
+    mod.clearActiveConfirmAsk(WS, 'p1')
   })
 })

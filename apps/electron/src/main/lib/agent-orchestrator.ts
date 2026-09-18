@@ -2562,6 +2562,8 @@ export class AgentOrchestrator {
         // 输入不进事件流）。
         checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage, 'message', {
           humanOrigin: input.humanOrigin === true,
+          // P0-3：确认不构成授权时向 UI 注入三态拒因提示（复用助手消息通道）
+          notifyDenial: (text) => this.injectNanjuAssistantMessage(sessionId, text),
         })
         // #2 dialog.submitted（PRD §12.4）：真用户消息提交即发射（隐私收敛——只发
         // mode/turn/inputLength/vague/autoFilledCount，**不存原文**；见 F.md §9 父裁决）。
@@ -3030,7 +3032,9 @@ export class AgentOrchestrator {
               const userContent = (msg as { message?: { content?: Array<{ type: string; text?: string }> } }).message?.content
               if (Array.isArray(userContent) && !userContent.some((b) => b.type === 'tool_result')) {
                 const userText = userContent.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
-                checkConfirmAdvanceInput(sessionId, workspaceSlug, userText)
+                checkConfirmAdvanceInput(sessionId, workspaceSlug, userText, undefined, {
+                  notifyDenial: (text) => this.injectNanjuAssistantMessage(sessionId, text),
+                })
               }
               // W17-AC-M1：AskUserQuestion 答案（tool_result 形态）→ 提取 answers 值送同一检测
               if (Array.isArray(userContent) && userContent.some((b) => b.type === 'tool_result')) {
@@ -3052,7 +3056,9 @@ export class AgentOrchestrator {
                     if (answerText.trim() !== '') {
                       // W18：AskUserQuestion 横幅答案传 source='ask-answer'——唯一可置位
                       // 交付 ack 的来源（精确等值「满意交付」+ challenge 在场，见 consumer）
-                      checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText, 'ask-answer')
+                      checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText, 'ask-answer', {
+                        notifyDenial: (text) => this.injectNanjuAssistantMessage(sessionId, text),
+                      })
                     }
                   } catch (e) {
                     console.warn('[南大路由] AskUserQuestion 答案解析失败（不阻断）:', e instanceof Error ? e.message : String(e))

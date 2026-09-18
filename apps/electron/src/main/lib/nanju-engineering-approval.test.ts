@@ -101,6 +101,36 @@ test('B-b：browser-url 测试的批准说明展示真实服务计划（runtime/
   expect(seenPayload.driver).toBeUndefined()
 })
 
+test('P0-1/Y-02：契约声明的 env 注入清单在单次批准文案中透明展示（仅变量名）', async () => {
+  const service = new AgentPermissionService()
+  const base = input()
+  const declared: EngineeringExecutionInput = {
+    ...base,
+    test: {
+      ...base.test,
+      driver: { runtime: 'node', path: 'check.cjs', args: [], timeoutMs: 3000, env: ['DASHSCOPE_API_KEY'] },
+      service: { runtime: 'node', path: 'server.cjs', args: [], port: 4319, readyPath: '/health', readyTimeoutMs: 3000, env: ['MY_SVC_TOKEN'] },
+    },
+  }
+  let seenDescription = ''
+  const approve = createEngineeringTestApproval('session-env', (request) => {
+    seenDescription = request.sdkDescription ?? ''
+    service.respondToPermission(request.requestId, 'allow', false)
+  }, service)
+  expect(await approve(declared)).toBe(true)
+  expect(seenDescription).toContain('环境变量注入：DASHSCOPE_API_KEY')
+  expect(seenDescription).toContain('MY_SVC_TOKEN')
+  expect(seenDescription).toContain('仅变量名')
+  // 未声明 env 的既有测试零变化（无注入行）
+  let plainDescription = ''
+  const approve2 = createEngineeringTestApproval('session-env2', (request) => {
+    plainDescription = request.sdkDescription ?? ''
+    service.respondToPermission(request.requestId, 'allow', false)
+  }, service)
+  expect(await approve2(input())).toBe(true)
+  expect(plainDescription).not.toContain('环境变量注入：')
+})
+
 test('B-b：非 browser-url 测试不追加服务行（零行为变化）', async () => {
   const service = new AgentPermissionService()
   let seenDescription = ''

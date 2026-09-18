@@ -48,6 +48,9 @@ export interface EngineeringDriverPlan {
   path: string
   args: string[]
   timeoutMs: number
+  /** P0-1（schema v2，2026-09-18）：驱动所需环境变量名清单（不含值）；值由宿主进程环境
+   * 提供，不写入契约、不落盘。仅 schemaVersion=2 可声明；v1 无此字段等价 env=[]。 */
+  env?: string[]
 }
 /** browser-url测试的服务计划：固定runtime+argv；宿主在单次批准后才启动、持有loopback服务句柄。 */
 export interface EngineeringServicePlan {
@@ -55,6 +58,8 @@ export interface EngineeringServicePlan {
   /** 服务文件，相对08_APP且必须列入artifacts（源码指纹绑定批准）。 */
   path: string
   args: string[]
+  /** P0-1（schema v2）：服务进程所需环境变量名清单；语义同 driver.env。 */
+  env?: string[]
   /** 1024至65535的loopback固定端口；宿主启动前探测，已被占用即拒绝，不接管他人服务。 */
   port: number
   /** 就绪探测路径（以/开头，不含查询串）；就绪判定以响应携带本次启动 nonce 为准（header 或 body），任意 HTTP 状态码不够。 */
@@ -79,7 +84,10 @@ export interface EngineeringTestPlan {
   scenarioFiles?: string[]
 }
 export interface EngineeringContract {
-  schemaVersion: 1
+  /** P0-1（2026-09-18）：v2 为新工程默认（可携带可选 env 字段）；v1 存量档案原样有效
+   * （无 env 等价 env=[]，不迁移不重写）；在途 v1 工程声明 env 的通道=显式改 schemaVersion 为 2
+   * （校验器接受显式版本升级）。v1 文件出现 env 字段视为校验错误。 */
+  schemaVersion: 1 | 2
   target: { platform: string; kind: typeof TARGET_KINDS[number]; entry: string }
   artifacts: string[]
   build: string
@@ -115,12 +123,39 @@ function artifactPath(value: unknown): value is string {
     && value.split('/').every((part) => Boolean(part) && part !== '.' && part !== '..')
 }
 
+/** 合法环境变量名（POSIX 惯例：字母/下划线开头，字母数字下划线；长度≤64）。 */
+function envVarName(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value) && value.length <= 64
+}
+
+/** P0-1（schema v2）：driver/service 的 env 声明清单校验（仅 v2 契约允许）。
+ * v1 契约携带 env 字段视为校验错误（升级通道=显式将 schemaVersion 改 2）。 */
+function declaredEnvList(owner: Record<string, unknown>, label: string, schemaVersion: unknown, problems: string[]): void {
+  if (owner.env === undefined) return
+  if (schemaVersion !== 2) {
+    problems.push(label + ' env 字段仅 schemaVersion=2 契约可声明；在途 v1 工程请显式将 schemaVersion 改为 2 后再声明')
+    return
+  }
+  if (!Array.isArray(owner.env) || owner.env.length === 0 || owner.env.length > 32) {
+    problems.push(label + ' env 必须为1至32项的环境变量名数组')
+    return
+  }
+  const seen = new Set<string>()
+  for (const name of owner.env) {
+    if (!envVarName(name)) { problems.push(label + ' env 含非法环境变量名（须为字母/下划线开头、字母数字下划线、≤64字符）：' + JSON.stringify(name)); continue }
+    if (seen.has(name)) { problems.push(label + ' env 变量名不得重复：' + name); continue }
+    seen.add(name)
+  }
+}
+
 export function parseEngineeringContract(raw: string): { contract: EngineeringContract | null; problems: string[] } {
   let value: unknown
   try { value = JSON.parse(raw) } catch { return { contract: null, problems: ['工程契约不是有效 JSON'] } }
   if (!record(value)) return { contract: null, problems: ['工程契约必须为对象'] }
   const problems: string[] = []
-  if (value.schemaVersion !== 1) problems.push('工程契约 schemaVersion 必须为 1')
+  // P0-1：双版本接受——v1 存量档案原样有效，v2 为新工程默认（方可携带可选 env 字段）。
+  const schemaVersion = value.schemaVersion
+  if (schemaVersion !== 1 && schemaVersion !== 2) problems.push('工程契约 schemaVersion 必须为 1 或 2')
   const target = record(value.target) ? value.target : {}
   if (!text(target.platform) || !member(target.kind, TARGET_KINDS) || !artifactPath(target.entry)) {
     problems.push('target 必须明确 platform、kind 和相对于 08_APP 的 entry')
@@ -156,6 +191,7 @@ export function parseEngineeringContract(raw: string): { contract: EngineeringCo
       if (typeof driver.timeoutMs !== 'number' || !Number.isInteger(driver.timeoutMs) || driver.timeoutMs < 100 || driver.timeoutMs > 600000) {
         problems.push(label + ' driver.timeoutMs 必须为100至600000毫秒')
       }
+      declaredEnvList(driver, label + ' driver', schemaVersion, problems)
     }
     if (row.service !== undefined) {
       const service = record(row.service) ? row.service : {}
@@ -177,6 +213,7 @@ export function parseEngineeringContract(raw: string): { contract: EngineeringCo
         if (typeof service.readyTimeoutMs !== 'number' || !Number.isInteger(service.readyTimeoutMs) || service.readyTimeoutMs < 100 || service.readyTimeoutMs > 60000) {
           problems.push(label + ' service.readyTimeoutMs必须为100至60000毫秒')
         }
+        declaredEnvList(service, label + ' service', schemaVersion, problems)
       }
     }
     if (row.adapter === 'browser-url' && row.service === undefined) problems.push(label + ' browser-url测试必须声明service服务计划，固定runtime与argv')

@@ -121,8 +121,10 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
     label: '桌面应用',
     oneLiner: '本地桌面程序（Windows/macOS/Linux），不是网站——不存在「部署上线」，运行在用户本机，有系统层能力',
     stack: [
-      '技术栈参考：Tauri v2 + React + TypeScript（Vite + Tailwind + Zustand）；无 Rust 经验或重 Node 原生模块时备选 Electron',
-      '两层架构：UI 层（Web 技术，可浏览器渲染）+ 系统层（Rust/Node：文件/窗口/托盘/快捷键/输入法 hook 等，经 IPC 命令暴露）',
+      // P0-4（L1，2026-09-18）：双路径文案——与 desktop v2 模板 §1 技术栈矩阵对齐
+      //（P1 Python 快速验证 / P2 Tauri 正式交付），纠正 v1 仅推荐 Tauri 与实测 Python 栈的脱节。
+      '双路径技术栈（见模板全文 §1）：P1 快速验证路径（Python 3.10+，系统集成栈 pynput/sounddevice/pystray/xclip，本机可验证优先，适用系统集成类工具）',
+      'P2 正式交付路径（Tauri v2 + React + TypeScript + Vite + Tailwind + Zustand，UI 密集/跨平台分发；无 Rust 经验且重 Node 原生模块时备选 Electron；环境风险被 Spike 排除后转入）',
     ],
     structure: [
       '08_APP/src/：UI 层（components/layouts/features + stores + hooks，与 Web 前端同构）',
@@ -394,15 +396,27 @@ const ENV_COMPONENT_SHARED = new Set([
   'display',
 ])
 const ENV_COMPONENTS_BY_CATEGORY: Record<ProjectCategory, Set<string>> = {
-  'web-fullstack': new Set([]),
-  'api-backend': new Set(['python3', 'pip', 'uv', 'poetry', 'go', 'rustc', 'cargo', 'docker', 'docker-compose']),
-  'mobile-app': new Set(['watchman', 'adb', 'xcodebuild', 'xcode-select', 'swift', 'pod', 'cocoapods', 'java', 'gradle']),
+  'web-fullstack': new Set(['corepack', 'nvm', 'postgresql', 'psql', 'pg_isready', 'sqlite', 'sqlite3', 'playwright', 'docker', 'docker-compose']),
+  'api-backend': new Set(['python3', 'pip', 'uv', 'poetry', 'go', 'rustc', 'cargo', 'docker', 'docker-compose',
+    // P0-4：api-backend v2 模板 §2.1 组件对齐（curl/httpie 驱动、postgres/redis、原生哈希依赖）
+    'curl', 'httpie', 'postgresql', 'psql', 'pg_isready', 'redis', 'argon2', 'bcrypt', 'build-essential', 'node-gyp']),
+  'mobile-app': new Set(['watchman', 'adb', 'xcodebuild', 'xcode-select', 'swift', 'pod', 'cocoapods', 'java', 'gradle',
+    // P0-4：mobile v2 模板 §2.1 组件对齐（Expo/EAS/模拟器工具链；npx 为共享 npm 生态入口）
+    'expo', 'eas', 'eas-cli', 'avdmanager', 'sdkmanager', 'android-studio', 'npx']),
   // W24-10：补 Tauri v2 Linux 真实依赖（desktop-app 模板默认栈；架构师实测探测出
   // webkit2gtk-4.1/gtk+-3.0/libsoup-3.0/ayatana-appindicator3 被白名单误判幻觉包名）
   'desktop-app': new Set(['rustc', 'cargo', 'rustup', 'electron', 'pkg-config', 'cmake', 'clang', 'gcc', 'cc', 'make', 'python3',
-    'webkit2gtk-4.1', 'webkit2gtk-4.0', 'gtk+-3.0', 'gtk3', 'libsoup-3.0', 'libsoup', 'ayatana-appindicator3-0.1', 'libappindicator', 'appindicator', 'javascriptcoregtk-4.1', 'libsoup-3.0-dev']),
-  'cli-tool': new Set(['python3', 'pip', 'uv', 'go', 'rustc', 'cargo']),
-  'ai-application': new Set(['python3', 'pip', 'uv', 'poetry', 'ollama', 'docker']),
+    'webkit2gtk-4.1', 'webkit2gtk-4.0', 'gtk+-3.0', 'gtk3', 'libsoup-3.0', 'libsoup', 'ayatana-appindicator3-0.1', 'libappindicator', 'appindicator', 'javascriptcoregtk-4.1', 'libsoup-3.0-dev',
+    // P0-4（L1，2026-09-18）：desktop v2 模板双路径——P1 快速验证路径（Python）组件补齐。
+    // 品类白名单与 v2 模板 §2 组件环境清单对齐（pynput/sounddevice/pystray/xclip/xdotool/
+    // notify-send/pyaudio/portaudio/pip 为测试定死最小集；pillow/numpy/requests/httpx/
+    // libnotify/libportaudio2/pyperclip/xsel 为 §2.1/§2.2 卡片与降级替代项）。
+    'pynput', 'sounddevice', 'pyaudio', 'pystray', 'pillow', 'xclip', 'xsel', 'xdotool',
+    'notify-send', 'libnotify', 'portaudio', 'libportaudio2', 'pyperclip', 'requests', 'httpx', 'numpy', 'pip',
+    // venv/音频探测项（§2.3 check_env.sh 探测行；架构师实测会照抄进环境清单表）
+    'venv', 'audio-devices']),
+  'cli-tool': new Set(['python3', 'pip', 'uv', 'go', 'rustc', 'cargo', 'tsx', 'execa']),
+  'ai-application': new Set(['python3', 'pip', 'uv', 'poetry', 'ollama', 'docker', 'psql', 'pgvector', 'libsql']),
 }
 
 /** 环境清单校验结果 */
@@ -457,10 +471,14 @@ export function validateEnvChecklist(
     return { ok: false, problems: ['环境配置清单为空：architecture.md 未解析到环境组件清单（## 环境配置 节缺失或表格为空）'] }
   }
   for (const raw of checklist) {
+    // P0-4（2026-09-18）：先整串精确匹配——保护白名单内含 "+" 的合法名（gtk+-3.0 等），
+    // 再做复合名拆分校验。实测拆分符补 "+"（v2 模板 §2.1 用「python3 + venv」/
+    // 「pystray + Pillow」并联写法，架构师照抄会被误拦「幻觉包名」）。
+    if (allowed.has(raw.trim().toLowerCase())) continue
     // W24-10：复合名拆分校验——实测架构师会写「pkg-config / cc (gcc)」一行的多组件
-    // 合写（斜杠并列/括号别名），按 token 逐个校验（全合法即过），不再整体误拦。
+    // 合写（斜杠/加号并列/括号别名），按 token 逐个校验（全合法即过），不再整体误拦。
     const tokens = raw
-      .split(/[/,，、]/)
+      .split(/[/+,，、]/)
       .flatMap((seg) => {
         const paren = /\(([^)]*)\)/.exec(seg)
         return [seg.replace(/\([^)]*\)/g, ''), paren?.[1] ?? '']

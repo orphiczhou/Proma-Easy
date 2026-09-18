@@ -525,8 +525,9 @@ describe('W18 编排器接线源码断言', () => {
   })
 
   test('来源传参：AskUser tool_result 路径传 source=ask-answer；事件流/初始输入两处保持默认 message', () => {
-    expect(orchestratorSource).toContain("checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText, 'ask-answer')")
-    expect(orchestratorSource).toContain('checkConfirmAdvanceInput(sessionId, workspaceSlug, userText)')
+    // P0-3（2026-09-18）：调用新增 notifyDenial（授权拒因 UI 注入）——断言锚定调用头部形态
+    expect(orchestratorSource).toMatch(/checkConfirmAdvanceInput\(sessionId, workspaceSlug, answerText, 'ask-answer'/)
+    expect(orchestratorSource).toMatch(/checkConfirmAdvanceInput\(sessionId, workspaceSlug, userText/)
     // 当前Pi入口显式传message来源与上下文；旧零参数后缀断言在9759e2f8已过时。
     expect(orchestratorSource).toContain("checkConfirmAdvanceInput(sessionId, workspaceSlug, userMessage, 'message', {")
   })

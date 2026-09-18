@@ -310,7 +310,10 @@ export function createNanjuProject(input: {
   writeJsonFileAtomic(getMetaPath(input.workspaceSlug), existing)
 
   // 创建文档目录骨架，使用 project-{slugified-name} 格式（08_APP：P1 Sprint A coding 阶段产物目录）
+  // P0-5（2026-09-18）：00_SPIKES 注册进工程目录规范合法产物目录集（Spike 实验产物六件套
+  // 落位目录，见 02-Spike实验协议 §4；架构师可按 T1-T3 判据派 Spike 子会话写入）
   const docDirs = [
+    '00_SPIKES',
     '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE',
     '04_API_SPEC', '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS', '08_APP',
   ]
@@ -1128,13 +1131,62 @@ export function consumeConfirmAuthorization(workspaceSlug: string, projectId: st
   confirmAuthorizationStore.delete(authKey(workspaceSlug, projectId))
 }
 
-/** 登记 activeConfirmAsk（「确认」header 问句放行时；expectedTarget=harness 按阶段图算的唯一下一阶段） */
+/** 登记 activeConfirmAsk（「确认」header 问句放行时；expectedTarget=harness 按阶段图算的唯一下一阶段）
+ * P0-3（2026-09-18）：同步追加登记历史（内存滚动窗口，供授权阻塞态三态拒因提示——
+ * 「本阶段登记数/上次登记的阶段/发起方/时间」数据源；G3b 实测 testing 8 轮从未登记
+ * 问句、7 次文字确认全部无效且仅落日志）。 */
 export function setActiveConfirmAsk(
   workspaceSlug: string,
   projectId: string,
   expectedTarget: string,
+  stage?: string,
 ): void {
   activeConfirmAskStore.set(authKey(workspaceSlug, projectId), { askedAt: Date.now(), expectedTarget })
+  try {
+    const logKey = authKey(workspaceSlug, projectId)
+    const log = confirmAskLogStore.get(logKey) ?? []
+    log.push({ ts: Date.now(), expectedTarget, stage: stage ?? '未知阶段', by: 'AskUserQuestion 放行（阶段收口类问句）' })
+    confirmAskLogStore.set(logKey, log.slice(-50)) // 滚动窗口：防内存膨胀
+  } catch { /* 历史登记失败不影响问句置位 */ }
+}
+
+// ===== P0-3：收口问句登记历史（授权阻塞态可观测性；内存态，重启即空——与授权态同生命周期） =====
+export interface NanjuConfirmAskLogEntry {
+  ts: number
+  expectedTarget: string
+  stage: string
+  by: string
+}
+const confirmAskLogStore = new Map<string, NanjuConfirmAskLogEntry[]>()
+
+/** P0-3：授权链三态拒因诊断数据（供 UI 显式提示；数据源=平台既有授权判定路径）。 */
+export interface NanjuConfirmAskDiagnostics {
+  /** 当前活跃问句（TTL 内）；含剩余毫秒 */
+  active: { expectedTarget: string; askedAt: number; remainingMs: number } | null
+  /** 本阶段（按登记时 stage 计）登记次数 */
+  stageRegisteredCount: number
+  /** 最近一次登记（无则 null） */
+  lastRegistration: NanjuConfirmAskLogEntry | null
+}
+
+export function getConfirmAskDiagnostics(
+  workspaceSlug: string,
+  projectId: string,
+  currentStage: string,
+): NanjuConfirmAskDiagnostics {
+  const key = authKey(workspaceSlug, projectId)
+  const active = getActiveConfirmAsk(workspaceSlug, projectId)
+  const log = confirmAskLogStore.get(key) ?? []
+  return {
+    active: active ? { expectedTarget: active.expectedTarget, askedAt: active.askedAt, remainingMs: Math.max(0, NANJU_ADVANCE_AUTH_TTL_MS - (Date.now() - active.askedAt)) } : null,
+    stageRegisteredCount: log.filter((e) => e.stage === currentStage).length,
+    lastRegistration: log.length > 0 ? log[log.length - 1]! : null,
+  }
+}
+
+/** 测试专用：清空收口问句登记历史 */
+export function __resetConfirmAskLogForTests(): void {
+  confirmAskLogStore.clear()
 }
 
 /** 读取 activeConfirmAsk（TTL 惰性过期；无/过期返回 null） */

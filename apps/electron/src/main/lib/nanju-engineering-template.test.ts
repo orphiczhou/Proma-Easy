@@ -282,6 +282,57 @@ describe('setProjectCategory / getProjectCategory', () => {
 
 // ===== R2 规则校验层（W7，v0.17.69）：品类枚举 + 环境清单组件校验 =====
 
+
+describe('P0-4：desktop v2 双路径白名单兼容（形态定死：单元级逐条 + 集成级门禁不拦断）', () => {
+  test('Then 单元级：P1 快速验证路径组件逐条过白名单（测试定死最小集）', () => {
+    const result = validateEnvChecklist('desktop-app', [
+      'pynput', 'sounddevice', 'pystray', 'xclip', 'xdotool', 'notify-send', 'pyaudio', 'portaudio', 'pip',
+    ])
+    expect(result).toEqual({ ok: true, problems: [] })
+  })
+  test('Then 单元级：v2 模板 §2.1/§2.2 其余组件与降级替代项同步过白名单', () => {
+    const result = validateEnvChecklist('desktop-app', [
+      'pillow', 'numpy', 'requests', 'httpx', 'libnotify', 'libportaudio2', 'pyperclip', 'xsel', 'python3', 'venv',
+    ])
+    expect(result).toEqual({ ok: true, problems: [] })
+  })
+  test('Then 集成级：v2 desktop 模板 §2.1 清单为 fixture 走门禁路径不拦断（parseEnvChecklistFromDoc → validateEnvChecklist）', () => {
+    const architectureDoc = [
+      '# 架构', '', '## 环境配置', '',
+      '| 组件 | 版本 | 用途 | 探测结果 | 备注 |',
+      '| --- | --- | --- | --- | --- |',
+      '| python3 + venv | 3.10 | 运行时 | 就绪 | |',
+      '| portaudio | 19 | 音频底层 | 就绪 | libportaudio2 |',
+      '| sounddevice | 0.4 | 录音 | 就绪 | |',
+      '| pynput | 1.8 | 输入监听+注入 | 就绪 | |',
+      '| xclip | 0.13 | 剪贴板兑底 | 就绪 | |',
+      '| pystray + Pillow | 0.19 | 托盘 | 就绪 | |',
+      '| xdotool | 3.2 | 诊断 | 就绪 | |',
+      '| libnotify (notify-send) | 0.7 | 通知 | 就绪 | |',
+      '| requests | 2.3 | 云端 ASR | 就绪 | |',
+      '', '## 交付与运行', '',
+    ].join('\n')
+    const checklist = parseEnvChecklistFromDoc(architectureDoc)
+    expect(checklist.length).toBeGreaterThanOrEqual(9)
+    const verdict = validateEnvChecklist('desktop-app', checklist)
+    expect(verdict.ok).toBe(true)
+  })
+  test('Then 双路径文案：CATEGORY_META desktop-app 注入改双路径（P1 Python 快速验证 / P2 Tauri 正式交付）', () => {
+    const meta = CATEGORY_META['desktop-app']
+    const joined = meta.stack.join('\n')
+    expect(joined).toContain('P1 快速验证路径')
+    expect(joined).toContain('Python')
+    expect(joined).toContain('P2 正式交付路径')
+    expect(joined).toContain('Tauri')
+  })
+  test('Then v2 模板编号节头不匹配环境节正则 → 降级白名单模式（核对性断言：正则不改，兼容由白名单保障）', () => {
+    const tpl = readFileSync(join(REPO_ROOT, 'apps', 'electron', 'resources', 'nanju-engineering-templates', 'desktop-app.md'), 'utf-8')
+    expect(tpl).toContain('## 2. 组件环境清单')
+    const verdict = validateEnvChecklist('desktop-app', ['pynput'], tpl)
+    expect(verdict).toEqual({ ok: true, problems: [] })
+  })
+})
+
 describe('validateEnvChecklist（R2 第 4 层兜底）', () => {
   test('合法组件（品类白名单 + 共享集）通过', () => {
     expect(validateEnvChecklist('desktop-app', ['rustc', 'cargo', 'node', 'git'])).toEqual({ ok: true, problems: [] })

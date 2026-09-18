@@ -44,10 +44,72 @@ describe('Given 架构工程契约，When 解析声明，Then 不把设计当执
     }
   })
   test('Then 缺字段或不支持的版本明确返回问题', () => {
-    for (const raw of ['{', '{}', JSON.stringify({ ...contract, schemaVersion: 2 }), JSON.stringify({ ...contract, build: '' })]) {
+    // P0-1：v2 已为合法版本（可携带可选 env），不支持的版本用 3 表示
+    for (const raw of ['{', '{}', JSON.stringify({ ...contract, schemaVersion: 3 }), JSON.stringify({ ...contract, build: '' })]) {
       expect(parseEngineeringContract(raw).contract).toBeNull()
       expect(parseEngineeringContract(raw).problems.length).toBeGreaterThan(0)
     }
+  })
+  // ===== P0-1（2026-09-18）：schema v2 契约式 env 透传校验 =====
+  test('Then P0-1：v2 契约可声明 driver.env/service.env（合法变量名清单）', () => {
+    const v2 = {
+      ...contract, schemaVersion: 2,
+      tests: [
+        contract.tests[0],
+        { ...contract.tests[1]!, driver: { runtime: 'python3', path: 'bin/dictation', args: [], timeoutMs: 5000, env: ['DASHSCOPE_API_KEY', 'HTTPS_PROXY'] } },
+      ],
+    }
+    const result = parseEngineeringContract(JSON.stringify(v2))
+    expect(result.problems).toEqual([])
+    expect(result.contract?.tests[1]?.driver?.env).toEqual(['DASHSCOPE_API_KEY', 'HTTPS_PROXY'])
+  })
+  test('Then P0-1：v1 契约出现 env 字段视为校验错误（升级通道=显式改 schemaVersion 为 2）', () => {
+    const v1WithEnv = {
+      ...contract,
+      tests: [
+        contract.tests[0],
+        { ...contract.tests[1]!, driver: { runtime: 'python3', path: 'bin/dictation', args: [], timeoutMs: 5000, env: ['DASHSCOPE_API_KEY'] } },
+      ],
+    }
+    const result = parseEngineeringContract(JSON.stringify(v1WithEnv))
+    expect(result.contract).toBeNull()
+    expect(result.problems.some((x) => x.includes('env 字段仅 schemaVersion=2'))).toBe(true)
+  })
+  test('Then P0-1：v1 存量契约（无 env）原样有效，不迁移不重写', () => {
+    const result = parseEngineeringContract(JSON.stringify(contract))
+    expect(result.problems).toEqual([])
+    expect(result.contract?.schemaVersion).toBe(1)
+  })
+  test('Then P0-1：env 非法变量名/重复/超32项拒绝', () => {
+    for (const env of [
+      ['1BAD_NAME'], ['with-dash'], ['a'.repeat(65)],
+      ['GOOD_NAME', 'GOOD_NAME'],
+      Array.from({ length: 33 }, (_, i) => `VAR_${i}`),
+    ]) {
+      const bad = {
+        ...contract, schemaVersion: 2,
+        tests: [
+          contract.tests[0],
+          { ...contract.tests[1]!, driver: { runtime: 'python3', path: 'bin/dictation', args: [], timeoutMs: 5000, env } },
+        ],
+      }
+      const result = parseEngineeringContract(JSON.stringify(bad))
+      expect(result.contract).toBeNull()
+      expect(result.problems.length).toBeGreaterThan(0)
+    }
+  })
+  test('Then P0-1：browser-url service 亦可声明 env（仅 v2）', () => {
+    const v2 = {
+      ...contract, schemaVersion: 2,
+      tests: [
+        { id: 'web-e2e', layer: 'acceptance', adapter: 'browser-url', target: 'bin/dictation', command: 'x', covers: ['US-01'], requiresReal: false,
+          service: { runtime: 'node', path: 'bin/dictation', args: [], port: 18080, readyPath: '/ready', readyTimeoutMs: 5000, env: ['MY_SERVICE_TOKEN'] },
+          scenarioFiles: ['features/us-01.steps.json'] },
+      ],
+    }
+    expect(parseEngineeringContract(JSON.stringify(v2)).problems).toEqual([])
+    const v1Same = { ...v2, schemaVersion: 1 }
+    expect(parseEngineeringContract(JSON.stringify(v1Same)).contract).toBeNull()
   })
   test('Then 产物、入口和测试对象必须相互对应', () => {
     for (const changed of [

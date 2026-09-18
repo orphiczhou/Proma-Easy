@@ -45,6 +45,7 @@ import type { NanjuProjectInfoFile } from './nanju-project'
 import { parseUserStories } from './nanju-user-stories'
 import { prepareEngineeringBrowserRun } from './nanju-engineering-preflight'
 import { captureEngineeringEvidence, ENGINEERING_CONTRACT_PATH, requiresEngineeringContract, parseEngineeringContract } from './nanju-engineering-contract'
+import { summarizeDriverIo, buildDriverIoLogFile } from './nanju-engineering-driver-io'
 import type { EngineeringEvidence } from './nanju-engineering-contract'
 import { recordTelemetry } from './nanju-telemetry'
 
@@ -442,6 +443,14 @@ export interface GwtReportJson {
   errorCount?: number
   /** 非阻塞警告汇总（W22 F4）：assert-screenshot baseline-created/diff 等，不影响 verdict；空数组省略 */
   warnings?: string[]
+  /** P0-2（2026-09-18）：verdict=error 轮的驱动输出尾部与旁挂文件信息（无驱动环节的
+   * error 轮缺省）。报告 md 嵌入尾部全文；errorReason 判定行内联 ≤1KB 自适应诊断摘要。 */
+  driverIo?: {
+    testId: string
+    stdoutTail: string
+    stderrTail: string
+    logPath: string
+  }
   scenarios: Array<{
     feature: string
     scenario: string
@@ -795,6 +804,23 @@ export function buildReportMarkdown(report: GwtReportJson, projectName: string):
         ? '❌ 未通过（覆盖不全：有用户故事无可执行场景）'
         : '❌ 未通过'
   lines.push(`- 判定结果：${verdictLabel}`)
+  // P0-2：error 轮嵌入驱动输出尾部全文（截断管道后）+ 旁挂文件路径注明——回归 A 报告
+  // P0 建议「stderr 尾部进验收报告」原意；dev 实例判定面板经 errorReason 内联摘要
+  // 直接可见，此处全文随项目归档供回炉修复定位。
+  if (report.verdict === 'error' && report.driverIo) {
+    lines.push(`- 驱动输出旁挂：\`${report.driverIo.logPath}\`（testId：${report.driverIo.testId}）`)
+    lines.push('')
+    // AC 审计 Y-04：尾部内容中的 3+ 连续反引号压为 2 个，防提前闭合 ```text fence
+    const fenceSafe = (text: string): string => text.replace(/`{3,}/g, '``')
+    lines.push('### 驱动输出尾部（stderr）')
+    lines.push('```text')
+    lines.push(report.driverIo.stderrTail.length > 0 ? fenceSafe(report.driverIo.stderrTail) : '（空）')
+    lines.push('```')
+    lines.push('### 驱动输出尾部（stdout）')
+    lines.push('```text')
+    lines.push(report.driverIo.stdoutTail.length > 0 ? fenceSafe(report.driverIo.stdoutTail) : '（空）')
+    lines.push('```')
+  }
   lines.push(`- 场景统计：共 ${report.scenariosTotal} 个，通过 ${report.passed}，失败 ${report.failed}，跳过 ${report.skipped}`)
   lines.push(`- 用户故事覆盖：${report.coveredUs.length > 0 ? report.coveredUs.join('、') : '无'}${report.uncoveredUs.length > 0 ? `（未覆盖：${report.uncoveredUs.join('、')}）` : ''}`)
   if (report.prdUserStoriesMissing) lines.push('- ⚠ PRD 未提取到 US-xx 用户故事清单，覆盖性无法判定（请补充 PRD 后重跑）')
@@ -2063,6 +2089,29 @@ async function runNanjuGwtAcceptanceInner(input: {
     results = [...results, ...schemaInvalidResults]
   }
 
+  // P0-2（L1，2026-09-18）error 透传：驱动 stdout/stderr 尾部 → 自适应诊断摘要内联
+  // errorReason + 旁挂落盘 06_TESTS/driver-io-<轮次时间戳>.log（平台侧写入，与既有
+  // 06_TESTS/report-*.md 同通道同权限，不经指挥官/Agent 会话——ATK-L-004）。
+  // 消除 G3b 式盲修轮（5 轮 error_reason 固定句、stderr 诊断全丢）。
+  const stamp = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stampText = `${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`
+  let driverIoReport: GwtReportJson['driverIo'] | undefined
+  if (errorReason && engineeringSuite) {
+    const ioTest = engineeringSuite.tests.find((t) => t.status === 'error' && t.driverIo)
+    if (ioTest?.driverIo) {
+      const diag = summarizeDriverIo(ioTest.driverIo.stdoutTail, ioTest.driverIo.stderrTail)
+      const relLogPath = `06_TESTS/driver-io-${stampText}.log`
+      try {
+        writeTextFileAtomic(join(projectDir, relLogPath), buildDriverIoLogFile(ioTest.driverIo, { testId: ioTest.testId, generatedAt: stamp.toISOString() }))
+      } catch { /* 旁挂落盘失败不影响主报告（尾部已内联报告 error 段） */ }
+      driverIoReport = { testId: ioTest.testId, stdoutTail: ioTest.driverIo.stdoutTail, stderrTail: ioTest.driverIo.stderrTail, logPath: relLogPath }
+      errorReason = errorReason
+        + (diag ? '\n驱动诊断（stderr 尾部自适应摘要）：' + diag : '')
+        + '\n（驱动输出旁挂：' + relLogPath + '）'
+    }
+  }
+
   // 非 suite 的工程浏览器路径（engineering-browser 模式，无逐项 scenarioFiles 的 browser-file 契约）：
   // 测试期间产物变化 → blocked。suite 路径（engineering.mode === 'blocked'）的等价 digest 重校由
   // nanju-engineering-suite.ts 提供（彼时 prepareEngineeringBrowserRun 返回 evidence=null，本分支不进入）。
@@ -2097,7 +2146,9 @@ async function runNanjuGwtAcceptanceInner(input: {
     : verdict === 'error'
       ? (retryPending ? prevErrorCount : 0) + 1
       : (retryPending ? prevErrorCount : 0)
+  // P0-2：报告对象携带驱动 IO 信息（md 报告嵌入尾部全文用）
   const report: GwtReportJson = {
+    ...(driverIoReport ? { driverIo: driverIoReport } : {}),
     engineeringEvidence: engineeringSuite?.evidence ?? engineering.evidence ?? undefined,
     engineeringSuite: engineeringSuite ?? undefined,
     blockedReason: blockedReason ?? undefined,
@@ -2155,9 +2206,6 @@ async function runNanjuGwtAcceptanceInner(input: {
     const { tryAdvanceGuideSubStage } = require('./nanju-project') as typeof import('./nanju-project')
     tryAdvanceGuideSubStage(input.workspaceSlug, input.projectId, 'TEST_JUDGE')
   } catch { /* provenance/向导图写入失败不影响测试主流程 */ }
-  const stamp = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const stampText = `${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`
   const reportMdPath = join(projectDir, '06_TESTS', `report-${stampText}.md`)
   writeTextFileAtomic(reportMdPath, buildReportMarkdown(report, input.projectName))
 

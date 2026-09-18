@@ -622,11 +622,14 @@ export function resolveACOverride(
 
 // ===== 层三：产出路径阶段约束注入 =====
 
-/** 各阶段允许写入的产出目录（软约束注入用；真正拦截靠层一，L2 违规写入检测留后续） */
+/** 各阶段允许写入的产出目录（软约束注入用；真正拦截靠层一，L2 违规写入检测留后续）。
+ *  P0-5（2026-09-18）：architecture 阶段增入 00_SPIKES——架构师按 T1-T3 判据派发的
+ *  Spike 实验子会话产物落位目录（写放行清单；目录已注册进脚手架 docDirs 与
+ *  router-gate 归因集，委派子会话豁免不受 unbound-write-deny 影响）。 */
 export const STAGE_WRITE_DIR: Record<NanjuGuardStage, string> = {
   requirements: '01_PRD',
   prototype: '02_UX_DESIGN',
-  architecture: '03_ARCHITECTURE',
+  architecture: '03_ARCHITECTURE（架构产出）与 00_SPIKES（Spike 实验产物，见任务书 Spike 条文）',
   planning: '05_PROJECT_PLAN',
   coding: '08_APP',
   testing: '06_TESTS',
