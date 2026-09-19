@@ -1,6 +1,6 @@
 # 桌面应用 · 工程模板 v2
 
-> 版本：v2.0 | 代号：`desktop-app` | 适用模式：快消型 & 长期迭代型
+> 版本：v2.4 | 代号：`desktop-app` | 适用模式：快消型 & 长期迭代型
 > 证据等级图例：**[实证]**=本机真实跑通并留证据（来源：2026-09-17 夜间语音输入法实测，下称"昨晚实测"）；**[文证]**=有外部来源；**[推断]**=待验证（挂接建议 Spike）。
 > v1→v2 主要变化：新增 §2 组件环境清单、§5 测试闭环样例、§6 Spike 协议、§7 坑库；§1 改为双路径矩阵；v1 全文（157 行）见模版源头 `nanju-guide/09_工程模板/04-desktop-app/template-v1.md`（本文件为全量替换，v1 已归档为独立文件；运行时快照侧 v1 原文见平台 git 历史 v0.17.125）。
 
@@ -111,8 +111,8 @@
 **C4 xclip**
 - 探测：`which xclip && echo ok`
 - 安装：`sudo apt install xclip`
-- 已知坑：写剪贴板后子进程退出可能丢失内容，需 `xclip -selection clipboard -l 1` 或保持进程 [推断]；`-selection primary` 与中键粘贴语义不同 [文证]
-- 降级替代：`xsel`；GUI 内用 Tk clipboard（需 display）
+- 已知坑：①写剪贴板后子进程退出可能丢失内容，需 `xclip -selection clipboard -l 1` 或保持进程 [推断]；②**写时挂死**：`xclip -i` fork 的 daemon 持有 selection 并继承 stdout/stderr 管道 FD，`subprocess.run(capture_output=True)` 会永久阻塞（EOF 永不达）——写入侧一律 `stdout=stderr=DEVNULL` + `timeout=` 兜底；读侧同样必须带 timeout [实证 SPIKE-001：E2E 剪贴板工程，阻塞 21 分钟靠外部代杀才解]；③`-selection primary` 与中键粘贴语义不同 [文证]
+- 降级替代：`xsel`；GUI 内用 Tk clipboard（需 display）；事件驱动升级路线 clipnotify（XFixes，本机未装需源码编译）[推断]
 
 **C5 pystray + Pillow**
 - 探测：`python -c "import pystray, PIL; print('ok')"`
@@ -141,10 +141,14 @@ set -u
 probe() { local name="$1" cmd="$2"; local out; out=$(eval "$cmd" 2>&1) && r=ok || r=fail; printf '{"component":"%s","status":"%s","detail":"%s"}\n' "$name" "$r" "${out//\"/\'}"; }
 {
   probe "python3"      "python3 --version"
+  probe "os"          ". /etc/os-release && echo \$PRETTY_NAME"
+  probe "virt"        "systemd-detect-virt; cat /sys/class/dmi/id/sys_vendor 2>/dev/null"
+  probe "cloud-keys"  "env | grep -oE '^[A-Z_]+(API_KEY|TOKEN|SECRET)' | tr '\n' ' '"   # 只落变量名不落值
   probe "display"      "test -n \"${DISPLAY:-}\" && echo DISPLAY=${DISPLAY}"
   probe "portaudio"    "python3 -c 'import sounddevice'"
   probe "pynput"       "python3 -c 'from pynput.keyboard import Controller'"
   probe "xclip"        "which xclip"
+  probe "cb-owner"     "ps -eo args | grep -c '[x]clip -selection clipboard -i'"   # 剪贴板现 owner（桌面工具隐蔽前置态）
   probe "xdotool"      "which xdotool"
   probe "pystray"      "python3 -c 'import pystray, PIL'"
   probe "notify-send"  "which notify-send"
@@ -205,6 +209,8 @@ print(json.dumps(evidence, ensure_ascii=False))
 
 ## 3. 目录结构
 
+> 基准定案（v2.4）：当工程由多角色流水线（架构/开发/测试分目录归档）承载时，应用代码/驱动/测试以 **`08_APP/` 为根**（§5.3 骨架落位同此基准）；下列树形描述的是无流水线归档时的工程根形态，两者不冲突——契约 `engineering.json.artifacts` 的路径解析基准以 08_APP/ 为准 [实证：E2E 剪贴板工程 12/12 artifacts 落位验证]。
+
 ### 3.1 P1 快速验证路径（Python）
 
 ```
@@ -246,6 +252,10 @@ project/
 ### 5.1 闭环定义
 
 **架构决定 → 驱动脚本 → 证据文件**，三者缺一不闭环。验收方不信任口头描述，只看 evidence/ 里带时间戳的文件。
+
+验收必做两件事（v2.4 增补，均 [实证：E2E 剪贴板工程]）：
+1. **契约 run 命令黑盒真跑**：`engineering.json` 的 `run` 命令必须原样执行一次（存活/可退出即过）——包内导入的驱动全绿 ≠ 应用可运行（F-1 教训：入口 ImportError 被三条全绿掩盖）。
+2. **断言鉴别力对照**：关键验收检查至少一次"变异体验证"（故意破坏目标逻辑确认会 fail）——expected 反填运行时值的恒真断言两轮全绿无人自发发现（F-2 教训）。expected 必须为编译期常量/字面量，禁止引用运行时变量。
 
 ### 5.2 标准闭环一：音频采集（无麦克风环境的回环自测）[实证]
 
@@ -405,6 +415,16 @@ pnpm tauri build                 # 打包冒烟：Linux 需一次性 apt 安装 
 - 绕行：凡引入持久化配置，架构必须同时设计存量配置迁移/失效策略（配置版本字段或启动时重写），交付说明写明迁移路径。
 - 状态：已实证（2026-09-17；并入 §2.4 已知坑）。
 
+**PIT-DA-012 xclip 写时挂死**
+- 现象：`xclip -selection clipboard -i` fork 的 daemon 进程持有 selection 并**继承 stdout/stderr 管道写端**；若上层用 `subprocess.run(..., capture_output=True)`，`communicate()` 永等 EOF → 调用方永久阻塞（实测挂 21 分钟靠外部代杀）[实证：SPIKE-001，E2E 剪贴板工程 2026-09-19]。
+- 绕行：写入侧一律 `stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL`；读/写全部带 `timeout=`；外层 bash `timeout N` 兜底。泛化教训：**凡 fork 驻留进程的 CLI（xclip/剪贴板类）禁用 capture_output 等管道**。
+- 状态：已实证；已回填 C4 已知坑第②条。
+
+**PIT-DA-013 验收脚本自述条件必须读回断言（setswitchinterval API 版本坑）**
+- 现象：压测脚本声明 `switchinterval=1e-6` 但用 `threading.set_switchinterval`（Python 3.13 才有，3.12 及以下被 `except AttributeError` 静默吞掉），实际以默认 5ms 运行仍 exit 0——证据"声称的条件"本身未被校验 [实证：E2E 工程 E-1，AC 双重复核]。
+- 绕行：验收脚本声明的运行条件必须在运行时读回断言（如 `sys.getswitchinterval()`），不一致即非零退出；`sys.setswitchinterval` 才是 3.12 正确 API。骨架将提供 `assert_effective(claimed, actual)` 工具（P5 改进）。
+- 状态：已实证（2026-09-19）。
+
 ---
 
 ## 8. 标杆项目映射
@@ -433,6 +453,7 @@ pnpm tauri build                 # 打包冒烟：Linux 需一次性 apt 安装 
 
 ## CHANGELOG
 
+- v2.4（2026-09-19）：E2E 剪贴板工程（四渠道观察员+AC 对抗签收）实测回填——§2.3 check_env 增 OS 指纹/虚拟化/密钥名/剪贴板 owner 四探测（根治"失真与探测覆盖负相关"，O3）；§3 目录基准定案（08_APP/ 为契约 artifacts 解析基准）；§5.1 验收必做两项（契约 run 命令黑盒真跑+变异体鉴别力对照，F-1/F-2 教训）；C4 xclip 已知坑增"写时挂死"[实证 SPIKE-001]；坑库 PIT-DA-012/013；来源：dispatch/reviews/E2E-desktop-clipboard-review.md。
 - v2.3（2026-09-18）：§8 补二轮标杆 1 项（create-tauri-app 脚手架测试闭环，GitHub API 通道实证），详见 标杆解析-v1/二轮-*。
 - v2.2（2026-09-18）：§5.5 标杆测试闭环并入——cargo/vitest/tauri build 三层本机门禁（含 tauri 生态无 Rust 单测示例的如实标注与品类适配补位），证据等级 [文证：标杆实证]；来源：平台知识库《标杆解析-v1/测试闭环汇总》。
 - v2.1（2026-09-18）：L2-5 驱动自检骨架——`driver-skeleton.py`/`driver-skeleton.cjs` 随模版分发（五项运行时自检：storyId 非空 / expected-actual 同源 / 输出 schema 校验+退出码表 / 顶层异常包裹 / 环境前置自检）；§5 增骨架引用（desktop-app §5.3 骨架代码段升级为骨架文件引用，三条硬规则保留并标注由骨架承载）。
