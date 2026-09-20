@@ -255,10 +255,14 @@ export function resolveEngineeringTemplatesDir(explicitBase?: string): string {
   const bases: string[] = []
   // Electron 主进程检测用 process.versions.electron（无副作用）：bun/node 测试环境下
   // require('electron') 会触发包 wrapper 的二进制下载副作用，禁止在模块加载路径引入
+  // v0.17.131：asar 内资源优先于历史散装 resources/，避免旧模板目录遮蔽新版本。
+  // 开发模式无 app.asar 时自然跳过；Electron 的 fs 对 app.asar 路径透明。
   if (typeof process.versions.electron === 'string' && (process as { type?: string }).type === 'browser') {
+    bases.push(join(process.resourcesPath as string, 'app.asar'))
     bases.push(process.resourcesPath as string)
   }
   bases.push(join(process.cwd(), 'apps', 'electron', 'resources'))
+  // process.resourcesPath 已作为打包候选加入；开发模式再尝试 cwd 资源。
   bases.push(join(process.cwd(), 'resources'))
   for (const base of bases) {
     if (existsSync(join(base, 'nanju-engineering-templates'))) {

@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 
 /** 当前 fixture 根目录（mock 的 getWorkspaceFilesDir 每次调用时读取） */
 let fixtureRoot = ''
@@ -1161,6 +1161,16 @@ describe('L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目�
     expect(error).toContain('DashScope ASR 端点')
   })
 
+  test('Given 新项目 + 实证条目引用已存在的 file:// 证据 When 推进 Then 放行（快消型本机实证无需伪造网络引用）', () => {
+    const evidencePath = resolve(fixtureRoot, 'local-evidence.md')
+    writeFileSync(evidencePath, 'local evidence')
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'iterative',
+      html: archDocWithEvidence(`## 证据升级与检索记录\n- xclip 往返验证：[实证] file://${evidencePath}\n`),
+    })
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
   test('Given 新项目 + 纯申报（未触发检索条件/已检索无结论）When 推进 Then 放行（形态③自我申报不做事前拦截）', () => {
     const ws = setupFixture({
       stage: 'architecture', mode: 'iterative',

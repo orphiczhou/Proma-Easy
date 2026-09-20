@@ -102,6 +102,16 @@ function rejectWithEducationLoop(
   })()
   // F5 ③ 防环：教育闭环已达上限 → 转人工提示（不再注入教育/续接——防拒收→注入→续接→再拒收死循环烧 token）
   if (count > ADVANCE_REJECT_EDUCATION_LIMIT) {
+    try {
+      const { setProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
+      setProjectPendingAdvanceCorrection(workspaceSlug, projectId, {
+        kind,
+        target: correction.target,
+        expected: correction.expected,
+        at: new Date().toISOString(),
+        count,
+      })
+    } catch { /* pending 记录失败不阻断可见人工提示 */ }
     hooks.injectAssistantMessage(
       sessionId,
       '⛔ 推进标记已连续 ' + count + ' 次被拒（自动纠偏闭环已达上限，系统停止继续注入纠偏指令）。'
@@ -831,7 +841,7 @@ hooks: PhaseAdvanceHooks,
                     from_stage: project.currentStage,
                     target: newStage,
                     mode: project.mode,
-                    ...(isAutoProject ? { auto_block_reason: autoBlockReason } : {}),
+                    ...(isAutoProject ? { auto_block_reason: autoBlockReason, auto_block_detail: autoBlockDetail || undefined } : {}),
                   }, project.projectId)
                 } catch { /* 埋点失败不影响拒绝 */ }
                 // W22（F5①/②）：三档文案构建后统一走 rejectWithEducationLoop——注入 +
@@ -858,7 +868,9 @@ hooks: PhaseAdvanceHooks,
                     + '请先 continue_delegation 委派本阶段角色完成产出（产出达标后系统自动确认推进，无需询问用户；'
                     + '环境安装确认为唯一例外，仍需用户横幅应答）；信息不足时调 nanju_clarify_proxy 补完。'
                     + `产出达标后直接输出 <!-- PHASE_ADVANCE: ${newStage} --> 推进标记即可。当前拒因：`
-                    + (autoBlockReason === 'verify-failed' ? '阶段产出未达标：' + autoBlockDetail : autoBlockReason) + '。'
+                    + (autoBlockReason === 'verify-failed'
+                      ? '阶段产出未达标：' + (autoBlockDetail || '校验器未返回详细原因；请读取对应阶段产物与校验清单。')
+                      : autoBlockReason) + '。'
                 } else {
                   hardGateMessage =
                     '⚠️ 推进未被授权：阶段推进需要真人确认（或系统指令）才能生效。\n\n'

@@ -8,6 +8,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, readProjectInfo, type NanjuProject, type ProjectStage } from './nanju-project'
 import { getPhaseNode, getNextPhase, type PhaseId, type PhaseNode, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
@@ -48,6 +49,8 @@ const ACTIVE_PHASE_TOOLS = new Set([
   // v2.4（D7 §4）：自动补完需求代理工具（B 域注册给 L1；A 域 §3 deny 教育话术指向它，
   // 白名单缺行则 L1 被自身门禁拒——代理链路断。代理子会话自身的工具面在 nanjuProxy 首分支单独管制）
   'nanju_clarify_proxy', 'mcp__collaboration__nanju_clarify_proxy',
+  // 进度管理工具：调度员提示词要求每阶段建立/维护 Todo，必须与阶段工具白名单一致。
+  'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet',
   // 只读工具
   'Read', 'LS', 'Glob', 'Grep',
   // 交互工具
@@ -1118,6 +1121,13 @@ const EVIDENCE_RECORD_SECTION_RE = /^#{1,3}[ \t]*证据升级与检索记录/m
 /** 节内 [实证]/[文证] 条目标记（升级/新增形态①②的产物特征） */
 const EVIDENCE_BADGE_RE = /\[(实证|文证)\]/
 
+/** 实证条目允许引用本机 file:// 证据，但必须验证路径真实存在；文证仍要求 http(s)。 */
+function hasExistingFileEvidence(line: string): boolean {
+  const match = line.match(/file:\/\/[^\s)\]}>]+/i)
+  if (!match) return false
+  try { return existsSync(fileURLToPath(match[0])) } catch { return false }
+}
+
 /** 宽松 URL 形态判存（http(s)://，ATK-G-007 规格——不验可达性只验凭证在场） */
 const URL_LOOSE_RE = /https?:\/\//
 
@@ -1155,10 +1165,13 @@ export function validateEvidenceRecordSection(content: string): string | null {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
     if (!EVIDENCE_BADGE_RE.test(line)) continue
+    const badge = line.match(EVIDENCE_BADGE_RE)?.[1]
     if (URL_LOOSE_RE.test(line)) continue
+    if (badge === '实证' && hasExistingFileEvidence(line)) continue
     const nextLine = lines[i + 1] ?? ''
     const nextNextLine = lines[i + 2] ?? ''
     if (URL_LOOSE_RE.test(nextLine) || URL_LOOSE_RE.test(nextNextLine)) continue
+    if (badge === '实证' && (hasExistingFileEvidence(nextLine) || hasExistingFileEvidence(nextNextLine))) continue
     // 条目标识：表格行取首列，列表/普通行取行首截断（拦截消息指明条目用）
     const trimmed = line.trim().replace(/^\|\s*/, '')
     const label = (trimmed.split('|')[0] ?? '').trim() || trimmed.slice(0, 40)
