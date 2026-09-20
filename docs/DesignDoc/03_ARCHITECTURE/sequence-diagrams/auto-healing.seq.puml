@@ -1,0 +1,179 @@
+@startuml
+' DOC-3.3-SEQ5 | v0.3 | 日期: 2026-06-06 | 状态: 终审修正
+' 文档ID: DOC-3.3 | 文件: auto-healing.seq.puml
+' 依赖: architecture.md §6, class-diagram.puml v0.5, PRD §6.3, US-P02, US-U07
+' 覆盖: 代码错误 → 第1次修复(直接修正)→第2次修复(重读文档)→第3次修复(替换方案)→熔断→快照回滚→用户通知
+' 架构说明: CODE→GUIDE熔断通知路径在architecture.md §3依赖图中未定义。
+'   此路径为用户通知的必要通道(GuideAgent是唯一用户界面层), 依赖图需补充CODE→GUIDE边(标注"熔断通知")
+' 参与者: CodingAgent, SnapshotManager, ProjectDocumentSystem, GuideAgent, SandboxManager, User
+
+actor User
+participant CodingAgent
+participant SnapshotManager
+participant ProjectDocumentSystem
+participant GuideAgent
+participant SandboxManager
+
+== 任务开始前: 建立健康快照 ==
+
+CodingAgent -> SnapshotManager : autoTrigger(任务开始)
+activate SnapshotManager
+SnapshotManager -> ProjectDocumentSystem : createSnapshot(project-root)
+activate ProjectDocumentSystem
+ProjectDocumentSystem --> SnapshotManager : 健康快照已创建(snapshotId=H)
+deactivate ProjectDocumentSystem
+SnapshotManager --> CodingAgent : 快照就绪
+deactivate SnapshotManager
+
+== 代码执行 → 错误发生 ==
+
+CodingAgent -> SandboxManager : enforceLimits(构建/测试进程)
+activate SandboxManager
+
+alt 环境类错误(磁盘空间/内存/端口)
+  Note over CodingAgent : 不触发自修复循环\n立即通知向导Agent
+
+  CodingAgent -> GuideAgent : 环境错误通知
+  activate GuideAgent
+  GuideAgent --> User : "你的电脑[磁盘空间不足/内存不够],\n需要清理一些空间或关闭其他程序\n后才能继续。"
+  deactivate GuideAgent
+  deactivate SandboxManager
+  detach
+
+else 代码逻辑错误
+  SandboxManager --> CodingAgent : 构建失败/测试失败(错误详情)
+  deactivate SandboxManager
+
+  Note over CodingAgent : 进入自修复循环(最多3次)
+end
+
+== 第1次自修复: 直接修正 ==
+
+CodingAgent -> CodingAgent : autoHeal(错误日志)
+Note over CodingAgent : 策略1: 分析构建/测试日志\n定位错误行→直接修正
+
+CodingAgent -> SandboxManager : enforceLimits(重新构建)
+activate SandboxManager
+
+alt 修复成功
+  SandboxManager --> CodingAgent : 构建通过 ✓
+  deactivate SandboxManager
+  Note over CodingAgent : 对用户完全透明\n继续正常流程
+
+else 修复失败
+  SandboxManager --> CodingAgent : 仍失败
+  deactivate SandboxManager
+
+  Note over CodingAgent : 策略1失败 → 进入第2次
+
+== 第2次自修复: 重读文档确认设计意图 ==
+
+  CodingAgent -> ProjectDocumentSystem : 重新读取architecture.md+PlantUML
+  activate ProjectDocumentSystem
+  ProjectDocumentSystem --> CodingAgent : 完整规约文档
+  deactivate ProjectDocumentSystem
+
+  CodingAgent -> CodingAgent : autoHeal(基于设计意图重写逻辑片段)
+  Note over CodingAgent : 策略2(≠策略1): 不直接修错误行\n而是重新理解设计意图后\n重写相关逻辑片段
+
+  CodingAgent -> SandboxManager : enforceLimits(重新构建)
+  activate SandboxManager
+
+  alt 修复成功
+    SandboxManager --> CodingAgent : 构建通过 ✓
+    deactivate SandboxManager
+    Note over CodingAgent : 用户无感知
+
+  else 修复失败
+    SandboxManager --> CodingAgent : 仍失败
+    deactivate SandboxManager
+
+    Note over CodingAgent : 策略2失败 → 进入第3次(最后机会)
+
+== 第3次自修复: 替换技术方案 ==
+
+    CodingAgent -> CodingAgent : autoHeal(换用替代技术库/简化实现)
+    Note over CodingAgent : 策略3(≠策略1≠策略2):\n换用替代技术组件\n或降级为简化版实现\n3次中至少尝试2种不同策略
+
+    CodingAgent -> SandboxManager : enforceLimits(重新构建)
+    activate SandboxManager
+
+    alt 修复成功
+      SandboxManager --> CodingAgent : 构建通过 ✓
+      deactivate SandboxManager
+      Note over CodingAgent : 用户无感知
+
+    else 修复失败(第3次)
+      SandboxManager --> CodingAgent : 仍失败
+      deactivate SandboxManager
+
+== 熔断触发 ==
+
+      Note over CodingAgent : ⚠ 熔断触发 ⚠\n三次修复全部失败\n不得再尝试
+
+      CodingAgent -> SnapshotManager : rollback(snapshotId=H, project-root)
+      activate SnapshotManager
+
+      SnapshotManager -> ProjectDocumentSystem : 恢复健康快照
+      activate ProjectDocumentSystem
+      ProjectDocumentSystem --> SnapshotManager : 项目已回滚到错误前状态
+      deactivate ProjectDocumentSystem
+
+      SnapshotManager --> CodingAgent : 回滚完成
+      deactivate SnapshotManager
+
+      Note over CodingAgent : 记录内部日志:\n熔断原因+三次策略+失败信息
+
+== 用户通知(模式差异化) ==
+
+      CodingAgent -> GuideAgent : 熔断通知(原因+影响范围)
+      activate GuideAgent
+
+      alt 快消型
+        Note over CodingAgent : 编程层闭环: 换技术方案重新尝试\n不倒回向导Agent改需求
+
+        GuideAgent --> User : "刚才的修改遇到了一点技术问题,\n没有成功。我已经帮你回到了\n上一个正常版本, 你的内容没有丢失。\n\n我们可以换个方式来实现这个功能,\n你想试试吗？\n[换个方案] [先跳过这个功能]"
+
+        Note over User : 用户绝对看不到:\n代码堆栈/错误日志\n技术术语/红色报错
+
+      else 长期迭代型
+        CodingAgent -> CodingAgent : 出具变更说明
+        Note over CodingAgent : 含: 无法实现的原因\n建议的替代方案\n对用户可感知功能的影响
+
+        GuideAgent --> User : "你想要的[功能X]实现起来\n遇到了技术困难。原因简单说就是\n[通俗化原因]。\n\n建议可以换成[替代方案Y],\n对你的使用感受影响很小。\n你觉得可以吗？\n[采纳替代方案] [先跳过]\n[我想想其他办法]"
+
+        alt 用户同意替代方案
+          User -> GuideAgent : "可以, 就用替代方案"
+          GuideAgent -> CodingAgent : 用户已确认替代方案, 重新开始
+          Note over CodingAgent : 以替代方案重新生成\n(不倒回需求阶段)
+        else 用户拒绝
+          User -> GuideAgent : "不行, 我想想别的办法"
+          GuideAgent -> GuideAgent : 等待用户新指令
+        end
+      end
+
+      deactivate GuideAgent
+    end
+  end
+end
+
+== 异常恢复特殊场景 ==
+
+alt 修复耗时 > 5秒(用户等待中)
+  Note over CodingAgent : 编程Agent仍在处理
+
+  GuideAgent --> User : "我正在处理一个技术细节,\n请稍等几秒..." (加载动画)
+
+  alt 耗时 > 30秒
+    GuideAgent --> User : "比预期多花了些时间,\n我还在处理中。"
+  end
+end
+
+alt 用户连续第3次遭遇熔断(同项目)
+  Note over CodingAgent : 累计第3次熔断
+
+  GuideAgent --> User : "这个功能似乎实现起来\n比我预期的困难。\n要不要我们先做一个简化版？\n或者你描述一下你最在意的\n核心是哪个部分？"
+  Note over GuideAgent : 不简单重复相同的安抚文案
+end
+
+@enduml

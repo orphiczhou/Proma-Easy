@@ -1,0 +1,145 @@
+@startuml agent_architecture
+
+skinparam classAttributeIconSize 0
+skinparam classFontSize 14
+skinparam classFontStyle bold
+skinparam defaultFontSize 12
+skinparam defaultFontStyle normal
+skinparam monochrome false
+skinparam shadowing false
+
+skinparam class {
+    BackgroundColor #FFFFFF
+    BorderColor #2E75B6
+    ArrowColor #555555
+}
+
+title 向导Agent + 编程Agent 双脑协同平台 - 类图
+
+' ===== 基类 =====
+class BaseRole {
+    - systemPrompt: String
+    - modelConfig: ModelConfig
+    + getSystemPrompt(): String
+    + setSystemPrompt(prompt: String): void
+    + getModelConfig(): ModelConfig
+    + execute(input: Context): Output
+}
+
+' ===== 向导Agent角色 =====
+package "向导Agent (WizardAgent)" as wizard #F0F7FF {
+
+    class RequirementAnalyst {
+        + analyzeRequirements(rawInput: String): PRDDocument
+        + extractUserStories(prd: PRDDocument): List<UserStory>
+        + validateCompleteness(prd: PRDDocument): ValidationResult
+    }
+
+    class UIUXAdvisor {
+        + generatePrototype(prd: PRDDocument): HTMLPrototype
+        + applyDesignSystem(proto: HTMLPrototype): StyledPrototype
+        + reviewUX(prototype: StyledPrototype): UXReview
+    }
+
+    class ArchitectDesigner {
+        + designArchitecture(prd: PRDDocument): ArchSpec
+        + generatePlantUML(spec: ArchSpec): String
+        + defineAPISpec(spec: ArchSpec): OpenAPISpec
+    }
+
+    class EngineeringManager {
+        + planSprint(arch: ArchSpec): SprintPlan
+        + allocateTeam(plan: SprintPlan): TeamConfig
+        + estimateEffort(tasks: List<Task>): EffortEstimate
+    }
+}
+
+' ===== 编程Agent =====
+package "编程Agent (CodingAgent)" as coding #F0FFF0 {
+
+    class FullStackDev {
+        + generateCode(spec: ArchSpec, api: OpenAPISpec): CodeBundle
+        + implementFrontend(design: StyledPrototype): FrontendCode
+        + implementBackend(api: OpenAPISpec): BackendCode
+        + setupProject(config: TeamConfig): ProjectStructure
+    }
+
+    class TestEngineer {
+        + writeGWTTests(spec: ArchSpec): TestSuite
+        + runTests(code: CodeBundle): TestReport
+        + reportBugs(report: TestReport): List<Bug>
+        + verifyFix(bug: Bug): boolean
+    }
+}
+
+' ===== 裁判Agent =====
+package "裁判Agent (JudgeAgent)" as judge #FFF7F0 {
+
+    class JudgeAgent {
+        - rules: List<ComplianceRule>
+        + checkDocument(doc: Document): ComplianceReport
+        + checkCode(code: CodeBundle): CodeReview
+        + validateDeliverables(bundle: DeliverableBundle): FinalReport
+        + enforceStandards(input: Reviewable): ViolationList
+    }
+}
+
+' ===== 项目文件系统 =====
+package "基础设施" as infra #F5F5F5 {
+
+    class ProjectFS {
+        - basePath: String
+        + readFile(path: String): String
+        + writeFile(path: String, content: String): void
+        + listFiles(dir: String): List<String>
+        + exists(path: String): boolean
+    }
+
+    class ModelConfig {
+        + modelName: String
+        + temperature: float
+        + maxTokens: int
+        + topP: float
+    }
+}
+
+' ===== 关系 =====
+
+BaseRole <|-- RequirementAnalyst
+BaseRole <|-- UIUXAdvisor
+BaseRole <|-- ArchitectDesigner
+BaseRole <|-- EngineeringManager
+BaseRole <|-- FullStackDev
+BaseRole <|-- TestEngineer
+
+RequirementAnalyst --> ProjectFS : writes PRD
+UIUXAdvisor --> ProjectFS : writes prototypes
+ArchitectDesigner --> ProjectFS : writes arch specs
+EngineeringManager --> ProjectFS : writes sprint plans
+FullStackDev --> ProjectFS : writes source code
+TestEngineer --> ProjectFS : writes test reports
+
+RequirementAnalyst ..> UIUXAdvisor : PRD input
+UIUXAdvisor ..> ArchitectDesigner : design input
+ArchitectDesigner ..> EngineeringManager : arch input
+EngineeringManager ..> FullStackDev : sprint plan
+FullStackDev ..> TestEngineer : code for testing
+TestEngineer ..> FullStackDev : bug feedback
+
+JudgeAgent --> ProjectFS : reads all docs
+JudgeAgent ..> RequirementAnalyst : reviews PRD
+JudgeAgent ..> ArchitectDesigner : reviews arch
+JudgeAgent ..> FullStackDev : reviews code
+JudgeAgent ..> TestEngineer : reviews tests
+
+FullStackDev -[#555555,dashed]-> UIUXAdvisor : reads prototypes
+TestEngineer -[#555555,dashed]-> EngineeringManager : reports status
+
+BaseRole *-right- ModelConfig : has
+
+note right of ProjectFS
+  所有Agent通过ProjectFS交换文档，
+  无直接内存共享，松耦合架构
+end note
+
+@enduml

@@ -1,0 +1,1220 @@
+<!-- DOC-2.3 | 我的项目页 | v0.1 | 2026-06-05 | 依赖: sitemap v0.3, design-system v0.2 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>我的项目 - 向导Agent</title>
+<style>
+:root {
+  /* ===== 品牌色 ===== */
+  --color-primary: #4F46E5;
+  --color-primary-hover: #4338CA;
+  --color-primary-shadow: rgba(79, 70, 229, 0.35);
+  --color-primary-subtle: rgba(79, 70, 229, 0.06);
+  --color-primary-subtle-active: rgba(79, 70, 229, 0.12);
+
+  /* ===== 语义色 ===== */
+  --color-success: #059669;
+  --color-success-bg: #ECFDF5;
+  --color-warning: #D97706;
+  --color-warning-bg: #FEF3C7;
+  --color-danger: #DC2626;
+  --color-danger-bg: #FEE2E2;
+  --color-info: #3B82F6;
+  --color-info-bg: #DBEAFE;
+  --color-error-amber: #D97706;
+  --color-error-amber-bg: #FEF3C7;
+
+  /* ===== 中性色 - 背景与表面 ===== */
+  --color-bg: #1E1E2E;
+  --color-bg-workspace: #F9FAFB;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #F3F4F6;
+  --color-overlay: rgba(0, 0, 0, 0.55);
+  --color-popup-bg: #2A2A3E;
+  --color-bg-secondary: #F3F4F6;
+  --color-bg-secondary-hover: #E5E7EB;
+
+  /* ===== 中性色 - 文字 ===== */
+  --color-text: #111827;
+  --color-text-secondary: #6B7280;
+  --color-text-tertiary: #9CA3AF;
+
+  /* ===== 中性色 - 边框 ===== */
+  --color-border: #E5E7EB;
+  --color-border-focus: #4F46E5;
+
+  /* ===== 字体 ===== */
+  --font-family-sans: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  --font-size-section-title: 24px;
+  --font-size-body: 16px;
+  --font-size-subtitle: 15px;
+  --font-size-caption: 14px;
+  --font-size-small: 13.5px;
+  --font-size-badge: 12px;
+  --font-weight-bold: 700;
+  --font-weight-semibold: 600;
+  --font-weight-medium: 500;
+  --font-weight-regular: 400;
+
+  /* ===== 圆角 ===== */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 50%;
+
+  /* ===== 阴影 ===== */
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.08);
+  --shadow-card-hover: 0 12px 36px rgba(0, 0, 0, 0.18);
+  --shadow-dialog: 0 24px 64px rgba(0, 0, 0, 0.35);
+  --shadow-popup: 0 8px 28px rgba(0, 0, 0, 0.40);
+  --shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-btn-primary: 0 4px 14px rgba(79, 70, 229, 0.35);
+
+  /* ===== 间距 ===== */
+  --padding-page: 40px 24px;
+  --padding-card: 28px 28px 28px;
+  --padding-dialog: 36px 40px 32px;
+  --padding-btn: 10px 32px;
+  --padding-btn-sm: 6px 16px;
+  --padding-badge: 3px 12px;
+  --padding-input: 10px 14px;
+  --padding-toast: 12px 20px;
+  --margin-header-bottom: 32px;
+  --gap-cards: 24px;
+  --gap-btn-group: 14px;
+
+  /* ===== 尺寸 ===== */
+  --width-dialog: 460px;
+  --height-header: 56px;
+
+  /* ===== 动效 ===== */
+  --duration-instant: 50ms;
+  --duration-fast: 150ms;
+  --duration-normal: 180ms;
+  --duration-slow: 200ms;
+  --duration-overlay: 250ms;
+  --ease-default: ease;
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-family-sans);
+  background: var(--color-bg-workspace);
+  color: var(--color-text);
+  min-height: 100vh;
+}
+
+/* ===== Top Bar (一致的工具栏 ===== */
+.top-bar {
+  height: var(--height-header);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.top-bar-brand {
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-primary);
+  margin-right: auto;
+}
+
+.top-bar-back {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+}
+
+.top-bar-back:hover {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.top-bar-label {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+}
+
+/* ===== Page Header ===== */
+.page-header {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 28px 24px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.page-header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.page-header h1 {
+  font-size: var(--font-size-section-title);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+}
+
+.project-count {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
+}
+
+/* ===== Buttons ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--padding-btn);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+  border: none;
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-hover);
+  box-shadow: var(--shadow-btn-primary);
+}
+
+.btn-primary:active {
+  transform: scale(0.97);
+}
+
+.btn-secondary {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.btn-secondary:hover {
+  background: var(--color-bg-secondary-hover);
+}
+
+.btn-secondary:active {
+  transform: scale(0.97);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: #B91C1C;
+}
+
+.btn-danger:active {
+  transform: scale(0.97);
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-primary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  border: 1.5px dashed var(--color-border);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+  white-space: nowrap;
+}
+
+.btn-ghost:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+  color: var(--color-primary-hover);
+}
+
+/* ===== Filter Bar ===== */
+.filter-bar {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.search-box {
+  position: relative;
+  flex: 1;
+  max-width: 300px;
+}
+
+.search-box input {
+  width: 100%;
+  padding: 9px 14px 9px 36px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  outline: none;
+  transition: border-color var(--duration-normal) var(--ease-default);
+}
+
+.search-box input:focus {
+  border-color: var(--color-border-focus);
+}
+
+.search-box input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+  display: flex;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--color-bg-secondary);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.filter-tab {
+  padding: 6px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+  white-space: nowrap;
+}
+
+.filter-tab:hover {
+  color: var(--color-text);
+}
+
+.filter-tab.active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ===== Project Grid ===== */
+.project-grid {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 48px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--gap-cards);
+}
+
+/* ===== Project Card ===== */
+.project-card {
+  background: var(--color-surface);
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-lg);
+  padding: var(--padding-card);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  position: relative;
+  transition: border-color var(--duration-slow) var(--ease-default),
+              box-shadow var(--duration-slow) var(--ease-default),
+              transform var(--duration-slow) var(--ease-default);
+}
+
+.project-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-3px);
+}
+
+.project-card:active {
+  transform: scale(0.98);
+  transition-duration: var(--duration-fast);
+}
+
+/* Card top row */
+.project-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+/* Mode badge */
+.mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--padding-badge);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-badge);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  user-select: none;
+}
+
+.mode-badge.quick {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+}
+
+.mode-badge.long {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+/* Menu button (three dots) */
+.card-menu-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+  position: relative;
+  z-index: 5;
+}
+
+.card-menu-btn:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+/* Project name */
+.project-card-name {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+/* Project summary */
+.project-card-summary {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin-bottom: 16px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Project meta */
+.project-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--font-size-small);
+  color: var(--color-text-tertiary);
+}
+
+.project-card-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Status tag */
+.project-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-badge);
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: var(--font-weight-medium);
+  margin-left: auto;
+}
+
+.project-status.active {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+}
+
+.project-status.completed {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+/* Status dot in card corner (small indicator) */
+.card-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.card-status-dot.active {
+  background: var(--color-primary);
+}
+
+.card-status-dot.completed {
+  background: var(--color-success);
+}
+
+/* ===== Context Menu (Dropdown) ===== */
+.card-menu-wrapper {
+  position: relative;
+}
+
+.card-context-menu {
+  position: absolute;
+  right: 0;
+  top: 40px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popup);
+  z-index: 50;
+  min-width: 160px;
+  padding: 6px;
+  display: none;
+  animation: menuIn var(--duration-fast) var(--ease-default);
+}
+
+.card-context-menu.open {
+  display: block;
+}
+
+@keyframes menuIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--font-size-caption);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration-normal) var(--ease-default);
+}
+
+.context-menu-item:hover {
+  background: var(--color-primary-subtle);
+}
+
+.context-menu-item.danger {
+  color: var(--color-danger);
+}
+
+.context-menu-item.danger:hover {
+  background: var(--color-danger-bg);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 4px 8px;
+}
+
+/* ===== Empty State ===== */
+.empty-state {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 80px 24px;
+  text-align: center;
+  display: none;
+}
+
+.empty-state-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+  color: var(--color-text-tertiary);
+}
+
+.empty-state h3 {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  margin-bottom: 28px;
+  line-height: 1.7;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ===== No Results ===== */
+.no-results {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-body);
+}
+
+/* ===== Dialog ===== */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--color-overlay);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  z-index: 500;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-overlay.open {
+  display: flex;
+}
+
+.dialog-box {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--padding-dialog);
+  width: var(--width-dialog);
+  max-width: 90vw;
+  box-shadow: var(--shadow-dialog);
+  text-align: center;
+  animation: scaleIn var(--duration-overlay) var(--ease-smooth);
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.92) translateY(12px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.dialog-icon-wrap {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.dialog-icon-wrap.danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.dialog-box h4 {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.dialog-box .highlight-name {
+  color: var(--color-primary);
+}
+
+.dialog-box p {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  margin-bottom: 28px;
+  line-height: 1.6;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: var(--gap-btn-group);
+  justify-content: center;
+}
+
+/* ===== Toast ===== */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--padding-toast);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-caption);
+  z-index: 600;
+  animation: slideUp var(--duration-fast) var(--ease-bounce);
+  box-shadow: var(--shadow-toast);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 480px;
+  line-height: 1.5;
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.toast.success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success);
+}
+
+.toast.error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+}
+
+.toast.info {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  border: 1px solid var(--color-info);
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(16px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ===== Focus ===== */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ===== SVG ===== */
+.svg-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.svg-icon-sm {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.svg-icon-lg {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 860px) {
+  .project-grid {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+  .page-header h1 {
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 600px) {
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 20px 16px 16px;
+  }
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0 16px 16px;
+  }
+  .search-box {
+    max-width: none;
+  }
+  .project-grid {
+    grid-template-columns: 1fr;
+    padding: 0 16px 32px;
+    gap: 16px;
+  }
+  .project-card {
+    padding: 20px;
+  }
+  .dialog-box {
+    padding: 28px 24px;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== Top Bar ===== -->
+<div class="top-bar">
+  <span class="top-bar-brand">向导Agent</span>
+  <button class="top-bar-back" onclick="handleBack()" data-ai-id="btn-back" title="返回工作区">
+    <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="19" y1="12" x2="5" y2="12"/>
+      <polyline points="12 19 5 12 12 5"/>
+    </svg>
+  </button>
+  <span class="top-bar-label">我的项目</span>
+</div>
+
+<!-- ===== Page Header ===== -->
+<div class="page-header">
+  <div class="page-header-left">
+    <h1>我的项目</h1>
+    <span class="project-count" id="projectCount">共 6 个项目</span>
+  </div>
+  <button class="btn btn-primary" onclick="handleNewProject()" data-ai-id="btn-new-project">
+    <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19"/>
+      <line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+    新建项目
+  </button>
+</div>
+
+<!-- ===== Filter Bar ===== -->
+<div class="filter-bar">
+  <div class="search-box">
+    <span class="search-icon">
+      <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+    </span>
+    <input type="text" id="searchInput" placeholder="搜索项目名称..." oninput="filterProjects()" data-ai-id="search-input">
+  </div>
+  <div class="filter-tabs">
+    <button class="filter-tab active" data-ai-id="filter-all" onclick="setFilter('all', this)">全部</button>
+    <button class="filter-tab" data-ai-id="filter-quick" onclick="setFilter('quick', this)">快速工具</button>
+    <button class="filter-tab" data-ai-id="filter-long" onclick="setFilter('long', this)">长期项目</button>
+  </div>
+</div>
+
+<!-- ===== Project Grid ===== -->
+<div class="project-grid" id="projectGrid"></div>
+
+<!-- ===== Empty State (all deleted) ===== -->
+<div class="empty-state" id="emptyState">
+  <div class="empty-state-icon">
+    <svg class="svg-icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+      <polyline points="13 2 13 9 20 9"/>
+    </svg>
+  </div>
+  <h3>还没有项目</h3>
+  <p>创建一个项目，让AI帮你把想法变成可用的工具或网站。只需描述你的需求，剩下的交给AI来处理。</p>
+  <button class="btn btn-primary" onclick="handleNewProject()" data-ai-id="btn-empty-new">
+    <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19"/>
+      <line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+    创建第一个项目
+  </button>
+</div>
+
+<!-- ===== Delete Confirmation Dialog ===== -->
+<div class="dialog-overlay" id="deleteDialog">
+  <div class="dialog-box">
+    <div class="dialog-icon-wrap danger">
+      <svg class="svg-icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6h18"/>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      </svg>
+    </div>
+    <h4>确定要删除「<span class="highlight-name" id="deleteProjectName">项目</span>」吗？</h4>
+    <p>项目及其所有数据将被永久删除，此操作不可撤销。</p>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" onclick="closeDeleteDialog()" data-ai-id="dialog-delete-cancel">取消</button>
+      <button class="btn btn-danger" onclick="confirmDelete()" data-ai-id="dialog-delete-confirm-btn">确定删除</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   Wireframe: 我的项目页 v0.1
+   依赖: sitemap v0.3 §4, design-system v0.2, user-stories US-U10
+   ============================================================ */
+
+/* ---------- Mock Data ---------- */
+var projects = [
+  {
+    id: 'p1',
+    name: '奶茶店点单系统',
+    summary: '扫码点单、购物车管理、订单查看——让顾客自助下单，减少排队等待',
+    mode: 'quick',
+    status: 'active',
+    createdAt: '2026-06-03',
+    lastActive: '2 小时前'
+  },
+  {
+    id: 'p2',
+    name: '读书笔记管理',
+    summary: '记录书名、作者、阅读进度和感想，支持分类标签和关键词搜索',
+    mode: 'quick',
+    status: 'completed',
+    createdAt: '2026-05-28',
+    lastActive: '3 天前'
+  },
+  {
+    id: 'p3',
+    name: '个人记账本',
+    summary: '日常收支记录、分类统计、月度报表——养成记账习惯的好帮手',
+    mode: 'long',
+    status: 'active',
+    createdAt: '2026-05-20',
+    lastActive: '5 天前'
+  },
+  {
+    id: 'p4',
+    name: '社团活动报名平台',
+    summary: '活动发布、在线报名、名单管理、签到统计——社团管理的全套工具',
+    mode: 'long',
+    status: 'completed',
+    createdAt: '2026-05-15',
+    lastActive: '1 周前'
+  },
+  {
+    id: 'p5',
+    name: '宿舍拼单小工具',
+    summary: '群里发起拼单、记录每人点的东西、自动算账——室友聚餐不再乱账',
+    mode: 'quick',
+    status: 'completed',
+    createdAt: '2026-05-10',
+    lastActive: '2 周前'
+  },
+  {
+    id: 'p6',
+    name: '课程表提醒助手',
+    summary: '导入课表、上课提醒、作业截止倒计时——再也不怕忘交作业',
+    mode: 'quick',
+    status: 'completed',
+    createdAt: '2026-05-05',
+    lastActive: '3 周前'
+  }
+];
+
+/* ---------- State ---------- */
+var currentFilter = 'all';
+var currentSearch = '';
+var deletingProjectId = null;
+var menuOpenId = null;
+
+/* ---------- SVG Icon Builders ---------- */
+function iconQuick() {
+  return '<svg class="svg-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+}
+
+function iconLong() {
+  return '<svg class="svg-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><line x1="8" y1="6" x2="8" y2="6.01"/><line x1="16" y1="6" x2="16" y2="6.01"/><line x1="12" y1="6" x2="12" y2="6.01"/><line x1="12" y1="10" x2="12" y2="10.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="10" x2="16" y2="10.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><line x1="8" y1="10" x2="8" y2="10.01"/><line x1="8" y1="14" x2="8" y2="14.01"/></svg>';
+}
+
+function iconCalendar() {
+  return '<svg class="svg-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>';
+}
+
+function iconClock() {
+  return '<svg class="svg-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+}
+
+function iconMore() {
+  return '<svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+}
+
+function iconPlay() {
+  return '<svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+}
+
+function iconTrash() {
+  return '<svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+}
+
+function iconPlus() {
+  return '<svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+}
+
+/* ---------- Render ---------- */
+function renderProjects() {
+  var grid = document.getElementById('projectGrid');
+  var empty = document.getElementById('emptyState');
+  var countEl = document.getElementById('projectCount');
+
+  /* Update count */
+  countEl.textContent = '共 ' + projects.length + ' 个项目';
+
+  /* All deleted → empty state */
+  if (projects.length === 0) {
+    grid.style.display = 'none';
+    empty.style.display = '';
+    return;
+  }
+  grid.style.display = '';
+  empty.style.display = 'none';
+
+  /* Apply filters */
+  var filtered = projects.filter(function(p) {
+    if (currentFilter === 'quick' && p.mode !== 'quick') return false;
+    if (currentFilter === 'long' && p.mode !== 'long') return false;
+    if (currentSearch) {
+      var q = currentSearch.toLowerCase();
+      return p.name.toLowerCase().indexOf(q) !== -1 ||
+             p.summary.toLowerCase().indexOf(q) !== -1;
+    }
+    return true;
+  });
+
+  /* No results for filter/search */
+  if (filtered.length === 0) {
+    grid.innerHTML = '<div class="no-results">没有匹配的项目，试试其他关键词</div>';
+    return;
+  }
+
+  /* Build cards */
+  var html = '';
+  for (var i = 0; i < filtered.length; i++) {
+    var p = filtered[i];
+    var modeSvg = p.mode === 'quick' ? iconQuick() : iconLong();
+    var modeLabel = p.mode === 'quick' ? '快速工具' : '长期项目';
+    var modeClass = p.mode === 'quick' ? 'quick' : 'long';
+    var statusLabel = p.status === 'active' ? '进行中' : '已完成';
+    var statusClass = p.status === 'active' ? 'active' : 'completed';
+
+    html += '<div class="project-card" data-ai-id="project-card-' + p.id + '" data-project-id="' + p.id + '" onclick="handleCardClick(\'' + p.id + '\')">';
+
+    /* Top row: badge + menu */
+    html += '<div class="project-card-top">';
+    html += '<span class="mode-badge ' + modeClass + '">' + modeSvg + ' ' + modeLabel + '</span>';
+    html += '<div class="card-menu-wrapper">';
+    html += '<button class="card-menu-btn" onclick="event.stopPropagation();toggleMenu(\'' + p.id + '\')" data-ai-id="project-card-' + p.id + '-menu">' + iconMore() + '</button>';
+    html += '<div class="card-context-menu" id="menu-' + p.id + '" data-ai-id="project-card-' + p.id + '-context-menu">';
+    html += '<button class="context-menu-item" onclick="event.stopPropagation();openProject(\'' + p.id + '\')" data-ai-id="project-card-' + p.id + '-open">' + iconPlay() + ' 打开继续</button>';
+    html += '<div class="context-menu-divider"></div>';
+    html += '<button class="context-menu-item danger" onclick="event.stopPropagation();showDeleteDialog(\'' + p.id + '\')" data-ai-id="project-card-' + p.id + '-delete">' + iconTrash() + ' 删除</button>';
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    /* Name */
+    html += '<div class="project-card-name" data-ai-id="project-card-' + p.id + '-name">' + p.name + '</div>';
+
+    /* Summary */
+    html += '<div class="project-card-summary">' + p.summary + '</div>';
+
+    /* Meta row */
+    html += '<div class="project-card-meta">';
+    html += '<span>' + iconCalendar() + ' ' + p.createdAt + '</span>';
+    html += '<span>' + iconClock() + ' ' + p.lastActive + '</span>';
+    html += '<span class="project-status ' + statusClass + '"><span class="card-status-dot ' + statusClass + '"></span>' + statusLabel + '</span>';
+    html += '</div>';
+
+    html += '</div>';
+  }
+  grid.innerHTML = html;
+}
+
+/* ---------- Filter ---------- */
+function setFilter(filter, btn) {
+  currentFilter = filter;
+  var tabs = document.querySelectorAll('.filter-tab');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].classList.remove('active');
+  }
+  btn.classList.add('active');
+  renderProjects();
+}
+
+function filterProjects() {
+  var input = document.getElementById('searchInput');
+  currentSearch = input.value.trim();
+  renderProjects();
+}
+
+/* ---------- Card Click ---------- */
+function handleCardClick(id) {
+  closeAllMenus();
+  openProject(id);
+}
+
+function openProject(id) {
+  var p = findProject(id);
+  if (!p) return;
+  var modeName = p.mode === 'quick' ? '快速工具' : '长期维护的项目';
+  showToast('正在打开「' + p.name + '」→ ' + modeName + '工作区', 'info');
+}
+
+/* ---------- Context Menu ---------- */
+function toggleMenu(id) {
+  if (menuOpenId === id) {
+    closeAllMenus();
+    return;
+  }
+  closeAllMenus();
+  var menu = document.getElementById('menu-' + id);
+  if (menu) {
+    menu.classList.add('open');
+    menuOpenId = id;
+  }
+}
+
+function closeAllMenus() {
+  var menus = document.querySelectorAll('.card-context-menu.open');
+  for (var i = 0; i < menus.length; i++) {
+    menus[i].classList.remove('open');
+  }
+  menuOpenId = null;
+}
+
+/* Close menu on outside click */
+document.addEventListener('click', function(e) {
+  if (menuOpenId && !e.target.closest('.card-menu-wrapper')) {
+    closeAllMenus();
+  }
+});
+
+/* ---------- Delete Flow (二次确认) ---------- */
+function showDeleteDialog(id) {
+  closeAllMenus();
+  var p = findProject(id);
+  if (!p) return;
+  deletingProjectId = id;
+  document.getElementById('deleteProjectName').textContent = p.name;
+  document.getElementById('deleteDialog').classList.add('open');
+}
+
+function closeDeleteDialog() {
+  deletingProjectId = null;
+  document.getElementById('deleteDialog').classList.remove('open');
+}
+
+function confirmDelete() {
+  if (!deletingProjectId) return;
+  var p = findProject(deletingProjectId);
+  if (!p) return;
+  var name = p.name;
+
+  /* Remove from data */
+  projects = projects.filter(function(x) { return x.id !== deletingProjectId; });
+  deletingProjectId = null;
+  closeDeleteDialog();
+  closeAllMenus();
+
+  renderProjects();
+  showToast('已删除「' + name + '」及其所有数据', 'success');
+}
+
+/* ---------- New Project ---------- */
+function handleNewProject() {
+  showToast('新建项目 → 跳转到模式选择页（选择「快速工具」或「长期项目」）', 'info');
+}
+
+/* ---------- Back ---------- */
+function handleBack() {
+  showToast('返回工作区', 'info');
+}
+
+/* ---------- Utility ---------- */
+function findProject(id) {
+  for (var i = 0; i < projects.length; i++) {
+    if (projects[i].id === id) return projects[i];
+  }
+  return null;
+}
+
+/* ---------- Toast ---------- */
+function showToast(msg, type) {
+  var existing = document.querySelector('.toast');
+  if (existing) existing.remove();
+
+  var el = document.createElement('div');
+  el.className = 'toast ' + (type || 'info');
+
+  var iconHtml = '';
+  if (type === 'success') {
+    iconHtml = '<svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+  } else if (type === 'error') {
+    iconHtml = '<svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+  } else {
+    iconHtml = '<svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+  }
+
+  el.innerHTML = iconHtml + '<span>' + msg + '</span>';
+  document.body.appendChild(el);
+
+  setTimeout(function() {
+    if (el.parentNode) el.remove();
+  }, 3000);
+}
+
+/* ---------- Keyboard ---------- */
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    if (document.getElementById('deleteDialog').classList.contains('open')) {
+      closeDeleteDialog();
+    }
+    closeAllMenus();
+  }
+});
+
+/* ---------- Init ---------- */
+renderProjects();
+</script>
+</body>
+</html>
