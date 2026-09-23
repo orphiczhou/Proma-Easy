@@ -10,6 +10,8 @@ import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { join } from 'node:path'
 import { getWorkspaceFilesDir } from './config-paths'
 import { verifyFileSnapshotDir } from './nanju-file-snapshot'
+import { getNanjuProject, readProjectInfo } from './nanju-project'
+import type { NanjuProject, NanjuProjectInfoFile } from './nanju-project'
 
 // ===== 类型 =====
 
@@ -18,7 +20,7 @@ export interface ProjectSnapshot {
   projectId: string
   timestamp: string
   description: string
-  triggerType: 'init' | 'pre-modify' | 'confirm' | 'mode-switch' | 'pre-error'
+  triggerType: 'init' | 'pre-modify' | 'confirm' | 'mode-switch' | 'pre-error' | 'pre-restore'
   sessionId: string
   forkedSessionId: string
   isCurrent: boolean
@@ -34,6 +36,13 @@ export interface ProjectSnapshot {
    * 不能当作文件已恢复的证据。
    */
   fileSnapshotId?: string | null
+  /** 新快照记录业务状态；历史快照缺省时只承诺会话/文件恢复。 */
+  recoveryState?: {
+    currentStage: NanjuProject['currentStage']
+    status: NanjuProject['status']
+    subStage?: string
+    projectCategory?: NanjuProjectInfoFile['projectCategory']
+  }
 }
 
 /** 会话快照的恢复能力描述（供 UI / IPC 使用，避免把会话回滚夸大成文件恢复） */
@@ -73,6 +82,7 @@ export function describeSnapshotRecovery(snapshot: ProjectSnapshot): SnapshotRec
 // ===== 存储 =====
 
 function getSnapshotsPath(workspaceSlug: string, projectId: string): string {
+  if (![workspaceSlug, projectId].every(value => typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..' && !/[\\/\0]/.test(value))) throw new Error('工作区或工程标识非法')
   return join(getWorkspaceFilesDir(workspaceSlug), `project-${projectId}`, '_snapshots.json')
 }
 
@@ -92,18 +102,17 @@ export async function createSnapshot(
   description: string,
   triggerType: ProjectSnapshot['triggerType'] = 'confirm',
 ): Promise<ProjectSnapshot> {
-  const snapshots = readSnapshots(workspaceSlug, projectId)
-
-  // 取消之前的 isCurrent
-  for (const s of snapshots) s.isCurrent = false
-
-  // Fork 当前会话
+  // Fork 是异步边界：必须在它完成后重读时间轴，读-改-写之间不再 await。
   const forked = await forkAgentSession({ sessionId })
+  const snapshots = readSnapshots(workspaceSlug, projectId)
+  for (const s of snapshots) s.isCurrent = false
 
   // 故意不接受 fileSnapshotId 参数：文件可恢复性必须经 linkFileSnapshot 校验真实快照后才写入，
   // 避免任意字符串直接让 hasFileSnapshot=true（见 S4）。
+  const project = getNanjuProject(workspaceSlug, projectId)
+  const info = readProjectInfo(workspaceSlug, projectId)
   const snapshot: ProjectSnapshot = {
-    snapshotId: snapshots.length + 1,
+    snapshotId: Math.max(0, ...snapshots.map(s => s.snapshotId)) + 1,
     projectId,
     timestamp: new Date().toISOString(),
     description,
@@ -111,6 +120,12 @@ export async function createSnapshot(
     sessionId,
     forkedSessionId: forked.id,
     isCurrent: true,
+    ...(project ? { recoveryState: {
+      currentStage: project.currentStage,
+      status: project.status,
+      subStage: info?.subStage,
+      projectCategory: info?.projectCategory,
+    } } : {}),
   }
 
   snapshots.push(snapshot)

@@ -243,3 +243,68 @@ describe('Given 驱动文件在执行窗口内缺失或不是普通文件，When
     await expect(cliDriver().execute(input)).rejects.toBeInstanceOf(EngineeringExecutionBlocked)
   })
 })
+
+// ===== Task 11（2026-09-20）：基础子进程数限制 + 取消/超时清理回归 =====
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+function hangScript(pidFile = false): string {
+  const writePid = pidFile ? "const fs=require('node:fs'); fs.writeFileSync('pid.txt', String(process.pid));" : ''
+  return `${writePid} setInterval(()=>{},1000);`
+}
+
+describe('Given 并发驱动子进程数上限，When 超限执行，Then 后续执行 blocked（不产生进程洪峰）', () => {
+  test('Then maxConcurrentProcesses=1 时第二个并发执行 blocked', async () => {
+    const limited = createEngineeringProcessDrivers({ nodePath, maxConcurrentProcesses: 1 })
+    const abort1 = new AbortController()
+    const input1 = { ...fixture(hangScript(), 10000), signal: abort1.signal }
+    const firstRoot = input1.projectDir
+    const pending1 = runRegisteredEngineeringTest(input1, { drivers: limited, approve: async () => true })
+    await new Promise((resolve) => setTimeout(resolve, 300)) // 等第一个子进程 spawn 并占用名额
+    try {
+      const input2 = fixture(hangScript(), 5000)
+      const secondRoot = input2.projectDir
+      try {
+        const result2 = await runRegisteredEngineeringTest(input2, { drivers: limited, approve: async () => true })
+        expect(result2.status).toBe('blocked')
+        expect(result2.reason).toContain('并发')
+      } finally {
+        rmSync(secondRoot, { recursive: true, force: true })
+      }
+    } finally {
+      abort1.abort()
+      await pending1
+      rmSync(firstRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('Given 已启动的驱动子进程，When 取消/超时，Then 子进程被回收（PID 不再存活）', () => {
+  test('Then 取消后驱动子进程 PID 不再存活', async () => {
+    const input = fixture(hangScript(true), 10000)
+    const abort = new AbortController()
+    const pending = runRegisteredEngineeringTest({ ...input, signal: abort.signal }, { drivers: drivers(), approve: async () => true })
+    await new Promise((resolve) => setTimeout(resolve, 300)) // 等子进程写入 pid.txt
+    const pid = Number(readFileSync(join(root, '08_APP/pid.txt'), 'utf-8'))
+    expect(pid).toBeGreaterThan(0)
+    expect(isProcessAlive(pid)).toBe(true)
+    abort.abort()
+    const result = await pending
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toContain('取消')
+    await new Promise((resolve) => setTimeout(resolve, 120)) // 等 SIGKILL 后 reap
+    expect(isProcessAlive(pid)).toBe(false)
+  })
+  test('Then 超时后驱动子进程 PID 不再存活', async () => {
+    const input = fixture(hangScript(true), 200) // 200ms 超时
+    const pending = runRegisteredEngineeringTest(input, { drivers: drivers(), approve: async () => true })
+    await new Promise((resolve) => setTimeout(resolve, 150)) // 等子进程写入 pid.txt（超时前）
+    const pid = Number(readFileSync(join(root, '08_APP/pid.txt'), 'utf-8'))
+    expect(pid).toBeGreaterThan(0)
+    const result = await pending
+    expect(result.status).toBe('error')
+    expect(result.reason).toContain('超时')
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(isProcessAlive(pid)).toBe(false)
+  })
+})

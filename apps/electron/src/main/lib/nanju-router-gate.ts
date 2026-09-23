@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { hasEvidenceDate, hasEvidenceReference } from './nanju-evidence-reference'
 import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, readProjectInfo, type NanjuProject, type ProjectStage } from './nanju-project'
 import { getPhaseNode, getNextPhase, type PhaseId, type PhaseNode, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
@@ -1121,16 +1121,6 @@ const EVIDENCE_RECORD_SECTION_RE = /^#{1,3}[ \t]*证据升级与检索记录/m
 /** 节内 [实证]/[文证] 条目标记（升级/新增形态①②的产物特征） */
 const EVIDENCE_BADGE_RE = /\[(实证|文证)\]/
 
-/** 实证条目允许引用本机 file:// 证据，但必须验证路径真实存在；文证仍要求 http(s)。 */
-function hasExistingFileEvidence(line: string): boolean {
-  const match = line.match(/file:\/\/[^\s)\]}>]+/i)
-  if (!match) return false
-  try { return existsSync(fileURLToPath(match[0])) } catch { return false }
-}
-
-/** 宽松 URL 形态判存（http(s)://，ATK-G-007 规格——不验可达性只验凭证在场） */
-const URL_LOOSE_RE = /https?:\/\//
-
 /**
  * L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档产物检查（纯函数）。
  *
@@ -1145,7 +1135,7 @@ const URL_LOOSE_RE = /https?:\/\//
  * 存量兼容：本函数只对 _project-info.json 带 archEvidenceGate=true（v0.17.127+ 创建）
  * 的项目生效（调用方判定）；旧项目豁免。
  */
-export function validateEvidenceRecordSection(content: string): string | null {
+export function validateEvidenceRecordSection(content: string, allowedDirectories: readonly string[] = []): string | null {
   const headerMatch = content.match(EVIDENCE_RECORD_SECTION_RE)
   if (!headerMatch || headerMatch.index === undefined) {
     return '架构文档缺少「## 证据升级与检索记录」节：凡依据网络检索的结论须逐条附来源引用（URL+检索日期）；'
@@ -1165,20 +1155,22 @@ export function validateEvidenceRecordSection(content: string): string | null {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
     if (!EVIDENCE_BADGE_RE.test(line)) continue
-    const badge = line.match(EVIDENCE_BADGE_RE)?.[1]
-    if (URL_LOOSE_RE.test(line)) continue
-    if (badge === '实证' && hasExistingFileEvidence(line)) continue
-    const nextLine = lines[i + 1] ?? ''
-    const nextNextLine = lines[i + 2] ?? ''
-    if (URL_LOOSE_RE.test(nextLine) || URL_LOOSE_RE.test(nextNextLine)) continue
-    if (badge === '实证' && (hasExistingFileEvidence(nextLine) || hasExistingFileEvidence(nextNextLine))) continue
+    const badge = line.match(EVIDENCE_BADGE_RE)?.[1] as '实证' | '文证'
+    // 多行条目允许两行续写，但不能借用下一条带徽记记录的来源/日期。
+    const record = [line]
+    for (let j = i + 1; j <= i + 2 && j < lines.length; j++) {
+      if (EVIDENCE_BADGE_RE.test(lines[j]!)) break
+      record.push(lines[j]!)
+    }
+    const text = record.join('\n')
+    if (hasEvidenceReference(text, badge, allowedDirectories) && hasEvidenceDate(text)) continue
     // 条目标识：表格行取首列，列表/普通行取行首截断（拦截消息指明条目用）
     const trimmed = line.trim().replace(/^\|\s*/, '')
     const label = (trimmed.split('|')[0] ?? '').trim() || trimmed.slice(0, 40)
     if (label) missing.push(label)
   }
   if (missing.length > 0) {
-    return '证据记录凭证缺失：以下 [实证]/[文证] 条目未附来源 URL（须「URL+检索日期」，http(s):// 形态）：'
+    return '证据记录凭证缺失：以下 [实证]/[文证] 条目缺少有效来源或日期（须「URL+检索日期」YYYY-MM-DD；[文证]限 http(s)://，[实证]也可引用工程内或明确授权目录中的普通 file:// 文件；该检查不证明内容真实性）：'
       + `${missing.join('；')}。请补来源引用或降级为 [推断] 并按形态③申报（已检索无结论/未触发检索条件）。`
   }
   return null
@@ -1190,40 +1182,69 @@ export function validateEvidenceRecordSection(content: string): string | null {
  *
  * 返回 null 表示验证通过，返回 string 表示错误原因。
  */
+/** 结构化校验项直接在校验点产生，UI/模型/遥测共享，不解析错误文案。 */
+export type GateCheck = import('@proma/shared').AdvanceGateCheck
+
+export function evaluatePhaseOutput(workspaceSlug: string, projectId: string, phaseId: PhaseId): { error: string | null; checks: GateCheck[] } {
+  const checks: GateCheck[] = []
+  try {
+    const error = verifyPhaseOutput(workspaceSlug, projectId, phaseId, checks)
+    if (checks.length === 0) checks.push({ id: 'phase.output', pass: !error, expected: '阶段产出满足要求', actual: error ?? '符合要求' })
+    return { error, checks }
+  } catch (e) {
+    const error = `阶段产出无法校验：${e instanceof Error ? e.message : String(e)}`
+    checks.push({ id: 'output.readable', pass: false, expected: '可读取的阶段产出', actual: error, nextAction: '检查路径、权限与文件格式后重新校验。' })
+    return { error, checks }
+  }
+}
+
 export function verifyPhaseOutput(
   workspaceSlug: string,
   projectId: string,
   phaseId: PhaseId,
+  checks?: GateCheck[],
 ): string | null {
+  const reject = (id: string, actual: string | null, expected: string, path?: string): string | null => {
+    checks?.push({ id, path, expected, actual: actual ?? '符合要求', pass: actual === null, nextAction: actual ? `修正 ${path ?? phaseId} 后重新校验；不得跳过门禁。` : undefined })
+    return actual
+  }
   const projectDir = join(getWorkspaceFilesDir(workspaceSlug), `project-${projectId}`)
   const phase = getPhaseNode(
     listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)?.mode ?? 'iterative',
     phaseId,
   )
-  if (!phase || !phase.outputPath) return null
+  if (!phase || !phase.outputPath) return reject('route.missing', `阶段路由节点或产出路径缺失：${phaseId}`, '有效阶段路由与产出路径', phaseId)
+  if (readProjectInfo(workspaceSlug, projectId)?.acceptanceBaselineRequired) {
+    const { validateAcceptanceSpecification, validateAcceptanceBindings } = require('./nanju-acceptance-baseline') as typeof import('./nanju-acceptance-baseline')
+    const error = phaseId === 'architecture' ? validateAcceptanceSpecification(projectDir)
+      : phaseId === 'coding' ? validateAcceptanceSpecification(projectDir, true)
+      : phaseId === 'testing' ? validateAcceptanceBindings(projectDir) : null
+    if (error) return reject('acceptance.baseline', error, '编码前冻结规格、测试逐项绑定验收编号', phaseId === 'testing' ? '06_TESTS/features' : '03_ARCHITECTURE/acceptance.json')
+  }
 
   if (phaseId === 'coding') {
     const { resolveCodingOutputPath, validateEngineeringCodingOutput, ENGINEERING_DELIVERY_PATH } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
     if (resolveCodingOutputPath(projectDir) === ENGINEERING_DELIVERY_PATH) {
-      return validateEngineeringCodingOutput(projectDir)
+      return reject('coding.engineering-contract', validateEngineeringCodingOutput(projectDir), '契约、入口、驱动与被测产物齐全', ENGINEERING_DELIVERY_PATH)
     }
   }
 
   const filePath = join(projectDir, phase.outputPath)
 
   if (!existsSync(filePath)) {
-    return `产出文件不存在：${phase.outputPath}`
+    return reject('output.exists', `产出文件不存在：${phase.outputPath}`, '阶段产出是可读普通文件', phase.outputPath)
   }
 
   const stat = statSync(filePath)
+  if (!stat.isFile()) return reject('output.regular-file', `产出路径不是普通文件：${phase.outputPath}`, '普通文件', phase.outputPath)
   if (stat.size < 100) {
-    return `产出文件过小（${stat.size} 字节），内容可能不完整：${phase.outputPath}`
+    return reject('output.size', `产出文件过小（${stat.size} 字节），内容可能不完整：${phase.outputPath}`, '至少 100 字节完整内容', phase.outputPath)
   }
 
   // 最低格式检查
   const content = readFileSync(filePath, 'utf-8')
   if (!checkOutputFormat(phaseId, content)) {
-    return `产出文件格式不符合要求（缺少基本结构）：${phase.outputPath}`
+    return reject('output.format', `产出文件格式不符合要求（缺少基本结构）：${phase.outputPath}`, '符合阶段基本结构', phase.outputPath)
   }
 
   // testing 阶段（v0.17.63，AC I-001）：可执行契约存在性门禁——06_TESTS/features/ 下
@@ -1244,21 +1265,21 @@ export function verifyPhaseOutput(
         }
       })
       if (!hasScenarios) {
-        return '缺少可执行场景：06_TESTS/features/ 下至少一个 .feature 需同时含 Feature: 与 Scenario:（index.feature 可为纯索引，场景允许分布在 us-XX.feature 分文件）'
+        return reject('testing.scenarios', '缺少可执行场景：06_TESTS/features/ 下至少一个 .feature 需同时含 Feature: 与 Scenario:（index.feature 可为纯索引，场景允许分布在 us-XX.feature 分文件）', '至少一个 Feature/Scenario 规格', phase.outputPath)
       }
       const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract, captureEngineeringEvidence } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
       const contractPath = join(projectDir, ENGINEERING_CONTRACT_PATH)
       if (existsSync(contractPath)) {
         const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
-        if (!parsed.contract) return '工程测试契约不完整：' + parsed.problems.join('；')
+        if (!parsed.contract) return reject('testing.contract', '工程测试契约不完整：' + parsed.problems.join('；'), '有效工程测试契约', phase.outputPath)
         if (parsed.contract.tests.some((test) => test.scenarioFiles)) {
           const captured = captureEngineeringEvidence(projectDir)
-          if (!captured.evidence) return '工程测试文件绑定不完整：' + captured.problems.join('；')
+          if (!captured.evidence) return reject('testing.binding', '工程测试文件绑定不完整：' + captured.problems.join('；'), '测试规格与契约一致', phase.outputPath)
         }
         if (parsed.contract.tests.every((test) => test.adapter !== 'browser-file' && test.adapter !== 'browser-url')) {
-          if (parsed.contract.tests.some((test) => !test.driver)) return '工程测试缺少driver执行计划，请回coding补齐真实驱动；不得伪造DOM步骤。'
+          if (parsed.contract.tests.some((test) => !test.driver)) return reject('testing.driver', '工程测试缺少driver执行计划，请回coding补齐真实驱动；不得伪造DOM步骤。', '非浏览器契约含真实驱动', phase.outputPath)
           const captured = captureEngineeringEvidence(projectDir)
-          return captured.evidence ? null : '工程驱动或被测产物不完整：' + captured.problems.join('；')
+          return reject('testing.execution-files', captured.evidence ? null : '工程驱动或被测产物不完整：' + captured.problems.join('；'), '驱动及被测产物完整', phase.outputPath)
         }
       }
       // AC I-1（v0.17.65）：占位产物拦截——至少一个 *.steps.json 可 JSON.parse 且解析后
@@ -1276,7 +1297,7 @@ export function verifyPhaseOutput(
           }
         })
       if (!hasValidStepsJson) {
-        return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个可解析且含非空 feature/scenario 的 *.steps.json（与 us-XX.feature 成对产出；空占位文件不算）'
+        return reject('testing.steps', '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个可解析且含非空 feature/scenario 的 *.steps.json（与 us-XX.feature 成对产出；空占位文件不算）', '至少一个有效步骤映射', phase.outputPath)
       }
     }
   }
@@ -1303,7 +1324,7 @@ export function verifyPhaseOutput(
     // 未标注不是错误（web-default 降级）；标注了但值非法 = 品类幻觉，拦。
     const rawMarker = extractRawCategoryMarker(content)
     if (rawMarker !== null && !isProjectCategory(rawMarker.toLowerCase())) {
-      return `架构文档品类标记非法：projectCategory: ${rawMarker}（合法值为 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一）`
+      return reject('architecture.category', `架构文档品类标记非法：projectCategory: ${rawMarker}（合法值为 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一）`, '合法工程品类', phase.outputPath)
     }
 
     // resolved 品类（W3 口径：existing ?? architecture/prd 提取 ?? web-default）。
@@ -1316,7 +1337,7 @@ export function verifyPhaseOutput(
       if (envReady === false) {
         // 显式未就绪：拦截（缺失组件清单可见化）
         const missing = missingComponents.length > 0 ? missingComponents.join('、') : '未知组件'
-        return `环境未就绪（${missing}）：请先完成工程环境配置（回到架构师环节执行安装/调通，或与用户确认换技术栈/降级）`
+        return reject('architecture.environment', `环境未就绪（${missing}）：请先完成工程环境配置（回到架构师环节执行安装/调通，或与用户确认换技术栈/降级）`, '必需环境组件就绪', phase.outputPath)
       }
       if (envReady === undefined) {
         // 存量豁免（R8 禁裸 !==true）：envReady 字段缺失 = 未检查，不误拦。
@@ -1329,7 +1350,7 @@ export function verifyPhaseOutput(
         const checklist = parseEnvChecklistFromDoc(content)
         const validation = validateEnvChecklist(resolved.category, checklist)
         if (!validation.ok) {
-          return `环境配置清单校验未通过：${validation.problems.join('；')}`
+          return reject('architecture.environment-schema', `环境配置清单校验未通过：${validation.problems.join('；')}`, '品类环境清单合法', phase.outputPath)
         }
       }
     }
@@ -1338,7 +1359,7 @@ export function verifyPhaseOutput(
     if (existsSync(contractPath)) {
       try {
         const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
-        if (!parsed.contract) return '工程契约需补全：' + parsed.problems.join('；')
+        if (!parsed.contract) return reject('architecture.contract', '工程契约需补全：' + parsed.problems.join('；'), '完整工程契约', phase.outputPath)
         // L3-7d（2026-09-18）：Spike 埋点·契约侧观察——契约校验通过后 spikes[] 登记变化
         // → spike.verdict（verdict 取登记值，source:contract-registration；与文档侧
         // pending-removed 互补：此处可知结论方向）。选点理由：契约校验通过才可信为登记，
@@ -1348,12 +1369,12 @@ export function verifyPhaseOutput(
           const { recordSpikeTelemetryFromContract } = require('./nanju-spike-telemetry') as typeof import('./nanju-spike-telemetry')
           recordSpikeTelemetryFromContract(workspaceSlug, projectId, parsed.contract)
         } catch { /* 埋点观察失败不影响门禁判定 */ }
-      } catch { return '工程契约不可读，请补全：' + ENGINEERING_CONTRACT_PATH }
+      } catch { return reject('architecture.contract-readable', '工程契约不可读，请补全：' + ENGINEERING_CONTRACT_PATH, '可读工程契约', phase.outputPath) }
     }
     // 结构检查只证明设计资料齐全，不构成运行证据或权限授权。
     const testArchitecture = validateTestArchitecture(content)
     if (!testArchitecture.ok) {
-      return '架构交付与测试设计不完整，请补全后再确认：' + testArchitecture.problems.join('；')
+      return reject('architecture.test-design', '架构交付与测试设计不完整，请补全后再确认：' + testArchitecture.problems.join('；'), '架构交付与测试设计完整', phase.outputPath)
     }
     // L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档须含
     // 「## 证据升级与检索记录」节，且节内 [实证]/[文证] 升级/新增条目附 URL；
@@ -1362,8 +1383,11 @@ export function verifyPhaseOutput(
     // 项目生效，旧项目豁免（标记由 createNanjuProject 写入；非时间戳比对——版本
     // 发布时刻依赖脆弱，显式标记确定性）。
     if (readProjectInfo(workspaceSlug, projectId)?.archEvidenceGate === true) {
-      const evidenceError = validateEvidenceRecordSection(content)
-      if (evidenceError) return evidenceError
+      const { getAgentSessionMeta } = require('./agent-session-manager') as typeof import('./agent-session-manager')
+      const project = listNanjuProjects(workspaceSlug).find(item => item.projectId === projectId)
+      const attachedDirectories = project?.sessionId ? getAgentSessionMeta(project.sessionId)?.attachedDirectories ?? [] : []
+      const evidenceError = validateEvidenceRecordSection(content, [projectDir, ...attachedDirectories])
+      if (evidenceError) return reject('architecture.evidence', evidenceError, '来源证据记录齐全', phase.outputPath)
     }
   }
 
@@ -1389,10 +1413,10 @@ export function verifyPhaseOutput(
       if (refPath.startsWith('/')) continue
       const resolved = resolve(dirname(filePath), refPath)
       if (!resolved.startsWith(dirname(filePath) + sep)) {
-        return '入口文件引用越出 08_APP 目录：' + ref
+        return reject('coding.reference-boundary', '入口文件引用越出 08_APP 目录：' + ref, '入口资源位于08_APP内', phase.outputPath)
       }
       if (!existsSync(resolved)) {
-        return `入口文件引用的资源不存在：${ref}`
+        return reject('coding.reference-exists', `入口文件引用的资源不存在：${ref}`, '入口引用资源存在', phase.outputPath)
       }
     }
   }

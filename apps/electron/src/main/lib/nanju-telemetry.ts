@@ -49,7 +49,7 @@ export type TelemetryEventType =
   | 'confirm.auto-confirm' | 'advance.auto-gate' | 'clarify.auto-degrade'
   // W22（G 域 F5/D8-1）：W11 目标校验拒绝遥测补齐 + 拒收防环转人工/续接放弃归因
   //（payload.kind 区分 loop-limit / continuation-giveup）
-  | 'advance.target-deny' | 'advance.reject-escalate'
+  | 'advance.target-deny' | 'advance.reject-escalate' | 'advance.correction'
   // W22（M 域 M#8 预留入表）：开发↔测试跨族断言告警（不阻断，配置层可观测）
   | 'model.diversity-warn'
   // W23（§六.3）：配置级 autofix——委派指令构建前预检失效端点并临时替换（区别于

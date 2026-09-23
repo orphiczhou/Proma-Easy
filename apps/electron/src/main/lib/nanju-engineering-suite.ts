@@ -1,9 +1,11 @@
 /** 非浏览器工程测试汇总：全部计划逐项执行，辅助结果不冒充用户故事覆盖。 */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { captureEngineeringEvidence, ENGINEERING_CONTRACT_PATH, parseEngineeringContract } from './nanju-engineering-contract'
 import { parseUserStories } from './nanju-user-stories'
 import { EngineeringExecutionBlocked, runRegisteredEngineeringTest } from './nanju-engineering-execution'
+import { archiveEngineeringTestEvidence, writeEngineeringEvidenceIndex, type EvidenceIndexEntry } from './nanju-engineering-evidence'
 import type { EngineeringEvidence } from './nanju-engineering-contract'
 import type { EngineeringExecutionResult, EngineeringExecutionServices } from './nanju-engineering-execution'
 
@@ -16,11 +18,27 @@ export interface EngineeringSuiteResult {
   uncoveredUs: string[]
   /** 项目测试驱动的语义真实性仍需独立核验，尤其是系统/设备能力。 */
   coverageUnverified: string[]
+  /** Task 11：本次运行的 runId（证据归档键，06_TESTS/evidence/<runId>/）。 */
+  runId?: string
+  /** Task 11：证据索引路径（06_TESTS/evidence/<runId>/index.json）；无测试证据时不写。 */
+  evidenceIndex?: string
 }
 export const ENGINEERING_DRIVER_EVIDENCE_BOUNDARY = '项目驱动记录的断言不等于独立观察到真实系统行为；桌面热键、设备、服务及外部应用效果须另有实际验收证据。'
 
 export async function runEngineeringSuite(projectDir: string, services: EngineeringExecutionServices, signal: AbortSignal, onProgress?: (counts: { current: number; total: number; passed: number; failed: number; skipped: number }) => void): Promise<EngineeringSuiteResult> {
-  const base: EngineeringSuiteResult = { verdict: 'blocked', reason: null, evidence: null, tests: [], coveredUs: [], uncoveredUs: [], coverageUnverified: [ENGINEERING_DRIVER_EVIDENCE_BOUNDARY] }
+  const runId = randomUUID()
+  const generatedAt = new Date().toISOString()
+  const base: EngineeringSuiteResult = { verdict: 'blocked', reason: null, evidence: null, tests: [], coveredUs: [], uncoveredUs: [], coverageUnverified: [ENGINEERING_DRIVER_EVIDENCE_BOUNDARY], runId }
+  // Task 11（2026-09-20）：证据归档 best-effort（失败不阻断判定）；只归档只读证据，
+  // 不持久化 approve() 结果/交付授权——交付仍走 GWT 交付门 + 单次批准重新验证。
+  const entries: EvidenceIndexEntry[] = []
+  const archive = (result: EngineeringExecutionResult): void => {
+    try { const { sha256 } = archiveEngineeringTestEvidence(projectDir, result, runId, generatedAt); entries.push({ testId: result.testId, status: result.status, sha256, generatedAt }) } catch { /* 归档失败不阻断判定 */ }
+  }
+  const finalize = (): void => {
+    if (entries.length === 0) return
+    try { base.evidenceIndex = writeEngineeringEvidenceIndex(projectDir, runId, entries, generatedAt) } catch { /* 索引失败不阻断 */ }
+  }
   const captured = captureEngineeringEvidence(projectDir)
   if (!captured.evidence) return { ...base, reason: captured.problems.join('；') }
   base.evidence = captured.evidence
@@ -59,10 +77,12 @@ export async function runEngineeringSuite(projectDir: string, services: Engineer
   for (const test of contract.tests) {
     const result = await runRegisteredEngineeringTest({ projectDir, test, evidence: captured.evidence, signal }, services)
     base.tests.push(result)
+    archive(result)
     notify()
-    if (result.status === 'blocked') return { ...base, reason: result.reason }
-    if (result.status === 'error') return { ...base, verdict: 'error', reason: result.reason }
+    if (result.status === 'blocked') { finalize(); return { ...base, reason: result.reason } }
+    if (result.status === 'error') { finalize(); return { ...base, verdict: 'error', reason: result.reason } }
   }
+  finalize()
   if (captureEngineeringEvidence(projectDir).evidence?.digest !== captured.evidence.digest) return { ...base, reason: '测试期间版本变化，汇总结果作废' }
   base.coveredUs = [...new Set(base.tests.flatMap((test) => test.coveredUs))]
   base.uncoveredUs = stories.filter((id) => !base.coveredUs.includes(id))

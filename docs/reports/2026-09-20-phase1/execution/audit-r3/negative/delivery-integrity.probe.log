@@ -1,0 +1,128 @@
+[PASS] a1 pass 自洽 → pass
+  expected="pass"
+  actual  ="pass"
+[PASS] a2 pass + passed=0/scenariosTotal=0 → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a3 pass + passed>scenariosTotal → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a4 pass + passed 负数 → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a5 pass + skipped>0 → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a6 pass + failed>0 → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a7 pass + passed=NaN → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a8 pass + failed 负数(===0 不满足) → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a9 verdict=fail → fail
+  expected="fail"
+  actual  ="fail"
+[PASS] a10 verdict=error → error
+  expected="error"
+  actual  ="error"
+[PASS] a11 verdict=blocked → blocked
+  expected="blocked"
+  actual  ="blocked"
+[PASS] a12 pass 自洽 → warnings []
+  expected=[]
+  actual  =[]
+[PASS] a13 pass + skipped>0 → warnings 含"计数不自洽"
+  expected=true
+  actual  =true
+[配置] 配置目录: ~/.proma-dev/（开发模式）
+[PASS] b1 自洽+指纹一致 → pass
+  expected="pass"
+  actual  ="pass"
+[PASS] b2 篡改计数+指纹一致 → fail（非 pass/stale）
+  expected="fail"
+  actual  ="fail"
+[PASS] b3 篡改计数+指纹不符 → verdict=stale（优先级）
+  expected="stale"
+  actual  ="stale"
+[PASS] b3 附带: evidence[0].verdict（不一致观察点）
+  expected="fail"
+  actual  ="fail"
+[PASS] b3 附带: staleMessage 非空
+  expected=true
+  actual  =true
+[PASS] b4 攻击者重算指纹 → verdict（sha256 信任模型边界，预期 pass，非缺陷）
+  expected="pass"
+  actual  ="pass"
+[PASS] c1 tests=[null,{pass}] → not-tested
+  expected="not-tested"
+  actual  ="not-tested"
+[PASS] c2 tests=[5,"pass",{pass}] → not-tested
+  expected="not-tested"
+  actual  ="not-tested"
+[PASS] c3 tests=[skip,pass] → not-tested
+  expected="not-tested"
+  actual  ="not-tested"
+[PASS] c3b tests=[unknown] → not-tested
+  expected="not-tested"
+  actual  ="not-tested"
+[PASS] c4 generatedAt 非法 → conclusion 仍 pass（generatedAt 不影响结论）
+  expected="pass"
+  actual  ="pass"
+[PASS] c4 generatedAt 非法 → fallback 到 tests[0].generatedAt
+  expected="2026-09-23T13:04:00Z"
+  actual  ="2026-09-23T13:04:00Z"
+[PASS] c5 tests=[pass,pass] → pass
+  expected="pass"
+  actual  ="pass"
+[PASS] c6 tests=[error,fail,pass] → error（error 优先）
+  expected="error"
+  actual  ="error"
+[PASS] d1 runId "a..b" 被拒
+  expected=false
+  actual  =false
+[PASS] d2 runId ".hidden" 被拒
+  expected=false
+  actual  =false
+[PASS] d3 runId 超长名 被拒
+  expected=false
+  actual  =false
+[PASS] d4 runId "valid-1" 被收
+  expected=true
+  actual  =true
+[PASS] d5 目录 "a..b" 仍在盘（但被 readDeliveryHistory 跳过）
+  expected=true
+  actual  =true
+[PASS] d6 "..evil" 前缀目录名被拒
+  expected=false
+  actual  =false
+[PASS] sec1 symlink 目录不逃逸（不读外部 index.json）
+  expected=false
+  actual  =false
+[PASS] sec2 dirent.isDirectory() 对 symlink=false（机制根因）
+  expected=false
+  actual  =false
+[PASS] sec2b dirent.isSymbolicLink() 对 symlink=true
+  expected=true
+  actual  =true
+[PASS] sec3 index.json 为 symlink → 不跟随读取（lstat 拒）
+  expected=null
+  actual  =null
+[PASS] sec4 >1MB index.json → 拒
+  expected=null
+  actual  =null
+[PASS] reg1 无 evidence 目录 → history=[] 不抛错
+  expected=true
+  actual  =true
+[PASS] reg2 坏索引 → 跳过，不抛错
+  expected=false
+  actual  =false
+[PASS] reg3 旧报告缺 retryCount → not-tested（schema 降级）
+  expected="not-tested"
+  actual  ="not-tested"
+
+===== SUMMARY =====
+total=41 fail=0
+FINAL_JSON={"total":41,"fail":0,"results":[{"id":"a1 pass 自洽 → pass","expected":"\"pass\"","actual":"\"pass\"","ok":true},{"id":"a2 pass + passed=0/scenariosTotal=0 → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a3 pass + passed>scenariosTotal → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a4 pass + passed 负数 → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a5 pass + skipped>0 → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a6 pass + failed>0 → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a7 pass + passed=NaN → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a8 pass + failed 负数(===0 不满足) → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a9 verdict=fail → fail","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"a10 verdict=error → error","expected":"\"error\"","actual":"\"error\"","ok":true},{"id":"a11 verdict=blocked → blocked","expected":"\"blocked\"","actual":"\"blocked\"","ok":true},{"id":"a12 pass 自洽 → warnings []","expected":"[]","actual":"[]","ok":true},{"id":"a13 pass + skipped>0 → warnings 含\"计数不自洽\"","expected":"true","actual":"true","ok":true},{"id":"b1 自洽+指纹一致 → pass","expected":"\"pass\"","actual":"\"pass\"","ok":true,"detail":{"staleMessage":null}},{"id":"b2 篡改计数+指纹一致 → fail（非 pass/stale）","expected":"\"fail\"","actual":"\"fail\"","ok":true,"detail":{"staleMessage":null,"evVerdict":"fail"}},{"id":"b3 篡改计数+指纹不符 → verdict=stale（优先级）","expected":"\"stale\"","actual":"\"stale\"","ok":true,"detail":{"evVerdict":"fail"}},{"id":"b3 附带: evidence[0].verdict（不一致观察点）","expected":"\"fail\"","actual":"\"fail\"","ok":true},{"id":"b3 附带: staleMessage 非空","expected":"true","actual":"true","ok":true},{"id":"b4 攻击者重算指纹 → verdict（sha256 信任模型边界，预期 pass，非缺陷）","expected":"\"pass\"","actual":"\"pass\"","ok":true},{"id":"c1 tests=[null,{pass}] → not-tested","expected":"\"not-tested\"","actual":"\"not-tested\"","ok":true},{"id":"c2 tests=[5,\"pass\",{pass}] → not-tested","expected":"\"not-tested\"","actual":"\"not-tested\"","ok":true},{"id":"c3 tests=[skip,pass] → not-tested","expected":"\"not-tested\"","actual":"\"not-tested\"","ok":true},{"id":"c3b tests=[unknown] → not-tested","expected":"\"not-tested\"","actual":"\"not-tested\"","ok":true},{"id":"c4 generatedAt 非法 → conclusion 仍 pass（generatedAt 不影响结论）","expected":"\"pass\"","actual":"\"pass\"","ok":true},{"id":"c4 generatedAt 非法 → fallback 到 tests[0].generatedAt","expected":"\"2026-09-23T13:04:00Z\"","actual":"\"2026-09-23T13:04:00Z\"","ok":true},{"id":"c5 tests=[pass,pass] → pass","expected":"\"pass\"","actual":"\"pass\"","ok":true},{"id":"c6 tests=[error,fail,pass] → error（error 优先）","expected":"\"error\"","actual":"\"error\"","ok":true},{"id":"d1 runId \"a..b\" 被拒","expected":"false","actual":"false","ok":true},{"id":"d2 runId \".hidden\" 被拒","expected":"false","actual":"false","ok":true},{"id":"d3 runId 超长名 被拒","expected":"false","actual":"false","ok":true},{"id":"d4 runId \"valid-1\" 被收","expected":"true","actual":"true","ok":true},{"id":"d5 目录 \"a..b\" 仍在盘（但被 readDeliveryHistory 跳过）","expected":"true","actual":"true","ok":true},{"id":"d6 \"..evil\" 前缀目录名被拒","expected":"false","actual":"false","ok":true},{"id":"sec1 symlink 目录不逃逸（不读外部 index.json）","expected":"false","actual":"false","ok":true},{"id":"sec2 dirent.isDirectory() 对 symlink=false（机制根因）","expected":"false","actual":"false","ok":true},{"id":"sec2b dirent.isSymbolicLink() 对 symlink=true","expected":"true","actual":"true","ok":true},{"id":"sec3 index.json 为 symlink → 不跟随读取（lstat 拒）","expected":"null","actual":"null","ok":true,"detail":{"note":"readDeliveryHistory 用 lstatSync 拒 isSymbolicLink"}},{"id":"sec4 >1MB index.json → 拒","expected":"null","actual":"null","ok":true},{"id":"reg1 无 evidence 目录 → history=[] 不抛错","expected":"true","actual":"true","ok":true},{"id":"reg2 坏索引 → 跳过，不抛错","expected":"false","actual":"false","ok":true},{"id":"reg3 旧报告缺 retryCount → not-tested（schema 降级）","expected":"\"not-tested\"","actual":"\"not-tested\"","ok":true}]}

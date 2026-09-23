@@ -17,7 +17,11 @@ export interface EngineeringProcessRuntime {
   nodePath?: string
   pythonPath?: string
   maxOutputBytes?: number
+  /** 并发驱动子进程数上限（默认 DEFAULT_MAX_CONCURRENT_DRIVER_PROCESSES）；防驱动洪峰。 */
+  maxConcurrentProcesses?: number
 }
+/** 默认并发驱动子进程数上限（Task 11 基础子进程数限制）。 */
+export const DEFAULT_MAX_CONCURRENT_DRIVER_PROCESSES = 8
 function resolveExecutable(input: EngineeringExecutionInput, runtimes: EngineeringProcessRuntime): string {
   const plan = input.test.driver
   if (!plan) throw new EngineeringExecutionBlocked('缺少结构化测试驱动，不能执行command说明')
@@ -65,7 +69,8 @@ function collectInjectedDriverSecretValues(declared?: readonly string[]): string
 }
 
 /** 固定argv、项目cwd、有限输出与执行时间；不是OS沙箱，项目脚本副作用须由单次批准承担。 */
-async function executeProcess(input: EngineeringExecutionInput, runtimes: EngineeringProcessRuntime): Promise<unknown> {
+async function executeProcess(input: EngineeringExecutionInput, runtimes: EngineeringProcessRuntime, concurrency: { active: number }, max: number): Promise<unknown> {
+  if (concurrency.active >= max) throw new EngineeringExecutionBlocked(`并发测试驱动进程数超限（上限 ${max}），请等待当前执行结束后重试`)
   const executable = resolveExecutable(input, runtimes)
   const plan = input.test.driver!
   const cwd = join(input.projectDir, '08_APP')
@@ -80,7 +85,9 @@ async function executeProcess(input: EngineeringExecutionInput, runtimes: Engine
   if (process.platform === 'win32') throw new EngineeringExecutionBlocked('Windows测试进程树回收适配尚未接入')
   if (input.signal.aborted) throw new EngineeringExecutionBlocked('测试已取消')
   const limit = runtimes.maxOutputBytes ?? 1024 * 1024
-  return new Promise((resolve, reject) => {
+  concurrency.active += 1
+  try {
+    return await new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
       // 不继承渠道密钥；需要网络/设备的驱动须在契约 driver.env 声明变量名并经单次批准。
@@ -143,16 +150,21 @@ async function executeProcess(input: EngineeringExecutionInput, runtimes: Engine
       } catch { rejectWithIo(new Error('测试驱动未返回有效JSON结果，退出码：' + code)) }
     })
     child.stdin.end(JSON.stringify({ schemaVersion: 1, testId: input.test.id, target: input.test.target, covers: input.test.covers, evidenceDigest: input.evidence.digest }))
-  })
+    })
+  } finally {
+    concurrency.active -= 1
+  }
 }
 
 export function createEngineeringProcessDrivers(runtimes: EngineeringProcessRuntime): EngineeringRegisteredDriver[] {
+  const concurrency = { active: 0 }
+  const max = runtimes.maxConcurrentProcesses ?? DEFAULT_MAX_CONCURRENT_DRIVER_PROCESSES
   return (['cli-driver', 'api-driver', 'native-driver', 'mobile-driver'] as const).map((adapter) => ({
     adapter,
     preflight: (input) => {
       if (process.platform === 'win32') return 'Windows测试进程树回收适配尚未接入'
       try { resolveExecutable(input, runtimes); return null } catch (error) { return error instanceof Error ? error.message : String(error) }
     },
-    execute: (input) => executeProcess(input, runtimes),
+    execute: (input) => executeProcess(input, runtimes, concurrency, max),
   }))
 }

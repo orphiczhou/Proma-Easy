@@ -28,10 +28,14 @@
  *   （「生成应用代码」仍拦，「不能只看代码推断」审查语境放行）；
  * - stage-deny 埋点补 matchContext（命中字段/前后 20 字符/是否在路径内）。
  *
- * 匹配文本：delegate_agent 的 title + task 字段（参数结构调研结论：任务字段名是
- * task 而非 prompt；role 是 explore/research/implement/review/custom 枚举，语义过泛，
- * 不纳入匹配文本）。中文词用 includes，英文词用 \b 词边界（防 'ac' 误命中
- * 'trace'/'space'、'test' 误命中 'latest'）。
+ * 匹配文本：delegate_agent 的 task + expectedOutput 字段（任务字段名是 task 而非
+ * prompt；role 是 explore/research/implement/review/custom 枚举，语义过泛，不纳入匹配文本）。
+ * Task 8（2026-09-20）标题降权：标题仅作描述，不与实际任务同权重——拒绝面（他阶段词/
+ * 强动词/R2）只由 task/expectedOutput 判定，title 不制造拒绝也不为工作文本的拒绝豁免；
+ * 放行面（本阶段词/AC 词）保留 title 参与既有宽匹配。
+ * 中文词用 includes（Task 8 起在 CJK 间空白归一后的文本上匹配——插空格/换行拆词
+ * 不能改变授权结果），英文词用 \b 词边界（防 'ac' 误命中 'trace'/'space'、'test'
+ * 误命中 'latest'）。
  */
 
 import type { NanjuGuardStage } from './nanju-project'
@@ -60,11 +64,14 @@ import { isNanjuDelegationSlot } from '@proma/shared'
  *   英文全栈角色声明由强动词 develop/build 兑底，中文由 全栈/开发/实现 覆盖。
  * - testing 裸「验收」换精确复合词——「验收标准（AC）清单」是每个委派的标准 AC
  *   引用语（实测 deny#4/#5 另一命中源）；项目名含「验收」碰撞已由路径豁免解决。
+ * - Task 8（2026-09-20）：architecture 去裸「技术」——「技术栈」是需求调研/架构
+ *   正文的高频合法词（事件 SD-1 实测在 requirements 阶段被误拦）；architecture
+ *   角色识别由 架构/architect/环境配置 承接，产出词「技术选型」保留，本阶段匹配不削弱。
  */
 export const STAGE_ROLE_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
   requirements: ['需求调研', '需求收集', '收集需求', '需求梳理', '需求评审', 'analyst', 'requirements'],
   prototype: ['UX', '原型', 'prototype', '视觉', '界面'],
-  architecture: ['架构', 'architect', '环境配置', '技术'],
+  architecture: ['架构', 'architect', '环境配置', '技术选型'],
   planning: ['规划', '工程计划', '计划', 'plan', '项目经理', '排期', '里程碑', '项目管理'],
   coding: ['全栈', '开发', 'coding', '实现'],
   testing: ['测试', 'test', 'GWT', 'QA', '验收测试', '验收用例', '验收场景', '执行验收', '跑验收', 'UAT', 'testing'],
@@ -290,6 +297,58 @@ function keywordIndices(text: string, keyword: string): number[] {
   return out
 }
 
+// ===== Task 8（2026-09-20，Phase1 加固）：引用语境豁免 + 标题降权 + 分词硬ening =====
+
+/**
+ * 上游产物引用标记词（Task 8，样本：19 条 stage-deny 事件中 SD-4/SD-5——
+ * 「根据 PRD 和原型，产出精简架构文档」「根据 PRD 与既有 UX 产出…」被 prototype
+ * ROLE 词误拦）。ROLE 词命中位置紧邻其前出现标记词时，该次出现按「引用既有产物」
+ * 处理，不构成他阶段施工意图（出现级判定：同一词的另一次非引用出现仍计违规）。
+ *
+ * 反暗语边界：标记词全为双字词、要求紧邻（仅允许短无标点夹层 + 和/与/及/或、连接符），
+ * 不收录单字标记（按/依/原）与长夹层窗口——「根据X和开发」式构造无法豁免真产出意图，
+ * 拒绝文案（router-gate 侧）也不提示本表存在，不教模型用措辞规避。
+ */
+export const REFERENCE_MARKERS: readonly string[] = [
+  '根据', '依据', '基于', '对照', '比照', '参考', '参照', '引用', '按照', '依循', '遵循', '沿用',
+  '来自', '出自', '既有', '前序', '上游',
+]
+
+/** 标记词→命中词之间允许的形态：直接紧邻（余空白），或 ≤6 字符无句读夹层 + 和/与/及/或、连接符 */
+const REFERENCE_BEFORE_RE = new RegExp(
+  `(?:${REFERENCE_MARKERS.join('|')})[^，。；！？\\n]{0,6}[和与及或、][\\s]*$`
+  + `|(?:${REFERENCE_MARKERS.join('|')})[\\s]*$`,
+)
+
+/** 某次关键词出现是否为引用语境（pos 为该词起始下标） */
+export function isReferenceOccurrence(text: string, pos: number): boolean {
+  return pos > 0 && REFERENCE_BEFORE_RE.test(text.slice(0, pos))
+}
+
+/**
+ * 出现级关键词判定：关键词存在任一「非引用」出现即返回该词；全部出现都是引用语境
+ * （根据/基于/对照/既有…紧邻其前）→ 不计违规，继续扫下一个词。
+ */
+export function findKeywordExcludingReferences(text: string, keywords: readonly string[]): string | undefined {
+  for (const kw of keywords) {
+    const positions = keywordIndices(text, kw)
+    if (positions.some((pos) => !isReferenceOccurrence(text, pos))) return kw
+  }
+  return undefined
+}
+
+/** CJK 字符间的空白字符集（含全角空格/换行——拆词规避同权处理） */
+const CJK_GAP_WS_RE = /([\u3400-\u9fff])[ \t\u00a0\u3000\r\n\u200b-\u200f\u2060\ufeff]+(?=[\u3400-\u9fff])/g
+
+/**
+ * CJK 间空白归一（Task 8）：删去相邻中文之间的空格/换行/制表符，使「开 发」「编\n写」
+ * 与连续词同判（插空格/换行分词不能改变授权结果——含 deny 侧漏放与豁免侧构造两向）。
+ * ASCII 词与词边界正则不受影响（仅删 CJK 相邻空白）。
+ */
+export function compactCjkWhitespace(text: string): string {
+  return text.replace(CJK_GAP_WS_RE, '$1')
+}
+
 /** W19-C：OUTPUT 词邻近语境窗口（字符数）——OUTPUT 词与强动词距离在窗口内才判产出意图 */
 export const OUTPUT_VERB_PROXIMITY = 20
 
@@ -302,13 +361,22 @@ export interface KeywordHitContext {
   inPath: boolean
 }
 
-/** 在原文中定位关键词首处命中并给出归因上下文（找不到返回 undefined） */
+/** 空白容忍版引用标记正则（仅归因用：在原文字段上定位，CXXX 间空白未归一时仍同语义判定） */
+const REFERENCE_BEFORE_TOLERANT_RE = new RegExp(
+  `(?:${REFERENCE_MARKERS.join('|')})[\\s]*[^，。；！？\\n]{0,6}[和与及或、][\\s]*$`
+  + `|(?:${REFERENCE_MARKERS.join('|')})[\\s]*$`,
+)
+
+/** 在原文中定位关键词首处命中并给出归因上下文（找不到返回 undefined；
+ *  Task 8：引用语境出现不计入首处命中——归因与拒绝面同口径，被豁免的出现不作为拒绝证据报告） */
 export function describeKeywordHit(source: DelegationMatchSource, keyword: string): KeywordHitContext | undefined {
   if (!keyword) return undefined
   for (const field of ['title', 'task', 'expectedOutput'] as const) {
     const raw = source[field]
     if (!raw) continue
     for (const pos of keywordIndices(raw, keyword)) {
+      // 引用语境判定与匹配面同语义：紧邻标记（空白容忍）的出现不计为拒绝证据
+      if (pos > 0 && REFERENCE_BEFORE_TOLERANT_RE.test(raw.slice(0, pos))) continue
       let inPath = false
       for (const match of raw.matchAll(PATH_RUN_RE)) {
         const start = match.index ?? 0
@@ -341,10 +409,21 @@ export interface DelegationMatchSource {
   modelId?: string
 }
 
-/** 匹配文本拼接（单一真源：checkDelegationAgainstStage / matchACKeyword / detectACRole 共用；R2 后含 expectedOutput；
- *  W19-C：拼接后剥离路径 token——项目名/用户名出现在路径内不再命中任何词表） */
+/**
+ * 匹配文本拼接（单一真源：checkDelegationAgainstStage / matchACKeyword / detectACRole 共用；R2 后含 expectedOutput）。
+ * W19-C：拼接后剥离路径 token——项目名/用户名出现在路径内不再命中任何词表。
+ * Task 8：再作 CJK 间空白归一——插空格/换行拆词与连续词同判（授权结果不因分词改变）。
+ */
 function buildMatchText(source: DelegationMatchSource): string {
-  return stripPathTokens(`${source.title ?? ''}\n${source.task ?? ''}\n${source.expectedOutput ?? ''}`)
+  return compactCjkWhitespace(stripPathTokens(`${source.title ?? ''}\n${source.task ?? ''}\n${source.expectedOutput ?? ''}`))
+}
+
+/**
+ * 工作文本（Task 8 标题降权）：task + expectedOutput——拒绝面判定源。
+ * title 不参与：标题仅作描述，不制造拒绝（也不为工作文本的拒绝提供豁免）。
+ */
+function buildWorkMatchText(source: DelegationMatchSource): string {
+  return compactCjkWhitespace(stripPathTokens(`${source.task ?? ''}\n${source.expectedOutput ?? ''}`))
 }
 
 /** 匹配结果分类 */
@@ -414,10 +493,14 @@ export function checkDelegationAgainstStage(
     // 空文本（参数缺 title/task）：交给既有 validateToolInput 必填校验，此处放行
     return { allowed: true, matchKind: 'unmatched' }
   }
+  // Task 8（标题降权）：拒绝面统一用工作文本（task/expectedOutput）判定——
+  // 标题单独命中他阶段词/强动词不构成拒绝，也不为工作文本的拒绝提供豁免。
+  const workText = buildWorkMatchText(source)
 
   // 1. AC 审计意图：审计动词命中且无强动词 → 只读审计放行（ac）；强动词在场则不裁决
-  const acHit = findKeyword(text, AC_AUDIT_VERBS)
-  if (acHit !== undefined && findKeyword(text, STRONG_ACTION_VERBS) === undefined) {
+  //    （Task 8：以工作文本判定——标题声明审计不能掩护 task 内的真实产出动作）
+  const acHit = findKeyword(workText, AC_AUDIT_VERBS)
+  if (acHit !== undefined && findKeyword(workText, STRONG_ACTION_VERBS) === undefined) {
     return { allowed: true, matchKind: 'ac', matchedKeyword: acHit }
   }
 
@@ -432,7 +515,7 @@ export function checkDelegationAgainstStage(
   //     边界：continue_delegation 不经本守卫（工具入参只有 delegationId+message，不携
   //     委派文本/渠道），对已存在 minimax 委派的续派拦截需另走渠道反查（见 W22 报告）。
   if (stage === 'testing' && isMinimaxEndpoint(source.channelId, source.modelId)) {
-    const codingWordHit = findKeyword(text, R2_CODING_STAGE_KEYWORDS)
+    const codingWordHit = findKeyword(workText, R2_CODING_STAGE_KEYWORDS)
     if (codingWordHit !== undefined) {
       return {
         allowed: false,
@@ -445,24 +528,31 @@ export function checkDelegationAgainstStage(
   }
 
   // 2. 其他阶段专属词（仅扫角色词表——产出物词不参与他阶段扫描，见 STAGE_OUTPUT_KEYWORDS 注释）
+  //    Task 8：出现级引用豁免——同一词的全部出现都处于「根据/基于/对照/既有…」紧邻语境时
+  //    按「引用既有产物」放行（SD-4/SD-5 实测误拦类）；存在任一非引用出现仍拒绝。
   for (const otherStage of Object.keys(STAGE_ROLE_KEYWORDS) as NanjuGuardStage[]) {
     if (otherStage === stage) continue
-    const hit = findKeyword(text, STAGE_ROLE_KEYWORDS[otherStage])
+    const hit = findKeywordExcludingReferences(workText, STAGE_ROLE_KEYWORDS[otherStage])
     if (hit !== undefined) {
       return { allowed: false, matchKind: 'unmatched', violatedKeyword: hit, violatedStage: otherStage, denialKind: 'other-stage' }
     }
   }
 
   // 2.5. W18.1（A3 闭合）+ W19-C 邻近语境：强动词在场 + 下游 OUTPUT 词且两者距离在
-  //     邻近窗口内 → 拒绝（产出意图）；远距离共现（审查/引用语境）不拦
-  if (findKeyword(text, STRONG_ACTION_VERBS) !== undefined) {
-    const verbPositions = STRONG_ACTION_VERBS.flatMap((v) => keywordIndices(text, v))
+  //     邻近窗口内 → 拒绝（产出意图）；远距离共现（审查/引用语境）不拦。
+  //     Task 8：以下游 OUTPUT 词的工作文本出现为基准逐次判定——引用语境（根据/既有…
+  //     紧邻）的出现不计产出意图，非引用出现与任一强动词在窗口内仍拒。
+  if (findKeyword(workText, STRONG_ACTION_VERBS) !== undefined) {
+    const verbPositions = STRONG_ACTION_VERBS.flatMap((v) => keywordIndices(workText, v))
     const stageIdx = STAGE_ORDER.indexOf(stage)
     for (const downstreamStage of STAGE_ORDER) {
       if (STAGE_ORDER.indexOf(downstreamStage) <= stageIdx) continue
       let outputHit: string | undefined
       for (const kw of STAGE_OUTPUT_KEYWORDS[downstreamStage]) {
-        if (keywordIndices(text, kw).some((pos) => verbPositions.some((v) => Math.abs(pos - v) <= OUTPUT_VERB_PROXIMITY))) {
+        const isOutputIntent = keywordIndices(workText, kw).some((pos) =>
+          verbPositions.some((v) => Math.abs(pos - v) <= OUTPUT_VERB_PROXIMITY)
+          && !isReferenceOccurrence(workText, pos))
+        if (isOutputIntent) {
           outputHit = kw
           break
         }
@@ -474,14 +564,16 @@ export function checkDelegationAgainstStage(
   }
 
   // 3. 本阶段词（角色词 ∪ 产出物词：产出物词优先缓解强动词误拦——「编写 PRD」在
-  //    requirements 按本阶段词放行，而非掉入第 4 条强动词拒绝）
+  //    requirements 按本阶段词放行，而非掉入第 4 条强动词拒绝）。
+  //    Task 8：放行面保留 title 参与（标题声明本阶段角色/产物仍可支撑放行——
+  //    标题是描述，描述可以支撑放行，不能制造拒绝）
   const stageHit = findKeyword(text, [...STAGE_ROLE_KEYWORDS[stage], ...STAGE_OUTPUT_KEYWORDS[stage]])
   if (stageHit !== undefined) {
     return { allowed: true, matchKind: 'stage', matchedKeyword: stageHit }
   }
 
-  // 4. 强动作动词 → 拒绝（产出类动作必须显式声明角色——W8 敞口兜底）
-  const verbHit = findKeyword(text, STRONG_ACTION_VERBS)
+  // 4. 强动作动词 → 拒绝（产出类动作必须显式声明角色——W8 敞口兜底；Task 8：工作文本判定）
+  const verbHit = findKeyword(workText, STRONG_ACTION_VERBS)
   if (verbHit !== undefined) {
     return { allowed: false, matchKind: 'unmatched', violatedKeyword: verbHit, denialKind: 'strong-verb', matchedVerb: verbHit }
   }

@@ -134,7 +134,11 @@ describe('W-I B-e｜I-P3 框选接线（同一批：renderer→preload→IPC）'
     expect(ipc).toContain("if (input.kind === 'element-click') await emitClickToFix")
     expect(ipc).toContain("else if (input.kind === 'blank-click') await emitClickToFix")
     expect(listeners).toContain("eventType: 'click_to_fix'")
-    expect(listeners).toContain("stage: 'pick-color'")
+    // element-click 未选动作 → pick-other（审计 B6-F-06：不得固定发 pick-color）
+    expect(listeners).toContain("stage: 'pick-other'")
+    expect(listeners).not.toContain("applied: false, stage: 'pick-color'")
+    // panel-action 仍按实际动作映射（color→pick-color）
+    expect(listeners).toContain("stage: item.action === 'color' ? 'pick-color'")
   })
 })
 

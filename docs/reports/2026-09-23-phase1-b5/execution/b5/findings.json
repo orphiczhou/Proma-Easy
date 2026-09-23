@@ -1,0 +1,482 @@
+{
+  "$schema": "proma-b5-matrix-findings/v1",
+  "runId": "b5-2026-09-23-1914Z",
+  "capturedAt": "2026-09-23T11:17:44Z",
+  "repoSha": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+  "appVersionSource": "0.17.132",
+  "manifestBundleVersion": "2.5.0",
+  "manifestBundleSha256": "64b9d8731406098b0675e0857af31b489aad14ea023e1551055ef4baedb402ef",
+  "manifestRequiredCount": 12,
+  "manifestVerifyOk": true,
+  "devBundleAsarSha256": "6698f6bbc2416f51ff14a9334a20d257942505a2b2691fea337b8142dcc9479e",
+  "devBundleManifestState": "missing",
+  "devBundleVerifyExit": 1,
+  "scope": [
+    "manifest CLI (verify-engineering-resources.ts)",
+    "check_env.sh universal + 6 categories",
+    "driver-blocked-protocol tests (22)",
+    "driver-skeleton tests (24)",
+    "engineering-resources + preflight + process-driver (73)"
+  ],
+  "scopeNotRun": [
+    "gwt-runner B1 PASS+skip+pass 复现/红测（属 B1 修复前冻结，本任务为 B5/B6 截面）",
+    "W18 delivery gate（属 B1 范畴）",
+    "W17 phase advance chain（属 B1 + B2 范畴）",
+    "实跑 desktop-app 历史代表工程（task 13 后续 B6 派发）",
+    "实跑 web/api/cli/ai 代表工程（task 13 后续 B6 派发）"
+  ],
+  "commandResults": [
+    {
+      "id": "manifest-cli-source",
+      "cmd": "bun run apps/electron/scripts/verify-engineering-resources.ts --json",
+      "exit": 0,
+      "elapsedSec": 0.059,
+      "ok": true,
+      "log": "logs/manifest-cli-source.json",
+      "sha256": null
+    },
+    {
+      "id": "manifest-cli-dev",
+      "cmd": "bun run apps/electron/scripts/verify-engineering-resources.ts --json --templates-dir=/home/orphic/proma-easy/dev/app/resources",
+      "exit": 1,
+      "elapsedSec": 0.054,
+      "ok": false,
+      "log": "logs/manifest-cli-dev.json",
+      "sha256": null,
+      "blocking": ["manifest-missing"]
+    },
+    {
+      "id": "check-env-universal",
+      "cmd": "bash apps/electron/resources/nanju-engineering-templates/check_env.sh universal",
+      "exit": 0,
+      "elapsedSec": 0.703,
+      "ok": true,
+      "log": "logs/check-env-universal.jsonl",
+      "sha256": "0b9797af906db33b0c81d948d23365886d4e00f930d9b5ffc62b72b51cdef60d",
+      "components": 13,
+      "okCount": 10,
+      "failCount": 3,
+      "fails": ["bun", "pnpm", "yarn"]
+    },
+    {
+      "id": "check-env-web-fullstack",
+      "cmd": "bash check_env.sh web-fullstack",
+      "exit": 1,
+      "elapsedSec": 0.768,
+      "ok": false,
+      "log": "logs/check-env-web-fullstack.jsonl",
+      "sha256": "81eac8d26d01e6db6214ec48ca0d7d83f994dc4b3d6b195b0caa0ca3c3869001",
+      "stderrLog": "logs/check-env-web-fullstack.stderr",
+      "componentsRun": 14,
+      "expectedForCategory": 18,
+      "components": { "ok": 11, "fail": 3 },
+      "fails": ["bun", "pnpm", "yarn"],
+      "blocked": [
+        {
+          "kind": "script-bug",
+          "missing": ["NVM_DIR-probe in web-fullstack check_env section (line 121)"],
+          "scenarioExecuted": false,
+          "coveredUs": [],
+          "rootCause": "set -u + raw ${NVM_DIR} expansion in echo branch without `:-` guard; entire eval exits non-zero; downstream probes sqlite3/playwright/docker-compose never run",
+          "severity": "non-blocking-but-blocks-category-completion"
+        }
+      ]
+    },
+    {
+      "id": "check-env-api-backend",
+      "cmd": "bash check_env.sh api-backend",
+      "exit": 0,
+      "elapsedSec": 0.925,
+      "ok": true,
+      "log": "logs/check-env-api-backend.jsonl",
+      "sha256": "9eaa069acaa494c4420b7a1fe7e135a351422c92cea86fd6fccd9815f6d8f48e",
+      "components": 22,
+      "okCount": 12,
+      "failCount": 10,
+      "fails": ["bun", "pnpm", "yarn", "postgresql", "psql", "pg_isready", "redis-cli", "httpie", "node-gyp", "argon2"]
+    },
+    {
+      "id": "check-env-mobile-app",
+      "cmd": "bash check_env.sh mobile-app",
+      "exit": 0,
+      "elapsedSec": 3.347,
+      "ok": true,
+      "log": "logs/check-env-mobile-app.jsonl",
+      "sha256": "1ff43f2ca80003407280cde1c555dc0a864f841b8d0eb8d712fdb2bd313c7e3f",
+      "components": 27,
+      "okCount": 16,
+      "failCount": 11,
+      "fails": ["bun", "pnpm", "yarn", "watchman", "gradle", "xcodebuild", "expo", "eas-cli", "android-studio", "sdkmanager", "avdmanager"]
+    },
+    {
+      "id": "check-env-desktop-app",
+      "cmd": "bash check_env.sh desktop-app",
+      "exit": 0,
+      "elapsedSec": 1.793,
+      "ok": true,
+      "log": "logs/check-env-desktop-app.jsonl",
+      "sha256": "67a56bf0f7dcbd0562cff3dd1e872ddc004a0b413bd3a02442855068560110cf",
+      "components": 26,
+      "okCount": 19,
+      "failCount": 7,
+      "fails": ["bun", "pnpm", "yarn", "webkit2gtk-4.0", "pynput", "pystray", "portaudio"]
+    },
+    {
+      "id": "check-env-cli-tool",
+      "cmd": "bash check_env.sh cli-tool",
+      "exit": 0,
+      "elapsedSec": 0.791,
+      "ok": true,
+      "log": "logs/check-env-cli-tool.jsonl",
+      "sha256": "a24df989f1641776af708a258a53f78428b5a363cd8a998638b6c64a1d5c101a",
+      "components": 17,
+      "okCount": 11,
+      "failCount": 6,
+      "fails": ["bun", "pnpm", "yarn", "tsx", "poetry", "deno"]
+    },
+    {
+      "id": "check-env-ai-application",
+      "cmd": "bash check_env.sh ai-application",
+      "exit": 0,
+      "elapsedSec": 0.805,
+      "ok": true,
+      "log": "logs/check-env-ai-application.jsonl",
+      "sha256": "995cf787b5580f4116f4b4e0407657451cb2fb48d6c8a137bbef35a63ab66f9c",
+      "components": 17,
+      "okCount": 10,
+      "failCount": 7,
+      "fails": ["bun", "pnpm", "yarn", "ollama", "pgvector", "libsql", "embedding-model"]
+    },
+    {
+      "id": "driver-blocked-protocol",
+      "cmd": "bun test apps/electron/src/main/lib/nanju-driver-blocked-protocol.test.ts",
+      "exit": 0,
+      "elapsedSec": 0.570,
+      "passed": 22,
+      "failed": 0,
+      "expectCalls": 53,
+      "log": "logs/driver-blocked-protocol.test.log",
+      "sha256": "975807e6ee00e14e627d45c838b295b057a5b05fe2a6f2f5aa88f228086794e3"
+    },
+    {
+      "id": "driver-skeleton",
+      "cmd": "bun test apps/electron/src/main/lib/nanju-driver-skeleton.test.ts",
+      "exit": 0,
+      "elapsedSec": 1.553,
+      "passed": 24,
+      "failed": 0,
+      "expectCalls": 93,
+      "log": "logs/driver-skeleton.test.log",
+      "sha256": null
+    },
+    {
+      "id": "engineering-protocols-suite",
+      "cmd": "bun test nanju-engineering-resources.test.ts nanju-engineering-preflight.test.ts nanju-engineering-process-driver.test.ts",
+      "exit": 0,
+      "elapsedSec": 2.045,
+      "passed": 73,
+      "failed": 0,
+      "expectCalls": 172,
+      "files": 3,
+      "log": "logs/engineering-protocols-suite.test.log",
+      "sha256": null
+    }
+  ],
+  "protocolSelfCheckTotals": {
+    "driver-blocked-protocol": 22,
+    "driver-skeleton": 24,
+    "engineering-protocols-suite": 73,
+    "sum": 119,
+    "allPassed": true,
+    "note": "全部为模板/驱动/资源协议层单测；不构成产品验收。"
+  },
+  "findings": [
+    {
+      "id": "B5-F-1",
+      "title": "dev 部署 resources/nanju-engineering-templates/ 缺 manifest.json（manifest-missing blocking）",
+      "severity": "high",
+      "category": "B2/Task4 部署漂移（与 current-state.md P-3 一致）",
+      "evidence": [
+        "logs/manifest-cli-dev.json exit=1 issues[0].kind='manifest-missing' path=manifest.json",
+        "ls /home/orphic/proma-easy/dev/app/resources/nanju-engineering-templates/ 只含 6 个 .md 文件，无 check_env.sh/driver-skeleton.*/Spike 协议/CHANGELOG"
+      ],
+      "impact": "dev 实例不可能走 verify 链宣称部署通过；多渠道 E2E 在该实例上跑模板落位会回退到旧路径。",
+      "productAcceptanceImplication": "notRun-this-round（正确做法是 B2 Task 4 修复后再判）",
+      "scenarioExecuted": false,
+      "coveredUs": []
+    },
+    {
+      "id": "B5-F-2",
+      "title": "check_env.sh web-fullstack 分支内 NVM_DIR 探针在 set -u 下 unbound 触发脚本非零退出，下游探测全部漏跑",
+      "severity": "medium",
+      "category": "check_env 脚本 bug（universal/web-fullstack 都受影响）",
+      "evidence": [
+        "logs/check-env-web-fullstack.stderr: 'check_env.sh: line 121: NVM_DIR: unbound variable'",
+        "logs/check-env-web-fullstack.jsonl 只 14 行（universal 13 + corepack 1），sqlite3/playwright/docker-compose 未执行",
+        "shell 命令：test -n \"${NVM_DIR:-}\" && echo \"NVM_DIR=${NVM_DIR}\" || echo missing —— 后两处 `${NVM_DIR}` 缺 `:-` 守卫"
+      ],
+      "reproduction": "bash -c 'set -u; eval \"test -n \\\"${NVM_DIR:-}\\\" && echo \\\"NVM_DIR=${NVM_DIR}\\\" || echo missing\" 2>&1' ; exit=1",
+      "impact": "web-fullstack 类别的 env 探测产出未达预期；当下游依据探测结果调整工程栈时，sqlite3/playwright/docker-compose 三件是否齐备未知，架构师任务书注入失真风险（与 E2E-desktop O3 'WSL2 失真' 同型问题）。",
+      "remediationHint": "将 line 121 改为 `test -n \"${NVM_DIR:-}\" && echo \"NVM_DIR=${NVM_DIR:-unset}\" || echo missing`；或为整个分支加 `set +u` 局部禁用 unset 检查；或在 echo 内一并 `${NVM_DIR:-}`. 同步修所有 6 行的 nvm probe。",
+      "scenarioExecuted": false,
+      "coveredUs": [],
+      "blocked": { "kind": "script-bug", "missing": ["NVM_DIR-probe line 121"] }
+    },
+    {
+      "id": "B5-F-3",
+      "title": "universal 集节点 bun/pnpm/yarn fail；脚本约定 'AGENTS.md 提示 PATH=/home/orphic/.bun/bin:$PATH' 而 check_env 不感知",
+      "severity": "low",
+      "category": "env probe 上下文耦合（已设计如此：B5 协议允许 OPTIONAL 失败）",
+      "evidence": [
+        "logs/check-env-universal.jsonl: bun/pnpm/yarn fail detail = 'line 35: <cmd>: command not found'",
+        "/home/orphic/.bun/bin/bun 1.3.14 已装但不在 bash 子进程 PATH 上",
+        "AGENTS.md 与 Phase 1 计划 B2 章节均明确指定 PATH=/home/orphic/.bun/bin"
+      ],
+      "impact": "可降级；不是产品阻塞。架构师任务书在写出 'bun：缺失' 后，是否补 bun 的探测仍取决于该工程栈是否依赖。",
+      "scenarioExecuted": true,
+      "coveredUs": [],
+      "blocked": { "kind": "none", "missing": [] }
+    },
+    {
+      "id": "B5-F-4",
+      "title": "历史代表工程 e2e-clipboard-history 当前 env_probe.json probedAt=2026-09-20T00:25:00+08:00，距今 ~86h（>24h 默认 maxAgeMs）",
+      "severity": "medium",
+      "category": "B5 Task 10 新鲜度（仍未在 E2E 重跑中被强制刷新）",
+      "evidence": [
+        "cat ~/.proma-dev/agent-workspaces/workspace-1786847832507/.../project-真流程e2e-剪贴板历史/03_ARCHITECTURE/env_probe.json | head -1 → generatedAt: 2026-09-20T00:25:00+08:00",
+        "nanju-env-probe.ts:DEFAULT_MAX_AGE_MS = 24h",
+        "isEnvProbeFresh(): probedAt 早于 today 86h → reason='stale-age', fresh=false → 触发删除 + 重跑",
+        "项目 00_ENGINEERING_TEMPLATE/ 缺 check_env.sh + 缺 template-manifest.json（部署漂移 P-3 残留）"
+      ],
+      "impact": "工程恢复（Task 7）必须先刷新 env_probe.json；当前 runEnvProbe 重跑因脚本未落位会落到「脚本未落位 → 退化注入」路径。",
+      "scenarioExecuted": false,
+      "coveredUs": ["probe-freshness-rescan-required"]
+    },
+    {
+      "id": "B5-F-5",
+      "title": "六个品类的 check_env 失败项与 '实际可执行' 边界（不假装通过）",
+      "severity": "informational",
+      "category": "六品类真/模拟边界",
+      "evidence": [
+        "api-backend：postgresql/psql/pg_isready/redis-cli/httpie/node-gyp/argon2 缺失 → 真实服务路径完全 BLOCKED；Node-only mock 路径仍可走但不等同产品验收",
+        "mobile-app：watchman/gradle/xcodebuild/expo/eas-cli/android-studio/sdkmanager/avdmanager 缺失；adb 在场但 0 设备 → 真实设备路径 BLOCKED",
+        "desktop-app：pynput/pystray/portaudio 缺失 → P1（Python）路径缺失；P2（Tauri）4 件齐（webkit2gtk-4.1/gtk+-3.0/libsoup-3.0/ayatana）",
+        "cli-tool：tsx/uv/poetry/deno 缺失 → 可降级到 Node 子集（无 tsx 不影响 .js 入口）；其余 3 件为非必需",
+        "ai-application：ollama/pgvector/libsql/embedding-model 全缺 → AI 真实代表路径 BLOCKED；远端 API 需用户授权（任务范围内不擅自发起）",
+        "web-fullstack：因 B5-F-2 脚本 bug，sqlite3/playwright/docker-compose 三件探测未完成"
+      ],
+      "scenarioExecuted": {
+        "web-fullstack": false,
+        "api-backend": false,
+        "mobile-app": false,
+        "desktop-app": "partial-Tauri-only",
+        "cli-tool": "partial-node-only",
+        "ai-application": false
+      },
+      "coveredUs": []
+    },
+    {
+      "id": "B5-F-6",
+      "title": "driver-blocked-protocol 22 项 + skeleton 24 项 + engineering 协议套件 73 项 全绿；但属模板协议层 ≠ 产品验收",
+      "severity": "informational",
+      "category": "B5 协议验证齐全（仅协议自证）",
+      "evidence": [
+        "logs/driver-blocked-protocol.test.log: 22 pass / 0 fail / 53 expect / 0.560s",
+        "logs/driver-skeleton.test.log: 24 pass / 0 fail / 93 expect / 1.553s",
+        "logs/engineering-protocols-suite.test.log: 73 pass / 0 fail / 172 expect / 2.045s",
+        "全 119 项对应：结构化 blocked 标记 / 旧协议兼容 / 伪造 exit2 / schema 自检 / 真实子进程 / env 白名单 / 并发上限 / 取消超时 PID 回收 / preflight 故事覆盖 / manifest 严格 schema"
+      ],
+      "scenarioExecuted": true,
+      "coveredUs": ["protocol-bloc-of-b5"],
+      "honestBoundary": "模板协议通过 ≠ 产品验收。"
+    },
+    {
+      "id": "B5-F-7",
+      "title": "audit_gate verdict 与 coveredUs 关系已经在 B5 套件中实证",
+      "severity": "informational",
+      "category": "GWT → suite → repair budget 链接（同源 B1 + B5）",
+      "evidence": [
+        "nanju-repair-dispatch.test.ts 'B-d 资格门：pass/blocked 不烧修复预算'（blocked → skip，exit=2 不足以消耗修复预算）",
+        "nanju-driver-blocked-protocol.test.ts suite 级：blocked 驱动结果 → suite verdict=blocked → coveredUs=空 → 不进熔断"
+      ],
+      "scenarioExecuted": true,
+      "coveredUs": ["blocked-not-burns-budget"]
+    },
+    {
+      "id": "B5-F-8",
+      "title": "B6 Task 13 代表矩阵：4 类缺代表工程（web/api/cli/ai），2 类有历史不代表本轮重做",
+      "severity": "informational",
+      "category": "B6 Task 13 缺口",
+      "evidence": [
+        "history desktop-app → e2e-clipboard-history（review v0.17.131-era，已签收；本任务不复跑）",
+        "history mobile-app → OPPO Android 11 真机历史（review，仅作背景；不能复用为新业务通过）",
+        "web-fullstack / api-backend / cli-tool / ai-application 当前未派代表工程 → productAcceptance 全 BLOCKED"
+      ],
+      "scenarioExecuted": false,
+      "coveredUs": [],
+      "blocked": {
+        "kind": "representative-project-missing",
+        "missing": ["web", "api", "cli", "ai"],
+        "historicalEvidence": ["desktop-app (v0.17.131)", "mobile-app (history only)"]
+      }
+    }
+  ],
+  "matrixByCategory": {
+    "web-fullstack": {
+      "templateSha256": "8cdb47d0999b4d375a9a3d5f13b0bdca41aa095b3c41ec2ae5fcff35c064b0b0",
+      "manifestReferences": [
+        {"from": "web-fullstack.md", "to": "driver-skeleton.py", "kind": "file-reference", "required": true},
+        {"from": "web-fullstack.md", "to": "driver-skeleton.cjs", "kind": "file-reference", "required": true},
+        {"from": "web-fullstack.md", "to": "02-Spike实验协议.md", "kind": "section-reference", "anchor": "§6", "required": true}
+      ],
+      "check_env_universal": { "ok": 10, "fail": 3, "fails": ["bun", "pnpm", "yarn"] },
+      "check_env_category": { "ok": 1, "fail": 3, "fails": ["bun", "pnpm", "yarn"], "blocked": [{ "kind": "script-bug", "missing": ["NVM_DIR-probe"], "scenarioExecuted": false }] },
+      "driverCapability": "browser-driver(preflight-engineering-browser) + process-driver + driver-skeleton.cjs",
+      "realVsMockBoundary": "浏览器同构 UI ≠ 服务契约能力；preflight 拒绝『静态 HTML 冒充全栈』",
+      "executableCommands": [
+        "bash apps/electron/resources/nanju-engineering-templates/check_env.sh web-fullstack",
+        "bun test apps/electron/src/main/lib/nanju-engineering-preflight.test.ts",
+        "bun run apps/electron/scripts/verify-engineering-resources.ts --json"
+      ],
+      "blockedReasons": [
+        { "kind": "script-bug", "missing": ["NVM_DIR-probe line 121"], "scenarioExecuted": false, "coveredUs": [] },
+        { "kind": "representative-project-missing", "scenarioExecuted": false, "coveredUs": [] }
+      ],
+      "productAcceptance": "BLOCKED-not-run"
+    },
+    "api-backend": {
+      "templateSha256": "804d21dea9dd8bb5f21200ab2f9cbb2f8554209dc46c99421f527db75fe3bd76",
+      "check_env_universal": { "ok": 10, "fail": 3, "fails": ["bun", "pnpm", "yarn"] },
+      "check_env_category": { "ok": 2, "fail": 10, "fails": ["bun", "pnpm", "yarn", "postgresql", "psql", "pg_isready", "redis-cli", "httpie", "node-gyp", "argon2"] },
+      "driverCapability": "http-driver + process-driver",
+      "realVsMockBoundary": "Hono/FastAPI 必须起真实进程；mock 仅用于隔离单测",
+      "executableCommands": [
+        "bash apps/electron/resources/nanju-engineering-templates/check_env.sh api-backend",
+        "bun test apps/electron/src/main/lib/nanju-engineering-process-driver.test.ts"
+      ],
+      "blockedReasons": [
+        { "kind": "missing-service", "missing": ["postgresql", "redis-cli", "psql", "pg_isready", "node-gyp", "argon2"], "scenarioExecuted": false, "coveredUs": [] }
+      ],
+      "productAcceptance": "BLOCKED-missing-services"
+    },
+    "mobile-app": {
+      "templateSha256": "ae91332238369f00f5c5747596a020f59e8594c7e03f8647819e688897cff8ca",
+      "check_env_universal": { "ok": 10, "fail": 3, "fails": ["bun", "pnpm", "yarn"] },
+      "check_env_category": { "ok": 6, "fail": 11, "fails": ["bun", "pnpm", "yarn", "watchman", "gradle", "xcodebuild", "expo", "eas-cli", "android-studio", "sdkmanager", "avdmanager"] },
+      "driverCapability": "mobile-driver (adb/uiautomator2)",
+      "realVsMockBoundary": "真机/模拟器驱动；『手机尺寸网页不能替代移动验收』",
+      "executableCommands": [
+        "bash apps/electron/resources/nanju-engineering-templates/check_env.sh mobile-app",
+        "adb devices"
+      ],
+      "blockedReasons": [
+        { "kind": "device-unreachable", "missing": ["real-android-device", "iOS-simulator"], "scenarioExecuted": false, "coveredUs": [] }
+      ],
+      "productAcceptance": "BLOCKED-device-unreachable",
+      "historyNote": "OPPO Android 11 真机历史可复用为『背景能力』，但不视作本次业务通过。详见 dispatch/reviews/mobile闭环验证-review.md"
+    },
+    "desktop-app": {
+      "templateSha256": "39e278c8023d018fad7d23883c870aa6fb330d13048dc8cd7e34b77f2b534c6e",
+      "manifestReferences": [
+        {"from": "desktop-app.md", "to": "check_env.sh", "kind": "script-reference", "anchor": "§2.3", "required": true}
+      ],
+      "check_env_universal": { "ok": 10, "fail": 3, "fails": ["bun", "pnpm", "yarn"] },
+      "check_env_category": {
+        "ok": 9,
+        "fail": 4,
+        "note": "desktop 专属 13 探测：9 ok 4 fail；universal 10/13 总 19/26 / fail 7",
+        "fails": ["bun", "pnpm", "yarn", "webkit2gtk-4.0", "pynput", "pystray", "portaudio"],
+        "tauriStack": { "webkit2gtk-4.1": "2.52.6", "gtk+-3.0": "3.24.41", "libsoup-3.0": "3.4.4", "ayatana-appindicator3-0.1": "0.5.90", "pkg-config": "1.8.1" },
+        "pythonStack": { "pynput": "FAIL", "sounddevice": "0.5.6", "pystray": "FAIL", "portaudio": "FAIL" },
+        "systemTools": { "xclip": "/usr/bin/xclip", "xdotool": "3.20160805.1", "notify-send": "/usr/bin/notify-send" },
+        "display": "DISPLAY=:12.0"
+      },
+      "driverCapability": "process-driver + driver-skeleton.py + 真实 OS 退出码 + 取消 → blocked",
+      "realVsMockBoundary": "P1（Python 快速）/P2（Tauri 正式）双路径；mock ≠ 原生验收",
+      "executableCommands": [
+        "bash apps/electron/resources/nanju-engineering-templates/check_env.sh desktop-app",
+        "bun test apps/electron/src/main/lib/nanju-engineering-process-driver.test.ts"
+      ],
+      "blockedReasons": [
+        { "kind": "python-stack-incomplete", "missing": ["pynput", "pystray", "portaudio"], "scenarioExecuted": false, "coveredUs": [] },
+        { "kind": "probe-freshness-stale", "info": "历史代表工程 env_probe.json probedAt~86h 前（>24h maxAgeMs）", "coveredUs": ["probe-freshness-rescan-required"] }
+      ],
+      "productAcceptance": "notRun-this-round (history e2e-clipboard-history 在 v0.17.131 已签收，本任务不复跑)",
+      "historyNote": "dispatch/reviews/E2E-desktop-clipboard-review.md：4 轮 0 盲修，宿主 checks 40/40，DISPLAY 三态 blocked exit 2"
+    },
+    "cli-tool": {
+      "templateSha256": "4cf2384821adfc5f17dbd2a5957c5972f12862ee9a95af07c08a941f4f630f21",
+      "check_env_universal": { "ok": 10, "fail": 3, "fails": ["bun", "pnpm", "yarn"] },
+      "check_env_category": { "ok": 1, "fail": 6, "fails": ["bun", "pnpm", "yarn", "tsx", "poetry", "deno"] },
+      "driverCapability": "process-driver + driver-skeleton.cjs",
+      "realVsMockBoundary": "真实入口（参数 + 退出码 + 副作用）；演控台 ≠ CLI 验收",
+      "executableCommands": [
+        "bash apps/electron/resources/nanju-engineering-templates/check_env.sh cli-tool"
+      ],
+      "blockedReasons": [
+        { "kind": "missing-toolchain", "missing": ["tsx", "uv", "poetry", "deno"], "scenarioExecuted": "partial-Node-only", "coveredUs": ["US-Node-runtime-only"] }
+      ],
+      "productAcceptance": "BLOCKED-toolchain-incomplete-non-blocking"
+    },
+    "ai-application": {
+      "templateSha256": "4aace3f9d7e591a18ae113bfc9864bb33b46a8d3592171fec4e364c895722fba",
+      "check_env_universal": { "ok": 10, "fail": 3, "fails": ["bun", "pnpm", "yarn"] },
+      "check_env_category": { "ok": 0, "fail": 7, "fails": ["bun", "pnpm", "yarn", "ollama", "pgvector", "libsql", "embedding-model"] },
+      "driverCapability": "http-driver (远端 LLM) / process-driver (本地模型) / ai-driver (provider mock)",
+      "realVsMockBoundary": "付费或外部发送必须用户确认；任务范围内不擅自配置密钥 / 调用付费接口",
+      "executableCommands": [
+        "bash apps/electron/resources/nanju-engineering-templates/check_env.sh ai-application"
+      ],
+      "blockedReasons": [
+        { "kind": "ai-stack-missing", "missing": ["ollama", "pgvector", "libsql", "embedding-model"], "scenarioExecuted": false, "coveredUs": [] },
+        { "kind": "llm-authorization-required", "missing": ["user-confirmed-llm-provider-key"], "scenarioExecuted": false, "coveredUs": [] }
+      ],
+      "productAcceptance": "BLOCKED-ai-stack-external-required"
+    }
+  },
+  "verdict": {
+    "protocolLayer": {
+      "passed": 119,
+      "failed": 0,
+      "scope": "B5 driver-blocked-protocol + driver-skeleton + engineering-protocols-suite",
+      "verdict": "PASS"
+    },
+    "productAcceptance": {
+      "web-fullstack": "BLOCKED-not-run",
+      "api-backend": "BLOCKED-missing-services",
+      "mobile-app": "BLOCKED-device-unreachable",
+      "desktop-app": "notRun-this-round",
+      "cli-tool": "BLOCKED-toolchain-incomplete-non-blocking",
+      "ai-application": "BLOCKED-ai-stack-external-required"
+    },
+    "manifestSelfCheck": {
+      "source": "ok (bundleSha256 一致, requiredCount=12)",
+      "devDeploy": "manifest-missing blocking"
+    },
+    "overall": "B5 protocol layer PASS; B6 productAcceptance NOT-RUN across 6 categories (3 BLOCKED-for-missing-env, 1 history-not-rerun-this-round, 1 not-run, 1 partial-degradable). This is the honest state and must not be marked green by exploiting history or template tests."
+  },
+  "isolationEvidence": {
+    "shmWorkdir": "/dev/shm/b5-2594870/",
+    "shmWorkdirStatus": "created-then-cleaned",
+    "shmCleanupConfirm": "rm -rf /dev/shm/b5-2594870 后 ls /dev/shm | grep b5- → 0 行"
+  },
+  "filesProduced": [
+    "b5-matrix.md",
+    "findings.json",
+    "logs/run-context.env",
+    "logs/manifest-cli-source.json",
+    "logs/manifest-cli-source.meta",
+    "logs/manifest-cli-dev.json",
+    "logs/manifest-cli-dev.meta",
+    "logs/check-env-{universal,web-fullstack,api-backend,mobile-app,desktop-app,cli-tool,ai-application}.jsonl",
+    "logs/check-env-web-fullstack.stderr",
+    "logs/check-env-{...}.meta",
+    "logs/driver-blocked-protocol.test.log",
+    "logs/driver-blocked-protocol.test.meta",
+    "logs/driver-skeleton.test.log",
+    "logs/driver-skeleton.test.meta",
+    "logs/engineering-protocols-suite.test.log",
+    "logs/engineering-protocols-suite.test.meta",
+    "logs/template-bundle-hashes.txt"
+  ]
+}

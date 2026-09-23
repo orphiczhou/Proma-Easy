@@ -1,0 +1,230 @@
+{
+  "audit": {
+    "role": "独立只读审计员（未改代码、未 commit、未部署）",
+    "date": "2026-09-23T18:21+08:00",
+    "repo": "/home/orphic/proma-patches/p1-quick-engineering",
+    "branch": "p1-quick-engineering",
+    "head": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+    "versions": { "electron": "0.17.132", "shared": "0.1.63" },
+    "hashSnapshot": "test-sources 上层目录 file-hashes-20260923.md",
+    "verification": "关键反例已用 bun 1.3.14 对源码实机复现（/tmp 审计脚本，未改产品文件）"
+  },
+  "severityLegend": {
+    "red": "门禁实质可被绕过/洗过，需工程侧裁决修复",
+    "yellow": "存在可验证的绕过面或误拦面，或失效声明缺程序化兑底；建议加固",
+    "green": "已核实设计正确的红线/回归钉，或轻微一致性问题"
+  },
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "yellow",
+      "category": "US三类覆盖与notApplicable绕过",
+      "title": "6字符凑数理由即可豁免 boundary/exception，三类覆盖可被全豁免掏空",
+      "files": ["apps/electron/src/main/lib/nanju-acceptance-baseline.ts"],
+      "evidence": [
+        "if (row.kind === 'normal' || typeof row.notApplicable !== 'string' || row.notApplicable.trim().length < 6) throw new Error(`${row.id}豁免需具体理由，普通路径不得豁免`)"
+      ],
+      "repro": "实机验证：AC-002(boundary)/AC-003(exception) 均填 notApplicable:'理由理由理由'（6字）→ validateAcceptanceSpecification 返回 null；normal 条目照常通过",
+      "impact": "覆盖硬约束（每个US覆盖normal/boundary/exception）在豁免侧退化为6字符长度检查，异常/边界路径可被无语义文本批量豁免；豁免条目随后被绑定检查过滤（!row.notApplicable），testing 阶段不再要求任何对应场景",
+      "recommendation": "豁免理由结构化（分类枚举+最小有效长度+与US内容相关性人工/模型复核），或要求豁免条目在架构确认环节单独列出供用户/AC审视",
+      "negativeTest": "neg-01-us-coverage-not-applicable.test.ts"
+    },
+    {
+      "id": "F-02",
+      "severity": "red",
+      "category": "冻结基线后需求变更",
+      "title": "验收基线为项目目录内普通文件，可被同权限写者重写自证；重冻结无变更授权痕迹",
+      "files": [
+        "apps/electron/src/main/lib/nanju-acceptance-baseline.ts",
+        "apps/electron/src/main/lib/nanju-phase-advance-consumer.ts"
+      ],
+      "evidence": [
+        "if (baseline?.version !== 1 || baseline.specHash !== spec.specHash || baseline.prdHash !== spec.prdHash) return '编码前验收基线缺失或已改变；请先回到架构确认验收范围，不能沿用旧基线。'",
+        "/** 仅在已通过原授权门的进入coding事务中调用；读取规格不自动冻结。 */ export function freezeAcceptanceSpecification(projectDir: string): void",
+        "if (newStage === 'coding') { … freezeAcceptanceSpecification(getNanjuProjectDir(workspaceSlug, project.projectId)) }"
+      ],
+      "repro": "实机验证：冻结后弱化 then 断言并将 exception 转 6 字豁免 → 门禁拒绝（基线缺失）；但重写 _acceptance-baseline.json（重冻结）后校验恢复 null，frozenAt 被静默刷新且无变更/授权记录字段",
+      "impact": "门禁校验是自证式的：基线与被校验对象同处一个 L2 有写权限的目录（委派子会话对项目目录写豁免），改规格+同步改基线即可消除「已改变」事实；引导语「需求变更需先走回退确认」仅是提示词约束，无程序化区分首次冻结与变更重冻结",
+      "recommendation": "重冻结前校验旧基线存在且 hash 不匹配时要求显式回退/变更授权（用户确认事件或系统指令），并把重冻结事件写入独立于项目目录的审计日志；至少冻结记录含 prevSpecHash+prevPrdHash 变更链",
+      "negativeTest": "neg-02-frozen-baseline-change.test.ts"
+    },
+    {
+      "id": "F-03",
+      "severity": "yellow",
+      "category": "contract.test id冒充steps",
+      "title": "绑定证据按名字匹配：契约 acceptance test id 或 steps 单字段 scenario 文本即可顶替绑定",
+      "files": ["apps/electron/src/main/lib/nanju-acceptance-baseline.ts"],
+      "evidence": [
+        "for (const test of contract?.tests ?? []) if (test.layer === 'acceptance') names.push(test.id)",
+        "if (typeof value?.scenario === 'string') names.push(value.scenario)",
+        "const missing = spec.cases.filter(row => !row.notApplicable && !names.some(name => new RegExp(`\\\\b${row.id}\\\\b`).test(name)))"
+      ],
+      "repro": "实机验证①：契约 id=AC-001 且无任何 steps 文件 → validateAcceptanceBindings 返回 null；实机验证②：三个 steps JSON 仅 {scenario:'占位 AC-00x'} → 返回 null；实机验证③：单个场景文本同时提及 AC-001/AC-002/AC-003 → null（按名匹配不看场景归属）",
+      "impact": "testing 推进门（verifyPhaseOutput 的 acceptance.baseline 分支）可被无可执行内容的命名证据通过；深度防线依赖 GwtRunner 执行期 schema 校验与覆盖判定，但那是重入后的裁判，不在进门门禁",
+      "recommendation": "绑定校验要求 AC 编号出现在 .feature 场景名或 steps 文件与 feature 成对命名（us-XX），并校验 scenario 字段与 feature 段一致性；契约 id 只应作为设计登记不构成绑定",
+      "negativeTest": "neg-03-contract-id-steps.test.ts"
+    },
+    {
+      "id": "F-04",
+      "severity": "yellow",
+      "category": "testing点选跨阶段写",
+      "title": "点选修复的重测要求只是文案注入，无程序化失效动作",
+      "files": [
+        "apps/electron/src/main/lib/nanju-click-to-fix-policy.ts",
+        "apps/electron/src/main/lib/nanju-ipc.ts"
+      ],
+      "evidence": [
+        "mustRetest: stage === 'testing' || stage === 'delivered'",
+        "policy.application ? ' 08_APP/ 下的应用代码，testing/delivered 修改后必须重新执行测试，不需要同步 PRD'",
+        "'旧测试报告与交付确认已失效，修复后必须重新测试。'"
+      ],
+      "repro": "静态证据：nanju-ipc.ts 点选消费点仅拼接 label 文本，未调用 clearProjectDeliveryAck/clearProjectDeliveryChallenge 或标记报告失效；clickToFixPolicy 返回结构无失效动作字段",
+      "impact": "testing 阶段点选改 08_APP 后，重测义务只由 LLM 遵从承担；程序化兑底仅剩 GwtRunner 交付门的 entryFingerprint 重算比对——若用户不再发起交付，旧 pass 报告与 deliveryAck 维持原状显示",
+      "recommendation": "testing/delivered 点选受理时同拍清除 deliveryAck 并把 challenge/report 标记为 stale（UI 展示失效事实），或至少记录 fingerprint 失效事件",
+      "negativeTest": "neg-04-click-to-fix-cross-stage.test.ts"
+    },
+    {
+      "id": "F-05",
+      "severity": "yellow",
+      "category": "结构化GateCheck一致性",
+      "title": "route 节点/输出路径缺失时 verifyPhaseOutput fail-open：零 checks 静默放行",
+      "files": ["apps/electron/src/main/lib/nanju-router-gate.ts"],
+      "evidence": [
+        "if (!phase || !phase.outputPath) return null",
+        "if (checks.length === 0) checks.push({ id: 'phase.output', pass: !error, expected: '阶段产出满足要求', actual: error ?? '符合要求' })"
+      ],
+      "repro": "静态推演：getPhaseNode 查不到节点（mode/currentStage 数据异常）→ 返回 null 且不写 checks → evaluatePhaseOutput 兜底合成 pass=true 的 phase.output check",
+      "impact": "与 validateAdvanceTarget 的「防御性放行」设计一致（宁可放行不可卡死），但此处是产出校验门（承重门）而非目标校验：route 数据损坏时整个文件门静默失效，且 GateCheck 面不显式化该状态",
+      "recommendation": "route 缺失时产出显式 fail check（如 id='route.missing', pass=false）或至少 pass=false 的观测项，避免把数据异常伪装成校验通过",
+      "negativeTest": "neg-05-gatecheck-consistency.test.ts"
+    },
+    {
+      "id": "F-05b",
+      "severity": "green",
+      "category": "结构化GateCheck一致性",
+      "title": "acceptance.baseline 拒绝的 path 标签对 testing 绑定错误失真",
+      "files": ["apps/electron/src/main/lib/nanju-router-gate.ts"],
+      "evidence": [
+        "phaseId === 'testing' ? validateAcceptanceBindings(projectDir) : null\n    if (error) return reject('acceptance.baseline', error, '编码前冻结规格、测试逐项绑定验收编号', '03_ARCHITECTURE/acceptance.json')"
+      ],
+      "repro": "testing 绑定错误（实际域 06_TESTS/steps）的 GateCheck.path 仍为 '03_ARCHITECTURE/acceptance.json'",
+      "impact": "UI/消费者按 path 定位修正文件时被误导（轻微一致性缺陷，不构成放行）",
+      "recommendation": "按 phaseId 区分 path（testing→06_TESTS/steps）",
+      "negativeTest": "neg-05-gatecheck-consistency.test.ts"
+    },
+    {
+      "id": "F-06",
+      "severity": "green",
+      "category": "旧schema pending与取消/幂等续接",
+      "title": "取消粘性与续接幂等设计正确；两处边界需工程侧确认",
+      "files": [
+        "apps/electron/src/main/lib/nanju-advance-recovery.ts",
+        "apps/electron/src/main/lib/nanju-phase-advance-consumer.ts"
+      ],
+      "evidence": [
+        "if (!pending?.eventKey || pending.executionState === 'cancelled' || pending.consumedEventKey === pending.eventKey) return false",
+        "executionState: previous?.eventKey === eventKey && previous?.executionState === 'cancelled' ? 'cancelled' : 'blocked'"
+      ],
+      "repro": "静态核验：①旧 schema pending（无 eventKey）claim=false fail-closed ✓；②claim 领取后 consumedEventKey 去重不重复续接 ✓；③取消后同 eventKey 再次 persist 保持 cancelled 不复活 ✓；④阶段前进（fromStage≠currentStage）恢复提示为 null ✓",
+      "impact": "边界确认项：产物指纹变化产生新 eventKey 时，先前被用户取消的 pending 会以 blocked 形态复活并可再次自动续接——取消意图不跨事件记忆（新失败=新事件的设计权衡，需用户裁决）",
+      "recommendation": "如需强化，可在取消时记录取消原因与产物指纹，新指纹复活时向用户提示「此前的取消针对旧版本产物」",
+      "negativeTest": "neg-06-pending-cancel-idempotent.test.ts"
+    },
+    {
+      "id": "F-07",
+      "severity": "green",
+      "category": "skip/error/blocked不能洗通过",
+      "title": "GWT 必测语义已实现且红线完整（附 size=0 边界确认项）",
+      "files": [
+        "apps/electron/src/main/lib/nanju-gwt-runner.ts"
+      ],
+      "evidence": [
+        "const verdict = failed === 0 && skipped === 0 && uncoveredUs.length === 0 && passed > 0 ? 'pass' : 'fail'",
+        "Task 1：skipped > 0 同样阻断 pass（必测场景跳过不得视为通过）",
+        "reportPass = report?.verdict === 'pass' && hasGwtDeliverySchemaFields(report as Parameters<typeof hasGwtDeliverySchemaFields>[0])"
+      ],
+      "repro": "实机验证：skip 场景存在 → verdict=fail 且 skipped=1；skip 场景不计覆盖（uncoveredUs 含 US-01）；空结果集 fail；hasGwtDeliverySchemaFields 对旧 schema/空 runId/null 均 false",
+      "impact": "红线健康。边界确认项：entryFingerprint.size=0 仍通过 schema（typeof size==='number'）——空壳入口文件语义上不应有效，建议 size>0",
+      "recommendation": "hasGwtDeliverySchemaFields 增加 size > 0 校验",
+      "negativeTest": "neg-07-skip-error-wash.test.ts"
+    },
+    {
+      "id": "F-08",
+      "severity": "yellow",
+      "category": "门禁误拦与暗语分词",
+      "title": "零宽字符与全角标点夹层可拆散中文关键词，绕过层一 deny（实锤）",
+      "files": ["apps/electron/src/main/lib/nanju-delegate-guard.ts"],
+      "evidence": [
+        "export function compactCjkWhitespace(text: string): string {\n  return text.replace(/([\\u3400-\\u9fff])[ \\t\\u00a0\\u3000\\r\\n]+(?=[\\u3400-\\u9fff])/g, '$1')\n}",
+        "Task 8：删去相邻中文之间的空格/换行/制表符，使「开 发」「编\\n写」与连续词同判"
+      ],
+      "repro": "实机验证：task='开\\u200b发一个工具' → {allowed:true, matchKind:'unmatched'}（「开发」强动词+coding ROLE 词双 miss）；task='开(发)一个工具' → 同样 allowed:true",
+      "impact": "Task 8 硬化的「插空格/换行拆词不改判」仅覆盖空白字符集，零宽字符（\\u200b 等）与全角括号夹层仍在归一集合外——L1 主动构造暗语即可绕过其他阶段词/强动词拒绝（pass-unmatched 埋点可见但门禁已放行）",
+      "recommendation": "归一前先剥除 Unicode Cf/Cc 不可见字符（\\u200b-\\u200f、\\u2060、\\uFEFF 等），并把相邻 CJK 间的单字符标点夹层（·（）等）纳入拆词判定或至少纳入埋点观察",
+      "negativeTest": "neg-08-delegate-guard-adversarial.test.ts"
+    },
+    {
+      "id": "F-09",
+      "severity": "yellow",
+      "category": "门禁误拦与暗语分词",
+      "title": "OUTPUT 邻近窗口（±20字符）可用填充文本拉距绕过，本阶段词掩护下游产出意图（实锤）",
+      "files": ["apps/electron/src/main/lib/nanju-delegate-guard.ts"],
+      "evidence": [
+        "export const OUTPUT_VERB_PROXIMITY = 20",
+        "const isOutputIntent = keywordIndices(workText, kw).some((pos) =>\n          verbPositions.some((v) => Math.abs(pos - v) <= OUTPUT_VERB_PROXIMITY)\n          && !isReferenceOccurrence(workText, pos))"
+      ],
+      "repro": "实机验证：requirements 阶段 task='根据 PRD 梳理需求，请在充分理解上下文与用户预期的前提下，完成高质量的最终代码产物'（动词「完成/最终」不在强动词表、生成类动词与「代码」距离>20）→ {allowed:true, matchKind:'stage', matchedKeyword:'需求'}；对照：'根据 PRD 生成应用代码' → 正确 deny",
+      "impact": "W18.1 2.5 下游 OUTPUT 守卫的邻近判定可被填充文本拉距绕过；配合 F-08 分词，产出类意图可借本阶段词洗过（同页填写）",
+      "recommendation": "记录为已知残余面并纳入 pass-unmatched/stage 放行埋点观察；如误拦率允许，可扩大窗口或按句切分后做句级「动词×产出词共现」判定",
+      "negativeTest": "neg-08-delegate-guard-adversarial.test.ts"
+    },
+    {
+      "id": "F-10",
+      "severity": "yellow",
+      "category": "门禁误拦与暗语分词",
+      "title": "testing 阶段合法核验任务含裸词 coding 即被 other-stage deny（误拦实锤）",
+      "files": ["apps/electron/src/main/lib/nanju-delegate-guard.ts"],
+      "evidence": [
+        "const result = checkDelegationAgainstStage('testing', { task: '核验 coding 阶段产出的 driver 与被测产物一致性，并记录审查结论' }) → {allowed:false, violatedStage:'coding', violatedKeyword:'coding'}",
+        "testing 节点约束：'非浏览器工程：读取coding已产出的driver，独立核验真实对象和行为检查'"
+      ],
+      "repro": "实机验证（上列 evidence 第一条即为复现）：testing 节点自身约束语风的任务文本会命中 coding ROLE 词被拒；「对coding产出…」不处于引用标记之后（标记表无「对」）",
+      "impact": "testing 阶段标准核验委派存在结构性误拦面；同型：coding 阶段核验 architecture 产出的任务含「架构」词（ROLE 词命中他阶段）——严格序设计已接受该误拦成本并埋点观察，但实测确认为高频合法形态",
+      "recommendation": "为他阶段词命中增加「下游/上游产物核验语境」豁免（如阶段名词+产出物引用模式），或把 ROLE 表中的阶段自指词（coding/test 等裸英文阶段名）降为产出物级判定",
+      "negativeTest": "neg-08-delegate-guard-adversarial.test.ts"
+    },
+    {
+      "id": "F-11",
+      "severity": "green",
+      "category": "US编号归一",
+      "title": "US 编号归一与覆盖对齐行为正确（含 fail-closed 边界）",
+      "files": [
+        "apps/electron/src/main/lib/nanju-acceptance-baseline.ts",
+        "apps/electron/src/main/lib/nanju-user-stories.ts"
+      ],
+      "evidence": [
+        "if (typeof row.us === 'string' && /^US-\\d+$/i.test(row.us)) row.us = `US-${String(Number(row.us.slice(3))).padStart(2, '0')}`",
+        "const normalized = `US-${String(Number(m[1])).padStart(2, '0')}`"
+      ],
+      "repro": "静态+夹具核验：US-1/US-01/US-001/us2 均归一到 US-01/US-02 并正确对齐覆盖检查；无连字符形态（us01）fail-closed 拒绝（'US或kind无效'）",
+      "impact": "无缺陷；作为回归钉固化于 neg-01",
+      "recommendation": null,
+      "negativeTest": "neg-01-us-coverage-not-applicable.test.ts"
+    },
+    {
+      "id": "F-12",
+      "severity": "green",
+      "category": "冻结基线后需求变更",
+      "title": "冻结检测本体有效：PRD/规格任何变更均被拒，testing 绑定先报基线拒因",
+      "files": ["apps/electron/src/main/lib/nanju-acceptance-baseline.ts"],
+      "evidence": [
+        "baseline.specHash !== spec.specHash || baseline.prdHash !== spec.prdHash",
+        "const error = validateAcceptanceSpecification(projectDir, true)\n  if (error) return error"
+      ],
+      "repro": "实机验证：冻结后改规格 → '基线缺失'；改 PRD → 同拒；validateAcceptanceBindings 同样先报基线拒因（变更优先于绑定噪声，语义正确）",
+      "impact": "检测面无缺陷（绕过面见 F-02 的重冻结自证）；哈希按原文比对，等价格式化差异也判变更——保守方向正确，记录为设计确认",
+      "recommendation": null,
+      "negativeTest": "neg-02-frozen-baseline-change.test.ts"
+    }
+  ]
+}

@@ -20,6 +20,7 @@
 import type { PromaPermissionMode } from '@proma/shared'
 import type { NanjuGuardStage } from './nanju-project'
 import { verifyPhaseOutput } from './nanju-router-gate'
+import { persistAdvanceCorrection, claimAdvanceCorrectionContinuation } from './nanju-advance-recovery'
 
 /** 编排器副作用注入（eventBus 注入 / GWT 触发 / Todo 收尾——见 agent-orchestrator 薄壳装配） */
 export interface PhaseAdvanceHooks {
@@ -94,29 +95,23 @@ function rejectWithEducationLoop(
 ): number {
   const count = (() => {
     try {
-      const { bumpAdvanceRejectCount } = require('./nanju-project') as typeof import('./nanju-project')
-      return bumpAdvanceRejectCount(workspaceSlug, projectId)
+      const { bumpAdvanceRejectCount, getProjectPendingAdvanceCorrection, getNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
+      const previous = getProjectPendingAdvanceCorrection(workspaceSlug, projectId)
+      const stage = getNanjuProject(workspaceSlug, projectId)?.currentStage
+      const persistedCount = previous?.fromStage === stage ? previous?.count ?? 0 : 0
+      return Math.max(bumpAdvanceRejectCount(workspaceSlug, projectId), persistedCount + 1)
     } catch {
       return 0
     }
   })()
+  persistAdvanceCorrection(workspaceSlug, projectId, { kind, ...correction, count, message })
   // F5 ③ 防环：教育闭环已达上限 → 转人工提示（不再注入教育/续接——防拒收→注入→续接→再拒收死循环烧 token）
   if (count > ADVANCE_REJECT_EDUCATION_LIMIT) {
-    try {
-      const { setProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
-      setProjectPendingAdvanceCorrection(workspaceSlug, projectId, {
-        kind,
-        target: correction.target,
-        expected: correction.expected,
-        at: new Date().toISOString(),
-        count,
-      })
-    } catch { /* pending 记录失败不阻断可见人工提示 */ }
     hooks.injectAssistantMessage(
       sessionId,
       '⛔ 推进标记已连续 ' + count + ' 次被拒（自动纠偏闭环已达上限，系统停止继续注入纠偏指令）。'
       + '\n\n请人工介入：查看上述拒收原因（目标合法性/授权/产出校验），与用户确认处理方式后，'
-      + '由用户/调度员按指引重新声明合法推进，或调整项目状态。',
+      + '由用户/调度员按指引修正产出后重新声明合法推进，不得手改阶段状态。\n当前拒因：' + message,
     )
     try {
       const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
@@ -133,6 +128,7 @@ function rejectWithEducationLoop(
   }
   hooks.injectAssistantMessage(sessionId, message)
   // F5 ①：systemInitiated 续接驱动 L1 下一轮（拒收后本轮照常 completeRun，无续接则 L1 看不到拒收）
+  if (!claimAdvanceCorrectionContinuation(workspaceSlug, projectId)) return count
   hooks.sendContinuation(sessionId, message, {
     onGiveUp: () => {
       // F5 ④：续接失败降级——可见注入 + 遥测 + 拒因登记（不静默；下一轮 prompt 消费侧接线后可提示 L1）
@@ -154,14 +150,9 @@ function rejectWithEducationLoop(
         }, projectId)
       } catch { /* 域点失败不影响 */ }
       try {
-        const { setProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
-        setProjectPendingAdvanceCorrection(workspaceSlug, projectId, {
-          kind,
-          target: correction.target,
-          expected: correction.expected,
-          at: new Date().toISOString(),
-          count,
-        })
+        const { getProjectPendingAdvanceCorrection, setProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
+        const pending = getProjectPendingAdvanceCorrection(workspaceSlug, projectId)
+        if (pending && pending.executionState !== 'cancelled') setProjectPendingAdvanceCorrection(workspaceSlug, projectId, { ...pending, executionState: 'blocked' })
       } catch { /* 登记失败不影响（遥测已有同拍事件） */ }
     },
   })
@@ -922,8 +913,10 @@ hooks: PhaseAdvanceHooks,
                 console.warn('[南大路由] 环境状态置位失败（不阻断验证）:', e instanceof Error ? e.message : String(e))
               }
             }
-            const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
+            const checks: import('./nanju-router-gate').GateCheck[] = []
+            const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage, checks)
             if (verifyError) {
+              persistAdvanceCorrection(workspaceSlug, project.projectId, { kind: 'gate-deny', target: newStage, expected: newStage, count: 0, message: verifyError, checks })
               console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
               // 可见化（AC L-002）：校验失败时 PHASE_ADVANCE 不推进，除主进程日志外
               // 向会话注入 assistant 消息，让用户/调度员在 UI 直接看到拦截原因；
@@ -1063,6 +1056,22 @@ hooks: PhaseAdvanceHooks,
                       console.log(`[南大路由] 工程品类判定: ${project.name} → ${resolved.category}（${resolved.source}）${templatePath ? '' : '，模板落位失败（coding 侧降级仅要点）'}`)
                     } catch (e) {
                       console.warn('[南大路由] 工程品类判定异常（不阻断推进）:', e instanceof Error ? e.message : String(e))
+                    }
+                  }
+                  if (newStage === 'coding') {
+                    const { readProjectInfo, getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
+                    if (readProjectInfo(workspaceSlug, project.projectId)?.acceptanceBaselineRequired) {
+                      try {
+                        (require('./nanju-acceptance-baseline') as typeof import('./nanju-acceptance-baseline')).freezeAcceptanceSpecification(
+                          getNanjuProjectDir(workspaceSlug, project.projectId),
+                          `advance:${project.projectId}:${newStage}`,
+                        )
+                      } catch (error) {
+                        const message = `无法冻结编码前验收规格：${error instanceof Error ? error.message : String(error)}`
+                        persistAdvanceCorrection(workspaceSlug, project.projectId, { kind: 'gate-deny', target: newStage, expected: newStage, count: 0, message })
+                        hooks.injectAssistantMessage(sessionId, message)
+                        return null
+                      }
                     }
                   }
                   updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })

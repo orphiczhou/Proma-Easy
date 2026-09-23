@@ -646,7 +646,7 @@ export function useGlobalAgentListeners(): void {
         void window.electronAPI.nanjuRecordEvent?.({
           workspaceSlug: workspace.slug,
           eventType: 'click_to_fix',
-          payload: { elementType: ref.type, hasId: true, applied: false, stage: 'pick-color' },
+          payload: { elementType: ref.type, hasId: true, applied: false, stage: 'pick-other' },
           sessionId,
         }).catch(() => {})
         store.set(uxElementRefPoolMapAtom, (prev) => {

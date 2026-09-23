@@ -1,0 +1,10 @@
+50ca13f0751ca25185706ddc3437048aad10e12ec3dfd02dae61d41072c677eb docs/reports/2026-09-20-phase1/execution/b6/product-acceptance.md
+a94373714a5a5c79b7547f3e1cf354a3123790756e1165598f244246eb55b253 docs/reports/2026-09-20-phase1/execution/b6/findings.json
+c0d2c01de18c44dd1ebc5f241811fe46353b6cbdbe8c012a30f686c7eae0c3a6 docs/reports/2026-09-20-phase1/execution/b6/logs/README.md
+90cac2e870d977546ee1bc1c578dd191d228ea9524a5227f601039b41c6a89f3 docs/reports/2026-09-20-phase1/execution/b6/logs/b6-counterexample-delivery.log
+912668a4e82b81dd3574da798fad0a809ddbc3d2db70773a14d832be8838ade3 docs/reports/2026-09-20-phase1/execution/b6/logs/b6-counterexample-delivery.script.ts
+553e991a1fe2ab4a6faa6cb32097ba65f6ae7fb3a657f2cc020c48f371526ac2 docs/reports/2026-09-20-phase1/execution/b6/logs/focused-b6-core-tests.log
+452ab115d29051e1d9f33341b42d20dc1f8bce9d4563cf2b6e3cdf60fe30c322 docs/reports/2026-09-20-phase1/execution/b6/logs/focused-b6-gate-tests.log
+e23d1b788abc45dd58aa6341e47156d875806e53807c03ef71d8f0368ac7f10d docs/reports/2026-09-20-phase1/execution/b6/logs/focused-b6-resources-tests.log
+cef3ff9919499100793069ef580193ebd56a792e832ebf75ccec004a2610bdd6 docs/reports/2026-09-20-phase1/execution/b6/logs/focused-b6-suite-tests.log
+0db0c7b2369389851225bc6746066d3fb6d054b760b4aad0de003a09e9c1fb4e docs/reports/2026-09-20-phase1/execution/b6/logs/parent-source-verification.txt

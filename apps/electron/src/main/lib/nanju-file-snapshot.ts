@@ -243,6 +243,7 @@ export type RecoverAction =
   | 'aborted-clean'
   | 'compensated'
   | 'invalid-layout'
+  | 'locked'
 
 export interface RecoverResult {
   ok: boolean
@@ -844,7 +845,7 @@ export function restoreFileSnapshot(snapshotDir: string, projectDir: string, sto
       return { ok: false, reason: 'locked', message: '陈旧锁接管时被并发恢复抢占，请重试', compensated: false }
     }
     ownedToken = retry.token
-    recoverInterruptedRestore(projectDir, storageDir)
+    recoverInterruptedRestoreUnlocked(projectDir, storageDir)
   } else {
     ownedToken = acquired.token
   }
@@ -1048,6 +1049,21 @@ export function restoreFileSnapshot(snapshotDir: string, projectDir: string, sto
  * - committed / compensated / aborted-clean → 只做残留清理 → nothing-to-recover
  */
 export function recoverInterruptedRestore(projectDir: string, storageDir: string): RecoverResult {
+  const layout = verifyDirectoryLayout(projectDir, storageDir)
+  if (!layout.ok) return { ok: false, action: 'invalid-layout', message: layout.message }
+  if (!existsSync(storageDir)) return { ok: true, action: 'nothing-to-recover', message: '存储目录不存在，无需恢复' }
+  let acquired = acquireRestoreLock(storageDir)
+  if (acquired.kind === 'stale') {
+    try { rmSync(lockPath(storageDir), { force: true }) } catch { /* 下面获取失败则拒绝 */ }
+    acquired = acquireRestoreLock(storageDir)
+  }
+  if (acquired.kind !== 'ok') return { ok: false, action: 'locked', message: '另一个恢复事务持有活跃锁，请等其结束后重试。' }
+  try { return recoverInterruptedRestoreUnlocked(projectDir, storageDir) }
+  finally { releaseRestoreLock(storageDir, acquired.token) }
+}
+
+/** 仅供已持有同一引擎锁的内部调用。 */
+function recoverInterruptedRestoreUnlocked(projectDir: string, storageDir: string): RecoverResult {
   // S3：recover 入口同样做布局守卫，避免对嵌套/同址配置误操作
   const layout = verifyDirectoryLayout(projectDir, storageDir)
   if (!layout.ok) {

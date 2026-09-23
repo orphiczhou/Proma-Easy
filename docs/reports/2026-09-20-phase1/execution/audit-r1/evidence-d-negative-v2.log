@@ -1,0 +1,25 @@
+### audit-r1 独立负例（哈希 14a34c9b 版本，含 N1 修复后复测）
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/audit-r1.negative.test.ts:
+(pass) N1 旧协议 exit-2 自检签名：label-only 逃逸是否仍成立（哈希 70153979→14a34c9b 变更后复测） > N1a 产品断言失败（expected≠actual）+ label「环境前置自检」+ exit2 → 当前行为=fail（不再洗成 blocked） [9.81ms]
+(pass) N1 旧协议 exit-2 自检签名：label-only 逃逸是否仍成立（哈希 70153979→14a34c9b 变更后复测） > N1b expected===actual 且无「缺失: 」前缀 + exit2 → fail（不判 blocked） [3.72ms]
+(pass) N1 旧协议 exit-2 自检签名：label-only 逃逸是否仍成立（哈希 70153979→14a34c9b 变更后复测） > N1c 残留：完整伪造旧签名（label+expected+「缺失: X」+非空 evidence 四字段齐）→ 仍判 blocked（自述性未变） [4.36ms]
+(pass) N2 结构化 blocked：驱动自述即判据（宿主无独立证据） > N2a 伪造 missing 项、无宿主探测 → 当前行为=blocked 且原文回显 [3.52ms]
+(pass) N2 结构化 blocked：驱动自述即判据（宿主无独立证据） > N2b 驱动自述文本未限长/未脱敏，直接进入 reason（用户摘要同源文案） [3.67ms]
+(pass) N3 工程套件前置失败：归入 blocked（不耗修复预算 + 环境措辞） > N3a 契约与 PRD 用户故事不对应 → verdict=blocked，且不执行驱动 [4.79ms]
+(pass) N3 工程套件前置失败：归入 blocked（不耗修复预算 + 环境措辞） > N3b 工程契约缺失 → verdict=blocked [1.37ms]
+(pass) N3 工程套件前置失败：归入 blocked（不耗修复预算 + 环境措辞） > N3c browser-file 场景文件缺失（工程产物缺陷）→ verdict=blocked 而非 fail [1.68ms]
+[配置] 配置目录: ~/.proma-dev/（开发模式）
+(pass) N4 交付门对 skip 报告：是否拦截（Task1 声称「交付门不得被 skip 报告绕过」） > N4a 历史 pass+skip 报告（同 schema、指纹未变、ack 绑定该 runId）→ 当前行为=放行(null) [3.89ms]
+(pass) N4 交付门对 skip 报告：是否拦截（Task1 声称「交付门不得被 skip 报告绕过」） > N4b 对照：同报告去掉 ack → 被拦截（no-ack），说明放行来自「不校验 skip」而非门禁失效 [1.80ms]
+(pass) N4 交付门对 skip 报告：是否拦截（Task1 声称「交付门不得被 skip 报告绕过」） > N4c 门禁不自校验 verdict：verdict=fail 报告 + 合法 ack → 当前行为=放行(null)，依赖调用方先拦 [1.16ms]
+(pass) N4 交付门对 skip 报告：是否拦截（Task1 声称「交付门不得被 skip 报告绕过」） > N4d 门禁不校验 skipped 字段本身：scenarios 全 fail 但 verdict=pass（伪造）同样放行 [1.81ms]
+(pass) N5 GWT 裁判边界：结果集合完整性 > N5a 未记录场景（不在 results 内）不影响 pass —— results 完整性由调用方保证 [0.69ms]
+(pass) N5 GWT 裁判边界：结果集合完整性 > N5b 工程 suite 路径下 skip 状态被映射为 fail（check.actual=skip）→ verdict=fail [5.47ms]
+(pass) N6 审计环境自检：埋点置空生效（未写入配置目录） [0.14ms]
+
+ 15 pass
+ 0 fail
+ 26 expect() calls
+Ran 15 tests across 1 file. [184.00ms]

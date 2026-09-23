@@ -1958,3 +1958,96 @@ describe('L2-4 J2 集成：getNanjuRouterPrompt 在 architecture 阶段执行探
     expect(prompt).not.toContain('已知环境事实')
   })
 })
+
+describe('Task 10 接线：architecture 阶段 env 探测使用项目品类（2026-09-23）', () => {
+  test('Given PRD 标注 desktop-app 品类 When 生成 architecture prompt Then 探测按 desktop-app 品类集执行（非 universal 兜底）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-cat-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-cat10')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    mkdirSync(join(projectDir, '00_ENGINEERING_TEMPLATE'), { recursive: true })
+    // PRD 带品类标记（resolveProjectCategoryForCoding 的 prd 分支来源）
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\nprojectCategory: desktop-app\n## US-01 演示\n')
+    // 探测脚本按品类参数回显，证明收到的是 desktop-app
+    writeFileSync(join(projectDir, '00_ENGINEERING_TEMPLATE', 'check_env.sh'),
+      '#!/usr/bin/env bash\ncat="universal"\nfor a in "$@"; do [ "$a" != "universal" ] && cat="$a"; done\n'
+      + 'echo "{\\"component\\":\\"$cat\\",\\"status\\":\\"ok\\",\\"version\\":\\"v1\\",\\"detail\\":\\"cat=$cat\\"}"\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'cat10', name: 'Task10 品类项目', mode: 'quick', status: 'active',
+      currentStage: 'architecture', createdAt: '', updatedAt: '', sessionId: 's-cat10',
+    }]))
+    const prompt = getNanjuRouterPrompt('test-ws', 's-cat10')
+    expect(prompt).toBeTruthy()
+    // 品类专用探测生效：探测行组件名为 desktop-app（旧实现恒为 universal）
+    expect(prompt).toContain('desktop-app：可用')
+    // 只读：architecture 阶段不得写元信息（getProjectCategory 未被补写）
+    const { getProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
+    expect(getProjectCategory('test-ws', 'cat10')).toBeNull()
+  })
+})
+
+describe('Task 5 收口：待纠正拒因重启后仍进入下一轮 L1 上下文（2026-09-23）', () => {
+  function buildPendingPrompt(projectId: string, sessionId: string, pending: Record<string, unknown>): string | undefined {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-pend-'))
+    fixtureRoot = root
+    const projectDir = join(root, `project-${projectId}`)
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId, name: 'Task5 拒因项目', mode: 'quick', status: 'active',
+      currentStage: 'coding', createdAt: '', updatedAt: '', sessionId,
+    }]))
+    // 待纠正拒因真实落位：<projectDir>/_project-info.json（与 setProjectPendingAdvanceCorrection 同源）
+    writeFileSync(join(projectDir, '_project-info.json'), JSON.stringify({
+      projectId, name: 'Task5 拒因项目', mode: 'quick', workspaceSlug: 'test-ws',
+      projectDir: `project-${projectId}`, docDirs: [], createdAt: '', updatedAt: '',
+      pendingAdvanceCorrection: pending,
+    }))
+    return getNanjuRouterPrompt('test-ws', sessionId)
+  }
+
+  test('Given 已持久化 blocked 拒因 When 重启后重建 prompt Then 注入拒因段且明确「非推进授权」', () => {
+    const prompt = buildPendingPrompt('pend1', 's-pend1', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 1,
+      fromStage: 'coding', executionState: 'blocked', message: '缺少 06_TESTS 测试报告与 acceptance.json 覆盖',
+      eventKey: 'ek-1', fingerprint: 'fp-1',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).toContain('## 待纠正的阶段推进（已持久化，非推进授权）')
+    expect(prompt).toContain('缺少 06_TESTS 测试报告与 acceptance.json 覆盖')
+    expect(prompt).toContain('非推进授权')
+    // 注入拒因不等于授权推进：拒因段自身不得携带推进标记
+    //（coding 阶段的操作指引另有合法 PHASE_ADVANCE 标记，故只截取拒因段断言）
+    const section = prompt!.slice(prompt!.indexOf('## 待纠正的阶段推进'), prompt!.indexOf('项目名：'))
+    expect(section).not.toContain('PHASE_ADVANCE')
+  })
+
+  test('Given 用户已取消（executionState=cancelled）When 重建 prompt Then 不注入拒因段（不复活）', () => {
+    const prompt = buildPendingPrompt('pend2', 's-pend2', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 2,
+      fromStage: 'coding', executionState: 'cancelled', message: '用户已停止自动续接',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('待纠正的阶段推进')
+    expect(prompt).not.toContain('用户已停止自动续接')
+  })
+
+  test('Given 拒因来自其它阶段（fromStage 不匹配当前阶段）When 重建 prompt Then 不注入（防陈旧归因）', () => {
+    const prompt = buildPendingPrompt('pend3', 's-pend3', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 1,
+      fromStage: 'prototype', executionState: 'blocked', message: '陈旧拒因不应出现',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('陈旧拒因不应出现')
+  })
+
+  test('Given 拒因 message 含私钥形态 When 重建 prompt Then 脱敏后再注入', () => {
+    const prompt = buildPendingPrompt('pend4', 's-pend4', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 1,
+      fromStage: 'coding', executionState: 'blocked',
+      message: 'token=sk-abcdefghijklmnopqrstuvwxyz012345 请求失败',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('sk-abcdefghijklmnopqrstuvwxyz012345')
+  })
+})

@@ -1,3 +1,4 @@
+import { NANJU_CANCEL_ADVANCE_CORRECTION } from '@proma/shared'
 /**
  * Preload 脚本
  *
@@ -6,6 +7,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { ProjectRecoveryResult } from '@proma/shared'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, NANJU_MODEL_IPC } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
@@ -1277,6 +1279,8 @@ export interface ElectronAPI {
   getTreeStates: (workspaceSlug?: string) => Promise<unknown>
 
   /** 南大项目：项目元数据 + 埋点 */
+  nanjuCancelAdvanceCorrection: (input: { workspaceSlug: string; projectId: string; sessionId: string }) => Promise<{ ok: boolean }>
+  nanjuGetDeliveryView: (input: { workspaceSlug: string; projectId: string }) => Promise<import('@proma/shared').DeliveryViewModel | null>
   nanjuListProjects: (workspaceSlug: string) => Promise<unknown[]>
   nanjuCreateProject: (input: Record<string, unknown>) => Promise<unknown>
   nanjuUpdateProject: (input: Record<string, unknown>) => Promise<unknown>
@@ -1313,7 +1317,7 @@ export interface ElectronAPI {
   /** 南大项目：快照管理（参数契约与 nanju-ipc.ts handler 对齐：双参对象 + snapshotId number） */
   nanjuCreateSnapshot: (input: { workspaceSlug: string; projectId: string; sessionId: string; description: string; triggerType?: string }) => Promise<unknown>
   nanjuListSnapshots: (input: { workspaceSlug: string; projectId: string }) => Promise<unknown[]>
-  nanjuRollbackSnapshot: (input: { workspaceSlug: string; projectId: string; snapshotId: number }) => Promise<unknown>
+  nanjuRollbackSnapshot: (input: { workspaceSlug: string; projectId: string; snapshotId: number }) => Promise<ProjectRecoveryResult>
 
   /** 南大项目：启动 HTML 文件监听 */
   nanjuStartHtmlWatcher: (workspaceSlug: string) => Promise<unknown>
@@ -3039,6 +3043,8 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('proma:get-tree-states', workspaceSlug ? { workspace_slug: workspaceSlug } : {}),
 
   // ===== 南大项目 =====
+  nanjuCancelAdvanceCorrection: (input) => ipcRenderer.invoke(NANJU_CANCEL_ADVANCE_CORRECTION, input),
+  nanjuGetDeliveryView: (input) => ipcRenderer.invoke('nanju:get-delivery-view', input),
   nanjuListProjects: (workspaceSlug: string) =>
     ipcRenderer.invoke('nanju:list-projects', workspaceSlug),
   nanjuCreateProject: (input: Record<string, unknown>) =>

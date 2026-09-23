@@ -1,0 +1,32 @@
+bun test v1.3.14 (0d9b296a)
+
+src/main/lib/__tests__/w-i-b-e-wiring.test.ts:
+(pass) W-I B-e｜I-P1 模式卡（点卡=选模式，不绕 autoClarify 勾选） > 两张卡片消费 quick-ux-model 常量（文案单一真源，无硬编码重复） [0.11ms]
+(pass) W-I B-e｜I-P1 模式卡（点卡=选模式，不绕 autoClarify 勾选） > 卡片点击只调 handleSelectMode（选模式），不直接创建项目 [0.08ms]
+(pass) W-I B-e｜I-P1 模式卡（点卡=选模式，不绕 autoClarify 勾选） > 创建动作在「开始创建」按钮：输入框 + 复选框 + 按钮三者都在 selectedMode 之后渲染 [0.13ms]
+(pass) W-I B-e｜I-P1 模式卡（点卡=选模式，不绕 autoClarify 勾选） > 快消型才显示勾选（长期型隐藏=升级即失效硬边界），且创建入参带 autoClarify [0.14ms]
+(pass) W-I B-e｜I-P2 需求阶段策略注入（引用常量，不复制字面量） > router 从 quick-dialog 引用 US-U02 常量与模板（唯一真源） [0.21ms]
+(pass) W-I B-e｜I-P2 需求阶段策略注入（引用常量，不复制字面量） > 策略落在 requirements 约束数组里（不是散落注释/未使用变量） [0.07ms]
+(pass) W-I B-e｜I-P3 框选接线（同一批：renderer→preload→IPC） > renderer 的 box-select 分支出现在空白点击兜底之前（否则误报空白） [0.49ms]
+(pass) W-I B-e｜I-P3 框选接线（同一批：renderer→preload→IPC） > renderer 侧只转发 id/type 且有条数上限（隐私与防伪造） [1.15ms]
+(pass) W-I B-e｜I-P3 框选接线（同一批：renderer→preload→IPC） > preload 的 reportClickToFix 声明 items（通道契约同步） [0.84ms]
+(pass) W-I B-e｜I-P3 框选接线（同一批：renderer→preload→IPC） > IPC handler 接收 items 且框选早退不注入消息（不落兜底文案） [0.22ms]
+(pass) W-I B-e｜I-P3 框选接线（同一批：renderer→preload→IPC） > #7 click_to_fix 在三处发射：框选 / 主进程四类 / 渲染端就地路径 [0.65ms]
+(pass) W-I B-e｜I-P4 mode.switched 真实落库点 > 锚在 nanju:update-project（真实写库路径），判定 quick→iterative 且写入成功后发射 [0.07ms]
+(pass) W-I B-e｜I-P4 mode.switched 真实落库点 > 不落在 auto-clarify 关闭计划器里（该计划器不是模式落库点） [0.05ms]
+(pass) W-I B-e｜I-P5/I-P8 事件发射点（推进即事实） > #4/#5 在推进成功分支按当前阶段分流（requirements→#4，prototype→#5） [0.18ms]
+(pass) W-I B-e｜I-P5/I-P8 事件发射点（推进即事实） > #14 architecture.confirmed 与 arch.executed 同区但独立（不互为别名） [0.20ms]
+(pass) W-I B-e｜I-P5/I-P8 事件发射点（推进即事实） > #12 satisfaction.marked 与 delivery.ack-recorded 同拍且时长取自 askedAt→ack.at [0.26ms]
+(pass) W-I B-e｜I-P5/I-P8 事件发射点（推进即事实） > #1 project.created 在建项目成功后发射 [0.18ms]
+(pass) W-I B-e｜I-P5/I-P8 事件发射点（推进即事实） > #2 dialog.submitted 与 checkConfirmAdvanceInput 同条件（真用户消息，非自动化/非委派） [0.75ms]
+(pass) W-I B-e｜I-P5/I-P8 事件发射点（推进即事实） > #10 repair.triggered 覆盖 success / 熔断 / 环境三类发射位 [0.93ms]
+(pass) W-I B-e｜I-P6/I-P7 视图消费（通俗行/熔断安抚） > GwtProgressCard 汇总行走 buildGwtSummaryLine，逐场景走 buildScenarioRows（工程 scope 排除） [0.10ms]
+(pass) W-I B-e｜I-P6/I-P7 视图消费（通俗行/熔断安抚） > GuardAlertCard 用 buildCircuitBreakMessage 且三字段来自主进程（非渲染端推断） [0.56ms]
+(pass) W-I B-e｜#6 user.undo（渲染端事实经主进程解析归属） > ClickToFixPanel 单条撤销与全部放弃均上报 [0.16ms]
+(pass) W-I B-e｜#6 user.undo（渲染端事实经主进程解析归属） > record-event 支持 sessionId 解析项目且不写入 payload [0.18ms]
+(pass) W-I B-e｜埋点接线层边界（模块自述契约） > 接线层只发射 #1/#2/#6/#8/#10 且失败一律吞掉（不影响主流程） [0.32ms]
+
+ 24 pass
+ 0 fail
+ 104 expect() calls
+Ran 24 tests across 1 file. [64.00ms]

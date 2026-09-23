@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { runEngineeringSuite } from './nanju-engineering-suite'
+import { readEngineeringEvidenceIndex } from './nanju-engineering-evidence'
 import type { EngineeringExecutionServices } from './nanju-engineering-execution'
 
 let root = ''
@@ -45,6 +46,33 @@ test('Given 部分驱动尚未注册 When 开始整套工程测试 Then 不批�
   const result = await runEngineeringSuite(fixture(false), { drivers: [], approve: async () => { approvals++; return true } }, new AbortController().signal)
   expect(result.verdict).toBe('blocked')
   expect(approvals).toBe(0)
+})
+
+test('Given 套件执行完成 When 归档证据 Then runId/evidenceIndex 返回且证据索引落盘可读', async () => {
+  const dir = fixture(false)
+  const result = await runEngineeringSuite(dir, services(), new AbortController().signal)
+  expect(result.verdict).toBe('pass')
+  expect(result.runId).toBeDefined()
+  expect(result.evidenceIndex).toContain('06_TESTS/evidence/')
+  const idx = readEngineeringEvidenceIndex(dir, result.runId!)
+  expect(idx?.schemaVersion).toBe(1)
+  expect(idx?.tests.length).toBe(2) // unit + acceptance 均归档
+  expect(idx?.tests.map((t) => t.testId).sort()).toEqual(['acceptance', 'unit'])
+})
+
+test('Given 套件中某测试 blocked When 提前返回 Then 已归档的测试证据仍落盘可读', async () => {
+  const dir = fixture(false)
+  // 第二个（acceptance）返回 blocked → 套件提前返回 blocked；unit 已归档
+  const blockedServices: EngineeringExecutionServices = {
+    approve: async () => true,
+    drivers: [{ adapter: 'cli-driver', execute: async ({ test }) => test.id === 'unit'
+      ? { testId: test.id, target: test.target, exitCode: 0, checks: [{ storyId: null, label: 'unit', expected: '1', actual: '1', evidence: ['fixture'] }] }
+      : { testId: test.id, target: test.target, exitCode: 2, blocked: { kind: 'environment', missing: ['DISPLAY'], scenarioExecuted: false }, checks: [] } }],
+  }
+  const result = await runEngineeringSuite(dir, blockedServices, new AbortController().signal)
+  expect(result.verdict).toBe('blocked')
+  const idx = readEngineeringEvidenceIndex(dir, result.runId!)
+  expect(idx?.tests.some((t) => t.testId === 'unit')).toBe(true)
 })
 
 test('Given 全量环境预检意外异常 When 运行工程套件 Then 返回error而不是裸抛中断报告', async () => {

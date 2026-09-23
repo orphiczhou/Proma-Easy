@@ -206,6 +206,13 @@ export interface NanjuProjectInfoFile {
     at: string
     /** 登记时的累计拒收次数 */
     count: number
+    fromStage?: ProjectStage
+    executionState?: 'blocked' | 'correcting' | 'cancelled'
+    consumedEventKey?: string
+    message?: string
+    checks?: import('./nanju-router-gate').GateCheck[]
+    fingerprint?: string
+    eventKey?: string
   }
   /**
    * L2-4（2026-09-18，v0.17.127+ 创建的新项目）：架构凭证门禁存量兼容标记——
@@ -215,6 +222,7 @@ export interface NanjuProjectInfoFile {
    * 用显式标记而非 createdAt 时间戳比对（版本发布时刻依赖脆弱）。
    */
   archEvidenceGate?: boolean
+  acceptanceBaselineRequired?: boolean
 }
 
 /**
@@ -345,6 +353,7 @@ export function createNanjuProject(input: {
     projectDir: `project-${uniqueId}`,
     docDirs,
     archEvidenceGate: true,
+    acceptanceBaselineRequired: true,
   }
   writeJsonFileAtomic(join(projectDir, '_project-info.json'), projectInfo)
 

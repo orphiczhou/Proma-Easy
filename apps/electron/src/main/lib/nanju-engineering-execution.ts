@@ -78,6 +78,56 @@ function normalizeStory(value: string): string {
   return `US-${String(Number(value.slice(3))).padStart(2, '0')}`
 }
 
+/**
+ * Task 11（2026-09-20）：结构化环境阻塞（新协议）宿主校验。
+ * 骨架 emit_blocked 输出 {blocked:{kind:'environment',missing:[...],scenarioExecuted:false},checks:[]}
+ * 并 exit 2。宿主必须校验标记来源、诊断与「被测场景未执行」声明才认定为 blocked；
+ * 否则归 error（fail-closed）——产品 fail / 崩溃 / 坏 schema 与伪造 exit 2 一律不得洗成环境阻塞。
+ */
+function interpretBlocked(base: EngineeringExecutionResult, raw: Record<string, unknown>, invalid: (reason: string) => EngineeringExecutionResult): EngineeringExecutionResult {
+  if (raw.exitCode !== 2) return invalid('阻塞标记与退出码不一致（结构化 blocked 必须伴随 exit 2，实际 ' + String(raw.exitCode) + '）')
+  const blocked = raw.blocked
+  if (!object(blocked)) return invalid('阻塞标记形态非法')
+  if (blocked.kind !== 'environment') return invalid('阻塞标记 kind 非法：' + (blocked.kind === undefined ? '缺失' : String(blocked.kind)) + '（仅接受 environment）')
+  if (!Array.isArray(blocked.missing) || blocked.missing.length === 0 || !blocked.missing.every(nonempty)) return invalid('阻塞诊断缺少缺失项（missing 必须是非空字符串数组）')
+  if (blocked.scenarioExecuted !== false) return invalid('阻塞标记声称被测场景已执行，与 blocked 语义冲突')
+  if (Array.isArray(raw.checks) && raw.checks.length > 0) return invalid('阻塞结果不得携带产品检查项')
+  if (raw.error !== undefined) return invalid('阻塞结果不得同时携带错误信息')
+  return { ...base, status: 'blocked', reason: `环境阻塞：缺失 ${blocked.missing.join('、')}（驱动未执行被测场景，不计入产品修复）`, coveredUs: [], checks: [] }
+}
+
+/**
+ * Task 11（2026-09-20）：旧协议 exit-2 自检拦截兼容。新骨架改用结构化 blocked 标记后，
+ * 已复制到存量工程的旧骨架仍走此路径。exit 2 是自检拦截出口：环境缺失与 schema 违规共用。
+ *
+ * 「环境前置自检」单独 label 不是可信签名——必须同时满足：单条 check + label 逐字 +
+ * expected==='环境就绪' + actual 以「缺失: 」前缀且非空 + evidence 为非空字符串数组；
+ * 任一不符都不被视为环境阻塞（伪装产品失败落回 fail/error，异常 exit 2 不被洗成 blocked）。
+ * 「输出schema自检」→ error（坏 schema 不得洗成 blocked）。
+ */
+function isLegacyEnvironmentBlock(check: Record<string, unknown>): string | null {
+  if (check.label !== '环境前置自检') return null
+  if (check.expected !== '环境就绪') return null
+  if (typeof check.actual !== 'string' || !check.actual.startsWith('缺失: ')) return null
+  const missing = check.actual.slice('缺失: '.length).trim()
+  if (!missing) return null
+  if (!Array.isArray(check.evidence) || !check.evidence.length || !check.evidence.every((item): item is string => typeof item === 'string' && item.trim().length > 0)) return null
+  return missing
+}
+
+function interpretLegacyExit2(base: EngineeringExecutionResult, raw: Record<string, unknown>, invalid: (reason: string) => EngineeringExecutionResult): EngineeringExecutionResult | null {
+  const checks = raw.checks
+  const single = Array.isArray(checks) && checks.length === 1 && object(checks[0]) ? checks[0] : null
+  if (single) {
+    const missing = isLegacyEnvironmentBlock(single)
+    if (missing !== null) return { ...base, status: 'blocked', reason: `环境阻塞：${missing}（驱动未执行被测场景，不计入产品修复）`, coveredUs: [], checks: [] }
+    if (single.label === '输出schema自检') return invalid('驱动输出违反宿主协议 schema（自检拦截）')
+  }
+  // 非旧自检签名的 exit 2：不在此拦截，落回正常产品判定（非零退出即 fail；空 checks 即 error）——
+  // 异常 exit 2 不会被洗成 blocked。
+  return null
+}
+
 /** 结果必须绑定已批准的测试对象；US来源于契约，不能由驱动任意扩大覆盖。 */
 function interpret(input: EngineeringExecutionInput, raw: unknown): EngineeringExecutionResult {
   const base: EngineeringExecutionResult = { testId: input.test.id, target: input.test.target, status: 'error', reason: null, coveredUs: [], checks: [], evidenceDigest: input.evidence.digest }
@@ -86,6 +136,13 @@ function interpret(input: EngineeringExecutionInput, raw: unknown): EngineeringE
   const invalid = (reason: string): EngineeringExecutionResult => ({ ...base, reason: '测试驱动结果不可用：' + reason })
   if (!object(raw) || raw.testId !== input.test.id || raw.target !== input.test.target) return invalid('测试编号或被测产物不对应')
   if (typeof raw.exitCode !== 'number' || !Number.isInteger(raw.exitCode)) return invalid('缺少实际退出状态')
+  // Task 11（2026-09-20）：结构化环境阻塞（新协议）与旧协议 exit-2 自检拦截的宿主识别。
+  // exit 2 本身不足以证明 blocked——先校验结构化标记 / 旧签名，非自检签名落回产品判定。
+  if (raw.blocked !== undefined) return interpretBlocked(base, raw, invalid)
+  if (raw.exitCode === 2) {
+    const legacy = interpretLegacyExit2(base, raw, invalid)
+    if (legacy !== null) return legacy
+  }
   if (!Array.isArray(raw.checks) || !raw.checks.length) return invalid('没有行为检查，退出成功不能代替验收')
   const planned = new Set(input.test.covers.map(normalizeStory))
   const checks: EngineeringCheckResult[] = []

@@ -603,15 +603,18 @@ export class AgentOrchestrator {
 
   /** 注入一条可见的 assistant 消息（可见化模式，与 PHASE_ADVANCE 拦截注入同型） */
   private injectNanjuAssistantMessage(sessionId: string, text: string): void {
-    this.eventBus.emit(sessionId, {
-      kind: 'sdk_message',
-      message: {
-        type: 'assistant',
-        message: { content: [{ type: 'text', text }] },
-        parent_tool_use_id: null,
-        uuid: randomUUID(),
-      } as unknown as SDKMessage,
-    })
+    const message = {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text }] },
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+      _createdAt: Date.now(),
+    } as unknown as SDKMessage
+    // UI 与下一轮上下文使用同一条持久化消息；磁盘写失败明确记录，pending 仍提供恢复出口。
+    try { appendSDKMessages(sessionId, [message]) } catch (e) {
+      console.error('[南大向导] 纠偏/验收消息持久化失败:', e instanceof Error ? e.message : String(e))
+    }
+    this.eventBus.emit(sessionId, { kind: 'sdk_message', message })
   }
 
   /** GWT 交付门禁：testing → delivered 必须已有 verdict=pass 的测试报告（机器裁判收口） */
@@ -1429,16 +1432,27 @@ export class AgentOrchestrator {
    * W22（F5 ④）：新增可选 onGiveUp——重试耗尽/元数据缺失时回调，供调用方降级
    *（可见注入+遥测+拒因登记，保证不静默）；既有调用方不传时行为零变化。
    */
+  private readonly nanjuContinuationEpoch = new Map<string, number>()
+
   private runNanjuGuardContinuation(
     sessionId: string,
     message: string,
     retriesLeft = 6,
     onGiveUp?: (sessionId: string, message: string) => void,
+    epoch = this.nanjuContinuationEpoch.get(sessionId) ?? 0,
   ): void {
     try {
+      if (epoch !== (this.nanjuContinuationEpoch.get(sessionId) ?? 0) || getAgentSessionMeta(sessionId)?.stoppedByUser) return
+      const continuationMeta = getAgentSessionMeta(sessionId)
+      const continuationWorkspace = continuationMeta?.workspaceId ? getAgentWorkspace(continuationMeta.workspaceId) : undefined
+      if (continuationWorkspace) {
+        const { listNanjuProjects, getProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
+        const project = listNanjuProjects(continuationWorkspace.slug).find(p => p.sessionId === sessionId)
+        if (project && getProjectPendingAdvanceCorrection(continuationWorkspace.slug, project.projectId)?.executionState === 'cancelled') return
+      }
       if (this.isActive(sessionId)) {
         if (retriesLeft > 0) {
-          setTimeout(() => this.runNanjuGuardContinuation(sessionId, message, retriesLeft - 1, onGiveUp), 10_000)
+          setTimeout(() => this.runNanjuGuardContinuation(sessionId, message, retriesLeft - 1, onGiveUp, epoch), 10_000)
         } else {
           console.warn(`[南大护栏] 续接放弃（会话持续忙碌）：sessionId=${sessionId}`)
           try { onGiveUp?.(sessionId, message) } catch { /* 降级回调异常不影响 */ }
@@ -1761,6 +1775,8 @@ export class AgentOrchestrator {
       }
     }
 
+    if (!input.systemInitiated) this.nanjuContinuationEpoch.set(sessionId, (this.nanjuContinuationEpoch.get(sessionId) ?? 0) + 1)
+
     // 0.5 清除上一轮中断标记
     try { updateAgentSessionMeta(sessionId, { stoppedByUser: false }) } catch { /* 会话可能已删除 */ }
 
@@ -1864,6 +1880,17 @@ export class AgentOrchestrator {
           canRetry: false,
         })
         return
+      }
+    }
+
+    // 重启仅处理当前项目的事务；异常时仍允许用户进行只读诊断，写工具由下方硬门限制。
+    if (workspaceId) {
+      const recoveryWorkspace = getAgentWorkspace(workspaceId)
+      if (recoveryWorkspace) {
+        const { recoverInterruptedProjectRestore, findRecoveryProjectForSession } = require('./nanju-project-snapshots') as typeof import('./nanju-project-snapshots')
+        const project = findRecoveryProjectForSession(recoveryWorkspace.slug, sessionId)
+        const hasOtherRun = (require('./agent-session-manager') as typeof import('./agent-session-manager')).listAgentSessions().some(session => session.id !== sessionId && session.workspaceId === workspaceId && this.isActive(session.id))
+        if (project && !hasOtherRun) recoverInterruptedProjectRestore(recoveryWorkspace.slug, project.projectId)
       }
     }
 
@@ -2307,6 +2334,11 @@ export class AgentOrchestrator {
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         const currentMode = getPermissionMode()
+        if (workspaceSlug) {
+          const { getRecoveryToolBlock } = require('./nanju-project-snapshots') as typeof import('./nanju-project-snapshots')
+          const recoveryBlock = getRecoveryToolBlock(workspaceSlug, sessionId, toolName, input)
+          if (recoveryBlock) return { behavior: 'deny', message: recoveryBlock }
+        }
 
         // ── 参数校验守卫（所有模式、所有工具，优先于权限检查） ──
         const validationFailure = validateToolInput(toolName, input)
@@ -3533,6 +3565,17 @@ export class AgentOrchestrator {
    * 再调用 adapter.abort() 中止底层 SDK 进程。
    */
   stop(sessionId: string, stopBeforeRun = false): void {
+    this.nanjuContinuationEpoch.set(sessionId, (this.nanjuContinuationEpoch.get(sessionId) ?? 0) + 1)
+    try {
+      updateAgentSessionMeta(sessionId, { stoppedByUser: true })
+      const meta = getAgentSessionMeta(sessionId)
+      const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+      if (workspace) {
+        const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+        const project = listNanjuProjects(workspace.slug).find(p => p.sessionId === sessionId)
+        if (project) (require('./nanju-advance-recovery') as typeof import('./nanju-advance-recovery')).cancelAdvanceCorrection(workspace.slug, project.projectId)
+      }
+    } catch { /* 停止不能因持久化失败中断；内存epoch仍使已排队续接失效 */ }
     for (const run of this.engineeringGwtRuns.values()) if (run.sessionId === sessionId) run.abort.abort()
     const runGeneration = this.activeSessions.get(sessionId)
     this.activeSessions.delete(sessionId)

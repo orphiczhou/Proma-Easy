@@ -17,17 +17,22 @@
  * - 捕获失败/关联失败一律 fail-closed：保留会话快照但明确「不恢复工程文件」，绝不写假 id；
  * - storageDir 取工程目录之外的兄弟目录（D 布局守卫 + 同工作区根 ⇒ 同一文件系统 ⇒ 恢复不退化为跨设备）。
  */
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 import {
   captureFileSnapshot,
+  recoverInterruptedRestore,
   restoreFileSnapshot,
   verifyFileSnapshotDir,
 } from './nanju-file-snapshot'
 import type { CaptureResult, RestoreResult } from './nanju-file-snapshot'
 import { createSnapshot, hasFileSnapshot, linkFileSnapshot, listSnapshots, rollbackToSnapshot } from './nanju-snapshot'
 import type { ProjectSnapshot } from './nanju-snapshot'
-import { getNanjuProjectDir } from './nanju-project'
+import { listNanjuProjects, getNanjuProjectDir, getNanjuProject, readProjectInfo, writeProjectInfo, updateNanjuProject, clearNanjuAdvanceAuthState } from './nanju-project'
+import type { NanjuProject, NanjuProjectInfoFile } from './nanju-project'
+import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
+import { forkAgentSession, getAgentSessionMeta } from './agent-session-manager'
+import type { ProjectRecoveryResult } from '@proma/shared'
 import { getWorkspaceFilesDir } from './config-paths'
 
 type CaptureFailureReason = Extract<CaptureResult, { ok: false }>['reason']
@@ -41,6 +46,7 @@ type RestoreFailureReason = Extract<RestoreResult, { ok: false }>['reason']
  * 且与工程同处一个工作区目录 ⇒ 同一文件系统，恢复不会被 cross-device 拒绝。
  */
 export function getProjectFileSnapshotStorageDir(workspaceSlug: string, projectId: string): string {
+  if (![workspaceSlug, projectId].every(value => typeof value === 'string' && value.length > 0 && value !== '.' && value !== '..' && !/[\\/\0]/.test(value))) throw new Error('工作区或工程标识非法')
   return join(getWorkspaceFilesDir(workspaceSlug), `project-${projectId}-file-snapshots`)
 }
 
@@ -164,6 +170,7 @@ export function restoreProjectFileSnapshot(
   projectId: string,
   fileSnapshotId: string,
 ): FileRestoreOutcome {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(fileSnapshotId)) return { ok: false, complete: false, notRestored: [], actionable: true, userMessage: '文件快照标识非法，已拒绝恢复。' }
   const storageDir = getProjectFileSnapshotStorageDir(workspaceSlug, projectId)
   const snapshotDir = join(storageDir, 'snapshots', fileSnapshotId)
   const verdict = verifyFileSnapshotDir(snapshotDir)
@@ -296,42 +303,252 @@ export function describeSnapshotStorageFootprint(workspaceSlug: string, projectI
   }
 }
 
-/** 会话快照回滚（+ 已关联时的工程文件恢复）结论 */
-export interface ProjectSnapshotRollbackResult {
-  ok: boolean
-  snapshot: ProjectSnapshot | null
-  /** 仅在快照关联了文件快照时存在 */
-  fileRestore: FileRestoreOutcome | null
+/** 跨文件、会话绑定与业务阶段的事务日志放在工程目录外，文件恢复不会覆盖它。 */
+interface ProjectRecoveryJournal {
+  version: 1
+  projectId: string
+  phase: 'prepared' | 'files-restored' | 'committed' | 'compensated' | 'partial'
+  beforeProject: NanjuProject
+  beforeInfo: NanjuProjectInfoFile
+  preRestoreSnapshotId: number
+  preFileSnapshotId: string
+  targetSnapshotId: number
   message: string
 }
 
-/**
- * 回滚到会话快照；若该快照关联了文件快照，则**同时**恢复工程文件（D 的完整语义）。
- *
- * 顺序：先切会话分支（廉价、可逆），再恢复工程文件；文件恢复失败不回滚会话分支，
- * 但在文案里明确「会话已切、文件未恢复」，避免把二者混为一谈。
- */
+const recoveryLocks = new Set<string>()
+function recoveryKey(workspaceSlug: string, projectId: string): string {
+  return `${workspaceSlug}:${projectId}`
+}
+function recoveryJournalPath(workspaceSlug: string, projectId: string): string {
+  return join(getProjectFileSnapshotStorageDir(workspaceSlug, projectId), '_project-recovery.json')
+}
+
+function validRecoveryJournal(value: unknown, workspaceSlug: string, projectId: string): value is ProjectRecoveryJournal {
+  if (!value || typeof value !== 'object') return false
+  const j = value as Partial<ProjectRecoveryJournal>
+  if (j.version !== 1 || j.projectId !== projectId || !j.phase || !['prepared', 'files-restored', 'committed', 'compensated', 'partial'].includes(j.phase)) return false
+  if (j.beforeProject?.projectId !== projectId || j.beforeProject.workspaceSlug !== workspaceSlug || j.beforeInfo?.projectId !== projectId || j.beforeInfo.workspaceSlug !== workspaceSlug) return false
+  if (!j.beforeProject.sessionId || j.beforeProject.sessionId !== j.beforeInfo.sessionId || !['mode-select', 'requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered'].includes(j.beforeProject.currentStage)) return false
+  if (!Number.isInteger(j.preRestoreSnapshotId) || !Number.isInteger(j.targetSnapshotId) || typeof j.preFileSnapshotId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(j.preFileSnapshotId)) return false
+  const pre = listSnapshots(workspaceSlug, projectId).find(snapshot => snapshot.snapshotId === j.preRestoreSnapshotId && snapshot.projectId === projectId)
+  return Boolean(pre && pre.fileSnapshotId === j.preFileSnapshotId && pre.sessionId === j.beforeProject.sessionId)
+}
+
+function resolveWithExistingParents(path: string): string {
+  let parent = resolve(path)
+  const suffix: string[] = []
+  while (!existsSync(parent) && dirname(parent) !== parent) {
+    suffix.unshift(parent.slice(dirname(parent).length + 1))
+    parent = dirname(parent)
+  }
+  return join(realpathSync(parent), ...suffix)
+}
+
+/** 所有 Agent 入口与工具门禁使用同一个锁；重启时未提交日志仍然阻止执行。 */
+export function getProjectRecoveryBlock(workspaceSlug: string, projectId: string): string | null {
+  if (recoveryLocks.has(recoveryKey(workspaceSlug, projectId))) return '工程正在恢复，请等待恢复结束后继续。'
+  const path = recoveryJournalPath(workspaceSlug, projectId)
+  if (!existsSync(path)) return null
+  const journal = readJsonFileSafe<ProjectRecoveryJournal>(path)
+  if (!validRecoveryJournal(journal, workspaceSlug, projectId)) return '恢复日志不可读；请在时间轴选择含文件与阶段信息的检查点，确认后将保留原日志并重新恢复。'
+  if (journal.phase === 'committed' || journal.phase === 'compensated') return null
+  return journal.phase === 'partial'
+    ? '工程仅部分恢复（文件或阶段信息不完整，可能缺少阶段信息）；请在时间轴选择恢复前版本。'
+    : '工程恢复尚未完整提交，请先打开工程处理恢复事务。'
+}
+
+export function getWorkspaceRecoveryBlock(workspaceSlug: string): string | null {
+  for (const project of listNanjuProjects(workspaceSlug)) {
+    const block = getProjectRecoveryBlock(workspaceSlug, project.projectId)
+    if (block) return `${project.name}：${block}`
+  }
+  return null
+}
+
+/** 沿真实会话父链定位所属项目，含委派/恢复fork；循环或断链不猜测归属。 */
+export function findRecoveryProjectForSession(workspaceSlug: string, sessionId: string): NanjuProject | undefined {
+  const projects = listNanjuProjects(workspaceSlug)
+  const visited = new Set<string>()
+  let current: string | undefined = sessionId
+  while (current && !visited.has(current) && visited.size < 64) {
+    visited.add(current)
+    const project = projects.find(p => p.sessionId === current)
+    if (project) return project
+    current = getAgentSessionMeta(current)?.parentSessionId
+  }
+  return undefined
+}
+
+const RECOVERY_READ_TOOLS = new Set(['read', 'ls', 'glob', 'grep', 'find', 'browserobserve', 'browserscreenshot', 'browserlisttabs', 'askuserquestion', 'taskcreate', 'taskupdate', 'tasklist', 'taskget'])
+/** 对话/只读诊断始终可达；显式写路径只拦受影响项目，无法约束路径的shell/MCP保守阻止。 */
+export function getRecoveryToolBlock(workspaceSlug: string, sessionId: string, toolName: string, input: Record<string, unknown>): string | null {
+  const normalizedTool = toolName.toLowerCase().replace(/^functions\./, '')
+  if (RECOVERY_READ_TOOLS.has(normalizedTool)) return null
+  const blocked = listNanjuProjects(workspaceSlug).filter(p => getProjectRecoveryBlock(workspaceSlug, p.projectId))
+  if (!blocked.length) return null
+  const owner = findRecoveryProjectForSession(workspaceSlug, sessionId)
+  const ownsBlocked = owner && blocked.some(p => p.projectId === owner.projectId)
+  if (ownsBlocked) return getProjectRecoveryBlock(workspaceSlug, owner.projectId)
+  if (['write', 'edit', 'multiedit'].includes(normalizedTool)) {
+    const target = input.file_path ?? input.path
+    if (typeof target === 'string' && target.startsWith(sep)) {
+      let path: string
+      try { path = resolveWithExistingParents(target) } catch { return '写入路径无法核验，请先完成工程恢复。' }
+      for (const project of blocked) {
+        const roots = [getNanjuProjectDir(workspaceSlug, project.projectId), getProjectFileSnapshotStorageDir(workspaceSlug, project.projectId)]
+        if (roots.some(root => { const actual = resolveWithExistingParents(root); return path === actual || path.startsWith(actual + sep) })) return getProjectRecoveryBlock(workspaceSlug, project.projectId)
+      }
+      return null
+    }
+  }
+  return '工作区存在未完成的恢复事务：可继续只读诊断或修改其它工程的明确文件路径；任意命令/委派请先通过时间轴完成恢复，避免跨工程写入。'
+}
+
+/** 中断恢复采用保守补偿：回到恢复前已索引的版本，不猜测未提交的目标状态。 */
+export function recoverInterruptedProjectRestore(workspaceSlug: string, projectId: string): { ok: boolean; message: string } {
+  if (recoveryLocks.has(recoveryKey(workspaceSlug, projectId))) return { ok: false, message: '工程正在恢复，请稍后重试。' }
+  const path = recoveryJournalPath(workspaceSlug, projectId)
+  const journal = readJsonFileSafe<ProjectRecoveryJournal>(path)
+  if (existsSync(path) && !validRecoveryJournal(journal, workspaceSlug, projectId)) {
+    return { ok: false, message: '恢复日志损坏；可只读检查工程，或在时间轴选择完整检查点重新恢复。原日志与备份不会删除。' }
+  }
+  if (journal?.phase === 'partial') return { ok: false, message: getProjectRecoveryBlock(workspaceSlug, projectId)! }
+  if (!journal || journal.phase === 'committed' || journal.phase === 'compensated') {
+    const storage = getProjectFileSnapshotStorageDir(workspaceSlug, projectId)
+    if (!existsSync(join(storage, '_restore-journal.json'))) return { ok: true, message: '无待恢复事务。' }
+    const result = recoverInterruptedRestore(getNanjuProjectDir(workspaceSlug, projectId), storage)
+    return { ok: result.ok, message: result.message }
+  }
+  try {
+    const recovered = recoverInterruptedRestore(getNanjuProjectDir(workspaceSlug, projectId), getProjectFileSnapshotStorageDir(workspaceSlug, projectId))
+    if (!recovered.ok) return { ok: false, message: recovered.message }
+    const restored = restoreProjectFileSnapshot(workspaceSlug, projectId, journal.preFileSnapshotId)
+    if (!restored.ok || !restored.complete) return { ok: false, message: `恢复中断后的补偿未完成。${restored.userMessage}` }
+    writeProjectInfo(workspaceSlug, projectId, invalidateRecoveryAuthorization(journal.beforeInfo))
+    if (!updateNanjuProject(workspaceSlug, projectId, journal.beforeProject)) throw new Error('项目索引不存在')
+    if (!rollbackToSnapshot(workspaceSlug, projectId, journal.preRestoreSnapshotId)) throw new Error('恢复前时间轴条目不存在')
+    clearNanjuAdvanceAuthState(workspaceSlug, projectId)
+    journal.phase = 'compensated'
+    journal.message = '发现中断的恢复事务，已返回恢复前版本；请重新验收后继续。'
+    writeJsonFileAtomic(path, journal)
+    return { ok: true, message: journal.message }
+  } catch (e) {
+    return { ok: false, message: `恢复中断后的补偿失败：${e instanceof Error ? e.message : String(e)}；请保留快照与备份。` }
+  }
+}
+
+function invalidateRecoveryAuthorization(info: NanjuProjectInfoFile): NanjuProjectInfoFile {
+  const result = { ...info }
+  delete result.deliveryAck
+  delete result.deliveryChallenge
+  delete result.confirmPendingStage
+  delete result.pendingAdvanceCorrection
+  delete result.codingDelegationId
+  return result
+}
+
+/** 测试可注入活跃检查；生产由 IPC 接入实际 Agent 运行表，未提供时 fail-closed。 */
+export interface ProjectRecoveryPorts {
+  isBusy: () => boolean
+}
+
+export interface ProjectSnapshotRollbackResult extends ProjectRecoveryResult {
+  snapshot: ProjectSnapshot | null
+}
+
+/** 恢复前先保存当前版本；文件、会话绑定、业务状态均提交后才报告完整成功。 */
 export async function rollbackProjectSnapshot(
   workspaceSlug: string,
   projectId: string,
   snapshotId: number,
+  ports?: ProjectRecoveryPorts,
 ): Promise<ProjectSnapshotRollbackResult> {
-  const target = listSnapshots(workspaceSlug, projectId).find((s) => s.snapshotId === snapshotId) ?? null
-  if (!target) return { ok: false, snapshot: null, fileRestore: null, message: `会话快照不存在：${snapshotId}` }
-  const rolledBack = rollbackToSnapshot(workspaceSlug, projectId, snapshotId)
-  if (!rolledBack) return { ok: false, snapshot: null, fileRestore: null, message: `会话快照回滚失败：${snapshotId}` }
-  if (!hasFileSnapshot(rolledBack)) {
-    return {
-      ok: true, snapshot: rolledBack, fileRestore: null,
-      message: `已回滚会话分支（快照 ${snapshotId}）。该快照未关联工程文件快照，工程文件保持当前值——请勿按「已恢复工程」处置。`,
-    }
+  const failed = (message: string, preRestoreSnapshotId: number | null = null): ProjectSnapshotRollbackResult => ({
+    ok: false, status: 'failed', snapshot: null, fileRestore: null, message,
+    activeSessionId: null, restoredSnapshotId: null, preRestoreSnapshotId,
+  })
+  const key = recoveryKey(workspaceSlug, projectId)
+  if (recoveryLocks.has(key)) return failed('工程正在恢复，请稍后重试。')
+  if (!ports || ports.isBusy()) return failed('工作区仍有正在运行的会话；请停止相关会话后再恢复。')
+  const target = listSnapshots(workspaceSlug, projectId).find(s => s.snapshotId === snapshotId && s.projectId === projectId)
+  if (!target) return failed(`会话快照不存在：${snapshotId}`)
+  const project = getNanjuProject(workspaceSlug, projectId)
+  const beforeInfo = readProjectInfo(workspaceSlug, projectId)
+  if (!project?.sessionId || !beforeInfo) return failed('项目或当前会话绑定缺失，无法保存恢复前版本。')
+  const original = getAgentSessionMeta(project.sessionId)
+  const targetSession = getAgentSessionMeta(target.forkedSessionId)
+  if (!original || !targetSession || !original.workspaceId || original.workspaceId !== targetSession.workspaceId) {
+    return failed('快照会话不存在或所属工作区不一致，未修改工程。')
   }
-  const fileRestore = restoreProjectFileSnapshot(workspaceSlug, projectId, rolledBack.fileSnapshotId as string)
-  return {
-    ok: fileRestore.ok,
-    snapshot: rolledBack,
-    fileRestore,
-    message: `已回滚会话分支（快照 ${snapshotId}）。${fileRestore.userMessage}`,
+  // partial 可通过选择恢复前版本来修复；其它未提交事务必须先补偿。
+  const journalPath = recoveryJournalPath(workspaceSlug, projectId)
+  const previousJournal = readJsonFileSafe<ProjectRecoveryJournal>(journalPath)
+  const damagedJournal = existsSync(journalPath) && !validRecoveryJournal(previousJournal, workspaceSlug, projectId)
+  if (damagedJournal && (!target.recoveryState || !target.fileSnapshotId || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(target.fileSnapshotId) || !verifyFileSnapshotDir(join(getProjectFileSnapshotStorageDir(workspaceSlug, projectId), 'snapshots', target.fileSnapshotId)).ok)) return failed('恢复日志损坏；请选择含完整文件与阶段记录的检查点。原日志与备份均已保留。')
+  if (!damagedJournal && previousJournal?.phase !== 'partial') {
+    const recovered = recoverInterruptedProjectRestore(workspaceSlug, projectId)
+    if (!recovered.ok) return failed(recovered.message)
+  }
+  recoveryLocks.add(key)
+  let preId: number | null = null
+  let journal: ProjectRecoveryJournal | null = null
+  try {
+    const pre = await createProjectCheckpoint(workspaceSlug, projectId, project.sessionId, `恢复快照 ${snapshotId} 前的版本`, 'pre-restore')
+    preId = pre.snapshot.snapshotId
+    if (!pre.fileSnapshotId || !pre.fileCapture.ok) return failed(`未能保存恢复前版本，已取消恢复。${pre.message}`, preId)
+    // 不把不可完整恢复的前置快照作为事务补偿承诺。
+    const preVerdict = verifyFileSnapshotDir(join(getProjectFileSnapshotStorageDir(workspaceSlug, projectId), 'snapshots', pre.fileSnapshotId))
+    if (!preVerdict.ok || preVerdict.manifest.unrecoverable.length > 0) return failed('恢复前版本含无法快照的条目；已取消恢复，请先处理符号链接/特殊文件。', preId)
+    // 从冻结的历史上下文再创建分支，避免用户后续消息改写原快照会话。
+    const resumed = await forkAgentSession({ sessionId: target.forkedSessionId })
+    if (ports.isBusy()) return failed('保存恢复点期间有会话启动，已取消恢复，请停止会话后重试。', preId)
+    journal = {
+      version: 1, projectId, phase: 'prepared', beforeProject: project, beforeInfo,
+      preRestoreSnapshotId: preId, preFileSnapshotId: pre.fileSnapshotId,
+      targetSnapshotId: snapshotId, message: '工程恢复未提交，执行暂时停止。',
+    }
+    if (damagedJournal) {
+      // 用户已在时间轴确认恢复；先原样归档损坏日志，随后才用新事务替换。
+      copyFileSync(journalPath, `${journalPath}.corrupt-${Date.now()}`)
+    }
+    writeJsonFileAtomic(journalPath, journal)
+    const fileRestore = hasFileSnapshot(target)
+      ? restoreProjectFileSnapshot(workspaceSlug, projectId, target.fileSnapshotId as string)
+      : null
+    if (fileRestore && !fileRestore.ok) throw new Error(fileRestore.userMessage)
+    journal.phase = 'files-restored'
+    writeJsonFileAtomic(recoveryJournalPath(workspaceSlug, projectId), journal)
+    const state = target.recoveryState
+    const validStages = new Set<NanjuProject['currentStage']>(['mode-select', 'requirements', 'prototype', 'architecture', 'planning', 'coding', 'testing', 'delivered'])
+    const validRecoveryState = Boolean(state && validStages.has(state.currentStage) && state.status)
+    const safeState = validRecoveryState ? state! : null
+    const restoredStage: NanjuProject['currentStage'] = safeState?.currentStage === 'delivered' ? 'testing' : safeState?.currentStage ?? project.currentStage
+    const info = invalidateRecoveryAuthorization(beforeInfo)
+    info.sessionId = resumed.id
+    info.subStage = safeState?.currentStage === 'delivered' ? 'TEST' : safeState?.subStage
+    if (safeState?.projectCategory) info.projectCategory = safeState.projectCategory
+    writeProjectInfo(workspaceSlug, projectId, info)
+    if (!updateNanjuProject(workspaceSlug, projectId, { sessionId: resumed.id, currentStage: restoredStage, status: 'active' })) throw new Error('项目索引更新失败')
+    const snapshot = rollbackToSnapshot(workspaceSlug, projectId, snapshotId)
+    if (!snapshot) throw new Error('快照时间轴更新失败')
+    clearNanjuAdvanceAuthState(workspaceSlug, projectId)
+    const complete = Boolean(fileRestore?.ok && fileRestore.complete && validRecoveryState)
+    const message = complete
+      ? `已恢复会话、工程文件与阶段；恢复前版本已保存为快照 ${preId}。请重新验收后交付。${fileRestore?.userMessage}`
+      : `部分恢复：${fileRestore ? fileRestore.userMessage : '仅恢复会话上下文，旧快照未关联工程文件快照，工程文件保持当前值。'}${validRecoveryState ? '' : '旧快照缺少合法阶段信息，未恢复阶段。'}请先选择恢复前快照 ${preId} 返回完整版本，再补建完整检查点。`
+    journal.phase = complete ? 'committed' : 'partial'
+    journal.message = message
+    writeJsonFileAtomic(recoveryJournalPath(workspaceSlug, projectId), journal)
+    return { ok: complete, status: complete ? 'restored' : 'partial', snapshot, fileRestore, message,
+      activeSessionId: resumed.id, restoredSnapshotId: snapshotId, preRestoreSnapshotId: preId }
+  } catch (e) {
+    // 释放内存锁后走与重启相同的补偿路径；失败日志保留并继续阻止 Agent 写入。
+    recoveryLocks.delete(key)
+    const compensation = journal ? recoverInterruptedProjectRestore(workspaceSlug, projectId) : null
+    return failed(`恢复失败：${e instanceof Error ? e.message : String(e)}。${compensation?.message ?? '原工程未恢复；已创建的检查点予以保留。'}`, preId)
+  } finally {
+    recoveryLocks.delete(key)
   }
 }
 
@@ -385,7 +602,7 @@ export function resolveRepairRollbackSnapshot(
   workspaceSlug: string,
   projectId: string,
 ): { snapshotId: string; label: string } | null {
-  const linked = listSnapshots(workspaceSlug, projectId).filter((snapshot) => hasFileSnapshot(snapshot))
+  const linked = listSnapshots(workspaceSlug, projectId).filter((snapshot) => hasFileSnapshot(snapshot) && snapshot.triggerType !== 'pre-restore')
   if (linked.length === 0) return null
   const preferred = [...linked].reverse().find((snapshot) => snapshot.triggerType === 'pre-modify') ?? linked[linked.length - 1]
   if (!preferred || !preferred.fileSnapshotId) return null

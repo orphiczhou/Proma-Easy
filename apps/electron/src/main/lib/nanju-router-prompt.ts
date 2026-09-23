@@ -888,20 +888,27 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     ? { channel: acDefenderRuntime.channelId, model: acDefenderRuntime.modelId }
     : autofix.defender
 
-  // 工程品类（W3，v0.17.66，仅 coding 消费）：优先读推进钩子写入的判定结果；
+  // 工程品类（W3，v0.17.66，coding 消费）：优先读推进钩子写入的判定结果；
   // 读不到（老项目/钩子未触发）时现场从文档提取降级判定，并顺手补写元信息与模板落位
   // （幂等：钩子已处理时此处零开销）
+  // Task 10 接线（2026-09-23）：architecture 阶段的 env 探测也需要品类（品类专用组件清单），
+  // 但**只读**——不写元信息、不落模板（落位仍归 coding 阶段/推进钩子）。
   let categoryInfo: { category: ProjectCategory; source: ProjectCategorySource } | null = null
-  if (stage === 'coding') {
+  if (stage === 'coding' || stage === 'architecture') {
     const { getProjectCategory, setProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
     categoryInfo = getProjectCategory(workspaceSlug, project.projectId)
     if (!categoryInfo) {
       const resolved = resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
-      categoryInfo = resolved ?? { category: 'web-fullstack', source: 'default' }
-      try {
-        setProjectCategory(workspaceSlug, project.projectId, categoryInfo.category, categoryInfo.source)
-        materializeEngineeringTemplate(workspaceSlug, project.projectId, categoryInfo.category)
-      } catch { /* 补写失败不阻断：注入节已有降级自检兑底 */ }
+      if (stage === 'coding') {
+        categoryInfo = resolved ?? { category: 'web-fullstack', source: 'default' }
+        try {
+          setProjectCategory(workspaceSlug, project.projectId, categoryInfo.category, categoryInfo.source)
+          materializeEngineeringTemplate(workspaceSlug, project.projectId, categoryInfo.category)
+        } catch { /* 补写失败不阻断：注入节已有降级自检兑底 */ }
+      } else {
+        // architecture：仅用于品类专用环境探测；文档无标记时返回 null → 探测降级 universal
+        categoryInfo = resolved ?? null
+      }
     }
   }
 
@@ -930,7 +937,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   if (stage === 'architecture') {
     try {
       const { runEnvProbe } = require('./nanju-env-probe') as typeof import('./nanju-env-probe')
-      envProbeLines = runEnvProbe(workspaceSlug, project.projectId).lines
+      envProbeLines = runEnvProbe(workspaceSlug, project.projectId, { category: categoryInfo?.category as import('./nanju-env-probe').ProjectCategoryForProbe ?? 'universal' }).lines
     } catch { /* 探测异常不阻断 prompt 构建（无注入即无段，诚实退化） */ }
   }
 
@@ -1000,6 +1007,13 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   const prompt = [
     '## 🔒 南大向导 — 当前阶段：' + phase.title + '（' + stage + '）',
     ...confirmHintLines,
+    ...(() => {
+      try {
+        const { buildPendingAdvanceRecoveryPrompt } = require('./nanju-advance-recovery') as typeof import('./nanju-advance-recovery')
+        const recovery = buildPendingAdvanceRecoveryPrompt(workspaceSlug, project.projectId)
+        return recovery ? [recovery] : []
+      } catch { return ['待纠正拒因读取失败；请核对本阶段产出后再请求推进，不能跳过门禁。'] }
+    })(),
     '项目名：' + project.name + '（' + (project.mode === 'quick' ? '快消型' : '长期迭代型') + '）',
     '项目目录：' + projectDir,
     '',

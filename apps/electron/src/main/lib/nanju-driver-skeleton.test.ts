@@ -36,6 +36,7 @@ interface ResultPayload {
   testId?: string | null
   target?: string | null
   checks: CheckShape[]
+  blocked?: { kind: string; missing: string[]; scenarioExecuted: boolean }
   error?: { type: string; exit_code: number; message: string; traceback_summary: string[] }
 }
 
@@ -194,26 +195,31 @@ describe.skipIf(!pythonPath)('Given 宿主已装Python3的L2-5驱动骨架（无
     expect(payload.error!.exit_code).toBe(7)
   })
 
-  test('Then 环境前置自检：DISPLAY缺失（测试态注入）exit 2且checks含环境自检条目，blocked而非error（ATK-F-008）', async () => {
+  test('Then 环境前置自检：DISPLAY缺失（测试态注入）exit 2 且输出结构化 blocked 标记，blocked而非error（ATK-F-008）', async () => {
     const cwd = scaffold()
     const out = await runProcess(py, ['driver-skeleton.py'], {
       cwd, env: childEnv({ NANJU_DRIVER_SKELETON_TEST_DISPLAY_MISSING: '1' }), stdin: REQ_ACCEPT,
     })
     const payload: ResultPayload = JSON.parse(out.stdout)
     expect(out.exitCode).toBe(2) // 退出码表：2=自检拦截（环境）
-    expect(payload.checks[0]!.label).toBe('环境前置自检')
-    expect(payload.checks[0]!.actual).toContain('DISPLAY')
+    expect(payload.blocked?.kind).toBe('environment')
+    expect(payload.blocked?.missing).toContain('DISPLAY')
+    expect(payload.blocked?.scenarioExecuted).toBe(false)
+    expect(payload.checks).toEqual([]) // 阻塞不携带产品检查
     expect(payload.error).toBeUndefined() // blocked 而非 error：环境问题与产品缺陷区分
   })
 
-  test('Then 环境前置自检：密钥类变量缺失（MY_API_KEY样例）同样exit 2拦截', async () => {
+  test('Then 环境前置自检：密钥类变量缺失（MY_API_KEY样例）同样exit 2且输出结构化 blocked 标记', async () => {
     const cwd = scaffold()
     const out = await runProcess(py, ['driver-skeleton.py'], {
       cwd, env: childEnv({ MY_API_KEY: '' }), stdin: REQ_ACCEPT,
     })
     const payload: ResultPayload = JSON.parse(out.stdout)
     expect(out.exitCode).toBe(2)
-    expect(payload.checks[0]!.actual).toContain('MY_API_KEY')
+    expect(payload.blocked?.kind).toBe('environment')
+    expect(payload.blocked?.missing).toContain('MY_API_KEY')
+    expect(payload.blocked?.scenarioExecuted).toBe(false)
+    expect(payload.checks).toEqual([])
   })
 
   // ===== 审计 Y-4 补齐（2026-09-18）：sys.exit(0) 表外路径与 schema 违规两分支零测试 =====
@@ -248,6 +254,46 @@ describe.skipIf(!pythonPath)('Given 宿主已装Python3的L2-5驱动骨架（无
     expect(payload.checks.length).toBe(1) // 非法条目被替换为结构拦截条目，不进协议输出
     expect(payload.checks[0]!.label).toBe('输出schema自检') // 拦截原因可判读
     expect(payload.checks[0]!.actual).toContain('evidence')
+  })
+
+  // ===== Task 11（2026-09-20）：驱动行为合规负例——恒真/空断言/关键变异体 =====
+  test('Then 恒真断言（actual 传字符串非 probe）被工厂拦截为 DriverSelfCheckError（exit 1），不能声称合规', async () => {
+    const cwd = scaffold()
+    writeFileSync(join(cwd, 'sample-taut.py'), pyWrapper(
+      "sk.run_probes = lambda req: [sk.make_check(req['covers'][0], '恒真断言', 'x', 'x', ['样例驱动构造'])]",
+    ))
+    const out = await runProcess(py, ['sample-taut.py'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    const payload: ResultPayload = JSON.parse(out.stdout)
+    expect(out.exitCode).toBe(1)
+    expect(payload.checks).toEqual([])
+    expect(payload.error?.type).toBe('DriverSelfCheckError')
+    expect(payload.error?.message).toContain('恒真')
+  })
+  test('Then 空断言（run_probes 返回空列表）被③ schema 自检拦截为 exit 2，不能声称合规', async () => {
+    const cwd = scaffold()
+    writeFileSync(join(cwd, 'sample-empty.py'), pyWrapper(
+      'sk.run_probes = lambda req: []',
+    ))
+    const out = await runProcess(py, ['sample-empty.py'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    const payload: ResultPayload = JSON.parse(out.stdout)
+    expect(out.exitCode).toBe(2)
+    expect(payload.checks[0]?.label).toBe('输出schema自检')
+    expect(payload.checks[0]?.actual).toContain('非空')
+  })
+  test('Then 关键断言变异体：变异 target 内容后 probe 驱动由 pass 转 fail（断言有鉴别力，非恒真）', async () => {
+    const cwd = scaffold()
+    writeFileSync(join(cwd, 'target.txt'), 'hello')
+    writeFileSync(join(cwd, 'sample-mutant.py'), pyWrapper([
+      'from pathlib import Path',
+      "sk.run_probes = lambda req: [sk.make_check(req['covers'][0], '读取target', 'hello', lambda: Path('target.txt').read_text().strip(), ['读取被测文件 target.txt'])]",
+    ].join('\n')))
+    const out1 = await runProcess(py, ['sample-mutant.py'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    expect(out1.exitCode).toBe(0) // 变异前 pass
+    writeFileSync(join(cwd, 'target.txt'), 'HELLO') // 变异 target
+    const out2 = await runProcess(py, ['sample-mutant.py'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    const payload2: ResultPayload = JSON.parse(out2.stdout)
+    expect(out2.exitCode).toBe(1) // 变异后 fail：断言真实读取 target，非恒真
+    expect(payload2.checks[0]?.actual).toBe('HELLO')
   })
 })
 
@@ -322,15 +368,55 @@ describe('Given L2-5驱动骨架Node运行时（系统Node真实spawn），When 
     expect(payload.error!.traceback_summary.length).toBeGreaterThan(0)
   })
 
-  test('Then 环境前置自检：DISPLAY缺失（测试态注入）exit 2且checks含环境自检条目，blocked而非error（ATK-F-008）', async () => {
+  test('Then 环境前置自检：DISPLAY缺失（测试态注入）exit 2 且输出结构化 blocked 标记，blocked而非error（ATK-F-008）', async () => {
     const cwd = scaffold()
     const out = await runProcess(nodePath, ['driver-skeleton.cjs'], {
       cwd, env: childEnv({ NANJU_DRIVER_SKELETON_TEST_DISPLAY_MISSING: '1' }), stdin: REQ_ACCEPT,
     })
     const payload: ResultPayload = JSON.parse(out.stdout)
     expect(out.exitCode).toBe(2)
-    expect(payload.checks[0]!.label).toBe('环境前置自检')
-    expect(payload.checks[0]!.actual).toContain('DISPLAY')
+    expect(payload.blocked?.kind).toBe('environment')
+    expect(payload.blocked?.missing).toContain('DISPLAY')
+    expect(payload.blocked?.scenarioExecuted).toBe(false)
+    expect(payload.checks).toEqual([])
     expect(payload.error).toBeUndefined()
+  })
+
+  // ===== Task 11（2026-09-20）：驱动行为合规负例——恒真/空断言/关键变异体（Node 侧）=====
+  test('Then 恒真断言（actual 传字符串非 probe）被工厂拦截为 DriverSelfCheckError（exit 1）', async () => {
+    const cwd = scaffold()
+    writeFileSync(join(cwd, 'sample-taut.cjs'), nodeWrapper(
+      "sk.runProbes = (req) => [sk.makeCheck(req.covers[0], '恒真断言', 'x', 'x', ['样例驱动构造'])];",
+    ))
+    const out = await runProcess(nodePath, ['sample-taut.cjs'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    const payload: ResultPayload = JSON.parse(out.stdout)
+    expect(out.exitCode).toBe(1)
+    expect(payload.checks).toEqual([])
+    expect(payload.error?.type).toBe('DriverSelfCheckError')
+    expect(payload.error?.message).toContain('恒真')
+  })
+  test('Then 空断言（runProbes 返回空数组）被③ schema 自检拦截为 exit 2', async () => {
+    const cwd = scaffold()
+    writeFileSync(join(cwd, 'sample-empty.cjs'), nodeWrapper(
+      'sk.runProbes = (req) => [];',
+    ))
+    const out = await runProcess(nodePath, ['sample-empty.cjs'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    const payload: ResultPayload = JSON.parse(out.stdout)
+    expect(out.exitCode).toBe(2)
+    expect(payload.checks[0]?.label).toBe('输出schema自检')
+  })
+  test('Then 关键断言变异体：变异 target 后 probe 驱动由 pass 转 fail（断言有鉴别力）', async () => {
+    const cwd = scaffold()
+    writeFileSync(join(cwd, 'target.txt'), 'hello')
+    writeFileSync(join(cwd, 'sample-mutant.cjs'), nodeWrapper(
+      "sk.runProbes = (req) => { const fs = require('node:fs'); return [sk.makeCheck(req.covers[0], '读取target', 'hello', () => fs.readFileSync('target.txt','utf-8').trim(), ['读取被测文件 target.txt'])]; };",
+    ))
+    const out1 = await runProcess(nodePath, ['sample-mutant.cjs'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    expect(out1.exitCode).toBe(0)
+    writeFileSync(join(cwd, 'target.txt'), 'HELLO')
+    const out2 = await runProcess(nodePath, ['sample-mutant.cjs'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    const payload2: ResultPayload = JSON.parse(out2.stdout)
+    expect(out2.exitCode).toBe(1)
+    expect(payload2.checks[0]?.actual).toBe('HELLO')
   })
 })

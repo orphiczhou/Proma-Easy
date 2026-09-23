@@ -2,6 +2,13 @@
 
 Proma 是一个本地优先的 Electron AI 桌面 Agent。仓库是 Bun monorepo；主应用在 `apps/electron`，共享包在 `packages/*`。
 
+<!-- proma:project-knowledge:start -->
+## 项目知识入口
+
+- 开工先读 [Agent.md](Agent.md)，按其索引读取项目状态、决策记忆、当前计划和证据；本文件保留通用工程规则，不重复维护项目进度。
+- 用户于 2026-09-20 明确要求项目资料在本仓库持久化：报告及证据放 `docs/reports/`，计划放 `docs/plans/`，项目记忆放 `docs/project-memory/` 并索引到 `Agent.md`。不要把会话目录或 Proma 托管工作区目录作为这些交付物的权威位置。
+<!-- proma:project-knowledge:end -->
+
 ## 必须遵守
 
 - 使用 **Bun**，不使用 npm/pnpm：`bun run dev`、`bun run typecheck`、`bun test`。

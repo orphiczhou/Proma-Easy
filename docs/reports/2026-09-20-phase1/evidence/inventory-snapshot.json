@@ -1,0 +1,234 @@
+{
+  "capturedAt": "2026-09-20T12:54:17.025798+08:00",
+  "repo": "/home/orphic/proma-patches/p1-quick-engineering",
+  "head": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+  "gitStatus": "",
+  "project": "/home/orphic/.proma-dev/agent-workspaces/workspace-1786847832507/workspace-files/project-真流程e2e-剪贴板历史",
+  "stage": "CODE",
+  "pending": {
+    "kind": "gate-deny",
+    "target": "testing",
+    "expected": "testing",
+    "at": "2026-09-19T22:02:55.863Z",
+    "count": 1
+  },
+  "testFiles": [],
+  "telemetryCounts": {
+    "project.created": 1,
+    "dialog.submitted": 7,
+    "delegate.guard.stage-deny": 19,
+    "delegate.guard.ac-override": 4,
+    "router.gate.unbound-write-deny": 27,
+    "confirm.auto-confirm": 3,
+    "prd.confirmed": 1,
+    "phase.elapsed": 3,
+    "prototype.confirmed": 1,
+    "spike.verdict": 6,
+    "advance.auto-gate": 6,
+    "env.check.executed": 1,
+    "env.setup.verified": 1,
+    "advance.reject-escalate": 6,
+    "router.gate.ask-deny": 1,
+    "architecture.confirmed": 1,
+    "arch.executed": 1,
+    "circuit_break": 1
+  },
+  "eventCount": 90,
+  "latestEventAt": "2026-09-20T01:11:38.931Z",
+  "gateEvents": [
+    {
+      "eventId": "a9d458dc-d7ab-48e3-8678-a44133b71956",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.auto-gate",
+      "timestamp": "2026-09-19T16:40:35.823Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "from_stage": "architecture",
+        "target": "coding",
+        "mode": "quick",
+        "auto_block_reason": "verify-failed"
+      }
+    },
+    {
+      "eventId": "e06a8e89-dc1f-4aca-9621-db632b0995dd",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.reject-escalate",
+      "timestamp": "2026-09-19T16:40:45.827Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "kind": "continuation-giveup",
+        "reject_kind": "gate-deny",
+        "count": 1,
+        "target": "coding",
+        "expected": "coding"
+      }
+    },
+    {
+      "eventId": "7c30a4a2-b7ad-4a1b-ae1d-0080d07f0be5",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.auto-gate",
+      "timestamp": "2026-09-19T18:02:12.233Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "from_stage": "architecture",
+        "target": "coding",
+        "mode": "quick",
+        "auto_block_reason": "verify-failed"
+      }
+    },
+    {
+      "eventId": "0dbb1c40-79c8-4eea-bc67-60028a0eaf18",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.reject-escalate",
+      "timestamp": "2026-09-19T18:02:22.236Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "kind": "continuation-giveup",
+        "reject_kind": "gate-deny",
+        "count": 2,
+        "target": "coding",
+        "expected": "coding"
+      }
+    },
+    {
+      "eventId": "b40b026b-11b8-468b-8de4-ec3b79289d23",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.auto-gate",
+      "timestamp": "2026-09-19T18:38:39.601Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "from_stage": "architecture",
+        "target": "coding",
+        "mode": "quick",
+        "auto_block_reason": "verify-failed"
+      }
+    },
+    {
+      "eventId": "2f05524c-206a-48c5-9eef-f6c26e92a4a6",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.reject-escalate",
+      "timestamp": "2026-09-19T18:38:39.601Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "kind": "loop-limit",
+        "reject_kind": "gate-deny",
+        "count": 3,
+        "target": "coding",
+        "expected": "coding"
+      }
+    },
+    {
+      "eventId": "9e2e046c-283e-411e-8cfc-794b94507446",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.auto-gate",
+      "timestamp": "2026-09-19T19:21:57.275Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "from_stage": "architecture",
+        "target": "coding",
+        "mode": "quick",
+        "auto_block_reason": "verify-failed"
+      }
+    },
+    {
+      "eventId": "26c4485b-f4cc-427e-9d39-9cd8eb9ebf14",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.reject-escalate",
+      "timestamp": "2026-09-19T19:21:57.277Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "kind": "loop-limit",
+        "reject_kind": "gate-deny",
+        "count": 4,
+        "target": "coding",
+        "expected": "coding"
+      }
+    },
+    {
+      "eventId": "9cdec6ea-cb1a-420d-9474-c4e98a880db0",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.auto-gate",
+      "timestamp": "2026-09-19T20:07:37.626Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "from_stage": "architecture",
+        "target": "coding",
+        "mode": "quick",
+        "auto_block_reason": "verify-failed"
+      }
+    },
+    {
+      "eventId": "6da26517-6c41-49f6-b09a-5c538865a5bc",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.reject-escalate",
+      "timestamp": "2026-09-19T20:07:37.626Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "kind": "loop-limit",
+        "reject_kind": "gate-deny",
+        "count": 5,
+        "target": "coding",
+        "expected": "coding"
+      }
+    },
+    {
+      "eventId": "6beabcbd-e03b-4360-bb35-faf9c4b48264",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.auto-gate",
+      "timestamp": "2026-09-19T22:02:45.859Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "from_stage": "coding",
+        "target": "testing",
+        "mode": "quick",
+        "auto_block_reason": "verify-failed"
+      }
+    },
+    {
+      "eventId": "96f36c94-0290-43c5-97d7-f70118e7d126",
+      "projectId": "真流程e2e-剪贴板历史",
+      "eventType": "advance.reject-escalate",
+      "timestamp": "2026-09-19T22:02:55.863Z",
+      "payload": {
+        "project_id": "真流程e2e-剪贴板历史",
+        "kind": "continuation-giveup",
+        "reject_kind": "gate-deny",
+        "count": 1,
+        "target": "testing",
+        "expected": "testing"
+      }
+    }
+  ],
+  "templates": {
+    "sourceDesktop": {
+      "path": "/home/orphic/proma-patches/p1-quick-engineering/apps/electron/resources/nanju-engineering-templates/desktop-app.md",
+      "sha256": "39e278c8023d018fad7d23883c870aa6fb330d13048dc8cd7e34b77f2b534c6e",
+      "header": [
+        "# 桌面应用 · 工程模板 v2",
+        "",
+        "> 版本：v2.4 | 代号：`desktop-app` | 适用模式：快消型 & 长期迭代型",
+        "> 证据等级图例：**[实证]**=本机真实跑通并留证据（来源：2026-09-17 夜间语音输入法实测，下称\"昨晚实测\"）；**[文证]**=有外部来源；**[推断]**=待验证（挂接建议 Spike）。"
+      ]
+    },
+    "deployedDesktop": {
+      "path": "/home/orphic/proma-easy/dev/app/resources/nanju-engineering-templates/desktop-app.md",
+      "sha256": "9ac775447ef50688613e2a59d53246eaa759a300f7e44279a14808b3066d84b2",
+      "header": [
+        "# 桌面应用 · 工程模板",
+        "",
+        "> 版本：v1.0 | 代号：`desktop-app` | 适用模式：快消型 & 长期迭代型",
+        ""
+      ]
+    },
+    "materializedDesktop": {
+      "path": "/home/orphic/.proma-dev/agent-workspaces/workspace-1786847832507/workspace-files/project-真流程e2e-剪贴板历史/00_ENGINEERING_TEMPLATE/template.md",
+      "sha256": "9ac775447ef50688613e2a59d53246eaa759a300f7e44279a14808b3066d84b2",
+      "header": [
+        "# 桌面应用 · 工程模板",
+        "",
+        "> 版本：v1.0 | 代号：`desktop-app` | 适用模式：快消型 & 长期迭代型",
+        ""
+      ]
+    }
+  }
+}

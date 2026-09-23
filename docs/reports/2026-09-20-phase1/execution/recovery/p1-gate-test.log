@@ -1,0 +1,130 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-router-gate.test.ts:
+[配置] 配置目录: ~/.proma/（正式版本）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (quick): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-flash(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (iterative): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] attacker-author-family (iterative): planning 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-flash(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 正常相对引用：资源存在 → 通过（null） [3.41ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 缺失资源拦截：引用 style.css 未落盘 → 报资源不存在 [2.12ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 带 query：src="app.js?v=2" → 剥 query 后校验，通过 [1.37ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 带 hash+query：src="app.js?v=2#frag" → 先剥 hash 再剥 query，通过 [1.00ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 百分号非法编码不抛：src="%zz.js" 降级原始串后按缺失拦截（不 throw） [1.09ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 根绝对路径跳过：src="/favicon.ico" 不存在也不拦截（加载失败由预览暴露） [0.59ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 协议相对排除：src="//cdn.example.com/x.js" 不做本地校验 [0.56ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > data: URI 排除：内联 base64 图片不触发本地文件校验 [0.76ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > mailto: 排除（通用 scheme）：href="mailto:a@b.c" 不误拦截（修复前旧正则会拦） [0.99ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 单引号属性识别：缺失的单引号引用同样被拦截 [0.62ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > ../ 越界拦截：引用越出 08_APP 目录即使目标文件存在也拦截 [0.60ms]
+(pass) verifyPhaseOutput 分层边界（阶段与体积，AC F-002 存量回归） > 非 coding 阶段不做引用校验：prototype.html 引用缺失资源仍通过 [0.60ms]
+(pass) verifyPhaseOutput 分层边界（阶段与体积，AC F-002 存量回归） > 文件<100B 存量回归：产出过小仍被体积检查拦截 [0.53ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 合规汇总入口（Feature: + Scenario: 结构）通过；成对 steps.json 存在（v0.17.63 AC I-001） [1.13ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 全目录无 Scenario: 拦截（v0.17.64 目录兑底：index 仅 Feature + 有 steps.json 但无任何含场景的 .feature） [0.73ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 目录兑底通过（实证③「总览+分文件」结构：index.feature 纯索引无 Scenario + us-01.feature 含 Feature+Scenario + 成对 steps.json） [0.97ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 目录兑底拦截变体：分文件存在但全部无 Scenario:（仅有 steps.json）→ 拦截 [0.74ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > steps.json 存在性门禁（AC I-001）：只有汇总入口无任何 *.steps.json → 拦截 [0.79ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > steps.json 占位拦截（v0.17.65 AC I-1）：空 JSON / 缺 feature 或 scenario 的占位文件不算，需可解析且字段非空 [2.65ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 汇总入口缺失拦截：index.feature 不存在 [0.48ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady=false → 拦截（消息含缺失组件清单） [2.17ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady 缺失（存量豁免，R8 禁裸 !==true）→ 放行 [2.41ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady=true + 清单合法 → 放行 [2.36ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady=true + 清单 typo 组件 → 拦截（R2 第 4 层兜底） [2.17ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > web-default 品类（无标记/无写入）→ 免环境门禁（envReady=false 也不拦） [2.43ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 品类标记非法值（R2 品类幻觉）→ 拦截（合法值六枚举提示） [0.90ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 合法品类标记 + quick 模式 → 品类幻觉检查不误拦（desktop-app 在六枚举内） [1.45ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > iterative 六阶段合法推进全放行（route.next 同源） [0.45ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > iterative 跳级拒绝（expected 给出唯一合法目标） [0.15ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > iterative 回退拒绝（含原地自推——推进必须有位移） [0.12ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > testing 特判豁免：GWT 重入（testing→testing）与交付（testing→delivered）放行 [0.24ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > testing 非豁免目标仍拒绝（回炉 coding 走 GWT fail 路径，不是标记推进） [0.05ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > quick 链（无 planning）合法推进全放行 [0.06ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > quick 跳级/回退拒绝（quick 链 architecture.next=coding，无 planning 边） [0.07ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > 防御性放行：异常 mode / route 缺失节点维持现状（工单 §1 不新增拦截） [0.16ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > 垃圾标记目标拒绝（拼写错误不放行，expected 引导正确标记） [0.07ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > 终态 delivered：无合法下一阶段，任何目标拒绝（expected=null） [0.08ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Write 裸相对 01_PRD/x.md → deny + telemetry 留痕 [3.16ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Write delivered 项目 08_APP/index.html → 放行（指挥官裁决豁免） [0.70ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Write active 项目 08_APP/x.html → deny（非 delivered 不豁免） [0.65ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Read 01_PRD/prd.md → 放行（读类不拦，零 telemetry） [0.46ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 非 nanju 工作区（无 _nanju-projects.json）未绑定会话 Write 任意 → 零行为变化 [0.36ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > Bash 命令含裸阶段目录写操作（echo x > 01_PRD/y）→ deny + telemetry [0.94ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > Bash 命令提及 delivered 项目 08_APP 尾随路径 → 放行 [0.70ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > Bash 命令含 active 项目绝对路径（读命令也拦，保守口径）→ deny [0.49ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > project-<id> 提及带 id 边界检查：project-act2 不误配 project-act [0.34ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > L2 委派子会话（sourceDelegationId）写项目目录 → 放行（南大管线保护） [0.36ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 未绑定会话写工作区根散文件（项目外）→ 放行（零变化范围外） [0.31ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 未绑定会话写项目根散文件（project-act/readme.md）→ deny（工单：项目根散文件一律 deny） [0.37ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > Edit 工具同样拦截（写类工具集）；显式 project-<id>/ 前缀相对路径归因 [0.44ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 裸相对 08_APP 前缀：工作区存在未交付项目 → 保守 deny（无法归因） [0.38ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 绑定会话回归：项目自身会话不受未绑定写保护影响（走既有阶段门禁） [1.68ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针①：Write ./project-act/01_PRD/x.md（前导 ./ 前缀绕过归因）→ deny + 归因到项目 [0.65ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针②：delivered 豁免穿越 project-dlv/08_APP/../01_PRD/evil.html → deny（消解 .. 后不再豁免） [0.59ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针②-Bash：cat project-dlv/08_APP/../01_PRD/x（豁免穿越，命令形态）→ deny [0.42ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针③：Write ~/… 形态（~ 展开后归因）→ deny；~ 指向项目外 → 放行 [0.53ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 归一化回归：相对路径重复斜杠与中段 ./ 仍归因（project-act//01_PRD/./x.md）→ deny [0.46ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 检索与只读工具放行（WebSearch/WebFetch/Read/LS/Glob/Grep） [0.22ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 红测（Defender #12）：AskUserQuestion / mcp__session__send_message / Write / Edit / Bash / NotebookEdit / delegate_agent 一律 deny [0.18ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 红测（Defender #13）：workspaceSlug=undefined（未绑定工作区）时代理会话仍走白名单分支而非早退放行 [0.12ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 非代理会话现状回归：L1（session-1，requirements）AskUserQuestion 放行（非 auto 项目无路由约束） [0.87ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′）：auto on + 六确认收口 header（通用/原型交互验证/预览确认/架构与环境配置/满意交付）→ 一律 deny + 教育指向直接推进/调代理 [1.12ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′）：auto on + 设计/转述 header → deny（D7 三前缀放行面整体收窄） [1.27ms]
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > A3′ 唯一放行：精确「确认·安装缺失组件」→ 放行且不登记 activeConfirmAsk（环境安装=唯一人工点） [0.87ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′）：安装 + 其他混合 question → 整体 deny（fail-closed） [0.96ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′/§九）：auto on 交付挑战机器豁免禁用（challenge 在场 + 无前缀 → deny；交付走 A2′ main 实跑 provenance） [0.88ms]
+[南大路由] 登记活跃确认问句（expectedTarget=prototype，10min TTL）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > auto off（缺失 / enabled:false）→ 全放行 + D7 登记逻辑恢复（收口 header 登记 activeConfirmAsk） [1.19ms]
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > auto off 中间确认不登记（F2-3① 回归保持）：「确认·安装缺失组件」放行且不登记 [0.56ms]
+(pass) W22 O1/O2：minimax 修复守卫接线与 AC 覆写阶段感知（源码断言） > O1：resolveACOverride 生产调用点带第三参 guardStage（per-phase 覆盖位不失效） [0.67ms]
+(pass) W22 O1/O2：minimax 修复守卫接线与 AC 覆写阶段感知（源码断言） > O2：minimax-repair-misuse 分流消费 MINIMAX_REPAIR_GUIDANCE 专属文案 [0.33ms]
+(pass) Given 架构完成 When 推进阶段 Then 必须具备测试设计 > 历史架构缺少测试设计时明确要求补全，不静默放行 [0.71ms]
+(pass) Given 架构完成 When 推进阶段 Then 必须具备测试设计 > 两模式完整文档通过结构门，未宣称执行验收通过 [1.38ms]
+(pass) Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物 > Then 真实产物及说明存在时无需网页入口 [3.56ms]
+(pass) Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物 > Then 缺真实程序时明确报告路径，网页演示不能替代 [1.37ms]
+(pass) Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物 > Then 损坏工程契约不能静默改成网页模式 [0.90ms]
+(pass) Given 非浏览器工程的场景与实际驱动 When 确认testing产出 Then 不强迫伪造DOM steps.json [6.26ms]
+(pass) W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked） > 红测：prototype 阶段视觉验证者委派（文本命中）但未配独立端点 → deny（不静默放行） [7.65ms]
+(pass) W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked） > 内部 slot 权威：即使标题不含视觉标记，target.slot=visual-validator 也触发门禁 [1.28ms]
+(pass) W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked） > 对照：prototype 阶段普通作者委派（无视觉标记/slot）不被视觉门禁拦截 [0.92ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 机制一（title 兜底）：marker 标题 + 命中配置端点 → 放行（合法独立端点） [1.58ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 机制二（端点检测）：marker-less 标题但命中配置端点 → 同样纳入视觉门禁管辖 [1.78ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > marker 标题 + 端点错（非配置的独立端点）→ 拒 [1.12ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > marker 标题 + 端点=作者端点（同端点自证）→ 拒（不得削弱） [1.05ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 未配置 visualReviewer：端点检测不误拦普通委派（marker-less → 放行） [1.14ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 未配置 visualReviewer：阶段推进不被视觉槽位硬阻断（L1 正常委派 + 阶段序放行） [1.38ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目（archEvidenceGate=true）文档缺「## 证据升级与检索记录」节 When 推进 Then 拦截（无凭证视为未执行） [1.61ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 节内 [实证] 条目带 URL When 推进 Then 放行（形态①②凭证在场） [0.98ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 节内 [实证]/[文证] 条目无 URL When 推进 Then 拦截并指明条目 [1.07ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 实证条目引用已存在的 file:// 证据 When 推进 Then 放行（快消型本机实证无需伪造网络引用） [0.98ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 纯申报（未触发检索条件/已检索无结论）When 推进 Then 放行（形态③自我申报不做事前拦截） [0.86ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 存量项目（无 archEvidenceGate 字段）文档缺节 When 推进 Then 豁免放行（v0.17.127 前创建豁免） [0.92ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 正文含 [实证] 引用（模版坑库既有条目）但节内无条目 When 推进 Then 不误拦（只查证据记录节内条目） [0.88ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > 纯函数：### 级节头与后缀括号注释容忍；节体到下一节头截断（下一节的实证条目不计入） [0.06ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > 纯函数：节头匹配为「证据升级与检索记录」前缀形态，不误配相近词 [0.05ms]
+(pass) L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断） > 文档含 PENDING 标记 + 契约含 spikes 登记 → 门禁放行且双事件落盘（created=文档侧 / verdict=登记值） [1.56ms]
+(pass) L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断） > 同一文档重复推进不重复埋；PENDING 替换为结论后埋 verdict（resolved + pending-removed） [2.39ms]
+[南大埋点] 写入失败（不阻断主流程）: ENOTDIR: not a directory, open
+[南大埋点] 写入失败（不阻断主流程）: ENOTDIR: not a directory, open
+(pass) L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断） > 埋点写盘失败不阻断门禁（_telemetry 被同名文件占据 → 门禁仍放行） [1.02ms]
+
+ 97 pass
+ 0 fail
+ 233 expect() calls
+Ran 97 tests across 1 file. [226.00ms]

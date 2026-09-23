@@ -1,0 +1,3189 @@
+{
+  "baselineId": "B0-baseline-20260920-cfce785b",
+  "generatedAt": "2026-09-20T05:50Z (GMT+8 13:50)",
+  "git": {
+    "sha": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+    "branch": "p1-quick-engineering",
+    "appVersion": "0.17.131",
+    "workingTreeAtBaseline": [
+      " M AGENTS.md",
+      "?? Agent.md",
+      "?? docs/plans/2026-09-20-phase1-hardening-plan.md",
+      "?? docs/project-memory/",
+      "?? docs/reports/"
+    ],
+    "productCodeModified": false,
+    "note": "工作树在基线时刻仅有文档/证据改动（AGENTS.md 修改 + 新增 Agent.md/docs/plans/docs/project-memory/docs/reports），无产品代码改动；bun test 运行不修改工作树。",
+    "workingTreeAfterBaseline": {
+      "observedAtLocal": "2026-09-20 13:47 +0800",
+      "note": "基线副本于 13:37 由 git archive HEAD 固化；随后并行执行会话开始改源码工作树，B0 未参与。",
+      "changes": [
+        "M apps/electron/src/main/lib/nanju-engineering-template.ts (13:46:26, 疑 B2 Task 4)",
+        "M apps/electron/src/main/lib/nanju-gwt-runner.test.ts (13:46:17, 疑 B1 Task 1)",
+        "?? apps/electron/src/main/lib/nanju-engineering-resources.ts (13:47:03, 疑 B2 Task 4)",
+        "?? apps/electron/resources/nanju-engineering-templates/manifest.json (13:47:12, 疑 B2 Task 4)"
+      ],
+      "b0IntegrityProof": "副本内 nanju-engineering-template.ts / nanju-gwt-runner.test.ts 的 sha256 与 `git show HEAD:<file>` 一致（0477a446b7452fa0… / 9ddc0ff3150309b9…）；B0 仅写 /dev/shm/proma-p1-baseline-cfce* 与本 baseline 目录。",
+      "impact": "本基线数字对应 HEAD 快照而非当前工作树；后续对比必须重新固定 SHA。"
+    }
+  },
+  "method": {
+    "codeCopy": "/dev/shm/proma-p1-baseline-cfce",
+    "copyCreation": "git archive HEAD | tar -x -C /dev/shm/proma-p1-baseline-cfce（不含 .git；不安装/不构建）",
+    "nodeModules": "cp -a --no-dereference 复用真实 node_modules 符号链接（第三方包指向 /home/orphic/proma-source/node_modules）；node_modules/@proma/* 重建为指向副本自身 apps|packages，避免并行会话改源码污染基线",
+    "isolation": "PROMA_DEV=1（config-paths 隔离变量）→ 配置目录 ~/.proma-dev；未设置 HOME；未写入 release 配置（~/.proma）；未使用磁盘 worktree",
+    "notRun": [
+      "bun install",
+      "bun run build",
+      "bun run typecheck",
+      "任何部署/提交/推送"
+    ]
+  },
+  "environment": {
+    "os": "Linux 6.8.0-139-generic x86_64 GNU/Linux",
+    "bun": "1.3.14",
+    "node": "v22.23.2",
+    "bunPath": "/home/orphic/.bun/bin/bun",
+    "HOME": "/home/orphic",
+    "PROMA_DEV": "1",
+    "configDir": "~/.proma-dev",
+    "cwd": "/dev/shm/proma-p1-baseline-cfce",
+    "disk": {
+      "devShmAvail": "3.8G",
+      "rootAvail": "94M"
+    }
+  },
+  "runs": [
+    {
+      "runId": "full-1-default-reporter",
+      "command": "PROMA_DEV=1 bun test",
+      "reporter": "default",
+      "startedAtUtc": "2026-09-20T05:38:03Z",
+      "endedAtUtc": "2026-09-20T05:39:16Z",
+      "durationSeconds": 73,
+      "exitCode": 1,
+      "reported": {
+        "pass": 2341,
+        "fail": 119,
+        "errors": 6,
+        "testsRan": 2460,
+        "files": 163
+      },
+      "log": "full-tests.log"
+    },
+    {
+      "runId": "full-2-junit-reporter",
+      "command": "PROMA_DEV=1 bun test --reporter=junit --reporter-outfile=...",
+      "reporter": "junit(+default stdout)",
+      "startedAtUtc": "2026-09-20T05:39:58Z",
+      "endedAtUtc": "2026-09-20T05:41:11Z",
+      "durationSeconds": 73,
+      "exitCode": 1,
+      "reported": {
+        "pass": 2341,
+        "fail": 119,
+        "errors": 6,
+        "testsRan": 2460,
+        "files": 163
+      },
+      "junit": {
+        "tests": 2454,
+        "failures": 113,
+        "errors": 0,
+        "skipped": 0,
+        "testsuites": 157
+      },
+      "log": "full-tests.log / junit-full-tests.xml"
+    }
+  ],
+  "counts": {
+    "filesDiscovered": 163,
+    "filesWithTests": 157,
+    "filesWithLoadError": 6,
+    "testsExecuted": 2454,
+    "pass": 2341,
+    "fail": 113,
+    "loadErrors": 6,
+    "reporterReconciliation": "2341 + 113 = 2454（junit 口径）；2341 + 119 = 2460（default reporter 口径）。差额 6 = 6 个文件级加载错误被 default reporter 各计为 1 个失败测试，同时另计“6 errors”，故 default reporter 的 119 fail 存在 6 项与文件加载错误重复计数。此为 bun 默认 reporter 的显示语义（观察 + 算术推断，非产品行为结论）。"
+  },
+  "classificationSummary": [
+    {
+      "id": "A",
+      "label": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "failures": 106,
+      "files": 14,
+      "productDefect": false
+    },
+    {
+      "id": "B",
+      "label": "环境依赖（真实 dev 配置 override 文件参与模型配置加载）",
+      "failures": 6,
+      "files": 2,
+      "productDefect": false
+    },
+    {
+      "id": "C",
+      "label": "基线方法限制（临时副本无 .git）",
+      "failures": 1,
+      "files": 1,
+      "productDefect": false
+    },
+    {
+      "id": "D",
+      "label": "遗留失效用例（引用不存在的模块，文件级加载错误）",
+      "fileLoadErrors": 6,
+      "files": 6,
+      "testsExecuted": 0,
+      "productDefect": false
+    }
+  ],
+  "productDefectsConfirmed": 0,
+  "productDefectNote": "本次全量基线的 113 个失败用例全部可归入 A/B/C/D 四类，且每类都有单文件复跑或定向诊断证据；未发现可被单文件复现的产品代码缺陷。不能据此宣称“产品无缺陷”：B0 只覆盖可执行测试；真实流程（B3）、UI 行为、部署资源（B2）不在本基线范围。",
+  "failures": [
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:212",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "212",
+      "suite": "W17 §3-1：collectPhaseAdvanceStages 全消息扫描",
+      "test": "S1 丢弃观测：未锚定命中记 phase.advance.discarded-unanchored telemetry（锚定命中仍正常收集）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:219:39)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:322",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "322",
+      "suite": "W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现）",
+      "test": "确认文本作为 run 初始输入（活跃收口问句在场 + humanOrigin）→ confirmPending 置位 + 授权 + 埋点落库（v2.4 F2-3/F2-4：散点不再置位）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:332:39)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:409",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "409",
+      "suite": "W18 前置：delivered 消费需 runId+ack 双事实（无 ack 拦截，有 ack 推进+completed）",
+      "test": "有 ack（绑当前 runId）→ 推进 delivered + status=completed + project.finished 埋点 + ack 终态清理",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:417:39)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:510",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "510",
+      "suite": "v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）",
+      "test": "红测：纯 mark 无任何授权 → 拒绝推进 + 注入教育消息 + advance.gate-deny 埋点，状态机不动",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:522:39)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:602",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "602",
+      "suite": "v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）",
+      "test": "红测：真 UI 消息（humanOrigin:true）+ 确认词但无活跃确认问句（散点「继续」）→ 不授权（R4-02）+ 埋点观测",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:607:39)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:634",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "634",
+      "suite": "v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）",
+      "test": "ask-answer + 活跃收口问句匹配（F2-3②）→ 置位授权 + confirmPending（I1-① 主通道）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: ENOENT: no such file or directory, open '/tmp/nanju-w17-1lqvHf/_telemetry/events-2026-09.jsonl'",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:656:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:649",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "649",
+      "suite": "v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）",
+      "test": "红测（F2-3②/#3）：中间确认横幅答案（无活跃收口问句的 ask-answer）→ 不授权，仅埋 suspect-fake-confirm（Defender #4 收紧）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: ENOENT: no such file or directory, open '/tmp/nanju-w17-VazQQo/_telemetry/events-2026-09.jsonl'",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:676:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:665",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "665",
+      "suite": "v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）",
+      "test": "红测（F2-3②）：活跃问句 expectedTarget 不匹配 → 不授权（reason=target-mismatch）且问句清除",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: ENOENT: no such file or directory, open '/tmp/nanju-w17-obdsmE/_telemetry/events-2026-09.jsonl'",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:686:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:681",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "681",
+      "suite": "v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验）",
+      "test": "红测（F2-4/#15）：散点确认词不注入 ⏩ 强推进提示（无 activeConfirmAsk → confirmPending 不置位，仅埋点）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: ENOENT: no such file or directory, open '/tmp/nanju-w17-obdsmE/_telemetry/events-2026-09.jsonl'",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:686:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:833",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "833",
+      "suite": "D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式）",
+      "test": "A1′ 主路径：auto on + quick + requirements 产出达标 → 无三形态授权直接推进（auto-confirm）+ 埋点",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: ENOENT: no such file or directory, open '/tmp/nanju-d8-0PCvkk/_telemetry/events-2026-09.jsonl'",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:856:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:844",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "844",
+      "suite": "D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式）",
+      "test": "红测（A1′/§六-1）：auto on + 产出未达标 → 拒 + advance.auto-gate 埋点 + auto 专属教育文案",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: ENOENT: no such file or directory, open '/tmp/nanju-d8-0PCvkk/_telemetry/events-2026-09.jsonl'",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:856:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1394",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "1394",
+      "suite": "W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级）",
+      "test": "红测：无授权拒收 → 教育注入存在 且 systemInitiated 续接被触发（注入≠续接，D8-1/D8-2 真实缺口）+ gate-deny 埋点",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBeTruthy()",
+      "expected": "",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1424:23)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1414",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "1414",
+      "suite": "W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级）",
+      "test": "红测：W11 跳级拒收 → 注入+续接+advance.target-deny 埋点（D8-1 补齐）；off 版文案含确认问句指引",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBeTruthy()",
+      "expected": "",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1424:23)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1440",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "1440",
+      "suite": "W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级）",
+      "test": "红测（防环 F5③）：前 2 次教育+续接，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBeTruthy()",
+      "expected": "",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1455:22)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1473",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "1473",
+      "suite": "W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级）",
+      "test": "红测（F5④续接失败降级）：onGiveUp 回调 → 可见注入 + reject-escalate(kind=continuation-giveup) 埋点 + 拒因登记 _project-info",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBeTruthy()",
+      "expected": "",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1506:21)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1502",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "1502",
+      "suite": "W22 M-6：install-only 横幅答案回传豁免 suspect-fake-confirm（红测双向）",
+      "test": "豁免路径：install 标记在场 + ask-answer 确认词 → suspect 埋点 whitelisted:true + reason=install-whitelisted，不授权",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBeTruthy()",
+      "expected": "",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1519:21)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1516",
+      "file": "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+      "line": "1516",
+      "suite": "W22 M-6：install-only 横幅答案回传豁免 suspect-fake-confirm（红测双向）",
+      "test": "真伪造路径：install 标记不在场 + ask-answer 确认词 → 仍标 suspect（reason=no-active-ask，无 whitelisted 标记）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBeTruthy()",
+      "expected": "",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:1519:21)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 117,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[356.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts:216",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts",
+      "line": "216",
+      "suite": "W18 router-gate：stage-deny 埋点 coPresentStageKeyword（严格序误拦观察口径）",
+      "test": "拒绝文本同时命中本阶段词（PRD/需求）→ violations[].coPresentStageKeyword 记录共现词",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toHaveLength(expected)",
+      "expected": "Expected length: 1",
+      "received": "Received length: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts:238:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[292.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts:230",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts",
+      "line": "230",
+      "suite": "W18 router-gate：stage-deny 埋点 coPresentStageKeyword（严格序误拦观察口径）",
+      "test": "纯他阶段文本（无本阶段词共现）→ coPresentStageKeyword 为 undefined",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toHaveLength(expected)",
+      "expected": "Expected length: 1",
+      "received": "Received length: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts:238:20)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[292.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:191",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "191",
+      "suite": "W18 T1-T4：checkGwtDeliveryFacts 四道校验",
+      "test": "T1 旧 schema 报告（无 runId/entryFingerprint）→ 拦「旧版格式」+ delivery.gate.blocked 埋点",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:221:121)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:215",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "215",
+      "suite": "W18 T1-T4：checkGwtDeliveryFacts 四道校验",
+      "test": "T2 pass + runId + 无 ack → 拦，注入文案含「满意交付确认」与 AskUserQuestion 指引",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:230:131)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:224",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "224",
+      "suite": "W18 T1-T4：checkGwtDeliveryFacts 四道校验",
+      "test": "T3 ack.reportRunId ≠ report.runId（新报告落盘后旧 ack）→ 拦「已被替代」",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:230:131)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:241",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "241",
+      "suite": "W18 T1-T4：checkGwtDeliveryFacts 四道校验",
+      "test": "T4 pass 后改入口文件（fingerprint 不符）→ 拦「被修改」；改回原文件则放行",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:248:135)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:297",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "297",
+      "suite": "W18 T5：挑战绑定——ack 绑登记 runId，不绑磁盘当前报告",
+      "test": "应答后 challenge 被清除（单次有效）；ack 登记埋点 delivery.ack-recorded 落库",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:306:30)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:353",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "353",
+      "suite": "W18 T6/T9：message 来源命中交付词 → 只埋点不置位",
+      "test": "T6 自由文本 message 来源「满意交付」→ 不置位 ack，仅 delivery.ack-rejected-freetext 埋点（challenge 原样保留）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:361:82)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:432",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "432",
+      "suite": "W18 T8：幂等",
+      "test": "同 run 重复 delivered 消费 → 状态单次推进 + project.finished 恰一条；跨 run 重复声明被终态校验拒绝（不重复计）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:461:97)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:450",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "450",
+      "suite": "W18 T8：幂等",
+      "test": "重复 ask-answer 精确应答 → ack 不重写（at 不变）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:483:29)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:468",
+      "file": "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts",
+      "line": "468",
+      "suite": "W18 交付成功链：T5 ack 后 delivered 标记 → delivered+completed 同拍 + project.finished + ack 终态清理",
+      "test": "全链：pass 报告 → challenge 登记 → ask-answer「满意交付」→ L1 输出 delivered → 门禁放行推进",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts:483:29)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 27,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[193.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-model-selection.test.ts:76",
+      "file": "apps/electron/src/main/lib/agent-model-selection.test.ts",
+      "line": "76",
+      "suite": "pickDefaultModelForChannel（跨渠道未传 modelId 的默认选模）",
+      "test": "取第一个 enabled 模型（跳过未启用的）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"没有任何已启用的模型\"",
+      "received": "Received message: \"跨渠道协作子会话：未配置默认模型（本桩不覆盖该路径）\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-model-selection.test.ts:119:7)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[177.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-model-selection.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-model-selection.test.ts:100",
+      "file": "apps/electron/src/main/lib/agent-model-selection.test.ts",
+      "line": "100",
+      "suite": "pickDefaultModelForChannel（跨渠道未传 modelId 的默认选模）",
+      "test": "渠道无 enabled 模型时抛错",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"不存在或未启用\"",
+      "received": "Received message: \"跨渠道协作子会话：未配置默认模型（本桩不覆盖该路径）\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-model-selection.test.ts:125:7)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[177.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-model-selection.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-model-selection.test.ts:122",
+      "file": "apps/electron/src/main/lib/agent-model-selection.test.ts",
+      "line": "122",
+      "suite": "pickDefaultModelForChannel（跨渠道未传 modelId 的默认选模）",
+      "test": "渠道不存在时抛错",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"需要可用的 channelId\"",
+      "received": "Received message: \"跨渠道协作子会话：未配置默认模型（本桩不覆盖该路径）\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-model-selection.test.ts:131:7)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[177.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-model-selection.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-model-selection.test.ts:128",
+      "file": "apps/electron/src/main/lib/agent-model-selection.test.ts",
+      "line": "128",
+      "suite": "pickDefaultModelForChannel（跨渠道未传 modelId 的默认选模）",
+      "test": "channelId 缺失时抛错",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"需要可用的 channelId\"",
+      "received": "Received message: \"跨渠道协作子会话：未配置默认模型（本桩不覆盖该路径）\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-model-selection.test.ts:131:7)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[177.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-model-selection.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:140",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "140",
+      "suite": "Agent 会话 JSONL 读取",
+      "test": "Given 会话 JSONL 混入损坏行 When 读取 SDKMessage Then 跳过坏行并保留其它消息",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"JSONL 第 2 行解析失败\"",
+      "received": "Received message: \"manager.truncateSDKMessages is not a function. (In 'manager.truncateSDKMessages(\\\"session-truncate-bad-line\\\", \\\"assistant-1\\\")', 'manager.truncateSDKMessages' is undefined)\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:159:8)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:152",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "152",
+      "suite": "Agent 会话 JSONL 读取",
+      "test": "Given 会话 JSONL 存在损坏行 When 截断 SDKMessage Then 抛错避免重写不完整历史",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"medium\"",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:176:38)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:164",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "164",
+      "suite": "Agent 会话 runtime 元数据",
+      "test": "Given 已保存 OpenAI medium 默认值 When 新建会话 Then 始终创建并持久化 Pi 会话",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toMatchObject(expected)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:207:22)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:183",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "183",
+      "suite": "Agent 会话 runtime 元数据",
+      "test": "Given 历史 Claude 会话 When 读取并尝试分叉或回退 Then 迁移为只读 transcript 并拒绝续接",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.moveSessionToWorkspace is not a function. (In 'manager.moveSessionToWorkspace(\"pi-session-to-move\", \"workspace-b\")', 'manager.moveSessionToWorkspace' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:238:27)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:220",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "220",
+      "suite": "Agent 会话 runtime 元数据",
+      "test": "Given Pi session moved to another workspace When metadata is persisted Then clears the cwd-bound artifact and bindings",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"off\"",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:264:76)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:247",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "247",
+      "suite": "Agent 会话 runtime 元数据",
+      "test": "Given 新安装用户保存关闭思考 When 连续新建会话 Then 不被旧版迁移改回 high",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: undefined is not an object (evaluating 'updated.reasoningLevel')",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:278:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:273",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "273",
+      "suite": "Agent 会话 runtime 元数据",
+      "test": "Given session settings When updating Then persists reasoning depth per session",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toMatchObject(expected)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:288:21)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:282",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "282",
+      "suite": "Agent 会话 runtime 元数据",
+      "test": "Given a session When star state is updated Then it persists without changing freshness or archive state",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionMessages is not a function. (In 'manager.searchAgentSessionMessages(\"\\u547D\\u4E2D\\u8BCD\")', 'manager.searchAgentSessionMessages' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:331:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:295",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "295",
+      "suite": "Agent 会话正文搜索",
+      "test": "Given 用户/助手正文和内部块 When 搜索 Then 只返回最多两个不同正文消息命中",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionMessages is not a function. (In 'manager.searchAgentSessionMessages(\"\\u641C\\u7D22\\u4F18\\u5316\\u65B9\\u6848\")', 'manager.searchAgentSessionMessages' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:353:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:338",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "338",
+      "suite": "Agent 会话正文搜索",
+      "test": "Given 单会话中有多个不同质量的命中 When 搜索 Then 只保留两条最佳结果并让 user 同分优先",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionMessages is not a function. (In 'manager.searchAgentSessionMessages(\"\\u641C\\u7D22\\u4F18\\u5316\\u65B9\\u6848\")', 'manager.searchAgentSessionMessages' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:373:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:359",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "359",
+      "suite": "Agent 会话正文搜索",
+      "test": "Given 重复的 Agent SDK snapshot When 搜索 Then 每个 messageId 只返回最佳命中一次",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionMessages is not a function. (In 'manager.searchAgentSessionMessages(\"\\u547D\\u4E2D\\u8BCD\")', 'manager.searchAgentSessionMessages' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:390:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:379",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "379",
+      "suite": "Agent 会话正文搜索",
+      "test": "Given 超过 100 个命中会话 When 搜索 Then 最多返回 100 个会话且每个最多两个命中",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionReferences is not a function. (In 'manager.searchAgentSessionReferences({",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:404:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:401",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "401",
+      "suite": "Agent 会话引用搜索",
+      "test": "Given 工作区有超过 20 个会话 When 请求最近 200 条 Then 按更新时间返回 200 条",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionReferences is not a function. (In 'manager.searchAgentSessionReferences({",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:418:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:415",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "415",
+      "suite": "Agent 会话引用搜索",
+      "test": "Given 请求数量超过性能上限 When 搜索可引用会话 Then 最多返回 200 条",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionReferences is not a function. (In 'manager.searchAgentSessionReferences({",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:438:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:426",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "426",
+      "suite": "Agent 会话引用搜索",
+      "test": "Given 未指定工作区 When 搜索可引用会话 Then 返回全部工作区的最近会话并标示来源",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionReferences is not a function. (In 'manager.searchAgentSessionReferences({ query: \"\\u8DE8\\u5DE5\\u4F5C\\u533A\" })', 'manager.searchAgentSessionReferences' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:460:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:449",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "449",
+      "suite": "Agent 会话引用搜索",
+      "test": "Given 消息内容命中 When 搜索可引用会话 Then 异步返回匹配片段和工作区来源",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionReferences is not a function. (In 'manager.searchAgentSessionReferences({ query: \"\\u76EE\\u6807\" })', 'manager.searchAgentSessionReferences' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:490:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:472",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "472",
+      "suite": "Agent 会话引用搜索",
+      "test": "Given 正文扫描预算耗尽 When 较旧会话标题命中 Then 仍返回标题命中结果",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.searchAgentSessionReferences is not a function. (In 'manager.searchAgentSessionReferences({ query: \"\\u9690\\u85CF\\u5173\\u952E\\u8BCD\" })', 'manager.searchAgentSessionReferences' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:506:35)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:495",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "495",
+      "suite": "Agent 会话引用搜索",
+      "test": "Given 正文命中在单文件扫描上限之后 When 搜索引用 Then 不读取超出输入补全预算的历史",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toEqual(expected)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:533:36)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:513",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "513",
+      "suite": "Pi entry binding recovery",
+      "test": "Given Pi branch excludes later entries When fork Then keeps only bindings in the fork artifact",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: manager.rewindPiAgentSession is not a function. (In 'manager.rewindPiAgentSession(\"pi-rewind-source\", \"assistant-keep\")', 'manager.rewindPiAgentSession' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:558:41)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:538",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "538",
+      "suite": "Pi entry binding recovery",
+      "test": "Given rewind excludes transcript and artifact entries When rewinding Then keeps only valid retained assistant bindings",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toContain(expected)",
+      "expected": "Expected to contain: \"id=\\\"other-workspace-session\\\"\"",
+      "received": "Received: \"\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:583:22)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/agent-session-manager.test.ts:568",
+      "file": "apps/electron/src/main/lib/agent-session-manager.test.ts",
+      "line": "568",
+      "suite": "Agent 会话引用 prompt",
+      "test": "Given 用户显式引用跨工作区会话 When 构建发送 prompt Then 保留该会话上下文",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toContain(expected)",
+      "expected": "Expected to contain: \"id=\\\"other-workspace-session\\\"\"",
+      "received": "Received: \"\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/agent-session-manager.test.ts:583:22)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[482.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/agent-session-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:141",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "141",
+      "suite": "写入端形态：enc:v1: 统一标记",
+      "test": "Given 加密可用 When 创建/更新渠道 Then 存储带 enc:v1: 前缀且可解密还原",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.createChannel is not a function. (In 'channelManager.createChannel({",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:159:36)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:157",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "157",
+      "suite": "写入端形态：enc:v1: 统一标记",
+      "test": "Given 加密不可用 When 创建渠道 Then 按既有设计明文存储",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"重新输入\"",
+      "received": "Received message: \"channelManager.decryptApiKey is not a function. (In 'channelManager.decryptApiKey(\\\"ch1\\\")', 'channelManager.decryptApiKey' is undefined)\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:177:55)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:173",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "173",
+      "suite": "读取端三态：解密失败绝不返回密文",
+      "test": "Given enc:v1: 密文且解密失败 When 读取 Then 抛 ApiKeyDecryptError 而非返回密文",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"密钥环不可用\"",
+      "received": "Received message: \"channelManager.decryptApiKey is not a function. (In 'channelManager.decryptApiKey(\\\"ch1\\\")', 'channelManager.decryptApiKey' is undefined)\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:192:55)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:188",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "188",
+      "suite": "读取端三态：解密失败绝不返回密文",
+      "test": "Given 写入时加密可用、读取时不可用（漂移窗口）When 读取标记密文 Then 拒绝并报需重输",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"密钥环不可用\"",
+      "received": "Received message: \"channelManager.decryptApiKey is not a function. (In 'channelManager.decryptApiKey(\\\"ch1\\\")', 'channelManager.decryptApiKey' is undefined)\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:192:55)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:219",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "219",
+      "suite": "读取端三态：解密失败绝不返回密文",
+      "test": "Given 存量明文（历史无加密环境写入）且当前解密失败 When 读取 Then 明文透传（向后兼容）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.decryptApiKey is not a function. (In 'channelManager.decryptApiKey(\"plain2\")', 'channelManager.decryptApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:231:27)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:227",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "227",
+      "suite": "读取端三态：解密失败绝不返回密文",
+      "test": "Given 加密不可用环境下的明文 When 读取 Then 直接透传",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"empty\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:239:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:236",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "236",
+      "suite": "发送链防线：Key 不为空且非密文形态",
+      "test": "Given 渠道 Key 为空 When 解析运行时 Key Then 拒绝并提示未配置",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"drift\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:246:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:242",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "242",
+      "suite": "发送链防线：Key 不为空且非密文形态",
+      "test": "Given 密文不可解 When 解析运行时 Key Then 拒绝且消息含渠道名",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"ok\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:253:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:250",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "250",
+      "suite": "发送链防线：Key 不为空且非密文形态",
+      "test": "Given 合法密文 When 解析运行时 Key Then 返回明文",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.testChannel is not a function. (In 'channelManager.testChannel(\"drift3\")', 'channelManager.testChannel' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:260:41)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:256",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "256",
+      "suite": "发送链防线：Key 不为空且非密文形态",
+      "test": "Given 密文不可解 When 连接测试 Then 返回本地失败结果且不发请求",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.testChannel is not a function. (In 'channelManager.testChannel(\"empty2\")', 'channelManager.testChannel' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:269:41)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:266",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "266",
+      "suite": "发送链防线：Key 不为空且非密文形态",
+      "test": "Given 渠道 Key 为空 When 连接测试 Then 返回本地提示而非发起请求",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.scanChannelKeyHealth is not a function. (In 'channelManager.scanChannelKeyHealth()', 'channelManager.scanChannelKeyHealth' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:280:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:276",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "276",
+      "suite": "启动扫描：不静默、不清空、机会性迁移",
+      "test": "Given 存量无标记密文且可解密 When 扫描 Then 迁移为 enc:v1: 标记且无 issue",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.scanChannelKeyHealth is not a function. (In 'channelManager.scanChannelKeyHealth()', 'channelManager.scanChannelKeyHealth' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:294:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:289",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "289",
+      "suite": "启动扫描：不静默、不清空、机会性迁移",
+      "test": "Given 密文不可解 When 扫描 Then 报 issue 且不清空存储",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.scanChannelKeyHealth is not a function. (In 'channelManager.scanChannelKeyHealth()', 'channelManager.scanChannelKeyHealth' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:311:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:306",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "306",
+      "suite": "启动扫描：不静默、不清空、机会性迁移",
+      "test": "Given 密文形态但密钥环不可用（漂移）When 扫描 Then 报 issue",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.scanChannelKeyHealth is not a function. (In 'channelManager.scanChannelKeyHealth()', 'channelManager.scanChannelKeyHealth' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:323:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:317",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "317",
+      "suite": "启动扫描：不静默、不清空、机会性迁移",
+      "test": "Given 明文与空 Key 渠道 When 扫描 Then 无 issue 且不做加密迁移",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"渠道不存在\"",
+      "received": "Received message: \"channelManager.decryptApiKey is not a function. (In 'channelManager.decryptApiKey(\\\"nope\\\")', 'channelManager.decryptApiKey' is undefined)\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:333:56)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-manager.test.ts:331",
+      "file": "apps/electron/src/main/lib/channel-manager.test.ts",
+      "line": "331",
+      "suite": "兜底：渠道不存在",
+      "test": "Given 渠道不存在 When 解密 Then 抛渠道不存在错误",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toThrow(expected)",
+      "expected": "Expected substring: \"渠道不存在\"",
+      "received": "Received message: \"channelManager.decryptApiKey is not a function. (In 'channelManager.decryptApiKey(\\\"nope\\\")', 'channelManager.decryptApiKey' is undefined)\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-manager.test.ts:333:56)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[206.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-manager.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts:70",
+      "file": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts",
+      "line": "70",
+      "suite": "渠道运行时认证解析",
+      "test": "Given ChatGPT OAuth 渠道 When 解析运行时 key Then 返回 access token 而不是凭据 JSON",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"api-key-channel\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-runtime-api-key.test.ts:108:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 5,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[183.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-runtime-api-key.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts:93",
+      "file": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts",
+      "line": "93",
+      "suite": "渠道运行时认证解析",
+      "test": "Given 普通渠道 When 解析运行时 key Then 返回解密后的 API Key",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"drifted-marked\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-runtime-api-key.test.ts:128:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 5,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[183.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-runtime-api-key.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts:112",
+      "file": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts",
+      "line": "112",
+      "suite": "渠道运行时认证解析",
+      "test": "Given enc:v1: 标记密文且密钥环不可用（漂移窗口）When 解析运行时 key Then 拒绝而非返回密文",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"drifted-legacy\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-runtime-api-key.test.ts:152:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 5,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[183.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-runtime-api-key.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts:132",
+      "file": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts",
+      "line": "132",
+      "suite": "渠道运行时认证解析",
+      "test": "Given 存量无标记密文（v11 blob）且密钥环不可用 When 解析运行时 key Then 拒绝而非透传密文",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"empty-key-channel\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-runtime-api-key.test.ts:178:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 5,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[183.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-runtime-api-key.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts:163",
+      "file": "apps/electron/src/main/lib/channel-runtime-api-key.test.ts",
+      "line": "163",
+      "suite": "渠道运行时认证解析",
+      "test": "Given 渠道 Key 为空 When 解析运行时 key Then 拒绝并提示未配置",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: channelManager.resolveChannelRuntimeApiKey is not a function. (In 'channelManager.resolveChannelRuntimeApiKey(\"empty-key-channel\")', 'channelManager.resolveChannelRuntimeApiKey' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/channel-runtime-api-key.test.ts:178:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 5,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[183.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/channel-runtime-api-key.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/dingtalk-config.test.ts:None",
+      "file": "apps/electron/src/main/lib/dingtalk-config.test.ts",
+      "line": null,
+      "suite": "",
+      "test": "(unnamed)",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "SyntaxError: Export named 'safeStorage' not found in module '/home/orphic/proma-source/node_modules/electron/index.js'.",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[61.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/dingtalk-config.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:535",
+      "file": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+      "line": "535",
+      "suite": "类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——auto on 代决 / auto off fail-closed",
+      "test": "auto on（D8 §九 B′/R7-09）：ux-advisor blocked 事件进代理代决——kind=decision + 代决准则模板 + 自报无效",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: undefined is not an object (evaluating 'events[0].category')",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:587:19)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 41,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[311.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-clarify-proxy.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:575",
+      "file": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+      "line": "575",
+      "suite": "类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——auto on 代决 / auto off fail-closed",
+      "test": "auto off（注册后执行前关闭，R7-01 auto off 基线）：design-preference 组维持 D7 fail-closed → fallback:\"human\"",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: undefined is not an object (evaluating 'events[0].category')",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:610:19)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 41,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[311.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-clarify-proxy.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:603",
+      "file": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+      "line": "603",
+      "suite": "类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——auto on 代决 / auto off fail-closed",
+      "test": "未知/缺失类别（other）：auto on → auto-degrade（R2′ F2-2 收口，不再转述真人）；类别仍不进代理",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: undefined is not an object (evaluating 'events[0].category')",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:636:19)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 41,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[311.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-clarify-proxy.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:621",
+      "file": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+      "line": "621",
+      "suite": "类别门（D8 §九 B′/R7-09/R6-01）：design-preference 组——auto on 代决 / auto off fail-closed",
+      "test": "反向：requirement-analyst 委派（requirements 阶段）→ 进代理并完成回注",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: undefined is not an object (evaluating 'events[0].category')",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:636:19)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 41,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[311.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-clarify-proxy.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:712",
+      "file": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+      "line": "712",
+      "suite": "预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallback:\"auto-degrade\"，不转述真人）",
+      "test": "R7-01 主红测：budget=0 + design-preference blocked + auto on → auto-degrade（非 human）+ pending 登记 + 不建委派",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:736:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 41,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[311.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-clarify-proxy.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:753",
+      "file": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+      "line": "753",
+      "suite": "预算与熔断（D8 §九 B′/R7-01：auto on 四条路径 → fallback:\"auto-degrade\"，不转述真人）",
+      "test": "「无法判断」累计 3 次（同组一次）→ 熔断：auto on → auto-degrade（R7-01 路径③）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:766:119)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 41,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[311.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-clarify-proxy.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:788",
+      "file": "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+      "line": "788",
+      "suite": "工具侧等待兑底（R2′ F2-2：运行失败路径 auto on 统一 auto-degrade）",
+      "test": "代理委派失败（onError，渠道固定不降级）→ auto on 返回 auto-degrade（proxy-failed）+ 降级遥测",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-clarify-proxy.test.ts:798:111)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 41,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[311.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-clarify-proxy.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:468",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "468",
+      "suite": "W8 集成：checkNanjuRouterGate 参数级三层强制",
+      "test": "层一拦截：requirements 阶段委派「全栈开发」→ deny 且文案教育（P1-C 场景）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toHaveLength(expected)",
+      "expected": "Expected length: 1",
+      "received": "Received length: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:479:79)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:492",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "492",
+      "suite": "W8 集成：checkNanjuRouterGate 参数级三层强制",
+      "test": "unmatched 放行 + telemetry 观察（查资料类）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"glm-5-turbo\"",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:516:47)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:501",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "501",
+      "suite": "W8 集成：checkNanjuRouterGate 参数级三层强制",
+      "test": "层二覆写：L1 自选已下线 glm-5-turbo 委派攻击者 → quick 项目覆写（W22 起 testing=per-phase glm 攻击者，与新作者 deepseek 跨族）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"family-marker\"",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:528:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:521",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "521",
+      "suite": "W8 集成：checkNanjuRouterGate 参数级三层强制",
+      "test": "层二覆写：iterative 项目防御者 → coding per-phase defender=minimax 家族标记 → 跳过覆写（W22 O1：门禁无法解析 UUID 渠道，保留原值+埋点）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"family-marker\"",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:528:33)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:661",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "661",
+      "suite": "R3：recordTelemetry 失败注入（fail-closed：埋点盘中断不阻断门禁）",
+      "test": "写盘失败（_telemetry 路径被同名文件占用，mkdirSync 抛错）→ 不向上抛，返回 event 正常",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"project.created\"",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:668:29)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:823",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "823",
+      "suite": "W10-V2.1：router-gate 集成（deny 文案与 telemetry）",
+      "test": "requirements 委派「把这个工具做出来」→ deny 文案含产出类动作引导 + unmatched-action-deny 事件（含动词与文本摘要）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toHaveLength(expected)",
+      "expected": "Expected length: 1",
+      "received": "Received length: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:857:79)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:843",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "843",
+      "suite": "W10-V2.1：router-gate 集成（deny 文案与 telemetry）",
+      "test": "批量混合（他阶段词 + 强动词）→ 整批拒绝，两类违规行都在文案，两个 telemetry 事件各 1",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toHaveLength(expected)",
+      "expected": "Expected length: 1",
+      "received": "Received length: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:873:79)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:863",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "863",
+      "suite": "W10-V2.1：router-gate 集成（deny 文案与 telemetry）",
+      "test": "纯他阶段词 deny（无强动词）→ 文案不含产出类动作段、只记 stage-deny 事件（W8 行为不变）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toHaveLength(expected)",
+      "expected": "Expected length: 1",
+      "received": "Received length: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:873:79)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:1151",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "1151",
+      "suite": "W19-C：stage-deny telemetry matchContext（命中位置归因）",
+      "test": "deny 事件 violations[].matchContext 记录字段名与前后片段（prose 命中 inPath=false）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: undefined is not an object (evaluating '(readTelemetryEvents().filter((e) => e.eventType === \"delegate.guard.stage-deny\")[0]?.payload.violations)[0]')",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:1175:43)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:1168",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "1168",
+      "suite": "W19-C：stage-deny telemetry matchContext（命中位置归因）",
+      "test": "关键词首处命中在路径内 → inPath=true（项目名碰撞类误拦归因信号）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: undefined is not an object (evaluating '(readTelemetryEvents().filter((e) => e.eventType === \"delegate.guard.stage-deny\")[0]?.payload.violations)[0]')",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:1175:43)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts:1212",
+      "file": "apps/electron/src/main/lib/nanju-delegate-guard.test.ts",
+      "line": "1212",
+      "suite": "W24-8 层二覆写·作者委派豁免",
+      "test": "红测：需求分析师作者委派（任务内嵌 AC 攻防模板）→ 渠道不被覆写为攻击者",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"stage-author-bundle\"",
+      "received": "Received: undefined",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-delegate-guard.test.ts:1225:39)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 141,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[373.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-guide-progress.test.ts:263",
+      "file": "apps/electron/src/main/lib/nanju-guide-progress.test.ts",
+      "line": "263",
+      "suite": "syncNanjuGuideConfirmState（确认点 C）",
+      "test": "产出达标且未同步 → 写 {MAIN}_UC 并广播（write-then-emit）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: syncNanjuGuideConfirmState is not a function. (In 'syncNanjuGuideConfirmState(ws, \"session-1\")', 'syncNanjuGuideConfirmState' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-guide-progress.test.ts:278:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[160.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-guide-progress.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-guide-progress.test.ts:275",
+      "file": "apps/electron/src/main/lib/nanju-guide-progress.test.ts",
+      "line": "275",
+      "suite": "syncNanjuGuideConfirmState（确认点 C）",
+      "test": "幂等：subStage 已是 {MAIN}_UC → 不重写不重发",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: syncNanjuGuideConfirmState is not a function. (In 'syncNanjuGuideConfirmState(ws, \"session-1\")', 'syncNanjuGuideConfirmState' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-guide-progress.test.ts:284:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[160.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-guide-progress.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-guide-progress.test.ts:282",
+      "file": "apps/electron/src/main/lib/nanju-guide-progress.test.ts",
+      "line": "282",
+      "suite": "syncNanjuGuideConfirmState（确认点 C）",
+      "test": "产出未达标（PRD 缺失/过小）→ 不动（维持产出中态）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: syncNanjuGuideConfirmState is not a function. (In 'syncNanjuGuideConfirmState(ws, \"session-1\")', 'syncNanjuGuideConfirmState' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-guide-progress.test.ts:292:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[160.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-guide-progress.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-guide-progress.test.ts:290",
+      "file": "apps/electron/src/main/lib/nanju-guide-progress.test.ts",
+      "line": "290",
+      "suite": "syncNanjuGuideConfirmState（确认点 C）",
+      "test": "非项目会话/无子步骤阶段（delivered）→ 无副作用",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: syncNanjuGuideConfirmState is not a function. (In 'syncNanjuGuideConfirmState(ws, \"session-1\")', 'syncNanjuGuideConfirmState' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-guide-progress.test.ts:300:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[160.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-guide-progress.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-guide-progress.test.ts:297",
+      "file": "apps/electron/src/main/lib/nanju-guide-progress.test.ts",
+      "line": "297",
+      "suite": "syncNanjuGuideConfirmState（确认点 C）",
+      "test": "testing 机器裁判收口（序列无 TEST_UC）：达标产出也不点亮、不落盘污染、无广播（A1 必修-1/2）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: syncNanjuGuideConfirmState is not a function. (In 'syncNanjuGuideConfirmState(ws, \"session-1\")', 'syncNanjuGuideConfirmState' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-guide-progress.test.ts:300:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[160.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-guide-progress.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-guide-progress.test.ts:354",
+      "file": "apps/electron/src/main/lib/nanju-guide-progress.test.ts",
+      "line": "354",
+      "suite": "syncNanjuGuideConfirmState · M4 环境状态先行（L2 报 missing 未推进窗口）",
+      "test": "missing 标记行：envReady 先置位 false → 门禁拦截 → UC 不误亮 + ARCH_ENV blocked 广播",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: syncNanjuGuideConfirmState is not a function. (In 'syncNanjuGuideConfirmState(ws, \"session-1\")', 'syncNanjuGuideConfirmState' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-guide-progress.test.ts:373:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[160.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-guide-progress.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-guide-progress.test.ts:371",
+      "file": "apps/electron/src/main/lib/nanju-guide-progress.test.ts",
+      "line": "371",
+      "suite": "syncNanjuGuideConfirmState · M4 环境状态先行（L2 报 missing 未推进窗口）",
+      "test": "ready 标记行：门禁过 → UC 正常点亮（M4 不误伤正常路径）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "TypeError: syncNanjuGuideConfirmState is not a function. (In 'syncNanjuGuideConfirmState(ws, \"session-1\")', 'syncNanjuGuideConfirmState' is undefined)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-guide-progress.test.ts:373:12)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 21,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[160.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-guide-progress.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-gwt-runner.test.ts:752",
+      "file": "apps/electron/src/main/lib/nanju-gwt-runner.test.ts",
+      "line": "752",
+      "suite": "runNanjuGwtAcceptance",
+      "test": "全通过：report.json schema 完整 + verdict=pass + retryCount=0 + 埋点落盘",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: true",
+      "received": "Received: false",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-gwt-runner.test.ts:803:38)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 107,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[54.11s]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-gwt-runner.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-gwt-runner.test.ts:896",
+      "file": "apps/electron/src/main/lib/nanju-gwt-runner.test.ts",
+      "line": "896",
+      "suite": "runNanjuGwtAcceptance",
+      "test": "失败与重试累计：首轮 fail retryCount=0 → 重跑 fail retryCount=1 → 再跑 retryLimitReached",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-gwt-runner.test.ts:922:26)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 107,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[54.11s]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-gwt-runner.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-config.test.ts:108",
+      "file": "apps/electron/src/main/lib/nanju-model-config.test.ts",
+      "line": "108",
+      "suite": "两层加载（用户覆盖 > 内置 > 代码兜底）",
+      "test": "两层全禁用 → 逐字段回退代码兜底常量",
+      "kind": "failure",
+      "classification": "envdep",
+      "classificationLabel": "环境依赖（真实 dev 配置 override 文件参与模型配置加载）",
+      "productDefect": false,
+      "error": "error: expect(received).toEqual(expected)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-config.test.ts:130:46)",
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 30,
+        "fail": 5,
+        "errors": 0,
+        "duration": "[101.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-config.test.ts   # 失败；PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-model-config.test.ts → 0 失败"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-config.test.ts:116",
+      "file": "apps/electron/src/main/lib/nanju-model-config.test.ts",
+      "line": "116",
+      "suite": "两层加载（用户覆盖 > 内置 > 代码兜底）",
+      "test": "内置层覆盖代码兜底（phase 字段 + acPresets 档位）",
+      "kind": "failure",
+      "classification": "envdep",
+      "classificationLabel": "环境依赖（真实 dev 配置 override 文件参与模型配置加载）",
+      "productDefect": false,
+      "error": "error: expect(received).toEqual(expected)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-config.test.ts:130:46)",
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 30,
+        "fail": 5,
+        "errors": 0,
+        "duration": "[101.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-config.test.ts   # 失败；PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-model-config.test.ts → 0 失败"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-config.test.ts:162",
+      "file": "apps/electron/src/main/lib/nanju-model-config.test.ts",
+      "line": "162",
+      "suite": "两层加载（用户覆盖 > 内置 > 代码兜底）",
+      "test": "非法 JSON / 根结构非对象 → warn 跳层，不整体拒绝",
+      "kind": "failure",
+      "classification": "envdep",
+      "classificationLabel": "环境依赖（真实 dev 配置 override 文件参与模型配置加载）",
+      "productDefect": false,
+      "error": "",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-config.test.ts:172:27)",
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 30,
+        "fail": 5,
+        "errors": 0,
+        "duration": "[101.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-config.test.ts   # 失败；PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-model-config.test.ts → 0 失败"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-config.test.ts:222",
+      "file": "apps/electron/src/main/lib/nanju-model-config.test.ts",
+      "line": "222",
+      "suite": "resolvePhaseModelConfig / resolveAcPreset",
+      "test": "resolvePhaseModelConfig 全六阶段（纯兜底，两层禁用）：主选 + fallbacks 端点化",
+      "kind": "failure",
+      "classification": "envdep",
+      "classificationLabel": "环境依赖（真实 dev 配置 override 文件参与模型配置加载）",
+      "productDefect": false,
+      "error": "error: expect(received).toEqual(expected)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-config.test.ts:241:49)",
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 30,
+        "fail": 5,
+        "errors": 0,
+        "duration": "[101.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-config.test.ts   # 失败；PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-model-config.test.ts → 0 失败"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-config.test.ts:342",
+      "file": "apps/electron/src/main/lib/nanju-model-config.test.ts",
+      "line": "342",
+      "suite": "getConfigFallbackChains + getFallbackChain（W13b 配置优先接线）",
+      "test": "配置缺项回退代码链：user 同时改写 planning+testing 主选后，deepseek:deepseek-flash 不再是配置 key → 走 MODEL_FALLBACK_CHAINS（W22 M#6 后 testing 主选也是该端点，需两者都改才缺项）",
+      "kind": "failure",
+      "classification": "envdep",
+      "classificationLabel": "环境依赖（真实 dev 配置 override 文件参与模型配置加载）",
+      "productDefect": false,
+      "error": "error: expect(received).toEqual(expected)",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-config.test.ts:355:44)",
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 30,
+        "fail": 5,
+        "errors": 0,
+        "duration": "[101.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-config.test.ts   # 失败；PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-model-config.test.ts → 0 失败"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-fallback.test.ts:263",
+      "file": "apps/electron/src/main/lib/nanju-model-fallback.test.ts",
+      "line": "263",
+      "suite": "delegate_agent fallback 降级重试（nanju 范围内）",
+      "test": "同步降级：请求 v4-pro 但渠道未启用该模型 → 按 chain 校验降级到 v4-flash（单一遥测事件 + 工具结果反映降级模型）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-fallback.test.ts:321:27)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 13,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[243.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-fallback.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-fallback.test.ts:290",
+      "file": "apps/electron/src/main/lib/nanju-model-fallback.test.ts",
+      "line": "290",
+      "suite": "delegate_agent fallback 降级重试（nanju 范围内）",
+      "test": "异步降级：首启 onError（渠道超时）→ 同一 delegation 换 v4-flash 重启 → 完成；陈旧 onComplete 不误标（generation 守卫）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 2",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-fallback.test.ts:350:27)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 13,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[243.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-fallback.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-model-fallback.test.ts:327",
+      "file": "apps/electron/src/main/lib/nanju-model-fallback.test.ts",
+      "line": "327",
+      "suite": "delegate_agent fallback 降级重试（nanju 范围内）",
+      "test": "全链失败：v4-pro → v4-flash → glm-5.3-flash 全部启动失败 → 走既有 failed 路径（3 次尝试 + 2 次埋点）",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 2",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-model-fallback.test.ts:350:27)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 13,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[243.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-model-fallback.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-phase-guard.test.ts:147",
+      "file": "apps/electron/src/main/lib/nanju-phase-guard.test.ts",
+      "line": "147",
+      "suite": "isPhaseGuardCircuitOpen 阈值判定",
+      "test": "两计数独立（冻结裁决）：修复日志写入不改 phaseGuard；phaseGuard 计数不改修复日志",
+      "kind": "failure",
+      "classification": "pollution",
+      "classificationLabel": "测试隔离缺陷（跨文件 mock.module / 模块缓存泄漏）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: 1",
+      "received": "Received: 0",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-phase-guard.test.ts:158:60)",
+      "isolatedResult": {
+        "exitCode": 0,
+        "pass": 12,
+        "fail": 0,
+        "errors": 0,
+        "duration": "[68.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-phase-guard.test.ts"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-router-prompt.test.ts:1021",
+      "file": "apps/electron/src/main/lib/nanju-router-prompt.test.ts",
+      "line": "1021",
+      "suite": "D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade）",
+      "test": "返工二 F3-2：off 冻结串独立证明——architecture/prototype 关键话术行与 054f0721（v0.17.97）逐字一致",
+      "kind": "failure",
+      "classification": "methodlimit",
+      "classificationLabel": "基线方法限制（临时副本无 .git）",
+      "productDefect": false,
+      "error": "error: Command failed: git show 054f0721:apps/electron/src/main/lib/nanju-router-prompt.ts",
+      "expected": "",
+      "received": "",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-router-prompt.test.ts:1025:24)",
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 129,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[411.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-router-prompt.test.ts   # 副本内失败；GIT_DIR=/home/orphic/proma-patches/p1-quick-engineering/.git bun test apps/electron/src/main/lib/nanju-router-prompt.test.ts → 0 失败"
+    },
+    {
+      "testId": "apps/electron/src/main/lib/nanju-router.test.ts:214",
+      "file": "apps/electron/src/main/lib/nanju-router.test.ts",
+      "line": "214",
+      "suite": "planning 阶段（W13：v4-pro → v4-flash 降档）",
+      "test": "planning 节点定义：工程经理 / deepseek-flash（模板化拆分，技术决策已由 architecture 终判）/ 05_PROJECT_PLAN/plan.md / next=coding",
+      "kind": "failure",
+      "classification": "envdep",
+      "classificationLabel": "环境依赖（真实 dev 配置 override 文件参与模型配置加载）",
+      "productDefect": false,
+      "error": "error: expect(received).toBe(expected)",
+      "expected": "Expected: \"deepseek-flash\"",
+      "received": "Received: \"deepseek-v4-pro\"",
+      "assertionLocation": "at <anonymous> (/dev/shm/proma-p1-baseline-cfce/apps/electron/src/main/lib/nanju-router.test.ts:219:29)",
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 43,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[72.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test apps/electron/src/main/lib/nanju-router.test.ts   # 失败；PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-router.test.ts → 0 失败"
+    }
+  ],
+  "fileLoadErrors": [
+    {
+      "file": "docs/DesignDoc/06_TESTS/unit-llm-mock.test.ts",
+      "kind": "file-level load error",
+      "error": "Cannot find module '../src/coder/coder-engine-stub' from '/dev/shm/proma-p1-baseline-cfce/docs/DesignDoc/06_TESTS/unit-llm-mock.test.ts'",
+      "classification": "loaderror",
+      "classificationLabel": "遗留失效用例（引用不存在的模块，文件级加载错误）",
+      "productDefect": false,
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 0,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[27.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test docs/DesignDoc/06_TESTS/unit-llm-mock.test.ts"
+    },
+    {
+      "file": "docs/DesignDoc/06_TESTS/unit-judge-timeout.test.ts",
+      "kind": "file-level load error",
+      "error": "Cannot find module '../src/common/proma-cloud-llm-client' from '/dev/shm/proma-p1-baseline-cfce/docs/DesignDoc/06_TESTS/unit-judge-timeout.test.ts'",
+      "classification": "loaderror",
+      "classificationLabel": "遗留失效用例（引用不存在的模块，文件级加载错误）",
+      "productDefect": false,
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 0,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[20.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test docs/DesignDoc/06_TESTS/unit-judge-timeout.test.ts"
+    },
+    {
+      "file": "docs/DesignDoc/06_TESTS/unit-judge-hardchecks.test.ts",
+      "kind": "file-level load error",
+      "error": "Cannot find module '../src/judge/judge-engine-stub' from '/dev/shm/proma-p1-baseline-cfce/docs/DesignDoc/06_TESTS/unit-judge-hardchecks.test.ts'",
+      "classification": "loaderror",
+      "classificationLabel": "遗留失效用例（引用不存在的模块，文件级加载错误）",
+      "productDefect": false,
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 0,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[26.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test docs/DesignDoc/06_TESTS/unit-judge-hardchecks.test.ts"
+    },
+    {
+      "file": "docs/DesignDoc/06_TESTS/unit-coder-gwt-autofix.test.ts",
+      "kind": "file-level load error",
+      "error": "Cannot find module '../src/coder/coder-engine-stub' from '/dev/shm/proma-p1-baseline-cfce/docs/DesignDoc/06_TESTS/unit-coder-gwt-autofix.test.ts'",
+      "classification": "loaderror",
+      "classificationLabel": "遗留失效用例（引用不存在的模块，文件级加载错误）",
+      "productDefect": false,
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 0,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[36.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test docs/DesignDoc/06_TESTS/unit-coder-gwt-autofix.test.ts"
+    },
+    {
+      "file": "docs/DesignDoc/06_TESTS/e2e-ipc-cross-layer.test.ts",
+      "kind": "file-level load error",
+      "error": "Cannot find module '../electron/main' from '/dev/shm/proma-p1-baseline-cfce/docs/DesignDoc/06_TESTS/e2e-ipc-cross-layer.test.ts'",
+      "classification": "loaderror",
+      "classificationLabel": "遗留失效用例（引用不存在的模块，文件级加载错误）",
+      "productDefect": false,
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 0,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[73.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test docs/DesignDoc/06_TESTS/e2e-ipc-cross-layer.test.ts"
+    },
+    {
+      "file": "docs/DesignDoc/06_TESTS/e2e-coder-judge.test.ts",
+      "kind": "file-level load error",
+      "error": "Cannot find module '../src/coder/coder-engine-stub' from '/dev/shm/proma-p1-baseline-cfce/docs/DesignDoc/06_TESTS/e2e-coder-judge.test.ts'",
+      "classification": "loaderror",
+      "classificationLabel": "遗留失效用例（引用不存在的模块，文件级加载错误）",
+      "productDefect": false,
+      "isolatedResult": {
+        "exitCode": 1,
+        "pass": 0,
+        "fail": 1,
+        "errors": 0,
+        "duration": "[41.00ms]"
+      },
+      "reproCommand": "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test docs/DesignDoc/06_TESTS/e2e-coder-judge.test.ts"
+    }
+  ],
+  "isolatedRuns": {
+    "apps/electron/src/main/lib/agent-session-manager.test.ts": {
+      "exitCode": 0,
+      "pass": 21,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[482.00ms]"
+    },
+    "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts": {
+      "exitCode": 0,
+      "pass": 117,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[356.00ms]"
+    },
+    "apps/electron/src/main/lib/channel-manager.test.ts": {
+      "exitCode": 0,
+      "pass": 18,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[206.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-delegate-guard.test.ts": {
+      "exitCode": 0,
+      "pass": 141,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[373.00ms]"
+    },
+    "apps/electron/src/main/lib/__tests__/w18-delivery-gate.test.ts": {
+      "exitCode": 0,
+      "pass": 27,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[193.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts": {
+      "exitCode": 0,
+      "pass": 41,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[311.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-guide-progress.test.ts": {
+      "exitCode": 0,
+      "pass": 21,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[160.00ms]"
+    },
+    "apps/electron/src/main/lib/channel-runtime-api-key.test.ts": {
+      "exitCode": 0,
+      "pass": 5,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[183.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-model-config.test.ts": {
+      "exitCode": 1,
+      "pass": 30,
+      "fail": 5,
+      "errors": 0,
+      "duration": "[101.00ms]"
+    },
+    "apps/electron/src/main/lib/agent-model-selection.test.ts": {
+      "exitCode": 0,
+      "pass": 4,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[177.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-model-fallback.test.ts": {
+      "exitCode": 0,
+      "pass": 13,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[243.00ms]"
+    },
+    "apps/electron/src/main/lib/__tests__/w18-delegate-intent.test.ts": {
+      "exitCode": 0,
+      "pass": 27,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[292.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-gwt-runner.test.ts": {
+      "exitCode": 0,
+      "pass": 107,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[54.11s]"
+    },
+    "apps/electron/src/main/lib/dingtalk-config.test.ts": {
+      "exitCode": 0,
+      "pass": 4,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[61.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-phase-guard.test.ts": {
+      "exitCode": 0,
+      "pass": 12,
+      "fail": 0,
+      "errors": 0,
+      "duration": "[68.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-router-prompt.test.ts": {
+      "exitCode": 1,
+      "pass": 129,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[411.00ms]"
+    },
+    "apps/electron/src/main/lib/nanju-router.test.ts": {
+      "exitCode": 1,
+      "pass": 43,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[72.00ms]"
+    },
+    "docs/DesignDoc/06_TESTS/unit-llm-mock.test.ts": {
+      "exitCode": 1,
+      "pass": 0,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[27.00ms]"
+    },
+    "docs/DesignDoc/06_TESTS/unit-judge-timeout.test.ts": {
+      "exitCode": 1,
+      "pass": 0,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[20.00ms]"
+    },
+    "docs/DesignDoc/06_TESTS/unit-judge-hardchecks.test.ts": {
+      "exitCode": 1,
+      "pass": 0,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[26.00ms]"
+    },
+    "docs/DesignDoc/06_TESTS/unit-coder-gwt-autofix.test.ts": {
+      "exitCode": 1,
+      "pass": 0,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[36.00ms]"
+    },
+    "docs/DesignDoc/06_TESTS/e2e-ipc-cross-layer.test.ts": {
+      "exitCode": 1,
+      "pass": 0,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[73.00ms]"
+    },
+    "docs/DesignDoc/06_TESTS/e2e-coder-judge.test.ts": {
+      "exitCode": 1,
+      "pass": 0,
+      "fail": 1,
+      "errors": 0,
+      "duration": "[41.00ms]"
+    }
+  },
+  "pairExperiments": [
+    {
+      "id": "P1",
+      "files": [
+        "apps/electron/src/main/lib/nanju-router-prompt.test.ts",
+        "apps/electron/src/main/lib/channel-manager.test.ts"
+      ],
+      "result": {
+        "pass": 131,
+        "fail": 17
+      },
+      "victim": "channel-manager.test.ts",
+      "victimFailuresReproduced": 16,
+      "conclusion": "nanju-router-prompt.test.ts 中 mock.module('./channel-manager')（9 处桩）泄漏到同进程后续文件；受害文件单跑 18/0 通过，配对后复现 16 个失败（decryptApiKey is not a function）。"
+    },
+    {
+      "id": "P2",
+      "files": [
+        "apps/electron/src/main/lib/nanju-router-prompt.test.ts",
+        "apps/electron/src/main/lib/agent-session-manager.test.ts"
+      ],
+      "result": {
+        "pass": 132,
+        "fail": 19
+      },
+      "victim": "agent-session-manager.test.ts",
+      "victimFailuresReproduced": 18,
+      "conclusion": "同一文件亦泄漏 mock.module('./agent-session-manager')；受害文件单跑 21/0 通过，配合后 18 失败（truncateSDKMessages is not a function）。"
+    },
+    {
+      "id": "P3",
+      "files": [
+        "apps/electron/src/main/lib/nanju-model-fallback.test.ts",
+        "apps/electron/src/main/lib/agent-model-selection.test.ts"
+      ],
+      "result": {
+        "pass": 13,
+        "fail": 4
+      },
+      "victim": "agent-model-selection.test.ts",
+      "victimFailuresReproduced": 4,
+      "conclusion": "受害用例收到桩内文案「跨渠道协作子会话：未配置默认模型（本桩不覆盖该路径）」，该字符串仅存在于 nanju-model-fallback.test.ts:93 与 nanju-clarify-proxy.test.ts:96 的 pickDefaultModelForChannel 桩中 → 泄漏源可文本定位。"
+    },
+    {
+      "id": "P4",
+      "files": [
+        "apps/electron/src/main/lib/nanju-clarify-proxy.test.ts",
+        "apps/electron/src/main/lib/channel-runtime-api-key.test.ts"
+      ],
+      "result": {
+        "pass": 41,
+        "fail": 5
+      },
+      "victim": "channel-runtime-api-key.test.ts",
+      "victimFailuresReproduced": 5,
+      "conclusion": "nanju-clarify-proxy.test.ts 的 ./agent-model-selection 桩泄漏；受害文件单跑 5/0 通过。"
+    },
+    {
+      "id": "P5",
+      "files": [
+        "apps/electron/src/main/lib/nanju-snapshot.test.ts",
+        "apps/electron/src/main/lib/agent-session-manager.test.ts"
+      ],
+      "result": {
+        "pass": 6,
+        "fail": 1
+      },
+      "victim": "agent-session-manager.test.ts",
+      "victimFailuresReproduced": null,
+      "conclusion": "另一条泄漏路径：受害文件在钩子阶段即被污染（仅 6 pass + 1 fail，大量用例未执行）。说明 agent-session-manager.test.ts 在串行运行中同时受 nanju-router-prompt.test.ts 与 nanju-snapshot.test.ts 等多个文件影响。"
+    },
+    {
+      "id": "P6",
+      "files": [
+        "apps/electron/src/main/lib/nanju-telemetry.test.ts",
+        "apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts"
+      ],
+      "result": {
+        "pass": 121,
+        "fail": 0
+      },
+      "victim": null,
+      "conclusion": "反例（阴性对照）：单文件配对未复现污染，w17 的污染源不是 nanju-telemetry.test.ts。用于避免把所有配对都当成污染证据。"
+    },
+    {
+      "id": "P7",
+      "files": [
+        "apps/electron/src/main/lib/nanju-router-gate.test.ts",
+        "apps/electron/src/main/lib/nanju-delegate-guard.test.ts"
+      ],
+      "result": {
+        "pass": 238,
+        "fail": 0
+      },
+      "victim": null,
+      "conclusion": "反例（阴性对照）：nanju-delegate-guard.test.ts 的 11 个失败未被该配对复现，泄漏源待定（记录为“polluter 未最小化确认”）。"
+    }
+  ],
+  "environmentDiagnostics": [
+    {
+      "id": "D1",
+      "file": "apps/electron/src/main/lib/nanju-model-config.test.ts",
+      "command": "PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-model-config.test.ts",
+      "result": {
+        "pass": 35,
+        "fail": 0
+      },
+      "before": {
+        "PROMA_DEV": "1",
+        "pass": 30,
+        "fail": 5
+      },
+      "conclusion": "失败由 ~/.proma-dev/nanju-model-config-override.json 参与加载引起（该文件 planning = deepseek:deepseek-v4-pro / fallbacks [deepseek:deepseek-flash]）。用例只显式禁用 userConfigPath/builtinConfigPath，未传 overrideConfigPath: null；实现为 `if (opts.overrideConfigPath !== null)` + `?? getUserNanjuModelOverridePath()`，undefined 仍走默认真实路径。release 目录 ~/.proma 无该文件 → PROMA_DEV=0 全绿。"
+    },
+    {
+      "id": "D2",
+      "file": "apps/electron/src/main/lib/nanju-router.test.ts",
+      "command": "PROMA_DEV=0 bun test apps/electron/src/main/lib/nanju-router.test.ts",
+      "result": {
+        "pass": 44,
+        "fail": 0
+      },
+      "before": {
+        "PROMA_DEV": "1",
+        "pass": 43,
+        "fail": 1
+      },
+      "conclusion": "同一 override 文件使 PHASE 节点 planning 主选变成 deepseek-v4-pro，与用例期望的 deepseek-flash 冲突。"
+    },
+    {
+      "id": "D3",
+      "file": "apps/electron/src/main/lib/nanju-router-prompt.test.ts",
+      "command": "GIT_DIR=/home/orphic/proma-patches/p1-quick-engineering/.git bun test apps/electron/src/main/lib/nanju-router-prompt.test.ts",
+      "result": {
+        "pass": 130,
+        "fail": 0
+      },
+      "before": {
+        "copy": "/dev/shm（无 .git）",
+        "pass": 129,
+        "fail": 1
+      },
+      "conclusion": "用例用 execSync(`git show 054f0721:...`) 做冻结串对照；副本无 .git → \"fatal: not a git repository\"。属基线方法限制，非产品缺陷。"
+    }
+  ],
+  "configDirWriteCheck": {
+    "rule": "PROMA_DEV=1 期间对 ~/.proma-dev 与 ~/.proma 做 (path,size,mtime) 快照对比：开始 2026-09-20T05:37:59Z，检查点 2026-09-20T05:43Z（全量与全部隔离/配对运行之后）。",
+    "release": {
+      "dir": "~/.proma",
+      "agentWrites": "none attributable to test runs",
+      "observed": [
+        "全部差异均为并发 Proma 实例/其它 agent 会话自身的会话文件（agent-sessions.json、agent-sessions/*.jsonl、sdk-config/sessions/*.jsonl）",
+        "两个新会话 jsonl 的创建时间（05:39:39Z、05:42:08Z）落在两次测试运行之间/之后，非测试进程产生",
+        "无测试夹具命名的文件出现"
+      ],
+      "verdict": "本基线未向 release 配置写入"
+    },
+    "dev": {
+      "dir": "~/.proma-dev",
+      "changes": 1,
+      "created": [
+        "agent-workspaces/__f2_union_nonexistent__/",
+        "agent-workspaces/__f2_union_nonexistent__/workspace-files/"
+      ],
+      "createdAtUtc": "2026-09-20T05:38:05Z",
+      "modified": "none",
+      "deleted": "none",
+      "source": "apps/electron/src/main/lib/nanju-telemetry.test.ts:55（slug = '__f2_union_nonexistent__'）",
+      "verdict": "测试在真实 dev 配置目录留下 1 个夹具目录（增量、未改/未删任何文件）；按用户要求如实报告，未自行清理"
+    }
+  },
+  "reproduceFullBaseline": [
+    "export PATH=/home/orphic/.bun/bin:$PATH",
+    "rm -rf /dev/shm/proma-p1-baseline-cfce && mkdir -p /dev/shm/proma-p1-baseline-cfce",
+    "cd /home/orphic/proma-patches/p1-quick-engineering && git archive HEAD | tar -x -C /dev/shm/proma-p1-baseline-cfce",
+    "# 重建 node_modules 复用 + @proma/* 指向副本（见 method.nodeModules）",
+    "cd /dev/shm/proma-p1-baseline-cfce && PROMA_DEV=1 bun test"
+  ],
+  "limitations": [
+    "副本无 .git，冻结串对照用例（nanju-router-prompt.test.ts）必然失败 1 项，已在报告中标注并用 GIT_DIR 诊断排除产品因素。",
+    "sandbox 不可用：bwrap/unshare 在本机被拒绝（setting up uid map: Permission denied / unshare --user 失败），无法把 ~/.proma-dev 映射到临时目录；改用 PROMA_DEV=1 + 快照对比来界定写入边界。",
+    "B0 只覆盖可执行测试；未做 typecheck/build/pack、未做真实流程与 UI 验收（属 B2/B3/B5/B6）。",
+    "A 类的“泄漏源最小化确认”只对 P1–P4 完成；其余受害文件（如 w17-phase-advance-chain、nanju-delegate-guard、nanju-guide-progress、w18-*）已确认为跨文件污染（单跑全绿），但具体污染文件未逐一最小化。",
+    "两个全量运行结果完全一致（2341/119/6，73s），说明该基线下结果稳定可复算；但不代表并发写源码后的结果稳定。"
+  ]
+}

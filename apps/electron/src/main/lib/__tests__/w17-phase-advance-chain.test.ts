@@ -1437,20 +1437,20 @@ describe('W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 
     expect(getAdvanceRejectCount(WS, 'p1')).toBe(1)
   })
 
-  test('红测（防环 F5③）：前 2 次教育+续接，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点', () => {
+  test('红测（防环 F5③）：同产物同拒因只自动续接一次，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点', () => {
     const first = buildTestHooks()
     consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, first)
     const second = buildTestHooks()
     consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, second)
     expect(first.continuations.length).toBe(1)
-    expect(second.continuations.length).toBe(1)
+    expect(second.continuations.length).toBe(0) // 同一持久事件不重复自动续接
     // 第 3 次：转人工提示（不续接、不再教育注入）
     const third = buildTestHooks()
     consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, third)
     expect(third.continuations.length).toBe(0)
     expect(third.injected.some((t) => t.includes('自动纠偏闭环已达上限'))).toBe(true)
     expect(third.injected.some((t) => t.includes('人工介入'))).toBe(true)
-    expect(third.injected.some((t) => t.includes('推进未被授权'))).toBe(false) // 不再教育注入
+    expect(third.injected.some((t) => t.includes('当前拒因：'))).toBe(true) // 达限停止自动续接，但不能丢具体拒因
     const escalate = readTelemetryEvents().find((e) => e.eventType === 'advance.reject-escalate')
     expect(escalate).toBeTruthy()
     expect((escalate!.payload as Record<string, unknown>).kind).toBe('loop-limit')

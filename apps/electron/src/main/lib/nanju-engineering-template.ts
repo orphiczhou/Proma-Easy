@@ -19,14 +19,22 @@
  * （electron-builder extraResources，与 nanju-roles 同模式）。测试可注入显式目录。
  */
 
-import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync, unlinkSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import {
   isProjectCategory,
   getNanjuProjectDir,
+  getProjectEnvState,
+  setProjectEnvState,
+  listNanjuProjects,
+  getProjectSubStage,
   type ProjectCategory,
   type ProjectCategorySource,
 } from './nanju-project'
+import { resolveEngineeringTemplatesDirInternal, loadEngineeringResources, type EngineeringResourceIssue } from './nanju-engineering-resources'
+import { recordTelemetry } from './nanju-telemetry'
+import { emitGuideProgress } from './nanju-guide-progress'
 
 // ===== 品类元数据（注入用精简要点；全文见 resources/nanju-engineering-templates/） =====
 
@@ -244,32 +252,19 @@ export function resolveProjectCategoryForCoding(
 
 /**
  * 解析模板资源目录。候选依次探测（首个存在者胜）：
- * 1. 打包后 process.resourcesPath（electron-builder extraResources 落点）
- * 2. process.cwd()/apps/electron/resources（仓库根跑测试/脚本）
- * 3. process.cwd()/resources（dev:electron，cwd=apps/electron）
- * 全部不存在时返回候选 2（调用方 materialize 会 existsSync 降级为 null）。
+ * 1. 打包后 process.resourcesPath/app.asar（v0.17.131 加入；asar 内模板优先避免历史散装遮蔽）
+ * 2. 打包后 process.resourcesPath（electron-builder extraResources 落点）
+ * 3. process.cwd()/apps/electron/resources（仓库根跑测试/脚本）
+ * 4. process.cwd()/resources（dev:electron，cwd=apps/electron）
+ * 全部不存在时返回候选 0（调用方 existsSync 降级为 null/失败）。
  * 测试注入 explicitBase 时直接使用。
+ *
+ * v0.17.132：本实现下沉至 nanju-engineering-resources.resolveEngineeringTemplatesDirInternal
+ * 统一权威（manifest 校验逻辑与目录解析共用同源），本处 re-export 保持既有 import
+ * 不破坏 W3 既有 64 用例。
  */
 export function resolveEngineeringTemplatesDir(explicitBase?: string): string {
-  if (explicitBase) return join(explicitBase, 'nanju-engineering-templates')
-  const bases: string[] = []
-  // Electron 主进程检测用 process.versions.electron（无副作用）：bun/node 测试环境下
-  // require('electron') 会触发包 wrapper 的二进制下载副作用，禁止在模块加载路径引入
-  // v0.17.131：asar 内资源优先于历史散装 resources/，避免旧模板目录遮蔽新版本。
-  // 开发模式无 app.asar 时自然跳过；Electron 的 fs 对 app.asar 路径透明。
-  if (typeof process.versions.electron === 'string' && (process as { type?: string }).type === 'browser') {
-    bases.push(join(process.resourcesPath as string, 'app.asar'))
-    bases.push(process.resourcesPath as string)
-  }
-  bases.push(join(process.cwd(), 'apps', 'electron', 'resources'))
-  // process.resourcesPath 已作为打包候选加入；开发模式再尝试 cwd 资源。
-  bases.push(join(process.cwd(), 'resources'))
-  for (const base of bases) {
-    if (existsSync(join(base, 'nanju-engineering-templates'))) {
-      return join(base, 'nanju-engineering-templates')
-    }
-  }
-  return join(bases[0]!, 'nanju-engineering-templates')
+  return resolveEngineeringTemplatesDirInternal(explicitBase)
 }
 
 /** 项目内模板落位目录（00_ENGINEERING_TEMPLATE/，L2 可读） */
@@ -280,6 +275,16 @@ export function getProjectTemplateDir(workspaceSlug: string, projectId: string):
 /**
  * 把品类模板全文复制到项目目录 00_ENGINEERING_TEMPLATE/template.md。
  * 资源缺失/复制失败返回 null（降级：注入节退化为仅精简要点，不阻断 coding）。
+ *
+ * **Task 4 修订语义**（基线 v0.17.131+task4，待父集成 bump）：
+ * - **必须先走 manifest 校验**：调用 loadEngineeringResources 并检查 verify.ok。
+ *   校验失败 → 返回 null + console.warn 诊断（**禁止 silently fallback 到旧源**）。
+ * - **同时复制 Spike 协议**到项目 00_ENGINEERING_TEMPLATE/02-Spike实验协议.md
+ *   （修订前只复制 check_env.sh / driver-skeleton.*；现 Spike 也随模板落位，
+ *   满足各品类 §6 引用闭环）。
+ * - **写项目侧 template-manifest.json**：记录实际采用的 templateVersion /
+ *   templateHash / bundleVersion / bundleHash / copiedAt / sourceTemplatesDir，
+ *   便于项目交付后独立核验落位资源版本与哈希。
  *
  * opts.annotateInitialGuess（W7 R3 前移契约，v0.17.69）：prototype→architecture 推进
  * 钩子的前移落位传 true——模板头部注入一行「⏳ 初判参考，以架构师终判为准」标注；
@@ -299,36 +304,220 @@ export function materializeEngineeringTemplate(
   explicitBase?: string,
   opts?: { annotateInitialGuess?: boolean },
 ): string | null {
+  // Step 1：manifest 校验（Task 4 修订：mandatory；无 silently fallback）
+  const resources = loadEngineeringResources(explicitBase)
+  if (!resources.manifest || !resources.verify.ok) {
+    console.warn(
+      `[工程模板] 资源验证失败（projectId=${projectId}, category=${category}）：禁止 silently fallback 到旧源`,
+    )
+    for (const issue of resources.verify.issues) {
+      console.warn(`  [${issue.severity}] ${issue.kind}: ${issue.message}`)
+    }
+    return null
+  }
+  const templateEntry = resources.byCategory[category]
+  if (!templateEntry) {
+    console.warn(`[工程模板] 品类 ${category} 在 manifest 中缺失（projectId=${projectId}）`)
+    return null
+  }
   try {
-    const templatesDir = resolveEngineeringTemplatesDir(explicitBase)
-    const src = join(templatesDir, `${category}.md`)
-    if (!existsSync(src)) return null
+    const templatesDir = resources.baseDir
+    const src = join(templatesDir, templateEntry.path)
     const destDir = getProjectTemplateDir(workspaceSlug, projectId)
     if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
-    // L2-4 J2：check_env.sh 随模板落位（内层容错——脚本缺失/复制失败不影响模板落位）
-    // L2-5（审计 RED-2，2026-09-18）：驱动自检骨架双文件同段落位——模版 §5.3/§5 指引
-    // 「与本文件同目录/随模版分发」，不拷贝则真实项目内引用不可达（分发链最后一公里）。
-    for (const sharedFile of ['check_env.sh', 'driver-skeleton.py', 'driver-skeleton.cjs'] as const) {
-      try {
-        const sharedSrc = join(templatesDir, sharedFile)
-        if (existsSync(sharedSrc)) copyFileSync(sharedSrc, join(destDir, sharedFile))
-      } catch { /* 共享资源落位失败不阻断模板落位（探测/骨架侧有退化路径） */ }
-    }
+
+    // ===== S-1 修订：实测算落地 hash + 复制前后源变更拒绝 =====
+    // Step 2：复制前快照源文件 hash（防止复制期间源被并发改写）
+    const srcBytesBefore = readFileSync(src)
+    const srcHashBefore = createHash('sha256').update(srcBytesBefore).digest('hex')
+
+    // Step 3：品类模板落位（copyFile 或 annotate 注入；两者 dest 物理写入均回读 sha256）
     const dest = join(destDir, 'template.md')
+    let annotated = false
     if (opts?.annotateInitialGuess) {
-      // 标注行注入：首行标题后插入（保留原首行锚点，标注以注释形式紧跟其后）
-      const raw = readFileSync(src, 'utf-8')
+      const raw = srcBytesBefore.toString('utf-8')
       const lines = raw.split('\n')
       const firstTitle = lines.findIndex((l) => l.startsWith('# '))
       const note = '> ⏳ 初判参考，以架构师终判为准（本模板由 PRD 初判品类落位；架构师可在架构阶段修正品类，coding 推进时按终判权威重落位）'
       lines.splice(firstTitle + 1, 0, '', note)
       writeFileSync(dest, lines.join('\n'))
+      annotated = true
     } else {
       copyFileSync(src, dest)
+    }
+
+    // Step 4：复制后实测 dest hash（非 annotate 路径必须等于 srcHashBefore；annotate 路径必不等）
+    const destBytes = readFileSync(dest)
+    const landedTemplateHash = createHash('sha256').update(destBytes).digest('hex')
+    if (!annotated && landedTemplateHash !== srcHashBefore) {
+      // 罕见：copyFileSync 后内容与源不一致（盘错误/中转污染）→ 拒
+      console.warn(
+        `[工程模板] 落位 hash 与源不一致（projectId=${projectId}）：`,
+        `src=${srcHashBefore.slice(0, 16)}… landed=${landedTemplateHash.slice(0, 16)}…`,
+      )
+      try { unlinkSync(dest) } catch { /* 清理失败容忍 */ }
+      return null
+    }
+
+    // Step 5：复制后再次读取源 hash，校验复制期间源未被改写（防"中间漂移"）
+    const srcHashAfter = createHash('sha256').update(readFileSync(src)).digest('hex')
+    if (srcHashAfter !== srcHashBefore) {
+      console.warn(
+        `[工程模板] 源在复制期间被改写（projectId=${projectId}）：`,
+        `before=${srcHashBefore.slice(0, 16)}… after=${srcHashAfter.slice(0, 16)}…`,
+      )
+      try { unlinkSync(dest) } catch { /* 清理失败容忍 */ }
+      return null
+    }
+
+    // Step 6：shared 落位（Spike + check_env + skeleton）—— 每个都实测 landed hash
+    const sharedFiles: Array<{ name: string; srcHash: string; landedHash: string }> = []
+    const sharedNames = ['02-Spike实验协议.md', 'check_env.sh', 'driver-skeleton.py', 'driver-skeleton.cjs'] as const
+    for (const sharedFile of sharedNames) {
+      try {
+        const sharedSrc = join(templatesDir, sharedFile)
+        if (!existsSync(sharedSrc)) continue
+        const sharedSrcBytes = readFileSync(sharedSrc)
+        const sharedSrcHash = createHash('sha256').update(sharedSrcBytes).digest('hex')
+        const sharedDest = join(destDir, sharedFile)
+        copyFileSync(sharedSrc, sharedDest)
+        const sharedDestBytes = readFileSync(sharedDest)
+        const sharedLandedHash = createHash('sha256').update(sharedDestBytes).digest('hex')
+        if (sharedLandedHash !== sharedSrcHash) {
+          // shared 落位失败不阻断主流程（spec：脚本/骨架侧有退化路径），但记入日志
+          console.warn(`[工程模板] shared 落位 hash 与源不一致（${sharedFile}）：src=${sharedSrcHash.slice(0, 16)}… landed=${sharedLandedHash.slice(0, 16)}…`)
+        }
+        sharedFiles.push({ name: sharedFile, srcHash: sharedSrcHash, landedHash: sharedLandedHash })
+      } catch { /* 共享资源落位失败不阻断模板落位（探测/骨架侧有退化路径） */ }
+    }
+
+    // Step 7：写项目侧 template-manifest.json（含 templateHash + landedTemplateHash + shared 落位 hash）
+    try {
+      const projectManifest = {
+        category,
+        templateVersion: templateEntry.version ?? null,
+        templateHash: templateEntry.sha256,        // manifest 声明的源 hash（cross-reference）
+        landedTemplateHash,                         // S-1：实测落位 hash（交付后核验链）
+        annotated,                                  // 是否注入初判参考标注
+        bundleVersion: resources.manifest.bundleVersion,
+        bundleHash: resources.manifest.bundleSha256,
+        sourceTemplatesDir: templatesDir,
+        copiedAt: new Date().toISOString(),
+        sharedLanded: Object.fromEntries(sharedFiles.map((s) => [s.name, { srcHash: s.srcHash, landedHash: s.landedHash }])),
+      }
+      writeFileSync(join(destDir, 'template-manifest.json'), JSON.stringify(projectManifest, null, 2) + '\n')
+    } catch (e) {
+      console.warn(
+        `[工程模板] 项目侧 template-manifest.json 写盘失败（projectId=${projectId}）：`,
+        e instanceof Error ? e.message : String(e),
+      )
     }
     return dest
   } catch {
     return null
+  }
+}
+
+
+/**
+ * Materialize 结构化结果（Task 4 修订新增）。供调用方需要诊断/状态而非仅路径时使用。
+ */
+export interface MaterializeEngineeringTemplateResult {
+  /** 是否成功 */
+  ok: boolean
+  /** 模板全文绝对路径（成功时存在） */
+  templatePath: string | null
+  /** 项目侧 template-manifest.json 绝对路径（成功时存在） */
+  projectManifestPath: string | null
+  /** 实际采用的 templateVersion（来自 manifest；ok=false 时为 null） */
+  templateVersion: string | null
+  /** 实际采用的 templateHash（来自 manifest；ok=false 时为 null） */
+  templateHash: string | null
+  /** 资源整包 bundleVersion（ok=false 时为 null） */
+  bundleVersion: string | null
+  /** 资源整包 bundleSha256（ok=false 时为 null） */
+  bundleHash: string | null
+  /** 校验与落位问题清单（structured） */
+  issues: EngineeringResourceIssue[]
+}
+
+/**
+ * materializeEngineeringTemplate 的结构化版本，返回完整诊断。
+ *
+ * 与旧版差异：
+ * - 返回完整 MaterializeEngineeringTemplateResult 而非 string | null
+ * - 列出校验与落位阶段的所有 issue，便于 caller 不丢失上下文
+ * - verify 失败仍返回 issues（不抛），与 loadEngineeringResources 语义一致
+ */
+export function materializeEngineeringTemplateWithVerification(
+  workspaceSlug: string,
+  projectId: string,
+  category: ProjectCategory,
+  explicitBase?: string,
+  opts?: { annotateInitialGuess?: boolean },
+): MaterializeEngineeringTemplateResult {
+  const issues: EngineeringResourceIssue[] = []
+  const resources = loadEngineeringResources(explicitBase)
+  if (!resources.manifest || !resources.verify.ok) {
+    issues.push(...resources.verify.issues)
+    return {
+      ok: false,
+      templatePath: null,
+      projectManifestPath: null,
+      templateVersion: null,
+      templateHash: null,
+      bundleVersion: resources.manifest?.bundleVersion ?? null,
+      bundleHash: resources.manifest?.bundleSha256 ?? null,
+      issues,
+    }
+  }
+  const templateEntry = resources.byCategory[category]
+  if (!templateEntry) {
+    issues.push({
+      kind: 'manifest-unparseable',
+      severity: 'blocking',
+      message: `品类 ${category} 在 manifest 中缺失（byCategory 未索引到）`,
+      path: `${category}.md`,
+    })
+    return {
+      ok: false,
+      templatePath: null,
+      projectManifestPath: null,
+      templateVersion: null,
+      templateHash: null,
+      bundleVersion: resources.manifest.bundleVersion,
+      bundleHash: resources.manifest.bundleSha256,
+      issues,
+    }
+  }
+  const templatePath = materializeEngineeringTemplate(workspaceSlug, projectId, category, explicitBase, opts)
+  if (!templatePath) {
+    issues.push({
+      kind: 'file-missing',
+      severity: 'blocking',
+      message: `materialize 返回 null（写盘失败或源不可达），但 manifest verify 通过——IO 异常需独立排查`,
+    })
+    return {
+      ok: false,
+      templatePath: null,
+      projectManifestPath: null,
+      templateVersion: templateEntry.version ?? null,
+      templateHash: templateEntry.sha256,
+      bundleVersion: resources.manifest.bundleVersion,
+      bundleHash: resources.manifest.bundleSha256,
+      issues,
+    }
+  }
+  const projectManifestPath = join(getProjectTemplateDir(workspaceSlug, projectId), 'template-manifest.json')
+  return {
+    ok: true,
+    templatePath,
+    projectManifestPath,
+    templateVersion: templateEntry.version ?? null,
+    templateHash: templateEntry.sha256,
+    bundleVersion: resources.manifest.bundleVersion,
+    bundleHash: resources.manifest.bundleSha256,
+    issues,
   }
 }
 
@@ -601,11 +790,6 @@ export function syncProjectEnvStateFromArchitectureDoc(
   sessionId?: string,
 ): void {
   try {
-    const { readFileSync, existsSync } = require('node:fs') as typeof import('node:fs')
-    const { join } = require('node:path') as typeof import('node:path')
-    const {
-      getNanjuProjectDir, setProjectEnvState, getProjectEnvState,
-    } = require('./nanju-project') as typeof import('./nanju-project')
     const archPath = join(getNanjuProjectDir(workspaceSlug, projectId), '03_ARCHITECTURE', 'architecture.md')
     if (!existsSync(archPath)) return
     const content = readFileSync(archPath, 'utf-8')
@@ -632,8 +816,6 @@ export function syncProjectEnvStateFromArchitectureDoc(
     setProjectEnvState(workspaceSlug, projectId, marker.ready, envCheck)
 
     try {
-      const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
-      const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
       const mode = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)?.mode
       recordTelemetry(workspaceSlug, 'env.check.executed', {
         project_id: projectId, mode,
@@ -647,8 +829,6 @@ export function syncProjectEnvStateFromArchitectureDoc(
 
     if (sessionId) {
       try {
-        const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
-        const { getProjectSubStage, listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
         const project = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)
         if (project) {
           emitGuideProgress(sessionId, projectId, project.currentStage,

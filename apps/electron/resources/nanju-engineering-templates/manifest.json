@@ -1,0 +1,248 @@
+{
+  "$schema": "https://proma.cool/schemas/engineering-templates-manifest-v1.json",
+  "manifestVersion": "1.0.0",
+  "bundleVersion": "2.5.0",
+  "bundleId": "nanju-engineering-templates",
+  "generatedAt": "2026-09-23T11:24:30.524Z",
+  "generator": "proma-phase1-task4",
+  "platformVersion": "0.17.132",
+  "templates": [
+    {
+      "path": "web-fullstack.md",
+      "kind": "category",
+      "category": "web-fullstack",
+      "version": "v2.0",
+      "required": true,
+      "owner": "templates",
+      "sha256": "8cdb47d0999b4d375a9a3d5f13b0bdca41aa095b3c41ec2ae5fcff35c064b0b9",
+      "size": 30604
+    },
+    {
+      "path": "api-backend.md",
+      "kind": "category",
+      "category": "api-backend",
+      "version": "v2.0",
+      "required": true,
+      "owner": "templates",
+      "sha256": "804d21dea9dd8bb5f21200ab2f9cbb2f8554209dc46c99421f527db75fe3bd76",
+      "size": 17256
+    },
+    {
+      "path": "mobile-app.md",
+      "kind": "category",
+      "category": "mobile-app",
+      "version": "v2.3",
+      "required": true,
+      "owner": "templates",
+      "sha256": "ae91332238369f00f5c5747596a020f59e8594c7e03f8647819e688897cff8ca",
+      "size": 24265
+    },
+    {
+      "path": "desktop-app.md",
+      "kind": "category",
+      "category": "desktop-app",
+      "version": "v2.4",
+      "required": true,
+      "owner": "templates",
+      "sha256": "39e278c8023d018fad7d23883c870aa6fb330d13048dc8cd7e34b77f2b534c6e",
+      "size": 33295
+    },
+    {
+      "path": "cli-tool.md",
+      "kind": "category",
+      "category": "cli-tool",
+      "version": "v2.0",
+      "required": true,
+      "owner": "templates",
+      "sha256": "4cf2384821adfc5f17dbd2a5957c5972f12862ee9a95af07c08a941f4f630f21",
+      "size": 16226
+    },
+    {
+      "path": "ai-application.md",
+      "kind": "category",
+      "category": "ai-application",
+      "version": "v2.0",
+      "required": true,
+      "owner": "templates",
+      "sha256": "4aace3f9d7e591a18ae113bfc9864bb33b46a8d3592171fec4e364c895722fba",
+      "size": 20980
+    }
+  ],
+  "sharedFiles": [
+    {
+      "path": "02-Spike实验协议.md",
+      "kind": "shared-protocol",
+      "required": true,
+      "owner": "templates",
+      "sha256": "d2ff0c88151fe87f8ce4d9a68b3de7f034e425545f4d29b3d9ec34598058e0aa",
+      "size": 9136,
+      "version": "v1.0"
+    },
+    {
+      "path": "README.md",
+      "kind": "shared-readme",
+      "required": true,
+      "owner": "templates",
+      "sha256": "5106a23b0eeaf1958f9168ac8f8f6fcdefa8f8c08912066c5f399b098b1754ea",
+      "size": 4882,
+      "version": "v0.17.132"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "kind": "shared-changelog",
+      "required": true,
+      "owner": "templates",
+      "sha256": "0cf71bf21f7a65de8356acea8066726fec2cdf16103c77782c1c6b6514010124",
+      "size": 4781,
+      "version": "v0.17.132"
+    },
+    {
+      "path": "check_env.sh",
+      "kind": "shared-script",
+      "required": true,
+      "owner": "parent-refresh",
+      "sha256": "89d5ed521ebaa001b073e8cf9d935fda48ab039f922f52dc5d3817816eccc13a",
+      "size": 7982
+    },
+    {
+      "path": "driver-skeleton.py",
+      "kind": "shared-driver",
+      "required": true,
+      "owner": "parent-refresh",
+      "sha256": "1cc168a9c14611bbf4195f2ea0d5d29349f7545b7527407096ae4f7745e55e95",
+      "size": 14514
+    },
+    {
+      "path": "driver-skeleton.cjs",
+      "kind": "shared-driver",
+      "required": true,
+      "owner": "parent-refresh",
+      "sha256": "7dcde979b285fe1f20c8f42aaf49f72d5514ef2a0f504d471e75f009b1785272",
+      "size": 15254
+    }
+  ],
+  "dependencies": [
+    {
+      "from": "web-fullstack.md",
+      "to": "driver-skeleton.py",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "web-fullstack.md",
+      "to": "driver-skeleton.cjs",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "web-fullstack.md",
+      "to": "02-Spike实验协议.md",
+      "kind": "section-reference",
+      "anchor": "§6",
+      "required": true
+    },
+    {
+      "from": "api-backend.md",
+      "to": "driver-skeleton.py",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "api-backend.md",
+      "to": "driver-skeleton.cjs",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "api-backend.md",
+      "to": "02-Spike实验协议.md",
+      "kind": "section-reference",
+      "anchor": "§6",
+      "required": true
+    },
+    {
+      "from": "mobile-app.md",
+      "to": "driver-skeleton.py",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "mobile-app.md",
+      "to": "driver-skeleton.cjs",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "mobile-app.md",
+      "to": "02-Spike实验协议.md",
+      "kind": "section-reference",
+      "anchor": "§6",
+      "required": true
+    },
+    {
+      "from": "desktop-app.md",
+      "to": "driver-skeleton.py",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "desktop-app.md",
+      "to": "driver-skeleton.cjs",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "desktop-app.md",
+      "to": "02-Spike实验协议.md",
+      "kind": "section-reference",
+      "anchor": "§6",
+      "required": true
+    },
+    {
+      "from": "cli-tool.md",
+      "to": "driver-skeleton.py",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "cli-tool.md",
+      "to": "driver-skeleton.cjs",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "cli-tool.md",
+      "to": "02-Spike实验协议.md",
+      "kind": "section-reference",
+      "anchor": "§6",
+      "required": true
+    },
+    {
+      "from": "ai-application.md",
+      "to": "driver-skeleton.py",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "ai-application.md",
+      "to": "driver-skeleton.cjs",
+      "kind": "file-reference",
+      "required": true
+    },
+    {
+      "from": "ai-application.md",
+      "to": "02-Spike实验协议.md",
+      "kind": "section-reference",
+      "anchor": "§6",
+      "required": true
+    },
+    {
+      "from": "desktop-app.md",
+      "to": "check_env.sh",
+      "kind": "script-reference",
+      "anchor": "§2.3",
+      "required": true
+    }
+  ],
+  "bundleSha256": "397b1994bb984564aa59f2598210f26bc9eae139b4aae5cb01d2aeb8d7d870ac"
+}

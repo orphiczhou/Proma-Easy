@@ -16,6 +16,8 @@
   ② expected/actual 同源生成（A3 类）：actual 必须由 probe（可调用）真实探测产生；
      assert_same_source(expected_const, probe_fn) 断言同源——A3 类教训 [实证]：
      禁止把 actual 手写成 expected 的同义文案（期望"语音输入已开启"不得拿"语音输入打开"当通过）。
+     Task 11 恒真防线：make_check 的 actual 参数**只能传 probe 函数**，传字符串直接抛
+     DriverSelfCheckError——手写 actual 会让 expected==actual 恒真（无法暴露产品行为不符）。
   ③ 输出 JSON schema 校验 + 退出码表：emit_result 序列化前自校验
      （testId/target 来自 stdin、checks 非空、每条字段形态合法、evidence 非空字符串数组）。
   ④ 顶层异常包裹（R3 类）：run_guarded 以 except BaseException 捕获（含 SystemExit，
@@ -24,10 +26,12 @@
      崩溃也产出可判读输出，不再静默。os._exit 与信号（SIGSEGV 等）进程内不可拦截，
      该路径由平台侧 P0-2 stderr 尾部透传兜底。
   ⑤ 环境前置自检：check_environment 在驱动逻辑运行前检查 DISPLAY / 密钥类变量
-     （只声明变量名，值从环境读、不硬编码、不写进任何文件）。缺失 → 输出含
-     "环境前置自检"检查项的结构化结果并 exit 2（blocked），环境问题不伪装成产品 error。
-     语义说明：宿主把 exit≠0 且含 fail 检查的结果判为 fail/error——环境自检条目的
-     label/actual 明示"环境前置自检 / 缺失: XXX"，验收方能据此把环境缺失与产品缺陷区分开。
+     （只声明变量名，值从环境读、不硬编码、不写进任何文件）。缺失 → 输出结构化 blocked
+     标记 {blocked:{kind:'environment',missing:[...],scenarioExecuted:false},checks:[]}
+     并 exit 2（blocked），环境问题不伪装成产品 error。
+     宿主协议（Task 11）：exit 2 本身不足以证明 blocked——宿主校验 blocked 标记的
+     kind/missing/scenarioExecuted 且要求 checks 为空，才判 blocked（coveredUs 空、不计入
+     产品修复预算）；产品 fail / 崩溃 / 坏 schema 与伪造 exit 2 不会被洗成环境阻塞。
      回归测试态注入（仅平台测试用，业务勿用）：
      NANJU_DRIVER_SKELETON_TEST_DISPLAY_MISSING=1 模拟 DISPLAY 缺失；
      NANJU_DRIVER_SKELETON_TEST_KEY_MISSING=1 模拟密钥类变量缺失。
@@ -86,8 +90,9 @@ def make_check(story_id, label, expected, actual_or_probe, evidence=None):
 
     - acceptance 模式（stdin covers 非空）：story_id 必须非空字符串（R2 类校验）；
       辅助模式（covers 为空）：story_id 必须为 None。
-    - actual_or_probe 传可调用（probe 函数）→ 调用取实际值（② 同源生成，推荐路径）；
-      传字符串 → 直接作为 actual（仅开发期联调；A3 类同义文案风险自负，正式断言一律用 probe）。
+    - actual_or_probe **必须传可调用（probe 函数）**：调用取实际值（② 同源生成）。
+      传字符串直接抛 DriverSelfCheckError（恒真防线，Task 11）——手写 actual 会让
+      expected==actual 恒真，无法暴露产品行为不符（A3 类教训）。
     """
     req = _LAST_REQUEST or {}
     covers = req.get('covers') or []
@@ -101,7 +106,12 @@ def make_check(story_id, label, expected, actual_or_probe, evidence=None):
         if story_id is not None:
             raise DriverSelfCheckError(
                 '辅助测试（covers 为空）的 storyId 必须为 None，收到：' + repr(story_id))
-    actual = actual_or_probe() if callable(actual_or_probe) else actual_or_probe
+    if not callable(actual_or_probe):
+        raise DriverSelfCheckError(
+            '恒真断言风险（A3 类）：make_check 的 actual 必须是 probe 函数（真实探测），'
+            '禁止直接传字符串——手写 actual 会让 expected==actual 恒真，无法暴露产品行为不符。'
+            '请传 lambda/函数返回真实探测值，或用 assert_same_source。')
+    actual = actual_or_probe()
     to_str = lambda v: v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)  # noqa: E731
     return {
         'storyId': story_id,
@@ -163,15 +173,24 @@ def _guard_check(label, expected, actual, evidence):
 
 def emit_blocked(missing):
     # type: (list) -> None
-    """⑤ 环境缺失 → 结构化 blocked 输出 + exit 2（自检拦截）。"""
+    """⑤ 环境缺失 → 结构化 blocked 输出 + exit 2（自检拦截）。
+
+    宿主协议（Task 11）：
+    - blocked.kind='environment'（阻塞类别）；
+    - blocked.missing=缺失项列表（结构化诊断，宿主据此明确缺 DISPLAY/设备不可达）；
+    - blocked.scenarioExecuted=False（明确「被测场景未执行」，与产品 fail 区分）；
+    - checks=[]（阻塞不携带产品检查，宿主判 blocked 且 coveredUs 空、不计入产品修复预算）。
+    exit 2 本身不足以证明 blocked——宿主还会校验标记来源、诊断与「场景未执行」声明，
+    异常 exit 2 不会被洗成环境问题。"""
     _write_stdout({
         'testId': (_LAST_REQUEST or {}).get('testId'),
         'target': (_LAST_REQUEST or {}).get('target'),
-        'checks': [_guard_check(
-            '环境前置自检',
-            '环境就绪',
-            '缺失: ' + ', '.join(missing),
-            ['环境自检拦截（exit 2=blocked）：驱动未运行，环境缺失不伪装成产品 error'])],
+        'blocked': {
+            'kind': 'environment',
+            'missing': list(missing),
+            'scenarioExecuted': False,
+        },
+        'checks': [],
     })
     _exit_table(2)
 
@@ -229,7 +248,7 @@ def run_probes(request):
         covers[0] if covers else None,
         'TODO: 替换为真实 probe',
         '真实探测结果',
-        '骨架未填充 run_probes',
+        lambda: '骨架未填充 run_probes',
         ['照抄骨架默认检查：填充 run_probes 后本条消失'],
     )]
 

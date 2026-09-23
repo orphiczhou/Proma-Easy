@@ -5,6 +5,8 @@
  */
 
 import type { IpcMain } from 'electron'
+import { NANJU_CANCEL_ADVANCE_CORRECTION } from '@proma/shared'
+import { cancelAdvanceCorrection, getAdvanceCorrectionView } from './nanju-advance-recovery'
 import {
   listNanjuProjects,
   createNanjuProject,
@@ -18,10 +20,30 @@ import { recordTelemetry, readTelemetry } from './nanju-telemetry'
 import type { ProjectMode } from './nanju-project'
 import { startNanjuHtmlWatcher } from './nanju-preview-watcher'
 import { listSnapshots } from './nanju-snapshot'
-import { createProjectCheckpoint, rollbackProjectSnapshot } from './nanju-project-snapshots'
-import { listAgentWorkspaces, createAgentWorkspace } from './agent-workspace-manager'
+import { createProjectCheckpoint, rollbackProjectSnapshot, recoverInterruptedProjectRestore, getProjectRecoveryBlock } from './nanju-project-snapshots'
+import { listAgentWorkspaces, createAgentWorkspace, getAgentWorkspaceBySlug } from './agent-workspace-manager'
 import { findNanjuProjectBySession, getNanjuPhaseGatePrompt } from './nanju-phase-gate'
 import { getGuideProgressSnapshot } from './nanju-guide-progress'
+import { clickToFixPolicy } from './nanju-click-to-fix-policy'
+import { buildDeliveryViewModel } from './nanju-delivery-view'
+
+function isRecoveryWorkspaceBusy(workspaceSlug: string): boolean {
+  const workspace = getAgentWorkspaceBySlug(workspaceSlug)
+  if (!workspace) return true
+  const { listAgentSessions } = require('./agent-session-manager') as typeof import('./agent-session-manager')
+  const { isAgentSessionActive } = require('./agent-service') as typeof import('./agent-service')
+  return listAgentSessions().some(session => session.workspaceId === workspace.id && isAgentSessionActive(session.id))
+}
+
+function recoverBeforeProjectOpen(workspaceSlug: string, projectId: string): string | null {
+  // 同步恢复不会与本进程其它工具交错；活跃会话存在时只返回诊断，不更改文件。
+  if (isRecoveryWorkspaceBusy(workspaceSlug)) {
+    const block = getProjectRecoveryBlock(workspaceSlug, projectId)
+    return block
+  }
+  const result = recoverInterruptedProjectRestore(workspaceSlug, projectId)
+  return result.ok ? null : result.message
+}
 
 /** 点选纠错批量提交清单的单条项（宿主 ClickToFixPanel reportItems 的 JSON 形状） */
 export interface CtfCommitItem {
@@ -232,9 +254,18 @@ function readAutoClarifyField(project: NanjuProject): NanjuAutoClarifyState | un
 }
 
 export function registerNanjuIpc(ipcMain: IpcMain): void {
+  ipcMain.handle(NANJU_CANCEL_ADVANCE_CORRECTION, (_event, input: { workspaceSlug: string; projectId: string; sessionId: string }) => {
+    const project = getNanjuProject(input.workspaceSlug, input.projectId)
+    if (!project || project.sessionId !== input.sessionId) return { ok: false }
+    cancelAdvanceCorrection(input.workspaceSlug, input.projectId)
+    return { ok: true }
+  })
   // ===== 项目元数据 =====
   ipcMain.handle('nanju:list-projects', async (_event, workspaceSlug: string) => {
-    return listNanjuProjects(workspaceSlug)
+    return listNanjuProjects(workspaceSlug).map(project => {
+      const recoveryMessage = recoverBeforeProjectOpen(workspaceSlug, project.projectId)
+      return { ...getNanjuProject(workspaceSlug, project.projectId), recoveryMessage, advanceCorrection: getAdvanceCorrectionView(workspaceSlug, project.projectId) }
+    })
   })
 
   ipcMain.handle('nanju:create-project', async (_event, input: {
@@ -307,7 +338,10 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     workspaceSlug: string
     projectId: string
   }) => {
-    return getNanjuProject(input.workspaceSlug, input.projectId)
+    const project = getNanjuProject(input.workspaceSlug, input.projectId)
+    if (!project) return null
+    const recoveryMessage = recoverBeforeProjectOpen(input.workspaceSlug, input.projectId)
+    return { ...getNanjuProject(input.workspaceSlug, input.projectId), recoveryMessage, advanceCorrection: getAdvanceCorrectionView(input.workspaceSlug, input.projectId) }
   })
 
   ipcMain.handle('nanju:delete-project', async (_event, input: {
@@ -343,7 +377,9 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
   // ===== 阶段门禁 =====
   ipcMain.handle('nanju:get-project-stage', async (_event, input: { workspaceSlug: string; sessionId: string }) => {
     const project = findNanjuProjectBySession(input.workspaceSlug, input.sessionId)
-    return project ? { stage: project.currentStage, project } : null
+    const recoveryMessage = project ? recoverBeforeProjectOpen(input.workspaceSlug, project.projectId) : null
+    const current = project ? getNanjuProject(input.workspaceSlug, project.projectId) : null
+    return current ? { stage: current.currentStage, project: current, recoveryMessage } : null
   })
 
   // v2.4（D7 §8）：移除 nanju:advance-stage 死通道（曾 :132，绕过 §2 推进硬门；
@@ -498,7 +534,9 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     if (!win || win.isDestroyed()) return { ok: false, error: '主窗口不可用' }
     // 面板选项指令（interaction-spec 交互1 快速选项）：直接转化为修改指令消息
     // coding 阶段（P1 Sprint A）点选目标是 08_APP 代码而非 prototype.html，且不回写 PRD
-    const isCodingStage = project.currentStage === 'coding'
+    const policy = clickToFixPolicy(project.currentStage)
+    const isCodingStage = policy.application
+    const needsRetest = policy.mustRetest
     const actionLabel = (() => {
       if (input.kind === 'commit-changes') {
         // 待接受清单一次性提交：结构化列出全部即时调整（WO4：明细构建抽 buildCtfCommitDetail 纯函数）
@@ -508,7 +546,7 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
         } catch {
           detail = input.action ?? ''
         }
-        return `以下是我在${isCodingStage ? '应用' : '原型'}上即时调整的修改清单（共 ${input.type}），请把这些改动应用到${isCodingStage ? ' 08_APP 的代码文件（入口 08_APP/index.html），不需要同步 PRD' : ' prototype.html 并同步 PRD'}：\n${detail}`
+        return `以下是我在${isCodingStage ? '应用' : '原型'}上即时调整的修改清单（共 ${input.type}），请把这些改动应用到${isCodingStage ? ' 08_APP/ 下的应用代码，testing/delivered 修改后必须重新执行测试，不需要同步 PRD' : ' prototype.html 并同步 PRD'}：\n${detail}`
       }
       if (input.kind !== 'panel-action') return null
       const el = `${input.type}「${input.text || input.id}」`
@@ -519,7 +557,7 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     const label2 = input.kind === 'element-click'
       ? `【点选纠错】我点击了${isCodingStage ? '页面' : '原型'}元素：${input.type}「${input.text || input.id}」（data-ai-id=${input.id}）。请给出这个元素的快速修改选项。`
       : input.kind === 'panel-action' && actionLabel
-        ? `【点选纠错】${actionLabel}${isCodingStage ? '目标文件是 08_APP/ 下的代码文件（入口 08_APP/index.html），请执行修改。' : '请执行修改并同步 PRD。'}`
+        ? `【点选纠错】${actionLabel}${isCodingStage ? '目标文件是 ' + policy.target + ' 应用代码；' + (needsRetest ? '旧测试报告与交付确认已失效，修复后必须重新测试。' : '请执行修改。') : '请执行修改并同步 PRD。'}`
         : input.kind === 'commit-changes' && actionLabel
           ? `【点选纠错·批量修改】${actionLabel}`
           : `【点选纠错】我点了${isCodingStage ? '应用' : '原型'}空白处，没有选中可修改元素。`
@@ -556,10 +594,17 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
           : input.action === 'move' ? 'pick-move'
             : input.action === 'text' ? 'pick-text'
               : 'pick-other'
-      if (input.kind === 'element-click') await emitClickToFix(input.type ?? '', Boolean(input.id), false, 'pick-color')
+      // 审计 B6-F-06：裸元素点击尚未选择快速动作，stage 记 'pick-other'（不冒充 pick-color）
+      if (input.kind === 'element-click') await emitClickToFix(input.type ?? '', Boolean(input.id), false, 'pick-other')
       else if (input.kind === 'panel-action') await emitClickToFix(input.type ?? '', Boolean(input.id), true, actionStage)
       else if (input.kind === 'commit-changes') await emitClickToFix('多元素', false, true, 'pick-other')
       else if (input.kind === 'blank-click') await emitClickToFix('空白', false, false, 'pick-other')
+    }
+    if (policy.application && (input.kind === 'panel-action' || input.kind === 'commit-changes')) {
+      const { clearProjectDeliveryAck, clearProjectDeliveryChallenge, clearNanjuAdvanceAuthState } = await import('./nanju-project')
+      clearProjectDeliveryAck(input.workspaceSlug, project.projectId)
+      clearProjectDeliveryChallenge(input.workspaceSlug, project.projectId)
+      clearNanjuAdvanceAuthState(input.workspaceSlug, project.projectId)
     }
     // 会话可能空闲（等用户意见时是 idle）：queueAgentMessage 要求会话运行中，
     // 点选消息语义等同用户新消息——用 runAgent 开新一轮（带真实 webContents 流式回显）。
@@ -613,6 +658,11 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     return createRoleSession(input.roleId, input.workspaceId, input.projectContext)
   })
 
+  ipcMain.handle('nanju:get-delivery-view', async (_event, input: { workspaceSlug: string; projectId: string }) => {
+    if (!getNanjuProject(input.workspaceSlug, input.projectId)) return null
+    return buildDeliveryViewModel(input.workspaceSlug, input.projectId)
+  })
+
   // ===== 快照管理 =====
   // W-I B-c：create-snapshot 走三段式检查点（会话快照 + 工程文件快照 + linkFileSnapshot）。
   // 返回值向后兼容：除会话快照字段外额外带 fileSnapshotId（未捕获成功时为 null）。
@@ -620,6 +670,9 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
     workspaceSlug: string; projectId: string; sessionId: string;
     description: string; triggerType?: string;
   }) => {
+    const project = getNanjuProject(input.workspaceSlug, input.projectId)
+    if (!project || project.sessionId !== input.sessionId) throw new Error('工程不存在或会话不属于该工程')
+    if (isRecoveryWorkspaceBusy(input.workspaceSlug)) throw new Error('工作区有会话运行，请等其结束后保存检查点')
     const result = await createProjectCheckpoint(
       input.workspaceSlug, input.projectId, input.sessionId, input.description,
       input.triggerType as ProjectSnapshot['triggerType'],
@@ -630,6 +683,7 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
   ipcMain.handle('nanju:list-snapshots', async (_event, input: {
     workspaceSlug: string; projectId: string;
   }) => {
+    if (!getNanjuProject(input.workspaceSlug, input.projectId)) throw new Error('工程不存在')
     return listSnapshots(input.workspaceSlug, input.projectId)
   })
 
@@ -637,9 +691,9 @@ export function registerNanjuIpc(ipcMain: IpcMain): void {
   ipcMain.handle('nanju:rollback-snapshot', async (_event, input: {
     workspaceSlug: string; projectId: string; snapshotId: number;
   }) => {
-    const result = await rollbackProjectSnapshot(input.workspaceSlug, input.projectId, input.snapshotId)
-    // 兼容旧调用方（原来只返回 ProjectSnapshot|null）：保留原字段并附加恢复结论
-    return result.snapshot ? { ...result.snapshot, fileRestore: result.fileRestore, rollbackMessage: result.message } : null
+    return rollbackProjectSnapshot(input.workspaceSlug, input.projectId, input.snapshotId, {
+      isBusy: () => isRecoveryWorkspaceBusy(input.workspaceSlug),
+    })
   })
 
   // ===== 埋点 =====
