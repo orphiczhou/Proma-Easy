@@ -1,0 +1,14 @@
+  • electron-builder  version=25.1.8 os=6.8.0-139-generic
+  • loaded configuration  file=package.json ("build" field)
+  • loaded parent configuration  file=/home/orphic/proma-patches/p1-quick-engineering/apps/electron/electron-builder.yml
+  • skipped dependencies rebuild  reason=npmRebuild is set to false
+  • packaging       platform=linux arch=x64 electron=43.2.0 appOutDir=out/linux-unpacked
+[afterPack] 工程模板资源校验通过：/home/orphic/proma-patches/p1-quick-engineering/apps/electron/out/linux-unpacked/resources/nanju-engineering-templates (12 required)
+
+=== 结论（父会话补记）===
+- attempt1：afterPack 门禁首次实跑即拦截——bundleSha256 不一致（1ebb16 != 397b19），pack 退出码 1。
+  根因：after-pack-verify-resources.cjs 用 localeCompare 排序，而权威源 computeBundleSha256 用码元比较，
+  localeCompare 把 CHANGELOG.md/README.md 按大小写不敏感排到末尾，导致同一批文件 bundle 指纹不同。
+  修复：afterPack 排序改为码元比较（与 computeBundleSha256 一致）。
+- attempt2：修复后 afterPack 通过（12 required），electron-builder --dir 产出 out/linux-unpacked/proma（220MB）。
+- 结论：afterPack 资源门禁非摆设，首次真实打包即拦截了门禁脚本自身的排序漂移。

@@ -28,7 +28,7 @@ module.exports = async function afterPack(context) {
     const digest = sha256(file)
     if (size !== entry.size || digest !== entry.sha256) fail(`资源哈希/大小不一致：${entry.path}`)
   }
-  const required = entries.filter(entry => entry.required).sort((a, b) => a.path.localeCompare(b.path))
+  const required = entries.filter(entry => entry.required).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
   const bundle = crypto.createHash('sha256')
     .update(required.map(entry => `${entry.path}\0${entry.sha256}`).join('\n'))
     .digest('hex')

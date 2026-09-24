@@ -60,3 +60,9 @@
 - **历史空态与历史区对齐**：「暂无测试运行记录」空态仅在既无当前报告又无历史记录时展示，避免 report.json 缺失但 evidence 存在时的自相矛盾 UI。
 - **入口路径二次防御需加分隔符**：`startsWith(root)` 改 `resolved===root || startsWith(root+sep)`，防 `../project-<id>-evil` 兄弟目录前缀命中（审计实证缺口）。
 - **文档证据数字必须可复现**：审计发现「46/46」引用错误即判 red（修复本身真实、证据数夸大也损可信度）；更正为实测值并标注来源。
+
+## 2026-09-24 pack/部署新增决策
+
+- **afterPack 与 buildManifest 的 bundle 指纹排序必须同源**：afterPack 用 `localeCompare` 排序、`computeBundleSha256` 用码元比较，导致同一批文件 bundle 不一致。统一为码元比较（`a.path < b.path ? -1 : …`）。教训：跨语言（.cjs 门禁脚本 vs .ts 权威源）实现同一哈希协议时，排序/拼接算法必须逐字节一致，否则门禁误拦。
+- **dev 实例部署用 out/linux-unpacked 增量覆盖**：只替换 resources/app.asar + extraResources（bin/default-skills/nanju-engineering-templates/proma-logos/startup-splash/model-config/tutorial/icon），保留 dev 特有 package-type、setuid chrome-sandbox 与历史 .bak 备份；不删任何旧部署备份。
+- **B3 GUI 验证通过 CDP 9224**：dev 实例 `--remote-debugging-port=9224 --remote-allow-origins=*`，父会话用 node 全局 WebSocket 连 CDP Runtime.evaluate 读 DOM/点击，替代视觉截图（视觉路由不可用时）。新建测试工程保留作实物证据，不删。

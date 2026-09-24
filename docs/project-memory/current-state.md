@@ -84,3 +84,16 @@ Phase 1 快消型主轴的模块和六品类模板已有较完整实现，进入
 
 - 首个硬化批次已提交：`4e4f4630`（Phase 1 硬化：恢复事务/结构化拒因/交付视图/验收基线/环境探测）。工作树清零；版本 electron `0.17.132`、shared `0.1.63`、manifest bundle `2.5.0` 已入库。commit trailer 唯一 `Made-with: Proma`；**未推送**。
 - 仍 block：B3 真流程、B6 六品类产品验收、pack/afterPack/部署（根盘空间不足、dev 未运行且本轮不启动）。下一波优先解阻磁盘与 dev 实例，再评估 pack 与真流程端到端。
+
+## 2026-09-24 21:20–21:45 实施截面（磁盘解阻 / pack+afterPack 实跑 / dev 启动 / B3 GUI 突破）
+
+- **磁盘解阻**：清理 dotslash/npm/pip/tmp/apt 可再生缓存，根盘 23M → 2.0G 可用（未删旧部署备份与历史数据）。
+- **pack + afterPack 门禁首次实跑**：`electron-builder --dir` 产出 out/linux-unpacked/proma（220MB）。
+  - attempt1 afterPack 拦截 bundleSha256 不一致（1ebb16 != 397b19），根因是 after-pack-verify-resources.cjs 用 `localeCompare` 排序、权威源 `computeBundleSha256` 用码元比较（CHANGELOG/README 大小写不敏感排到末尾）。已修复 afterPack 排序为码元比较，attempt2 通过（12 required）。
+  - 结论：afterPack 门禁非摆设，首次真实打包即拦截门禁脚本自身排序漂移。
+- **部署 dev（修复 B5-F-1）**：dev/app/resources/nanju-engineering-templates 从 7 文件（Sep 4 旧版缺 manifest/check_env/driver-skeleton/Spike协议）→ 13 文件完整；app.asar 6698f6… → a894f4…（v0.17.132）。
+- **dev 实例启动**：start-dev.sh，9224 CDP 监听，proma-dev 进程正常。
+- **B3 GUI 突破**：通过 CDP 9224 操作真实 GUI——南大向导→快速做一个工具→开始创建→新工程 `project-我的快速工具`（workspace-1786847832507）真实创建，8 目录 + `acceptanceBaselineRequired=true` + `archEvidenceGate=true`（createNanjuProject 写入，非测试注入）+ currentStage=requirements。
+  - 旧工程 `project-真流程e2e-剪贴板历史` 状态确认：subStage=CODE、coding errorCount=2、pendingAdvanceCorrection 为旧 schema（无 eventKey/checks）、06_TESTS 空——是 Task 5 旧 schema 恢复的真实样本。
+- 证据：`execution/b3/gui-live-verification-20260924.md`、`execution/b3/shots/dev-main.png`、`execution/current-verification/pack-20260924.log`。
+- 仍待：新工程走完 coding→testing→delivery 全链、GUI 打开旧工程看恢复入口、六品类产品验收（B6）。均不计数 coveredUs。
