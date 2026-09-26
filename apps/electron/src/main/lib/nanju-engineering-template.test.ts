@@ -357,6 +357,16 @@ describe('validateEnvChecklist（R2 第 4 层兜底）', () => {
     expect(validateEnvChecklist('cli-tool', ['python3', 'pip', 'node'])).toEqual({ ok: true, problems: [] })
   })
 
+  test('desktop-app P1 Python 路径组件（tkinter/gi/AyatanaAppIndicator3/SNI host）通过（2026-09-26 E2E 实测回填）', () => {
+    expect(validateEnvChecklist('desktop-app', ['tkinter', 'gi', 'AyatanaAppIndicator3', 'SNI host'])).toEqual({ ok: true, problems: [] })
+    expect(validateEnvChecklist('desktop-app', ['gi (PyGObject)', 'pygobject'])).toEqual({ ok: true, problems: [] })
+    expect(validateEnvChecklist('desktop-app', ['ayatanaappindicator3'])).toEqual({ ok: true, problems: [] })
+    // SNI 协议宿主服务的其它写法也归一通过
+    expect(validateEnvChecklist('desktop-app', ['StatusNotifierItem', 'status-notifier-watcher', 'indicator-application-service'])).toEqual({ ok: true, problems: [] })
+    // 仍是幻觉包名的仍拦（不被本次扩容误放）
+    expect(validateEnvChecklist('desktop-app', ['tkinterr', 'AytanaAppIndicator3']).ok).toBe(false)
+  })
+
   test('typo 组件拦截（rustcc / nodee 不在白名单）', () => {
     const result = validateEnvChecklist('desktop-app', ['rustc', 'rustcc', 'nodee'])
     expect(result.ok).toBe(false)

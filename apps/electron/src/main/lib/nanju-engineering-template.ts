@@ -627,7 +627,14 @@ const ENV_COMPONENTS_BY_CATEGORY: Record<ProjectCategory, Set<string>> = {
     'pynput', 'sounddevice', 'pyaudio', 'pystray', 'pillow', 'xclip', 'xsel', 'xdotool',
     'notify-send', 'libnotify', 'portaudio', 'libportaudio2', 'pyperclip', 'requests', 'httpx', 'numpy', 'pip',
     // venv/音频探测项（§2.3 check_env.sh 探测行；架构师实测会照抄进环境清单表）
-    'venv', 'audio-devices']),
+    'venv', 'audio-devices',
+    // P0-4 补充（2026-09-26，E2E-桌面便签 architecture→coding 实测）：desktop-app P1 Python 路径
+    // 真实组件——tkinter（Python GUI 标准库）、gi/PyGObject（appindicator 依赖）、
+    // AyatanaAppIndicator3（托盘后端 Python 包，import 名小写归一）、SNI host/StatusNotifierItem
+    //（托盘显示协议宿主服务）。此前白名单只列了 apt 包名（ayatana-appindicator3-0.1），
+    // 架构师手写清单含 Python import 名/语义服务名时被误判「幻觉包名」。
+    'tkinter', 'gi', 'pygobject', 'ayatanaappindicator3',
+    'sni host', 'statusnotifieritem', 'status-notifier-watcher', 'statusnotifierwatcher', 'indicator-application-service']),
   'cli-tool': new Set(['python3', 'pip', 'uv', 'go', 'rustc', 'cargo', 'tsx', 'execa']),
   'ai-application': new Set(['python3', 'pip', 'uv', 'poetry', 'ollama', 'docker', 'psql', 'pgvector', 'libsql']),
 }
