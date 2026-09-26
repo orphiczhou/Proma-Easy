@@ -604,6 +604,11 @@ const ENV_COMPONENT_SHARED = new Set([
   'node', 'npm', 'bun', 'bunx', 'pnpm', 'yarn', 'deno', 'git',
   // W24-10：环境事实类探测项（架构师实测把 DISPLAY 会话可用性列为清单行）
   'display',
+  // P0-4 补齐（2026-09-26，E2E-桌面便签实测）：check_env.sh 通用探测集（52-64 行）对
+  // 所有品类都会探测 python3/pip/rustc/cargo/go/docker，但此前只列在 desktop-app/api-backend
+  // 专属集；架构师照抄 env_probe.json 探测结果（含 go/docker）进环境清单时被误判「幻觉包名」。
+  // 通用探测项一律进共享集（与 check_env.sh 通用集对齐，避免品类专属集遗漏）。
+  'python3', 'pip', 'rustc', 'cargo', 'go', 'docker',
 ])
 const ENV_COMPONENTS_BY_CATEGORY: Record<ProjectCategory, Set<string>> = {
   'web-fullstack': new Set(['corepack', 'nvm', 'postgresql', 'psql', 'pg_isready', 'sqlite', 'sqlite3', 'playwright', 'docker', 'docker-compose']),

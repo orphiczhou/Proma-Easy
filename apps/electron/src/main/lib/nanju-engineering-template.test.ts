@@ -367,6 +367,12 @@ describe('validateEnvChecklist（R2 第 4 层兜底）', () => {
     expect(validateEnvChecklist('desktop-app', ['tkinterr', 'AytanaAppIndicator3']).ok).toBe(false)
   })
 
+  test('check_env.sh 通用探测项（go/docker/python3/rustc）对所有品类通过共享白名单（2026-09-26 实测）', () => {
+    expect(validateEnvChecklist('desktop-app', ['go', 'docker', 'python3', 'rustc', 'cargo', 'pip'])).toEqual({ ok: true, problems: [] })
+    expect(validateEnvChecklist('web-fullstack', ['go', 'docker', 'python3'])).toEqual({ ok: true, problems: [] })
+    expect(validateEnvChecklist('cli-tool', ['go', 'docker'])).toEqual({ ok: true, problems: [] })
+  })
+
   test('typo 组件拦截（rustcc / nodee 不在白名单）', () => {
     const result = validateEnvChecklist('desktop-app', ['rustc', 'rustcc', 'nodee'])
     expect(result.ok).toBe(false)
