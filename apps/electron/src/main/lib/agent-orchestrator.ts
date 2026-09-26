@@ -1427,12 +1427,80 @@ export class AgentOrchestrator {
 
   /**
    * 护栏续接（注入+续接模式，不直连 sendMessage）：L1 空闲时经注册的 headless 通道
-   * 发送续接消息；L1 忙碌（如阻塞在 wait_for_delegations）时短暂重试，耗尽则放弃
-   * （硬超时场景强停会解阻塞，L1 的 wait 很快返回并结束本轮）。
-   * W22（F5 ④）：新增可选 onGiveUp——重试耗尽/元数据缺失时回调，供调用方降级
+   * 发送续接消息；L1 忙碌（如阻塞在 wait_for_delegations）时短暂重试（6 次 × 10s），
+   * 快速重试耗尽后改启动长期空闲巡检（startNanjuContinuationIdleWatch，30s × 20 次），
+   * 会话一旦空闲立即重新投递——避免「可操作出口（nextAction）」因 L1 短暂忙碌而永久不送达。
+   * W22（F5 ④）：新增可选 onGiveUp——快速重试 + 空闲巡检均耗尽/元数据缺失时回调，供调用方降级
    *（可见注入+遥测+拒因登记，保证不静默）；既有调用方不传时行为零变化。
    */
   private readonly nanjuContinuationEpoch = new Map<string, number>()
+
+  /**
+   * P0 修复（2026-09-26）：续接空闲巡检表。
+   * 会话在 runNanjuGuardContinuation 的 6 次（60s）快速重试期间持续忙碌（常见于 L1 仍阻塞在
+   * wait_for_delegations/流式收尾），此前直接 onGiveUp 导致「可操作出口（nextAction）」永远不送达
+   * 调度员、流程停摆（E2E-桌面便签 architecture→coding 卡死根因）。现在 giveup 前先启动长期空闲
+   * 巡检：每 30s 检查一次，会话一旦空闲立即重新投递续接；巡检有上限（20 次 ≈ 10 分钟），期间
+   * epoch 失效（用户 stop / 新消息）或工程 pendingAdvanceCorrection 被取消即停止；耗尽才真正 onGiveUp。
+   */
+  private readonly nanjuContinuationIdleWatches = new Map<string, { timer: ReturnType<typeof setTimeout>; attemptsLeft: number; epoch: number }>()
+
+  /** 续接是否因工程 pendingAdvanceCorrection 被取消而应停止（快速重试与空闲巡检共用）。 */
+  private isNanjuContinuationCancelled(sessionId: string): boolean {
+    try {
+      const meta = getAgentSessionMeta(sessionId)
+      const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+      if (!workspace) return false
+      const { listNanjuProjects, getProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
+      const project = listNanjuProjects(workspace.slug).find((p) => p.sessionId === sessionId)
+      return !!project && getProjectPendingAdvanceCorrection(workspace.slug, project.projectId)?.executionState === 'cancelled'
+    } catch {
+      return false
+    }
+  }
+
+  /** 续接空闲巡检：会话空闲后重新投递；epoch 失效/取消即停；耗尽才 onGiveUp。 */
+  private startNanjuContinuationIdleWatch(
+    sessionId: string,
+    message: string,
+    onGiveUp: ((sessionId: string, message: string) => void) | undefined,
+    epoch: number,
+  ): void {
+    if (this.nanjuContinuationIdleWatches.has(sessionId)) return
+    const idleIntervalMs = 30_000
+    const maxIdleAttempts = 20
+    const state = { timer: undefined as unknown as ReturnType<typeof setTimeout>, attemptsLeft: maxIdleAttempts, epoch }
+    const tick = (): void => {
+      const cur = this.nanjuContinuationIdleWatches.get(sessionId)
+      if (!cur || cur.epoch !== epoch) { this.nanjuContinuationIdleWatches.delete(sessionId); return }
+      // epoch 失效 / 用户停止 / 工程已取消 → 停止巡检
+      if (
+        epoch !== (this.nanjuContinuationEpoch.get(sessionId) ?? 0)
+        || getAgentSessionMeta(sessionId)?.stoppedByUser
+        || this.isNanjuContinuationCancelled(sessionId)
+      ) {
+        this.nanjuContinuationIdleWatches.delete(sessionId)
+        return
+      }
+      // 会话空闲 → 重新投递续接（从头重跑快速重试）
+      if (!this.isActive(sessionId)) {
+        this.nanjuContinuationIdleWatches.delete(sessionId)
+        this.runNanjuGuardContinuation(sessionId, message, 6, onGiveUp, epoch)
+        return
+      }
+      // 巡检耗尽 → 真正放弃
+      cur.attemptsLeft -= 1
+      if (cur.attemptsLeft <= 0) {
+        this.nanjuContinuationIdleWatches.delete(sessionId)
+        console.warn(`[南大护栏] 续接空闲巡检耗尽（会话长时间忙碌 ${maxIdleAttempts * idleIntervalMs / 1000}s）：sessionId=${sessionId}`)
+        try { onGiveUp?.(sessionId, message) } catch { /* 降级回调异常不影响 */ }
+        return
+      }
+      cur.timer = setTimeout(tick, idleIntervalMs)
+    }
+    state.timer = setTimeout(tick, idleIntervalMs)
+    this.nanjuContinuationIdleWatches.set(sessionId, state)
+  }
 
   private runNanjuGuardContinuation(
     sessionId: string,
@@ -1443,19 +1511,13 @@ export class AgentOrchestrator {
   ): void {
     try {
       if (epoch !== (this.nanjuContinuationEpoch.get(sessionId) ?? 0) || getAgentSessionMeta(sessionId)?.stoppedByUser) return
-      const continuationMeta = getAgentSessionMeta(sessionId)
-      const continuationWorkspace = continuationMeta?.workspaceId ? getAgentWorkspace(continuationMeta.workspaceId) : undefined
-      if (continuationWorkspace) {
-        const { listNanjuProjects, getProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
-        const project = listNanjuProjects(continuationWorkspace.slug).find(p => p.sessionId === sessionId)
-        if (project && getProjectPendingAdvanceCorrection(continuationWorkspace.slug, project.projectId)?.executionState === 'cancelled') return
-      }
+      if (this.isNanjuContinuationCancelled(sessionId)) return
       if (this.isActive(sessionId)) {
         if (retriesLeft > 0) {
           setTimeout(() => this.runNanjuGuardContinuation(sessionId, message, retriesLeft - 1, onGiveUp, epoch), 10_000)
         } else {
-          console.warn(`[南大护栏] 续接放弃（会话持续忙碌）：sessionId=${sessionId}`)
-          try { onGiveUp?.(sessionId, message) } catch { /* 降级回调异常不影响 */ }
+          // P0（2026-09-26）：快速重试耗尽后不直接放弃，启动长期空闲巡检，待会话空闲重新投递。
+          this.startNanjuContinuationIdleWatch(sessionId, message, onGiveUp, epoch)
         }
         return
       }
