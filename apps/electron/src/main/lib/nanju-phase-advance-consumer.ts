@@ -646,6 +646,14 @@ hooks: PhaseAdvanceHooks,
                 : `\n📋 授权链状态：当前无活跃收口确认问句（testing 阶段登记 ${diag.stageRegisteredCount} 次）——此时聊天框发送确认词不构成推进授权；交付需等待 GWT 验收 verdict=pass 后按向导流程收口。`
             } catch { /* 诊断失败不阻断拦截提示 */ }
             hooks.injectAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}${authStateNote}`)
+            // P0''（2026-09-28，E2E-Desktop 21:53 停摆根因）：交付拦截此前只注入不驱动——
+            // 调度员 run 已结束（PHASE_ADVANCE 输出后 completeRun），拦截指引无 Agent 消费，
+            // 流程静默停摆。追加 systemInitiated 续接（经 runNanjuGuardContinuation 的
+            // busy 重试/空闲巡检），把「拦截+行动指引」真正送达调度员驱动下一轮。
+            hooks.sendContinuation(
+              sessionId,
+              `交付声明被拦截：${gateError}${authStateNote}\n请按上述指引处理后重新声明推进；若是「测试尚未执行」，下一步行动是输出 <!-- PHASE_ADVANCE: testing --> 触发自动验收测试，全部通过后再声明交付。`,
+            )
           } else {
             // W18 Wave2：交付成功单次写双字段（currentStage=delivered + status=completed
             // 同拍落库）；finishedFirstTime 守门幂等——跨 run 重复 delivered 声明不重复计埋点

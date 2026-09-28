@@ -32,7 +32,10 @@ export function validateEngineeringCodingOutput(projectDir: string): string | nu
   if (!captured.evidence) return '工程契约或产物不完整：' + captured.problems.join('；')
   try {
     const doc = readFileSync(checkedFile(projectDir, ENGINEERING_DELIVERY_PATH), 'utf-8')
-    if (!/^#\s+\S/m.test(doc) || !/^##\s+构建与运行\s*$/m.test(doc) || !/^##\s+测试状态\s*$/m.test(doc)) {
+    // P2（2026-09-28）：章节标题允许行尾/空白/全半角括号后缀（如「## 测试状态（2026-09-26 实测）」
+    // ——E2E-Desktop coding→testing 卡死 2 天的直接诱因：标题带后缀被判「缺少章节」）；
+    // 「## 测试状态与xxx」等变体新章节名仍拦（负向前瞻不匹配非括号后续字符）。
+    if (!/^#\s+\S/m.test(doc) || !/^##\s+构建与运行(?![^\s（(])/m.test(doc) || !/^##\s+测试状态(?![^\s（(])/m.test(doc)) {
       return '交付说明缺少「构建与运行」「测试状态」章节：' + ENGINEERING_DELIVERY_PATH
     }
   } catch { return '缺少可读交付说明：' + ENGINEERING_DELIVERY_PATH }
