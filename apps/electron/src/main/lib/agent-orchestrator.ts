@@ -1524,6 +1524,24 @@ export class AgentOrchestrator {
       const meta = getAgentSessionMeta(sessionId)
       if (!meta?.channelId) {
         console.warn(`[南大护栏] 续接跳过（会话元数据缺失 channelId）：sessionId=${sessionId}`)
+        // P0'（2026-09-28）：缺 channelId 遥测可见化——南大工程会话创建链不传渠道且历史上
+        // 无回填，续接链对此类会话 100% 失效且仅 console 可见（E2E-Desktop 卡死调查时才发现）。
+        // SEND_MESSAGE 已加首条消息回填；此处补遥测，监控可发现存量无渠道会话。
+        try {
+          const workspace = meta?.workspaceId
+            ? (require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')).getAgentWorkspace(meta.workspaceId)
+            : undefined
+          if (workspace) {
+            const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+            const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+            const project = listNanjuProjects(workspace.slug).find((p) => p.sessionId === sessionId)
+            recordTelemetry(workspace.slug, 'continuation.channel-missing', {
+              project_id: project?.projectId ?? sessionId,
+              session_id: sessionId,
+              note: '会话元数据缺失 channelId，护栏续接不可用；需一条 UI 消息触发回填',
+            }, project?.projectId)
+          }
+        } catch { /* 埋点失败不影响 */ }
         try { onGiveUp?.(sessionId, message) } catch { /* 降级回调异常不影响 */ }
         return
       }

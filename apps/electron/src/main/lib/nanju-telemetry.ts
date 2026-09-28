@@ -55,6 +55,10 @@ export type TelemetryEventType =
   // W23（§六.3）：配置级 autofix——委派指令构建前预检失效端点并临时替换（区别于
   // 请求级 model.fallback.used：本事件在构建期触发，不落盘，仅本次指令生效）
   | 'model.config-autofix'
+  // P0'（2026-09-28，E2E-Desktop coding→testing 卡死调查）：护栏续接因会话元数据缺
+  // channelId 而不可用（南大工程会话创建链不传渠道且无回填）。SEND_MESSAGE 已加首条
+  // 消息回填；本事件标记存量无渠道会话，供监控发现与修复验证。
+  | 'continuation.channel-missing'
   // W24-EF F2（v0.17.123）：PRD §12.4 事件表补齐——只追加 union 成员；既有发射点不动。
   // #6 user.undo：用户主动撤销（区分系统侧 undo 与用户意图）；#7 click_to_fix：点选纠错单点
   // 上报（按 nanju-quick-events.ts.buildClickToFixPayload 输出，privacy 最小 payload 仅含

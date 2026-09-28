@@ -2953,6 +2953,19 @@ export function registerIpcHandlers(): void {
       input.humanOrigin = input.humanOrigin === false ? false : true
       const session = getAgentSessionMeta(input.sessionId)
       if (session) {
+        // P0'（2026-09-28，E2E-Desktop coding→testing 卡死根因）：南大工程调度员会话创建链
+        // （TabContent ModeSelectView）不传 channelId，而护栏续接（runNanjuGuardContinuation
+        // → runRegisteredHeadlessAgent）硬依赖 meta.channelId，缺失即整链失效（续接秒放弃）。
+        // 本通道是真 UI 消息唯一入口、必带 channelId——首条消息回填 meta，使后续 headless
+        // 续接可用；回填失败不阻塞消息发送。
+        if (!session.channelId && input.channelId) {
+          try {
+            updateAgentSessionMeta(input.sessionId, {
+              channelId: input.channelId,
+              ...(input.modelId ? { modelId: input.modelId } : {}),
+            })
+          } catch { /* 回填失败不阻塞发送 */ }
+        }
         await feishuBridgeManager.startSessionMirrorRun(session).catch((error) => {
           console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error)
         })
