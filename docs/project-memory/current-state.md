@@ -98,6 +98,14 @@ Phase 1 快消型主轴的模块和六品类模板已有较完整实现，进入
 - 证据：`execution/b3/gui-live-verification-20260924.md`、`execution/b3/shots/dev-main.png`、`execution/current-verification/pack-20260924.log`。
 - 仍待：新工程走完 coding→testing→delivery 全链、GUI 打开旧工程看恢复入口、六品类产品验收（B6）。均不计数 coveredUs。
 
+## 2026-09-28 21:30–21:50 截面（工程恢复 + P0' 根因定案并修复）
+
+- **工程已恢复**：修正 `08_APP/DELIVERY.md` 标题（`## 测试状态（2026-09-26 实测）` 带 Markdown 修饰后缀不匹配门禁精确正则 `/^##\s+测试状态\s*$/m`，改为标准标题+日期入正文），CDP 驱动 GUI 向调度员会话发恢复消息；21:35:40 `confirm.auto-confirm` **coding→testing 推进成功**（phase.elapsed 50.4 小时），pendingAdvanceCorrection 清除。testing 委派已开工：`06_TESTS/test-report.md` + 10 个 evidence 已产出。
+- **P0' 根因定案（推翻上轮「isActive 不释放」初判）**：遥测 giveup（12:41:29Z）仅晚拒因（12:41:18Z）11 秒，走的是 `runNanjuGuardContinuation` 的 `!meta?.channelId` 分支**立即放弃**，60s 快速重试/600s 空闲巡检均未触及；日志 `result arrived subtype=success` 证明 run 正常结束。真实根因：南大工程调度员会话创建链（TabContent ModeSelectView → `createAgentSession(name, undefined, ws.id)`）不传 channelId，UI 消息路径带渠道但从不回填 meta，护栏续接硬依赖 meta.channelId → 对南大会话 100% 失效（dev 索引实测 25 个南大会话全部无 channelId）。日志另有 2 次「巡检耗尽 600s」（更早事件，run 确实活跃）属次要边界问题。
+- **修复已提交**：`4b33a135`——① SEND_MESSAGE 首条 UI 消息回填 meta.channelId/modelId（治本，存量会话下一条消息触发回填）；② 缺渠道分支补 `continuation.channel-missing` 遥测；③ 新增 9 项源码断言测试全绿，typecheck exit 0。**未部署**（testing 推进中，重启会打断；磁盘仅 1.2G，pack 需 ≥1G）。
+- **stage-deny 误拦新证据 +2（累计 14/14）**：恢复过程实测——testing 委派任务描述里「托盘菜单视觉、置顶 z 序观感」命中 prototype 词表（关键词「视觉」）、「按架构测试规范」命中 architecture 词表（关键词「架构」），两次均带 `phase.role: tester` 标记仍被拦；调度员被迫改写措辞后第三版才成功委派。观察员「按 phase.role 判定/豁免」建议证据充分。
+- 监控任务 cb005c1c 已重新启用（30 分钟间隔）；监控记录见 `docs/reports/2026-09-25-phase1-e2e-desktop/监控记录.md`。
+
 ## 2026-09-28 21:11 截面（E2E 桌面便签 coding→testing 卡死，交接）
 
 - E2E 桌面便签工程（`project-桌面便签工具`）从 architecture→coding 突破后，走完 coding（产出 1987 行 tkinter 便签代码 + tests + evidence），在 **coding→testing 卡死**（2026-09-26 20:41 起冻结）。
