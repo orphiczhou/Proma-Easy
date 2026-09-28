@@ -95,3 +95,36 @@
 - 方案 1 + 方案 3：本文档落档后实施（本轮）。
 - 方案 2：待用户确认 2a/2b 后实施（下轮）。
 - 方案 4：子会话运行中；部署等磁盘与 deploy-plan 就绪 + 用户点头执行。
+
+---
+
+## 六、部署与 GWT 六轮实战记录（2026-09-29 01:20–02:35 GMT+8）
+
+### 部署
+- 提交 e97bb2b6（2a）后 pack（删 out 腾 706M；electron zip 重下 12 分钟）；afterPack 门禁一次通过（12 required）。
+- asar 备份 `app.asar.bak-v0.17.132-20260929-0141` → 替换 + 重启（PID 3940018）。CDP 5s 就绪。
+
+### 三修复验证
+- **P0'（channelId 回填）✓**：CDP 发首条 UI 消息后，ff681335 meta 立即出现 channelId/modelId。
+- **P0''（GWT 交付拦截续接）✓（间接）**：调度员对恢复消息响应、声明 testing；本轮拦截消费链通畅（拦截注入均在会话内可见）。
+- **2a（phase.role 豁免）**：部署后未再触发 stage-deny（调度员本轮委派未再被拦；role-exempt 遥测待后续样本观察）。
+- 差错记录：CDP 会话切换正则过时（4/4→5/5）导致两次消息误发 AC 审计子会话（无害，已修正正则）。
+
+### GWT 六轮迭代（驱动协议修复实战——每轮均由 GWT 严格校验抓出真问题）
+| 轮 | 结果 | 根因 → 修复 |
+|---|---|---|
+| r1 | error | 契约 unit-core 绑非协议驱动（tests/test_core.py 输出 unittest 文本）→ 新增协议包装驱动 drv_unit_core.py |
+| r2 | blocked | 新驱动未声明进契约 artifacts → 补 artifacts |
+| r3 | error | 驱动协议字段：evidence 须非空数组、exitCode 须 number、passed 按 expected===actual 等值 → 修 drv_unit_core |
+| r4 | error | integration 契约 target 误填驱动自身路径 + 老驱动缺 exitCode/evidence 空/描述性 expected → 修契约 target + 三老驱动补 exitCode |
+| r5 | error | core 驱动 US-01 越界（acceptance 层 storyId 不得为 null 且须在 covers）+ 多处描述性 expected → 对齐等值 |
+| r6 | **29/29 checks 全过** | suite 终态 blocked：真实证据门禁（requiresReal=true 的 core/tray 两项需宿主观察器实测或同会话真人见证，项目驱动不能自证——**设计内**） |
+
+### 新发现（待产品侧跟进）
+1. **契约/驱动协议编写指引缺失**（P1）：架构师写契约、测试工程师写驱动均未得到协议约束反馈，六轮才收敛。建议：契约 schema 校验前置（编辑时）+ driver-skeleton 模板对齐 interpret 全字段（exitCode/evidence 数组/等值语义）。
+2. **真实证据门禁交互面**（观察）：requiresReal 项的「真人见证」收据入口在当前流程中未呈现给用户（无可见的见证询问横幅）——门禁正确拦截但用户不知道怎么解除。建议补可见指引。
+3. CDP 驱动 UI 的会话切换宜按 sessionId 定位（当前按标题正则，脆弱）。
+
+### 当前状态
+- 工程 subStage=TEST；report.json verdict=blocked（真实证据门禁）；29/29 驱动检查通过。
+- 交付（delivered）需用户以「同会话真人见证」方式解除 requiresReal 门禁——这是 E2E 剩余的自然停点，需用户亲自参与。
