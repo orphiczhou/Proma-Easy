@@ -97,3 +97,12 @@ Phase 1 快消型主轴的模块和六品类模板已有较完整实现，进入
   - 旧工程 `project-真流程e2e-剪贴板历史` 状态确认：subStage=CODE、coding errorCount=2、pendingAdvanceCorrection 为旧 schema（无 eventKey/checks）、06_TESTS 空——是 Task 5 旧 schema 恢复的真实样本。
 - 证据：`execution/b3/gui-live-verification-20260924.md`、`execution/b3/shots/dev-main.png`、`execution/current-verification/pack-20260924.log`。
 - 仍待：新工程走完 coding→testing→delivery 全链、GUI 打开旧工程看恢复入口、六品类产品验收（B6）。均不计数 coveredUs。
+
+## 2026-09-28 21:11 截面（E2E 桌面便签 coding→testing 卡死，交接）
+
+- E2E 桌面便签工程（`project-桌面便签工具`）从 architecture→coding 突破后，走完 coding（产出 1987 行 tkinter 便签代码 + tests + evidence），在 **coding→testing 卡死**（2026-09-26 20:41 起冻结）。
+- 拦因：`08_APP/DELIVERY.md` 缺「构建与运行」「测试状态」章节（advance.auto-gate verify-failed）。
+- **P0 空闲巡检局限（新发现）**：giveup 后调度员会话持续 isActive=true（本轮 run 未及时结束，疑似与 coding 阶段 circuit_break{delegation_hard} 熔断相关），空闲巡检 20 次（10 分钟）耗尽后 onGiveUp 停摆。P0 修复解决了「立即放弃」，但未覆盖「会话长时间忙碌」的兜底。
+- 已完成提交：66814692（P0 giveup 空闲巡检）、2cf5f979（desktop-app 白名单 P1 Python 组件）、cbebe951（共享集 go/docker）、4744fe13（记录验证）。
+- 剩余待办见交接文件 `docs/reports/2026-09-25-phase1-e2e-desktop/handoff-next.md`（恢复工程 + 修复 P0 空闲巡检局限 + P1 stage-deny/env_probe/AC-015 + P2 项）。
+- dev 实例运行中（PID 3262632，9224 CDP）；监控任务 cb005c1c 已暂停。
