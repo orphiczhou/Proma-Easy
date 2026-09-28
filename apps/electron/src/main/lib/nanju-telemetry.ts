@@ -22,6 +22,8 @@ export type TelemetryEventType =
   | 'env.check.executed' | 'env.setup.verified' | 'env.setup.failed'
   // W8 流程程序化强制：委派守卫（阶段拒绝 / 误拦观察 / AC 模型覆写）
   | 'delegate.guard.stage-deny' | 'delegate.guard.pass-unmatched' | 'delegate.guard.ac-override'
+  // 2a（2026-09-28 用户裁决）：显式 phase.role 匹配当前阶段 → 豁免他阶段词扫描的观测事件
+  | 'delegate.guard.role-exempt'
   // W10 推进闭环强化：unmatched 强动词拒绝 + 确认待推进提示
   | 'delegate.guard.unmatched-action-deny' | 'confirm.advance-hint'
   // W13 模型 fallback 让步链：委派降级可观测（原值→新值→原因）

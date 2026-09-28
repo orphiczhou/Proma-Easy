@@ -1386,3 +1386,86 @@ describe('Task 8 标题降权：标题仅作描述，不与实际任务同权重
     expect(result.matchKind).toBe('stage')
   })
 })
+
+describe('2a（2026-09-28 用户裁决）：phase.role 显式标记豁免他阶段词扫描', () => {
+  // E2E-Desktop 2026-09-28 21:35/21:36 两次真实误拦样本原文片段（14/14 中的 #13/#14）
+  const testerTask = '你是测试工程师（phase.role: tester）。对已交付的桌面便签工具做独立核验与真实验收。'
+    + '人工清单项（托盘菜单视觉、置顶 z 序观感、拖拽手感）按架构测试规范用环境证据替代核查。'
+
+  test('E2E 真实样本：testing + phase.role: tester + 引用「视觉」「架构」→ 豁免放行并带标记', () => {
+    const result = checkDelegationAgainstStage('testing', { title: '测试工程师：桌面便签工具独立核验与验收（tester）', task: testerTask })
+    expect(result.allowed).toBe(true)
+    expect(result.roleExempt).toBe(true)
+    expect(result.matchKind).toBe('stage') // task 含「测试/验收」本阶段词 → ③ 放行
+  })
+
+  test('六角色全映射：标记角色=当前阶段 → 均豁免（他阶段词不拦）', () => {
+    const cases: Array<[Stage, string, string]> = [
+      ['requirements', 'requirement-analyst', '根据视觉稿与架构说明做需求梳理'],
+      ['prototype', 'ux-advisor', '对照测试反馈与架构约束做原型'],
+      ['architecture', 'architect', '统筹开发与测试的技术选型与架构'],
+      ['planning', 'engineering-manager', '排期覆盖开发与测试的规划'],
+      ['coding', 'fullstack-developer', '实现并测试索引页'],
+      ['testing', 'test-engineer', '按架构测试规范跑测试'],
+    ]
+    for (const [stage, role, tail] of cases) {
+      const result = checkDelegationAgainstStage(stage, { title: '', task: `你是角色（phase.role: ${role}）。${tail}` })
+      expect(result.allowed).toBe(true)
+      expect(result.roleExempt).toBe(true)
+    }
+  })
+
+  test('伪标记：声明 tester 却只有产出动作与下游 OUTPUT 词、无 testing 本阶段词 → 强动词兜底仍拒', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: tester\ndevelop the index.html 应用代码',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('strong-verb')
+  })
+
+  test('多标记歧义 → fail-closed 不豁免（他阶段词照常拦）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: tester\nphase.role: architect\n做架构评审',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('architecture')
+  })
+
+  test('角色与当前阶段不匹配 → 不豁免（coding 阶段声明 test-engineer + prototype 词被拦）', () => {
+    const result = checkDelegationAgainstStage('coding', {
+      title: '',
+      task: 'phase.role: test-engineer\n做一个原型 视觉稿',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('prototype')
+  })
+
+  test('未知角色 → fail-closed 不豁免', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: hacker\n做一个原型',
+    })
+    expect(result.allowed).toBe(false)
+  })
+
+  test('标题里的 phase.role 不豁免（Task 8 标题降权：标题声明既不拒绝也不豁免）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: 'phase.role: tester 的人',
+      task: '做一个原型 视觉稿',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('prototype')
+  })
+
+  test('豁免不含本阶段词且无强动词的边缘文本 → unmatched 放行 + roleExempt 标记（可观测）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: tester\n汇总环境证据',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('unmatched')
+    expect(result.roleExempt).toBe(true)
+  })
+})

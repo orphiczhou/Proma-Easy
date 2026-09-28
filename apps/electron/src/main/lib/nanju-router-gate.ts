@@ -816,6 +816,28 @@ function checkNanjuDelegateGuard(
     result: checkDelegationAgainstStage(guardStage, source),
   }))
 
+  // 2a（2026-09-28 用户裁决）：显式 phase.role 匹配当前阶段的委派经豁免放行时记观测事件
+  // （不 deny；供监控统计豁免面与伪装检测——role-exempt 后仍 deny 的不会到这，
+  // 未被豁免的伪标记会正常进 stage-deny 遥测）。
+  const roleExempts = entries.filter((e) => e.result.allowed && e.result.roleExempt)
+  if (roleExempts.length > 0) {
+    recordTelemetry(
+      workspaceSlug,
+      'delegate.guard.role-exempt',
+      {
+        stage: guardStage,
+        toolName,
+        count: roleExempts.length,
+        entries: roleExempts.map((e) => ({
+          title: e.source.title,
+          matchKind: e.result.matchKind,
+          matchedKeyword: e.result.matchedKeyword,
+        })),
+      },
+      project.projectId,
+    )
+  }
+
   // ── 层一：任一命中其他阶段专属词（W8）或强动作动词（W10-V2.1）→ 拒绝 ──
   // W10 起拒绝原因分流（result.denialKind）：other-stage = 命中他阶段词（既有语义，
   // 未定义时也归此类向后兼容）；strong-verb = unmatched+强动词（W8 敞口兜底）。
