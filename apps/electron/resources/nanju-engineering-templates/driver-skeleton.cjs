@@ -183,6 +183,7 @@ function emitBlocked(missing) {
   writeStdout({
     testId: _request ? _request.testId : null,
     target: _request ? _request.target : null,
+    exitCode: S.EXIT_TABLE.BLOCKED,
     blocked: {
       kind: 'environment',
       missing: missing.slice(),
@@ -203,6 +204,7 @@ function emitResult(checks) {
     writeStdout({
       testId: req.testId,
       target: req.target,
+      exitCode: S.EXIT_TABLE.BLOCKED,
       checks: [guardCheck(
         '输出schema自检',
         'checks 形态合法（宿主协议 {storyId,label,expected,actual,evidence}）',
@@ -211,8 +213,10 @@ function emitResult(checks) {
     });
     exitWith(S.EXIT_TABLE.BLOCKED);
   }
-  writeStdout({ testId: req.testId, target: req.target, checks });
-  exitWith(checks.every((c) => c.expected === c.actual) ? S.EXIT_TABLE.PASS : S.EXIT_TABLE.FAIL);
+  const resultCode = checks.every((c) => c.expected === c.actual) ? S.EXIT_TABLE.PASS : S.EXIT_TABLE.FAIL;
+  // 宿主 interpret 协议（E2E 2026-09-29 实证）：stdout JSON 必须携带顶层 exitCode 数值字段。
+  writeStdout({ testId: req.testId, target: req.target, exitCode: resultCode, checks });
+  exitWith(resultCode);
 }
 S.emitResult = emitResult;
 
@@ -224,6 +228,7 @@ function emitError(exc, exitCode) {
   writeStdout({
     testId: req.testId !== undefined ? req.testId : null,
     target: req.target !== undefined ? req.target : null,
+    exitCode: typeof exitCode === 'number' ? exitCode : 1,
     checks: [],
     error: {
       type: (exc && exc.name) || typeof exc,

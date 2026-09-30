@@ -1244,6 +1244,22 @@ export function verifyPhaseOutput(
     if (error) return reject('acceptance.baseline', error, '编码前冻结规格、测试逐项绑定验收编号', phaseId === 'testing' ? '06_TESTS/features' : '03_ARCHITECTURE/acceptance.json')
   }
 
+  // 校验时机前移（E2E 2026-09-29 六轮返工教训）：engineering.json 已存在时，把
+  // parseEngineeringContract 的静态 schema 检查（driver 必须引用 artifacts 内文件、
+  // 固定 runtime、service 路径合法等）在 architecture 推进时就拦，而不是等到 GWT
+  // 运行（三个阶段之后）才第一次暴露。不存在时不拦：浏览器工程无契约、或后续
+  // 阶段补写均属合法路径（coding/GWT 侧仍有兑底）。
+  if (phaseId === 'architecture') {
+    const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+    const contractPath = join(projectDir, ENGINEERING_CONTRACT_PATH)
+    if (existsSync(contractPath)) {
+      const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
+      if (!parsed.contract) {
+        return reject('architecture.engineering-contract', parsed.problems.join('；') || '契约解析失败', '驱动引用 artifacts 内文件、固定 runtime、target=被测产物', ENGINEERING_CONTRACT_PATH)
+      }
+    }
+  }
+
   if (phaseId === 'coding') {
     const { resolveCodingOutputPath, validateEngineeringCodingOutput, ENGINEERING_DELIVERY_PATH } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
     if (resolveCodingOutputPath(projectDir) === ENGINEERING_DELIVERY_PATH) {

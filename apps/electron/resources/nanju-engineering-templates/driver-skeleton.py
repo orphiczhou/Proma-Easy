@@ -185,6 +185,7 @@ def emit_blocked(missing):
     _write_stdout({
         'testId': (_LAST_REQUEST or {}).get('testId'),
         'target': (_LAST_REQUEST or {}).get('target'),
+        'exitCode': 2,
         'blocked': {
             'kind': 'environment',
             'missing': list(missing),
@@ -198,13 +199,16 @@ def emit_blocked(missing):
 def emit_result(checks):
     # type: (list) -> None
     """③ 输出 + 退出：schema 自校验（违规 → exit 2），单 JSON 写 stdout，
-    退出码按表：全部 expected==actual → 0；否则 1。"""
+    退出码按表：全部 expected==actual → 0；否则 1。
+    宿主 interpret 协议（E2E 2026-09-29 实证）：stdout JSON 必须携带顶层 exitCode
+    数值字段（与进程退出码一致），缺失即「缺少实际退出状态」error。"""
     req = _LAST_REQUEST or {}
     problems = _validate_checks(checks)
     if problems:
         _write_stdout({
             'testId': req.get('testId'),
             'target': req.get('target'),
+            'exitCode': 2,
             'checks': [_guard_check(
                 '输出schema自检',
                 'checks 形态合法（宿主协议 {storyId,label,expected,actual,evidence}）',
@@ -212,8 +216,9 @@ def emit_result(checks):
                 ['自检拦截（exit 2）：驱动输出了宿主无法判读的 checks'])],
         })
         _exit_table(2)
-    _write_stdout({'testId': req.get('testId'), 'target': req.get('target'), 'checks': checks})
-    _exit_table(0 if all(c['expected'] == c['actual'] for c in checks) else 1)
+    result_code = 0 if all(c['expected'] == c['actual'] for c in checks) else 1
+    _write_stdout({'testId': req.get('testId'), 'target': req.get('target'), 'exitCode': result_code, 'checks': checks})
+    _exit_table(result_code)
 
 
 def emit_error(exc, exit_code):
@@ -225,6 +230,7 @@ def emit_error(exc, exit_code):
     _write_stdout({
         'testId': req.get('testId') if req else None,
         'target': req.get('target') if req else None,
+        'exitCode': exit_code if isinstance(exit_code, int) else 1,
         'checks': [],
         'error': {
             'type': type(exc).__name__,

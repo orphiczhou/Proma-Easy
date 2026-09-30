@@ -35,6 +35,8 @@ interface CheckShape { storyId: string | null; label: string; expected: string; 
 interface ResultPayload {
   testId?: string | null
   target?: string | null
+  /** 协议修复（2026-09-30）：顶层退出码数值字段，与进程退出码一致（宿主 interpret 必需）。 */
+  exitCode?: number
   checks: CheckShape[]
   blocked?: { kind: string; missing: string[]; scenarioExecuted: boolean }
   error?: { type: string; exit_code: number; message: string; traceback_summary: string[] }
@@ -121,6 +123,20 @@ describe.skipIf(!pythonPath)('Given 宿主已装Python3的L2-5驱动骨架（无
     expect(out.exitCode).toBe(0)
     expect(payload.checks[0]!.storyId).toBe('US-01')
     expect(payload.checks[0]!.actual).toBe('hello')
+    // 协议修复（2026-09-30，E2E 六轮返工教训）：stdout JSON 必须携带顶层 exitCode 数值字段，
+    // 与进程退出码一致——宿主 interpret 缺此字段即判「缺少实际退出状态」error。
+    expect(payload.exitCode).toBe(0)
+  })
+
+  test('Then fail 路径：stdout 顶层 exitCode=1 与进程退出码一致（宿主 interpret 协议）', async () => {
+    const cwd = scaffold()
+    writeFileSync(join(cwd, 'sample.py'), pyWrapper(
+      "sk.run_probes = lambda req: [sk.make_check(req['covers'][0], '行为断言', 'opened', lambda: 'closed', ['probe: 实际状态'])]",
+    ))
+    const out = await runProcess(py, ['sample.py'], { cwd, env: childEnv(), stdin: REQ_ACCEPT })
+    const payload: ResultPayload = JSON.parse(out.stdout)
+    expect(out.exitCode).toBe(1)
+    expect(payload.exitCode).toBe(1)
   })
 
   test('Then R2类：acceptance下storyId空串被工厂拦截为结构化error（含R2指引），不产出无storyId的checks（ATK-L-006）', async () => {

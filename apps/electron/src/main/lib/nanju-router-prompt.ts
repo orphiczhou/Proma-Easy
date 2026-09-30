@@ -504,6 +504,9 @@ export function buildL2TaskWithAC(
   if (isTesting) {
     parts.push('工程浏览器场景按engineering.json中scenarioFiles逐项写入06_TESTS，必须对应所属test.id的covers且含Then行为断言；不遗漏清单，不把同一场景重复归给多个测试。')
     parts.push('适用边界：本节steps.json仅用于浏览器场景。非浏览器工程按engineering.json中driver执行，先Read并审查08_APP内驱动是否真正验证PRD行为，再产出Gherkin与审查说明；不伪造DOM步骤、不跨目录修改驱动。')
+    parts.push('驱动协议硬约束（宿主 GWT 逐字段校验，E2E 实证六轮返工教训）：驱动必须从 00_ENGINEERING_TEMPLATE/driver-skeleton.py（Node 用 .cjs）复制起手；')
+    parts.push('stdout 只输出单个 JSON，顶层必须含 testId/target/exitCode(数值)/checks；每条 check 的 expected 与 actual 必须同构可比（宿主按字符串等值判过，描述性文案必 fail）、')
+    parts.push('evidence 必须是非空字符串数组、storyId 在 acceptance 层必须是本测试 covers 内的 US-xx（辅助检查才可为 null）。')
     parts.push('## steps.json 格式规范（机器可执行，Harness 会严格校验并执行）')
     parts.push('每个 ' + projectDir + '/06_TESTS/features/us-XX.feature 配一个同名 us-XX.steps.json，结构如下：')
     parts.push('```json')
@@ -705,6 +708,10 @@ export function buildL2TaskWithAC(
     parts.push('2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；')
     parts.push('3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。')
     parts.push('4. 交付与运行字段、测试架构表、真实与模拟边界及失败回流说明是否完整；计划完整不代表验收通过。')
+    parts.push('5. engineering.json 契约（若本品类需要）：tests[].driver.path 必须指向 artifacts 清单内已声明的驱动文件；')
+    parts.push('   tests[].target 是被测产物路径（如 src/xxx.py），不是驱动自身；tests[].covers 必须与 PRD 用户故事一一对应；')
+    parts.push('   驱动文件必须是输出 JSON 协议的驱动（骨架见 00_ENGINEERING_TEMPLATE/driver-skeleton.py），')
+    parts.push('   不要把普通测试脚本（如 unittest 文本输出）直接绑为 driver——GWT 验收时会因驱动无 JSON 协议而 error。')
     parts.push('')
     // D8 §九 A1′（R7-05）：auto 开启时 quick architecture 补轻量 AC 载体契约——
     // ac-verdict.json 是 autoConfirmAuthorized 的第 6 条件（A 域已消费），缺失/red 拒自动确认。

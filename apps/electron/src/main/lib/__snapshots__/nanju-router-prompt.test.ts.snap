@@ -336,5 +336,9 @@ browser-url测试声明service={runtime,path,args,env,port,readyPath,readyTimeou
 2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；
 3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。
 4. 交付与运行字段、测试架构表、真实与模拟边界及失败回流说明是否完整；计划完整不代表验收通过。
+5. engineering.json 契约（若本品类需要）：tests[].driver.path 必须指向 artifacts 清单内已声明的驱动文件；
+   tests[].target 是被测产物路径（如 src/xxx.py），不是驱动自身；tests[].covers 必须与 PRD 用户故事一一对应；
+   驱动文件必须是输出 JSON 协议的驱动（骨架见 00_ENGINEERING_TEMPLATE/driver-skeleton.py），
+   不要把普通测试脚本（如 unittest 文本输出）直接绑为 driver——GWT 验收时会因驱动无 JSON 协议而 error。
 "
 `;
