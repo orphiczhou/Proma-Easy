@@ -158,7 +158,13 @@ function interpret(input: EngineeringExecutionInput, raw: unknown): EngineeringE
     checks.push({ storyId, label: row.label, expected: row.expected, actual: row.actual, evidence: row.evidence, passed: row.expected === row.actual })
   }
   const observed = new Set(checks.flatMap((check) => check.storyId ? [check.storyId] : []))
-  if ([...planned].some((story) => !observed.has(story))) return invalid('部分计划用户故事没有检查记录')
+  // 修复C（2026-10-01，E2E 番茄 GWT error）：拒因列出具体缺失的 US 编号（对照 Issue
+  // #P1-EVD-001 同族反馈断裂——不指明缺哪条，作者无从修正；实测 tray 驱动 covers 多声明
+  // US-01/07 而未写检查，作者需知道「缺哪几条 + 两条出路」才能自修复）。
+  const missedStories = [...planned].filter((story) => !observed.has(story)).sort()
+  if (missedStories.length > 0) {
+    return invalid(`部分计划用户故事没有检查记录（缺失：${missedStories.join('、')}）——驱动 checks 必须覆盖契约 covers 的每一条；若本测试实际不测这些 US，请从契约 tests[].covers 移除（套件层按并集聚合覆盖，其他测试覆盖即可），不要留空缺`)
+  }
   const passed = raw.exitCode === 0 && checks.every((check) => check.passed)
   return { ...base, status: passed ? 'pass' : 'fail', reason: passed ? null : '实际结果与期望不符或驱动退出失败', checks,
     coveredUs: [...planned].filter((story) => raw.exitCode === 0 && checks.filter((check) => check.storyId === story).every((check) => check.passed)) }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { captureEngineeringEvidence, parseEngineeringContract } from './nanju-engineering-contract'
@@ -68,6 +68,21 @@ describe('Given 实际驱动返回值，When 解释结果，Then 退出成功不
       expect(result.status).not.toBe('pass')
       expect(result.coveredUs).toEqual([])
     }
+  })
+
+  test('修复C（2026-10-01 番茄 GWT error）：覆盖缺失拒因列出具体缺失的 US 编号与两条出路', async () => {
+    // 契约 covers=['US-01']（fixture），驱动 checks 覆盖 US-09（不在计划内 → 另一条 invalid
+    // 先行命中）——改为计划内另一条缺失：直接改契约 covers 加 US-02，驱动只意 US-01。
+    const input = fixture()
+    const raw = JSON.parse(readFileSync(join(input.projectDir, '03_ARCHITECTURE/engineering.json'), 'utf-8'))
+    raw.tests[0].covers = ['US-01', 'US-02', 'US-03']
+    writeFileSync(join(input.projectDir, '03_ARCHITECTURE/engineering.json'), JSON.stringify(raw))
+    const contract = parseEngineeringContract(JSON.stringify(raw)).contract!
+    const input2 = { ...input, test: contract.tests[0]!, evidence: captureEngineeringEvidence(input.projectDir).evidence! }
+    const result = await runRegisteredEngineeringTest(input2, { drivers: [{ adapter: 'cli-driver', execute: async () => passing() }], approve: async () => true })
+    expect(result.status).toBe('error')
+    expect(result.reason).toContain('缺失：US-02、US-03')
+    expect(result.reason).toContain('从契约 tests[].covers 移除')
   })
   test('Then 期望与实际不符为行为失败而非环境阻塞', async () => {
     const output = passing(); output.checks[0]!.actual = 'goodbye'
