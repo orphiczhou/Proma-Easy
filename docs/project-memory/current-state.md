@@ -122,3 +122,10 @@ Phase 1 快消型主轴的模块和六品类模板已有较完整实现，进入
 - **核心发现**：架构师按格式补了证据引用但**虚构了不存在的文件路径**（pomodoro-spike-evidence/），而证据校验器布尔化反馈不区分「没写」与「写了路径不存在」→ 两轮拒因一字不差 → 死循环（count 5 / loop-limit×3）→ 调度员绕路委派又被 requirements.txt 文件名词表误拦（deny#15）。
 - **修复已提交**（8d2de303，未部署）：A 证据拒因细分（diagnoseEvidenceReference 回带失效引用路径+「先 Read/ls 确认」指引）；B 词表去 requirements 裸词（W19-C 模式）。263 pass / 0 fail。
 - **工程已人工恢复**：7 处虚构路径改真实 spike 产物 → 01:14 architecture→coding 推进成功（subStage CODE）。2a 豁免与三层修复的 E2E 验证由番茄工程 coding/testing 段与监控继续采集。
+
+## 2026-10-01 02:55 截面（番茄 E2E 终局：四项验证全过 + 真实证据门禁缺口定案）
+
+- **番茄工程 GWT 1 轮 92/92 全过**（对照便签 6 轮）——三层修复 + 提示词指引实证生效；唯一 error 为覆盖完整性层（契约 covers 与驱动 checks 不匹配），已修复 C（0232c5bb：拒因列缺失 US 编号+两条出路）。
+- **2a 生效实证**：role-exempt 遥测 ×2（architecture/testing），阶段角色委派零误拦；deny#15（requirements.txt 碰撞）已修（8d2de303）。
+- **结构性发现（Issue #P1-REAL-002）**：真实能力证据门禁校验端完备、**人机入口（宿主观察器/真人见证）零接线**——requiresReal 工程（desktop-app 全部）在当前版本结构上不可交付。两工程独立终结同一 blocked 佐证。修复方案 3 选项待用户拍板（建议方案 1：Ask 见证接线）。
+- 番茄/便签工程保持 blocked 终态作为活样本；调度员已通知勿重试。
