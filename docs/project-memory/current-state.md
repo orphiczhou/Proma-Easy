@@ -114,3 +114,11 @@ Phase 1 快消型主轴的模块和六品类模板已有较完整实现，进入
 - 已完成提交：66814692（P0 giveup 空闲巡检）、2cf5f979（desktop-app 白名单 P1 Python 组件）、cbebe951（共享集 go/docker）、4744fe13（记录验证）。
 - 剩余待办见交接文件 `docs/reports/2026-09-25-phase1-e2e-desktop/handoff-next.md`（恢复工程 + 修复 P0 空闲巡检局限 + P1 stage-deny/env_probe/AC-015 + P2 项）。
 - dev 实例运行中（PID 3262632，9224 CDP）；监控任务 cb005c1c 已暂停。
+
+## 2026-10-01 01:10 截面（三层修复部署 + 番茄 E2E：架构卡死发现与修复）
+
+- **三层修复已部署**（c653de7b + 0808a7a6，dev 0.17.132 @22:52 重启 PID 449428）：skeleton exitCode 字段 / 委派提示词契约约束 / 契约 schema 前置校验（afterPack 门禁两次拦 manifest 指纹漂移，按权威算法同步 2.5.0→2.5.1）。
+- **番茄 E2E 启动**（22:55 project-番茄工作法定时器，quick/desktop-app，监控 5372ddf2）：requirements→prototype→architecture 顺利推进，**架构阶段卡死 48 分钟**——完整分析与修复见 `docs/reports/2026-09-25-phase1-e2e-desktop/issue-20261001-evidence-feedback-loop.md`（Issue #P1-EVD-001）。
+- **核心发现**：架构师按格式补了证据引用但**虚构了不存在的文件路径**（pomodoro-spike-evidence/），而证据校验器布尔化反馈不区分「没写」与「写了路径不存在」→ 两轮拒因一字不差 → 死循环（count 5 / loop-limit×3）→ 调度员绕路委派又被 requirements.txt 文件名词表误拦（deny#15）。
+- **修复已提交**（8d2de303，未部署）：A 证据拒因细分（diagnoseEvidenceReference 回带失效引用路径+「先 Read/ls 确认」指引）；B 词表去 requirements 裸词（W19-C 模式）。263 pass / 0 fail。
+- **工程已人工恢复**：7 处虚构路径改真实 spike 产物 → 01:14 architecture→coding 推进成功（subStage CODE）。2a 豁免与三层修复的 E2E 验证由番茄工程 coding/testing 段与监控继续采集。
