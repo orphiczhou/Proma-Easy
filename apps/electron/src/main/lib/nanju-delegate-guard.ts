@@ -67,9 +67,13 @@ import { isNanjuDelegationSlot } from '@proma/shared'
  * - Task 8（2026-09-20）：architecture 去裸「技术」——「技术栈」是需求调研/架构
  *   正文的高频合法词（事件 SD-1 实测在 requirements 阶段被误拦）；architecture
  *   角色识别由 架构/architect/环境配置 承接，产出词「技术选型」保留，本阶段匹配不削弱。
+ * - 2c（2026-10-01，E2E 番茄工程 deny#15）：requirements 去裸英文词 'requirements'——
+ *   `requirements.txt` 是 Python 标配依赖清单文件名（任务书列产出物即命中：
+ *   「requirements.txt、setup.sh、README」），高频合法引用；requirements 阶段自身
+ *   匹配由 需求调研/需求收集/analyst 等复合词承接，角色声明能力不削弱。
  */
 export const STAGE_ROLE_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
-  requirements: ['需求调研', '需求收集', '收集需求', '需求梳理', '需求评审', 'analyst', 'requirements'],
+  requirements: ['需求调研', '需求收集', '收集需求', '需求梳理', '需求评审', 'analyst'],
   prototype: ['UX', '原型', 'prototype', '视觉', '界面'],
   architecture: ['架构', 'architect', '环境配置', '技术选型'],
   planning: ['规划', '工程计划', '计划', 'plan', '项目经理', '排期', '里程碑', '项目管理'],

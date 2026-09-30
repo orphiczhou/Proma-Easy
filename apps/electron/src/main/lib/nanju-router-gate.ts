@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
-import { hasEvidenceDate, hasEvidenceReference } from './nanju-evidence-reference'
+import { hasEvidenceDate, diagnoseEvidenceReference } from './nanju-evidence-reference'
 import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, readProjectInfo, type NanjuProject, type ProjectStage } from './nanju-project'
 import { getPhaseNode, getNextPhase, type PhaseId, type PhaseNode, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
@@ -1171,6 +1171,9 @@ export function validateEvidenceRecordSection(content: string, allowedDirectorie
   const section = nextSection === -1 ? after : after.slice(0, bodyStart + nextSection)
 
   const missing: string[] = []
+  const brokenFiles: string[] = []   // 修复A：引用在场但 file:// 路径不存在/越出目录——列出具体路径
+  const missingDate: string[] = []   // 引用有效但缺检索日期
+  const outsideFiles: string[] = []
   const lines = section.split('\n')
   // Y-2（审计，2026-09-18）：多行条目容忍——徽记行无 URL 时向下看最多 2 行（URL 另起一
   // 行/表格条目跨行的常见写法），仍无 URL 才拦；防「徽记行与 URL 行分行」整批误拦。
@@ -1185,15 +1188,38 @@ export function validateEvidenceRecordSection(content: string, allowedDirectorie
       record.push(lines[j]!)
     }
     const text = record.join('\n')
-    if (hasEvidenceReference(text, badge, allowedDirectories) && hasEvidenceDate(text)) continue
+    // 修复A（E2E 2026-10-01 架构卡死）：诊断版代替布尔版——「写了引用但路径不存在」
+    // 与「完全没写」分开反馈，拒因列出失效的具体路径，作者可自修正。
+    const diag = diagnoseEvidenceReference(text, badge, allowedDirectories)
+    if (diag.ok) continue
     // 条目标识：表格行取首列，列表/普通行取行首截断（拦截消息指明条目用）
     const trimmed = line.trim().replace(/^\|\s*/, '')
     const label = (trimmed.split('|')[0] ?? '').trim() || trimmed.slice(0, 40)
-    if (label) missing.push(label)
+    if (diag.reason === 'file-not-found' || diag.reason === 'file-outside-allowed') {
+      const refs = (diag.failedRefs ?? []).map(r => `${r}`).join(' ')
+      const why = diag.reason === 'file-not-found' ? '路径不存在' : '在工程/授权目录之外'
+      if (label) brokenFiles.push(`「${label}」→ ${refs}（${why}）`)
+      if (diag.reason === 'file-outside-allowed' && label) outsideFiles.push(label)
+    } else if (diag.reason === 'missing-date') {
+      if (label) missingDate.push(label)
+    } else if (label) {
+      missing.push(label)
+    }
   }
-  if (missing.length > 0) {
-    return '证据记录凭证缺失：以下 [实证]/[文证] 条目缺少有效来源或日期（须「URL+检索日期」YYYY-MM-DD；[文证]限 http(s)://，[实证]也可引用工程内或明确授权目录中的普通 file:// 文件；该检查不证明内容真实性）：'
-      + `${missing.join('；')}。请补来源引用或降级为 [推断] 并按形态③申报（已检索无结论/未触发检索条件）。`
+  if (missing.length > 0 || brokenFiles.length > 0 || missingDate.length > 0) {
+    const parts: string[] = []
+    if (missing.length > 0) {
+      parts.push('以下 [实证]/[文证] 条目缺少有效来源或日期（须「URL+检索日期」YYYY-MM-DD；[文证]限 http(s)://，[实证]也可引用工程内或明确授权目录中的普通 file:// 文件；该检查不证明内容真实性）：'
+        + `${missing.join('；')}。请补来源引用或降级为 [推断] 并按形态③申报（已检索无结论/未触发检索条件）。`)
+    }
+    if (brokenFiles.length > 0) {
+      parts.push('以下条目已写 file:// 引用但引用无效（请核对工程内实际文件路径——先用 Read/ls 确认文件存在再引用；不允许引用不存在的路径）：'
+        + brokenFiles.join('；') + '。')
+    }
+    if (missingDate.length > 0) {
+      parts.push('以下条目引用有效但缺检索日期（在引用旁补 YYYY-MM-DD）：' + missingDate.join('；') + '。')
+    }
+    return '证据记录凭证缺失：' + parts.join('')
   }
   return null
 }

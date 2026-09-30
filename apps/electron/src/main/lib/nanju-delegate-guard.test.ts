@@ -196,10 +196,30 @@ describe('W8 层一：checkDelegationAgainstStage 匹配矩阵（6 阶段全组�
     expect(result.violatedKeyword).toBe('实现')
   })
 
-  test('大小写不敏感：PrD / ANALYST / Requirements 均命中', () => {
+  test('大小写不敏感：PrD / ANALYST 命中；Requirements 裸词已移除（2c，deny#15 requirements.txt 碰撞）', () => {
     expect(checkDelegationAgainstStage('requirements', { task: 'update the PRD' }).matchKind).toBe('stage')
     expect(checkDelegationAgainstStage('requirements', { task: 'act as ANALYST' }).matchKind).toBe('stage')
-    expect(checkDelegationAgainstStage('requirements', { task: 'Requirements gathering' }).matchKind).toBe('stage')
+    // 2c（2026-10-01）：裸 'requirements' 移出词表（Python requirements.txt 文件名高频碰撞）——
+    // 'Requirements gathering' 从 stage 降为 unmatched：放行语义不变，仅观测分类变化（W19-C 同模式）。
+    const g = checkDelegationAgainstStage('requirements', { task: 'Requirements gathering' })
+    expect(g.allowed).toBe(true)
+    expect(g.matchKind).toBe('unmatched')
+  })
+
+  test('2c（E2E 番茄 deny#15）：任务书列产出物 requirements.txt 不再命中他阶段词表', () => {
+    // 架构阶段委派，任务书列产出「requirements.txt、setup.sh、README」——纯文件名，无角色声明意图
+    const result = checkDelegationAgainstStage('architecture', {
+      title: '产出物清单核对',
+      task: '按契约清单核对 08_APP 产出物：requirements.txt、setup.sh、README 与 main.py',
+    })
+    expect(result.allowed).toBe(true)
+    // 对照：同一委派若含真实 coding 角色词仍照常拦（去词不削弱拦截能力）
+    const r2 = checkDelegationAgainstStage('architecture', {
+      title: '',
+      task: '你是开发工程师，直接实现应用代码',
+    })
+    expect(r2.allowed).toBe(false)
+    expect(r2.violatedStage).toBe('coding')
   })
 
   test('词边界：ac 不误命中 trace/space；裸 AC 不再判 ac（W18 翻转）', () => {

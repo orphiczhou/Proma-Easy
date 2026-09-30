@@ -1170,6 +1170,35 @@ describe('L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目�
     setEvidenceGate(ws, true)
     expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
   })
+
+  test('修复A（2026-10-01 番茄卡死）：file:// 引用路径不存在 → 拒因区分「引用无效」并列出具体路径与条目', () => {
+    // E2E 番茄工程实录：架构师按格式补了 file://+日期，但虚构了不存在的
+    // pomodoro-spike-evidence/ 目录——旧拒因只说「缺少来源或日期」，与完全没写不可区分，
+    // 两轮一字不差，修正方向被封死（count 累计 5 次 loop-limit，停摆 40 分钟）。
+    const fake = resolve(fixtureRoot, `project-${PROJECT_ID}`, 'pomodoro-spike-evidence', 'probe-result.json')
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: '' })
+    writeFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '03_ARCHITECTURE', 'architecture.md'),
+      archDocWithEvidence(`## 证据升级与检索记录\n| pystray SNI 真实注册 | [实证]（Spike Q1） | file://${fake} | 2026-09-30 |\n`))
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('已写 file:// 引用但引用无效')
+    expect(error).toContain('路径不存在')
+    expect(error).toContain('pomodoro-spike-evidence') // 失效引用的具体路径在拒因里
+    expect(error).toContain('pystray SNI 真实注册')   // 条目标识在拒因里
+    expect(error).toContain('先用 Read/ls 确认文件存在再引用') // 可操作指引
+  })
+
+  test('修复A：引用存在但在工程目录之外 → 拒因提示「授权目录之外」（非「不存在」）', () => {
+    const outside = resolve(tmpdir(), 'nanju-outside-evidence-test.md')
+    writeFileSync(outside, 'outside')
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: '' })
+    writeFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '03_ARCHITECTURE', 'architecture.md'),
+      archDocWithEvidence(`## 证据升级与检索记录\n- 外部文件引用：[实证] file://${outside} 2026-09-30\n`))
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('工程/授权目录之外')
+    rmSync(outside, { force: true })
+  })
   test('Given 新项目 + 纯申报（未触发检索条件/已检索无结论）When 推进 Then 放行（形态③自我申报不做事前拦截）', () => {
     const ws = setupFixture({
       stage: 'architecture', mode: 'iterative',
