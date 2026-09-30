@@ -1,7 +1,7 @@
 {
   "$schema": "https://proma.cool/schemas/engineering-templates-manifest-v1.json",
   "manifestVersion": "1.0.0",
-  "bundleVersion": "2.5.0",
+  "bundleVersion": "2.5.1",
   "bundleId": "nanju-engineering-templates",
   "generatedAt": "2026-09-23T11:24:30.524Z",
   "generator": "proma-phase1-task4",
@@ -109,16 +109,16 @@
       "kind": "shared-driver",
       "required": true,
       "owner": "parent-refresh",
-      "sha256": "1cc168a9c14611bbf4195f2ea0d5d29349f7545b7527407096ae4f7745e55e95",
-      "size": 14514
+      "sha256": "6db4a21790806dc3be4a1fda08abac8fb3545091664b6bbd8774fccb7496f8a9",
+      "size": 14881
     },
     {
       "path": "driver-skeleton.cjs",
       "kind": "shared-driver",
       "required": true,
       "owner": "parent-refresh",
-      "sha256": "7dcde979b285fe1f20c8f42aaf49f72d5514ef2a0f504d471e75f009b1785272",
-      "size": 15254
+      "sha256": "7603aa4e84a732476ccf47a1c5a3a515d04eb88a3482aaecb1ef7be06b06bd2a",
+      "size": 15556
     }
   ],
   "dependencies": [
@@ -244,5 +244,5 @@
       "required": true
     }
   ],
-  "bundleSha256": "397b1994bb984564aa59f2598210f26bc9eae139b4aae5cb01d2aeb8d7d870ac"
+  "bundleSha256": "7ca72f382259a8f44f16d68fe8e764c8f1defc609aaeaf88fa5175d06dcf17e5"
 }
