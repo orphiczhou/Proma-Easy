@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { app } from 'electron'
 import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, CodexOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation } from '@proma/shared'
@@ -891,6 +891,56 @@ export class AgentOrchestrator {
             })
           }
           this.injectNanjuAssistantMessage(sessionId, outcome.summaryText)
+          // 方案1（2026-10-01 用户裁决，Issue #P1-REAL-002）：真实证据缺失型 blocked 且
+          // 驱动层已全 pass 时，向用户发真人见证询问（permissionService 唯一入口）；允许
+          // → 登记人证观察+ack → 提示调度员重声明 testing 重跑（观察期门禁即解除，
+          // 交付门 validate/consume 走既有协议）。拒绝/其他 blocked 保持等待。
+          const blockedText = outcome.blockedReason ?? outcome.summaryText ?? ''
+          if (useEngineeringDrivers && blockedText.includes('真实能力证据')) {
+            try {
+              const { registerSessionHumanWitnessEvidence } = require('./nanju-engineering-real-gate') as typeof import('./nanju-engineering-real-gate')
+              const { parseEngineeringContract } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+              const { getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
+              const projectDir = getNanjuProjectDir(workspaceSlug, projectId)
+              const contract = parseEngineeringContract(readFileSync(join(projectDir, '03_ARCHITECTURE/engineering.json'), 'utf-8')).contract
+              const realTests = (contract?.tests ?? []).filter((t) => t.requiresReal).map((t) => ({ testId: t.id, target: t.target, covers: t.covers }))
+              if (realTests.length > 0) {
+                const { registerSessionHumanWitnessEvidence } = require('./nanju-engineering-real-gate') as typeof import('./nanju-engineering-real-gate')
+                const { peekEngineeringDeviceDetail } = require('./nanju-gwt-runner') as typeof import('./nanju-gwt-runner')
+                const { permissionService } = require('./agent-permission-service') as typeof import('./agent-permission-service')
+                const witness = await registerSessionHumanWitnessEvidence(
+                  { workspaceSlug, projectId, sessionId, projectDir, deviceDetail: peekEngineeringDeviceDetail(projectId) },
+                  realTests,
+                  async (message) => {
+                    // 与工程测试逐项批准同一机制（requestSingleApproval：dangerous 单次确认，
+                    // UI 横幅由 eventBus permission_request 渲染）；allowed 即真人见证成立。
+                    let realRequestId = ''
+                    const result = await permissionService.requestSingleApproval(
+                      sessionId,
+                      'EngineeringHumanWitness',
+                      { description: message },
+                      { signal: engineeringAbort.signal, toolUseID: crypto.randomUUID(), displayName: '真人见证工程验收行为', title: '工程验收·真人见证', description: message },
+                      (request) => {
+                        realRequestId = request.requestId
+                        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
+                      },
+                      { lifetime: 'host-task' },
+                    )
+                    // 协议要求 requestId 为真实请求 id（回调捕获）；拿不到时退合成 id 并留日志。
+                    return { allowed: result.behavior === 'allow', requestId: realRequestId || 'witness-' + crypto.randomUUID() }
+                  },
+                )
+                this.injectNanjuAssistantMessage(
+                  sessionId,
+                  witness.ok
+                    ? `✅ ${witness.message}。请重新声明 <!-- PHASE_ADVANCE: testing --> 触发 GWT 重跑（本次观察期门禁将解除，全 pass 后即可声明交付）。`
+                    : `ℹ️ ${witness.message}。`,
+                )
+              }
+            } catch (witnessError) {
+              console.warn('[南大路由] 真人见证接线异常（不阻断 blocked 语义）:', witnessError instanceof Error ? witnessError.message : String(witnessError))
+            }
+          }
           // 环境/驱动阻塞不是代码失败；等待真人处理，不自动回炉或确认交付。
           return
         }

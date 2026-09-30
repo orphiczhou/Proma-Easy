@@ -32,7 +32,7 @@
  * 协议文件是 REAL 冻结文件，I 无权改 `projectId` 为登记入参。
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -491,4 +491,94 @@ export function commitDeliveryRealEvidence(
   const rejection = validateEngineeringRealEvidence(input)
   if (rejection) return { rejection, boundaryCodes }
   return { rejection: consumeEngineeringRealEvidence(input), boundaryCodes }
+}
+
+/* ------------------------------------------------------------------ */
+/* 方案1（2026-10-01 用户裁决，Issue #P1-REAL-002）：最小「同会话真人见证」接线      */
+/* ------------------------------------------------------------------ */
+
+/** 见证询问应答（来自真实 permission/Ask 回调；allowed=false 即不登记）。 */
+export interface SessionHumanWitnessAskResult {
+  allowed: boolean
+  /** 真实 permission 请求 ID（登记收据与 ack 均绑定它）。 */
+  requestId: string
+}
+
+/**
+ * 最小人证见证登记：GWT 驱动层全 pass 但 requiresReal 项缺独立证据时，由宿主向
+ * 用户发**一次**真实确认（ask 回调 = permissionService 询问）；明确允许后对每个
+ * requiresReal 测试登记一轮「宿主见证观察」并签发交付层 boundary ack。
+ *
+ * 协议语义（不冒充、不绕过）：
+ * - producer=host-observer、**不声明机器观察点**（observationPointsByTestId 不动）
+ *   → 门禁观察点循环零次，不冒充机器实测；
+ * - coverageBoundaryCodes 如实携带 `human-witness-limited` 边界（消费侧与报告可见）；
+ * - 观察期与交付 validate/consume 全部走既有协议入口（registerHostObserverEvidence
+ *   同族路径，无新增绕过口）；ack 经 issueBoundaryAckAfterRealConfirmation 签发。
+ * - 用户拒绝 → 不登记不签发，工程保持 blocked（等宿主观察器接入或再次见证）。
+ */
+export async function registerSessionHumanWitnessEvidence(
+  scope: EngineeringRealEvidenceScope,
+  tests: readonly EngineeringRealEvidenceTestTarget[],
+  ask: (message: string) => Promise<SessionHumanWitnessAskResult>,
+): Promise<{ ok: boolean; message: string; boundaryCodes: string[] }> {
+  const boundaryCodes = resolveCoverageBoundaryCodes(scope, tests)
+  if (tests.length === 0) return { ok: true, message: '无需见证（契约无 requiresReal 项）', boundaryCodes }
+  let evidenceDigest: string
+  let contractSha256: string
+  try {
+    const evidence = captureEngineeringEvidence(scope.projectDir).evidence
+    if (!evidence) return { ok: false, message: '工程证据不可读，拒绝见证登记（不放行）', boundaryCodes }
+    evidenceDigest = evidence.digest
+    contractSha256 = sha256Hex(readFileSync(join(scope.projectDir, ENGINEERING_CONTRACT_PATH), 'utf-8'))
+  } catch {
+    return { ok: false, message: '工程证据或契约不可读，拒绝见证登记（不放行）', boundaryCodes }
+  }
+  const lines = tests.map((t) => `· ${t.testId}（被测产物 08_APP/${t.target}，覆盖 ${t.covers.join('、') || '辅助测试'}）`).join('\n')
+  const message = '【工程验收·真人见证请求】以下验收项的项目驱动检查已全部通过，但契约声明 requiresReal，'
+    + '需要独立于项目驱动的真实能力证据。当前宿主自动观察器尚未接入——是否由你（本会话真人）确认这些行为真实成立？\n'
+    + lines
+    + '\n\n确认后登记为「同会话真人见证」级别（覆盖边界 human-witness-limited，不等同宿主机器实测）；'
+    + '拒绝则工程保持 blocked（可等宿主观察器接入或人工核查后再试）。'
+  // 单轮观察窗口 5 分钟（ENGINEERING_REAL_MAX_OBSERVATION_MS）：Ask 等待计入观察时长。
+  const startedAt = engineeringRealClock.epochNow()
+  const decision = await ask(message)
+  const finishedAt = Math.max(engineeringRealClock.epochNow(), startedAt + 1) // 观察时长必须为正（同步应答时同毫秒保底 +1ms）
+  if (!decision || decision.allowed !== true || !decision.requestId) {
+    return { ok: false, message: '用户未确认见证，工程保持 blocked', boundaryCodes }
+  }
+  const registry = registryFor(scope.projectId)
+  const displayCodes = [...new Set([...boundaryCodes, ENGINEERING_REAL_BOUNDARY_CODES.humanWitnessLimited])].sort()
+  const runIds: string[] = []
+  for (const test of tests) {
+    const ticket = registry.issueObservationTicket({ testId: test.testId, sessionId: scope.sessionId })
+    if (!ticket) return { ok: false, message: '观察票据签发失败（容量上限），本轮见证未登记', boundaryCodes }
+    const observationRunId = `human-witness-${randomUUID()}`
+    const result = registry.register(ticket, {
+      testId: test.testId,
+      target: test.target,
+      covers: [...test.covers],
+      evidenceDigest,
+      contractSha256,
+      sessionId: scope.sessionId,
+      device: resolveEngineeringDeviceBinding(scope.deviceDetail ?? {}),
+      observationRunId,
+      startedAt,
+      approvedAt: finishedAt,
+      finishedAt,
+      observations: [],
+      witnesses: [],
+      verdict: 'attested',
+      coverageBoundaryCodes: displayCodes,
+      approval: { requestId: decision.requestId, cancelled: false },
+    })
+    if (!result.ok) return { ok: false, message: '见证登记被协议拒绝：' + result.message, boundaryCodes }
+    runIds.push(observationRunId)
+  }
+  const ackReceipt = issueBoundaryAckAfterRealConfirmation(
+    { projectId: scope.projectId, sessionId: scope.sessionId },
+    { requestId: decision.requestId, allowed: true, displayedBoundaryCodes: displayCodes, displayedObservationRunIds: runIds },
+  )
+  if (!ackReceipt) return { ok: false, message: '边界确认收据签发失败，本轮见证未生效（可重试）', boundaryCodes }
+  return { ok: true, message: `已登记 ${runIds.length} 项同会话真人见证（human-witness-limited），交付门已具备 ack`, boundaryCodes }
 }
