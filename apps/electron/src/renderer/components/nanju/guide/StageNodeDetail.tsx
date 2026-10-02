@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { ChevronDown, FileText, History, Loader2, ShieldCheck, Undo2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { GuideRoutePhase } from '@proma/shared'
+import type { GuideRoutePhase, ProjectRecoveryResult } from '@proma/shared'
 import { showNanjuToast } from '@/components/nanju/NanjuToast'
 import type { StageViewStatus, TodoLike } from './guide-dsl'
 
@@ -30,7 +30,7 @@ interface StageNodeDetailProps {
   snapshots: GuideSnapshot[]
   snapshotsLoading: boolean
   onOpenPreview: (outputPath: string) => void
-  onRollback: (snapshotId: number) => Promise<boolean>
+  onRollback: (snapshotId: number) => Promise<ProjectRecoveryResult>
   onClose: () => void
 }
 
@@ -65,7 +65,7 @@ export function buildRollbackConfirmTitle(description: string): string {
 }
 
 /** Y2c（W1，spec 交互3）：确认弹窗正文（spec 原文，逐字） */
-export const ROLLBACK_CONFIRM_BODY = '不会丢失现在的版本。你随时可以从历史版本中切回来。'
+export const ROLLBACK_CONFIRM_BODY = '恢复前会先保存当前版本；保存失败将取消恢复。完整恢复后可从历史版本切回，部分恢复会明确提示。'
 
 export function StageNodeDetail({
   phase,
@@ -89,16 +89,18 @@ export function StageNodeDetail({
   const handleRollback = React.useCallback(async (snapshotId: number) => {
     setRollbackBusy(true)
     setRollbackError(null)
-    const snapshot = snapshots.find((s) => s.snapshotId === snapshotId)
-    const ok = await onRollback(snapshotId)
-    setRollbackBusy(false)
-    if (ok) {
-      setPendingRollbackId(null)
-      // Y2c（W1）：回滚成功 Toast（spec 交互3 原文，rollback 类型 4s 自动消失，复用 R1 Toast 服务）
-      if (snapshot) showNanjuToast('rollback', { text: buildRollbackSuccessToastText(snapshot.description) })
-    } else {
-      // 回滚失败（handler 返回 null，AC-13）：错误提示，不静默（文案保持，不回归）
-      setRollbackError('回滚失败：快照不存在或已被删除')
+    try {
+      const result = await onRollback(snapshotId)
+      if (result.ok && result.status === 'restored') {
+        setPendingRollbackId(null)
+        showNanjuToast('rollback', { text: result.message })
+      } else {
+        setRollbackError(result.message)
+      }
+    } catch (e) {
+      setRollbackError(`恢复失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRollbackBusy(false)
     }
   }, [onRollback, snapshots])
 

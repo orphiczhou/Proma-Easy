@@ -136,6 +136,8 @@ export interface NanjuGuideProject {
   currentStage: string
   sessionId?: string
   updatedAt: string
+  recoveryMessage?: string | null
+  advanceCorrection?: import('@proma/shared').AdvanceCorrectionView | null
 }
 
 export interface NanjuGuideData {

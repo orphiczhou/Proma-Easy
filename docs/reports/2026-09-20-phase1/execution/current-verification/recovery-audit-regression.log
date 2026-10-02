@@ -1,0 +1,64 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-project-snapshots.test.ts:
+(pass) B-c 存储位置与捕获 > storageDir 在工程目录之外（D 布局守卫）且可被捕获复用 [5.53ms]
+(pass) B-c 存储位置与捕获 > 工程目录不存在 → fail-closed 不返回 snapshotId 也不建快照目录 [0.81ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > 捕获成功 → 会话快照携带 fileSnapshotId 且描述含文件恢复承诺 [10.39ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > 捕获失败（存储目录不可写）→ 会话快照仍在但 fileSnapshotId 不写（fail-closed） [1.94ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > S4 守卫：清单被篡改的捕获快照不得被关联为文件可恢复 [2.75ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S8：含符号链接的工程恢复后 complete=false 且文案列出 notRestored [17.09ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > 恢复完整时文案含备份占用与「不自动清理」 [7.35ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S9：快照 id 非法/快照目录缺失 → 给可行动提示且不动工程 [0.85ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S10：占用统计列出快照与备份数量/字节，且明确不自动清理 [2.90ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > 无任何快照时占用统计为零且不抛错 [0.70ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 已关联文件快照 → 回滚同时恢复工程文件 [9.63ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 未关联文件快照（legacy fork 快照）→ 明确只回滚会话分支 [4.79ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 快照不存在 → ok=false 且不抛错 [0.77ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > capture 成功返回 D 的 UUID 字符串快照 id（原样透传，不做数值派生） [1.63ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > capture 失败必须抛错（不得静默成功）：工程目录缺失 → 抛错且原因可读 [0.81ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > rollback 原样透传 D 结构结果：成功时 ok=true + restoredFiles + 备份目录 [4.66ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > rollback 快照目录不可用 → ok=false + 语义 reason（不抛错、不碰工程） [0.68ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 无快照 → null（调用方据此 fileRollbackAvailable=false） [0.89ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 存在 pre-modify 已关联快照 → 选它（本次修改前的健康态），标签取描述 [4.02ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 只有未关联文件快照的会话快照 → null（避免把「只切分支」说成能恢复工程） [0.98ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 完整恢复切到新的历史上下文分支，阶段回退且旧交付授权失效，恢复前版本可再次选择 [18.59ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 损坏目标文件快照不会切换会话/阶段，并返回失败而非非空对象成功 [11.42ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 会话快照丢失/工作区仍忙时恢复不修改文件 [5.50ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 状态提交失败先补偿文件与会话；补偿失败则保持硬阻塞 [21.41ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 旧快照阶段未知只报partial并阻止新执行，可回恢复前版本解除 [15.29ms]
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-qNLoxN/project-p1-file-snapshots/_project-recovery.json
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-qNLoxN/project-p1-file-snapshots/_project-recovery.json
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 中断日志损坏和快照路径逃逸均不能静默成功 [0.89ms]
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-zQxoSi/project-p1-file-snapshots/_project-recovery.json
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-zQxoSi/project-p1-file-snapshots/_project-recovery.json
+(pass) 恢复审计R3：可诊断、坏日志保留、项目边界 > 坏日志不自动放行；用户选择完整检查点后归档原始日志并恢复 [8.22ms]
+(pass) 恢复审计R3：可诊断、坏日志保留、项目边界 > 受影响工程仍可只读诊断；无关工程显式文件写不受阻，符号链接绕路仍被拒 [3.28ms]
+
+apps/electron/src/main/lib/nanju-advance-recovery.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+248 |  * （nanju-model-settings-service，D2 域）；行级恢复 = save patch 字段显式 null，
+249 |  * 整体恢复 = 删该文件（IPC reset）。只拼路径不建目录（读路径不需要副作用）。
+250 |  */
+251 | export function getUserNanjuModelOverridePath(): string {
+252 |   const { getConfigDirName } = require('./config-paths') as typeof import('./config-paths')
+253 |   return join(homedir(), getConfigDirName(), 'nanju-model-config-override.json')
+                               ^
+TypeError: getConfigDirName is not a function. (In 'getConfigDirName()', 'getConfigDirName' is undefined)
+      at getUserNanjuModelOverridePath (/home/orphic/proma-patches/p1-quick-engineering/apps/electron/src/main/lib/nanju-model-config.ts:253:26)
+      at computeConfig (/home/orphic/proma-patches/p1-quick-engineering/apps/electron/src/main/lib/nanju-model-config.ts:487:45)
+      at setCacheAndBumpGeneration (/home/orphic/proma-patches/p1-quick-engineering/apps/electron/src/main/lib/nanju-model-config.ts:510:12)
+      at resolvePhaseModelConfig (/home/orphic/proma-patches/p1-quick-engineering/apps/electron/src/main/lib/nanju-model-config.ts:561:17)
+      at evaluateModelDiversity (/home/orphic/proma-patches/p1-quick-engineering/apps/electron/src/main/lib/nanju-router.ts:591:21)
+      at /home/orphic/proma-patches/p1-quick-engineering/apps/electron/src/main/lib/nanju-router.ts:670:32
+-------------------------------
+
+
+1 tests failed:
+
+ 28 pass
+ 1 fail
+ 1 error
+ 121 expect() calls
+Ran 29 tests across 2 files. [266.00ms]

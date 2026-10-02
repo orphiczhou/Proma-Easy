@@ -1,0 +1,3 @@
+$ tsc --noEmit
+src/main/lib/nanju-phase-advance-consumer.ts(1067,27): error TS2304: Cannot find name 'authSource'.
+src/main/lib/nanju-phase-advance-consumer.ts(1067,84): error TS2304: Cannot find name 'authSource'.

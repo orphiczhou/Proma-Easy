@@ -22,6 +22,8 @@ export type TelemetryEventType =
   | 'env.check.executed' | 'env.setup.verified' | 'env.setup.failed'
   // W8 流程程序化强制：委派守卫（阶段拒绝 / 误拦观察 / AC 模型覆写）
   | 'delegate.guard.stage-deny' | 'delegate.guard.pass-unmatched' | 'delegate.guard.ac-override'
+  // 2a（2026-09-28 用户裁决）：显式 phase.role 匹配当前阶段 → 豁免他阶段词扫描的观测事件
+  | 'delegate.guard.role-exempt'
   // W10 推进闭环强化：unmatched 强动词拒绝 + 确认待推进提示
   | 'delegate.guard.unmatched-action-deny' | 'confirm.advance-hint'
   // W13 模型 fallback 让步链：委派降级可观测（原值→新值→原因）
@@ -49,9 +51,34 @@ export type TelemetryEventType =
   | 'confirm.auto-confirm' | 'advance.auto-gate' | 'clarify.auto-degrade'
   // W22（G 域 F5/D8-1）：W11 目标校验拒绝遥测补齐 + 拒收防环转人工/续接放弃归因
   //（payload.kind 区分 loop-limit / continuation-giveup）
-  | 'advance.target-deny' | 'advance.reject-escalate'
+  | 'advance.target-deny' | 'advance.reject-escalate' | 'advance.correction'
   // W22（M 域 M#8 预留入表）：开发↔测试跨族断言告警（不阻断，配置层可观测）
   | 'model.diversity-warn'
+  // W23（§六.3）：配置级 autofix——委派指令构建前预检失效端点并临时替换（区别于
+  // 请求级 model.fallback.used：本事件在构建期触发，不落盘，仅本次指令生效）
+  | 'model.config-autofix'
+  // P0'（2026-09-28，E2E-Desktop coding→testing 卡死调查）：护栏续接因会话元数据缺
+  // channelId 而不可用（南大工程会话创建链不传渠道且无回填）。SEND_MESSAGE 已加首条
+  // 消息回填；本事件标记存量无渠道会话，供监控发现与修复验证。
+  | 'continuation.channel-missing'
+  // W24-EF F2（v0.17.123）：PRD §12.4 事件表补齐——只追加 union 成员；既有发射点不动。
+  // #6 user.undo：用户主动撤销（区分系统侧 undo 与用户意图）；#7 click_to_fix：点选纠错单点
+  // 上报（按 nanju-quick-events.ts.buildClickToFixPayload 输出，privacy 最小 payload 仅含
+  // 元素类型/是否含 id/是否成功/阶段，绝不含原文/坐标）；#8 mode.switched：模式转换（快消→
+  // 长期）——独立事件，与 #3 role.switched（向导角色切换）语义不同，不得复用；#10
+  // repair.triggered：自动修复触发（按 E2 RepairAttempt[] 派生 payload，含
+  // attempts/strategies/outcome，attempt 数始终来自 E2 真实状态，禁止 I 端硬编码伪造）；
+  // #12 satisfaction.marked：用户主动标记满意交付（仅 AskUserQuestion 精确等值置位，
+  // message 来源不置位——W18 已固化）。
+  | 'user.undo' | 'click_to_fix' | 'mode.switched' | 'repair.triggered' | 'satisfaction.marked'
+  // L3-7d（2026-09-18，工程模版体系改进）：Spike 效果度量三埋点（03 §6 定义，PRD
+  // §12.7 归档对照承接）。事件名沿枚举点分小写惯例（对齐 env.check.executed）。
+  // spike.created / spike.verdict 由 nanju-spike-telemetry.ts 按 architecture.md 的
+  // PENDING(SPIKE-NNN) 标记快照对比与契约 spikes[] 登记变化派生（观察点=verifyPhaseOutput
+  // architecture 分支）；spike.timebox_hit 无可观测载体（时间盒命中发生在 Spike 子会话
+  // 内部，文档/契约均无创建时间戳可比对）——仅登记枚举不接假触发点，真实触发依赖
+  // 未来 Spike 子会话自报通道或登记字段扩展（见 nanju-spike-telemetry.ts 头注）。
+  | 'spike.created' | 'spike.verdict' | 'spike.timebox_hit'
 
 export interface TelemetryEvent {
   eventId: string

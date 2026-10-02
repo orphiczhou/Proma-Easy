@@ -1,0 +1,162 @@
+@startuml
+' DOC-3.3-SEQ2 | v0.3 | 日期: 2026-06-06 | 状态: 终审修正
+' 文档ID: DOC-3.3 | 文件: agent-role-switch.seq.puml
+' 依赖: architecture.md §5, class-diagram.puml v0.5, PRD §4.3, US-G06, session-context-report.md
+' 覆盖: 阶段判定 → 上下文序列化 → Session Restart → 新角色System Prompt加载 → Context Backfill → 对话恢复
+' 注意: MVP采用串行切换, 探索结论放弃并行方案
+' 参与者: User, GuideAgent, SessionRouter, RequirementAnalyst, UIUXAdvisor, ArchitectDesigner, EngineeringManager, ProjectDocumentSystem
+
+actor User
+participant GuideAgent
+participant SessionRouter
+participant RequirementAnalyst
+participant UIUXAdvisor
+participant ArchitectDesigner
+participant EngineeringManager
+participant ProjectDocumentSystem
+
+== 需求分析师 → UI/UX顾问 ==
+
+GuideAgent -> GuideAgent : detectCompletion("PRD已确认")
+Note over GuideAgent : 阶段结束信号: 用户确认PRD摘要
+
+GuideAgent -> RequirementAnalyst : serializeContext()
+activate RequirementAnalyst
+RequirementAnalyst -> GuideAgent : contextSummary{核心需求, 功能清单, 页面列表, 已确认决策, GWT骨架}
+deactivate RequirementAnalyst
+
+GuideAgent -> SessionRouter : switchTo(UIUXAdvisor, contextSummary)
+activate SessionRouter
+
+SessionRouter -> SessionRouter : 序列化当前会话(保存对话历史)
+SessionRouter -> SessionRouter : 释放当前API连接
+SessionRouter -> SessionRouter : 加载UIUXAdvisor角色配置
+Note over SessionRouter : SystemPrompt: 02_UX_DESIGN prompt\n模型: MiniMax 2.7/M3\n角色ID: UIUXAdvisor
+
+SessionRouter -> SessionRouter : 注入contextSummary到SystemPrompt的Context段落
+
+SessionRouter -> GuideAgent : backfill(UI/UX顾问SystemPrompt+上下文摘要)
+deactivate SessionRouter
+
+GuideAgent --> User : "好的, 关于[上阶段总结], 接下来我们看看效果——"
+
+== UI/UX顾问 → 架构设计师 ==
+
+GuideAgent -> GuideAgent : detectCompletion("原型已确认")
+Note over GuideAgent : 阶段结束信号: 用户表达满意
+
+GuideAgent -> UIUXAdvisor : serializeContext()
+activate UIUXAdvisor
+UIUXAdvisor -> GuideAgent : contextSummary{PRD摘要, 原型文件列表, 设计决策, 用户审美偏好}
+deactivate UIUXAdvisor
+
+alt 快消型
+  GuideAgent -> SessionRouter : skipToBackstage(ArchitectDesigner)
+  activate SessionRouter
+
+  SessionRouter -> SessionRouter : 加载架构师SystemPrompt(无UI渲染)
+  SessionRouter -> SessionRouter : 注入上下文摘要
+  SessionRouter -> GuideAgent : backfill(后台模式, 不渲染对话界面)
+  deactivate SessionRouter
+
+  GuideAgent -> ArchitectDesigner : selectTech+generatePUML(后台执行)
+  activate ArchitectDesigner
+  Note over ArchitectDesigner : 用户看到"AI正在设计技术方案..."\n不展示PlantUML代码和技术细节
+
+  ArchitectDesigner -> ProjectDocumentSystem : 写入 architecture.md + .puml
+  ArchitectDesigner -> GuideAgent : 架构方案完成
+  deactivate ArchitectDesigner
+
+  Note over GuideAgent : 直接转入下一阶段\n跳过架构师前台确认
+
+else 长期迭代型
+  GuideAgent -> SessionRouter : switchTo(ArchitectDesigner, contextSummary)
+  activate SessionRouter
+
+  SessionRouter -> SessionRouter : 加载架构师SystemPrompt+上下文摘要
+  SessionRouter -> GuideAgent : backfill(前台模式, 渲染对话界面)
+  deactivate SessionRouter
+
+  GuideAgent -> ArchitectDesigner : 跳到前台 → 展示技术选型方案
+  activate ArchitectDesigner
+  Note over ArchitectDesigner : 用户看到的是通俗化方案选项:\n"选A还是B? 各自的优缺点"
+
+  ArchitectDesigner --> User : 技术选型确认
+  deactivate ArchitectDesigner
+
+  GuideAgent -> ArchitectDesigner : generatePUML(用户确认的选型)
+  activate ArchitectDesigner
+  ArchitectDesigner -> ProjectDocumentSystem : 写入完整架构文档
+  ArchitectDesigner -> GuideAgent : 架构方案确认
+  deactivate ArchitectDesigner
+end
+
+== 架构设计师 → 工程经理 ==
+
+GuideAgent -> GuideAgent : detectCompletion("架构已确认")
+
+GuideAgent -> ArchitectDesigner : serializeContext()
+activate ArchitectDesigner
+ArchitectDesigner -> GuideAgent : contextSummary{技术栈, PlantUML路径, API Spec路径, 模板类型}
+deactivate ArchitectDesigner
+
+alt 快消型
+  GuideAgent -> SessionRouter : skipToBackstage(EngineeringManager)
+  activate SessionRouter
+
+  SessionRouter -> SessionRouter : 加载工程经理SystemPrompt(无UI渲染)
+  SessionRouter -> SessionRouter : 注入上下文摘要
+  SessionRouter -> GuideAgent : backfill(后台模式, 不渲染对话界面)
+  deactivate SessionRouter
+
+  GuideAgent -> EngineeringManager : configureTeam+planSprints(自动)
+  activate EngineeringManager
+  Note over EngineeringManager : 自动配置: 全栈开发+测试Agent\n单Sprint计划
+
+  EngineeringManager -> ProjectDocumentSystem : 写入 team-config.md
+  EngineeringManager -> GuideAgent : 工程计划完成
+  deactivate EngineeringManager
+
+  Note over GuideAgent : 直接转入文档交接\n用户从PRD确认到"AI正在开发中"无缝过渡
+
+else 长期迭代型
+  GuideAgent -> SessionRouter : switchTo(EngineeringManager, contextSummary)
+  activate SessionRouter
+
+  SessionRouter -> SessionRouter : 加载工程经理SystemPrompt+上下文摘要
+  SessionRouter -> GuideAgent : backfill(前台模式, 渲染对话界面)
+  deactivate SessionRouter
+
+  GuideAgent -> EngineeringManager : 跳到前台 → 展示Sprint拆分
+  activate EngineeringManager
+  Note over EngineeringManager : 用户看到通俗化的Sprint规划:\n"第一版先做X和Y, 第二版加Z"
+
+  EngineeringManager --> User : Sprint优先级确认
+  deactivate EngineeringManager
+
+  GuideAgent -> EngineeringManager : planSprints(用户确认的优先级)
+  activate EngineeringManager
+  EngineeringManager -> ProjectDocumentSystem : 写入 sprint-plan.md + team-config.md + workflow.md
+  EngineeringManager -> GuideAgent : 工程规划确认
+  deactivate EngineeringManager
+end
+
+== 角色切换异常降级 ==
+
+alt 角色加载异常(SessionRouter内部)
+  SessionRouter -> SessionRouter : 角色Prompt/模型加载失败
+  Note over SessionRouter : 异常仅写入开发者日志,\n用户无感知
+  GuideAgent -> GuideAgent : 降级为通用对话模式(System Prompt回退)
+  Note over GuideAgent : GuideAgent仍能正常响应用户,\n用户看到无错误提示/技术日志/服务中断
+end
+
+== 切换完成 ==
+
+GuideAgent -> ProjectDocumentSystem : validateStructure(完整目录)
+activate ProjectDocumentSystem
+ProjectDocumentSystem --> GuideAgent : 结构校验通过
+deactivate ProjectDocumentSystem
+
+Note over GuideAgent : 全部4角色已完成\n进入文档交接 → 裁判审查(SEQ-4)
+
+@enduml

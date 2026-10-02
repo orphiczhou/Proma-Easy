@@ -184,39 +184,39 @@ afterEach(() => {
 describe('MODEL_FALLBACK_CHAINS（代码兑底层，W13b 起配置优先）', () => {
   test('代码链常量形状与 W13 工单 §2.1 一致（5 端点：旗舰→同族快版→异族备援；W13b 起作为配置缺项时的兑底）', () => {
     expect(MODEL_FALLBACK_CHAINS).toEqual({
-      'deepseek:deepseek-v4-pro': ['deepseek:deepseek-v4-flash', 'glm-zhipu:glm-5.3-flash'],
-      'deepseek:deepseek-v4-flash': ['glm-zhipu:glm-5.3-flash'],
-      'glm-zhipu:GLM-5.3': ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-v4-flash'],
-      'glm-zhipu:glm-5.3-flash': ['deepseek:deepseek-v4-flash'],
+      'deepseek:deepseek-v4-pro': ['deepseek:deepseek-flash', 'glm-zhipu:glm-5.3-flash'],
+      'deepseek:deepseek-flash': ['glm-zhipu:glm-5.3-flash'],
+      'glm-zhipu:GLM-5.3': ['glm-zhipu:glm-5.3-flash', 'deepseek:deepseek-flash'],
+      'glm-zhipu:glm-5.3-flash': ['deepseek:deepseek-flash'],
       'minimax:MiniMax-M3': ['glm-zhipu:glm-5.3-flash'],
     })
   })
 
   test('getFallbackChain：旗舰两级降级；glm:GLM-5.3 走配置链（W13b：参数文件 phases[].fallbacks 优先，同 key 并集）', () => {
     expect(getFallbackChain('deepseek', 'deepseek-v4-pro')).toEqual([
-      { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-flash' },
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
     ])
     // W13b：architecture（声明 deepseek:deepseek-v4-pro）与 coding（声明 glm-5.3-flash →
-    // deepseek-v4-flash）共用 glm-zhipu:GLM-5.3 主选——配置链按阶段序取并集，
+    // deepseek-flash）共用 glm-zhipu:GLM-5.3 主选——配置链按阶段序取并集，
     // 与代码链（[glm-5.3-flash, v4-flash]）不同 → 证明配置优先
     expect(getFallbackChain('glm-zhipu', 'GLM-5.3')).toEqual([
       { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
-      { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-flash' },
     ])
   })
 
   test('getFallbackChain：flash 级异族备援；minimax 链尾备援（W22 M#6 后 deepseek:v4-flash 成为 planning+testing 主选 key → 配置链并集，与代码链不同值）', () => {
     // W22 M#6：planning 先声明 [glm-5.3-flash]、testing 追加 [glm-5.3-flash（去重）, deepseek-v4-pro]
     // → 配置链 = 两条；不再是与代码链同值的单跳（原仅 testing 声明时同值）
-    expect(getFallbackChain('deepseek', 'deepseek-v4-flash')).toEqual([
+    expect(getFallbackChain('deepseek', 'deepseek-flash')).toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
       { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
     ])
     // W22 M#6：testing 主选不再是 glm:glm-5.3-flash → 配置链无该 key → 代码链兑底（与原值一致，行为不变）
     expect(getFallbackChain('glm-zhipu', 'glm-5.3-flash')).toEqual([
-      { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+      { channelId: 'deepseek', modelId: 'deepseek-flash' },
     ])
     expect(getFallbackChain('minimax', 'MiniMax-M3')).toEqual([
       { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
@@ -264,14 +264,14 @@ describe('delegate_agent fallback 降级重试（nanju 范围内）', () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-fb-sync-'))
     writeNanjuProjectFixture()
     // deepseek 渠道只启用 v4-flash（v4-pro 未启用 → 同步校验抛错）
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true }
 
     const result = await delegate({ channelId: 'deepseek', modelId: 'deepseek-v4-pro' })
 
     // 工具结果反映降级后的实际执行模型
-    expect(result.effectiveModelId).toBe('deepseek-v4-flash')
+    expect(result.effectiveModelId).toBe('deepseek-flash')
     const delegation = result.delegation as Record<string, unknown>
-    expect(delegation.modelId).toBe('deepseek-v4-flash')
+    expect(delegation.modelId).toBe('deepseek-flash')
     // runner 桩同步完成：返回时已是 completed（降级后启动成功）
     expect(delegation.status).toBe('completed')
 
@@ -279,12 +279,12 @@ describe('delegate_agent fallback 降级重试（nanju 范围内）', () => {
     const events = fallbackEvents()
     expect(events.length).toBe(1)
     expect(events[0]?.fromModelId).toBe('deepseek-v4-pro')
-    expect(events[0]?.toModelId).toBe('deepseek-v4-flash')
+    expect(events[0]?.toModelId).toBe('deepseek-flash')
     expect(String(events[0]?.reason)).toContain('不属于当前渠道或未启用')
 
     // headless 启动一次即用降级模型
     expect(runCalls.length).toBe(1)
-    expect(runCalls[0]?.modelId).toBe('deepseek-v4-flash')
+    expect(runCalls[0]?.modelId).toBe('deepseek-flash')
   })
 
   test('异步降级：首启 onError（渠道超时）→ 同一 delegation 换 v4-flash 重启 → 完成；陈旧 onComplete 不误标（generation 守卫）', async () => {
@@ -292,7 +292,7 @@ describe('delegate_agent fallback 降级重试（nanju 范围内）', () => {
     writeNanjuProjectFixture()
     modelAvailability = {
       'deepseek:deepseek-v4-pro': true,
-      'deepseek:deepseek-v4-flash': true,
+      'deepseek:deepseek-flash': true,
     }
     // 失败序列：第 1 次 run onError 后紧跟 onComplete（模拟 runAgentHeadless catch 分支连发），
     // 第 2 次 run（降级后）正常完成
@@ -311,16 +311,16 @@ describe('delegate_agent fallback 降级重试（nanju 范围内）', () => {
     const final = await waitDelegation(delegationId)
     // 终态：第二次（降级）run 完成，而非陈旧回调的空完成，也非 failed
     expect(final.status).toBe('completed')
-    expect(final.modelId).toBe('deepseek-v4-flash')
+    expect(final.modelId).toBe('deepseek-flash')
 
     // 启动序列：v4-pro 失败 → v4-flash 成功（重试 ≤ 链长）
-    expect(runCalls.map((c) => c.modelId)).toEqual(['deepseek-v4-pro', 'deepseek-v4-flash'])
+    expect(runCalls.map((c) => c.modelId)).toEqual(['deepseek-v4-pro', 'deepseek-flash'])
 
     // 埋点一次：v4-pro → v4-flash，原因带错误信息
     const events = fallbackEvents()
     expect(events.length).toBe(1)
     expect(events[0]?.fromModelId).toBe('deepseek-v4-pro')
-    expect(events[0]?.toModelId).toBe('deepseek-v4-flash')
+    expect(events[0]?.toModelId).toBe('deepseek-flash')
     expect(String(events[0]?.reason)).toContain('504')
   })
 
@@ -329,7 +329,7 @@ describe('delegate_agent fallback 降级重试（nanju 范围内）', () => {
     writeNanjuProjectFixture()
     modelAvailability = {
       'deepseek:deepseek-v4-pro': true,
-      'deepseek:deepseek-v4-flash': true,
+      'deepseek:deepseek-flash': true,
       'glm-zhipu:glm-5.3-flash': true,
     }
     runScript = (_input, callbacks) => {
@@ -344,11 +344,11 @@ describe('delegate_agent fallback 降级重试（nanju 范围内）', () => {
     expect(String(final.error)).toContain('鉴权错误')
     // 尝试序列 = 原端点 + 整条链（重试 ≤ 链长）
     expect(runCalls.map((c) => c.modelId)).toEqual([
-      'deepseek-v4-pro', 'deepseek-v4-flash', 'glm-5.3-flash',
+      'deepseek-v4-pro', 'deepseek-flash', 'glm-5.3-flash',
     ])
     const events = fallbackEvents()
     expect(events.length).toBe(2)
-    expect(events.map((e) => e.toModelId)).toEqual(['deepseek-v4-flash', 'glm-5.3-flash'])
+    expect(events.map((e) => e.toModelId)).toEqual(['deepseek-flash', 'glm-5.3-flash'])
   })
 
   test('链外模型失败不重试：未配置链的端点一次失败即 failed（链表演进不隐式扩大保护面）', async () => {
@@ -411,7 +411,7 @@ describe('非 nanju 会话豁免（普通 Proma 会话零行为变化）', () =>
 
   test('同步失败同样豁免：未启用模型直接抛错（不吞错不降级）', async () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-fb-exempt-sync-'))
-    modelAvailability = { 'deepseek:deepseek-v4-flash': true }
+    modelAvailability = { 'deepseek:deepseek-flash': true }
     const tools = buildPiCollaborationTools(sdkStub, {
       sessionId: 'plain-session-2',
       channelId: 'deepseek',

@@ -1,3 +1,4 @@
+import { NANJU_CANCEL_ADVANCE_CORRECTION } from '@proma/shared'
 /**
  * Preload 脚本
  *
@@ -6,9 +7,11 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS } from '@proma/shared'
+import type { ProjectRecoveryResult } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, NANJU_MODEL_IPC } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
+  NanjuGwtProgressData,
   RuntimeStatus,
   GitRepoStatus,
   Channel,
@@ -150,6 +153,11 @@ import type {
   ResolvePlanningNativeSyncConflictInput,
   PlanningSyncProfile,
   SavePlanningSyncProfileInput,
+  NanjuModelSettingsState,
+  NanjuModelTestResultItem,
+  NanjuModelRecommendResponse,
+  NanjuModelSavePatch,
+  NanjuModelSaveResponse,
 } from '@proma/shared'
 import type {
   UserProfile,
@@ -1271,12 +1279,21 @@ export interface ElectronAPI {
   getTreeStates: (workspaceSlug?: string) => Promise<unknown>
 
   /** 南大项目：项目元数据 + 埋点 */
+  nanjuCancelAdvanceCorrection: (input: { workspaceSlug: string; projectId: string; sessionId: string }) => Promise<{ ok: boolean }>
+  nanjuGetDeliveryView: (input: { workspaceSlug: string; projectId: string }) => Promise<import('@proma/shared').DeliveryViewModel | null>
   nanjuListProjects: (workspaceSlug: string) => Promise<unknown[]>
   nanjuCreateProject: (input: Record<string, unknown>) => Promise<unknown>
   nanjuUpdateProject: (input: Record<string, unknown>) => Promise<unknown>
   nanjuGetProject: (input: Record<string, unknown>) => Promise<unknown>
   nanjuDeleteProject: (input: Record<string, unknown>) => Promise<boolean>
-  nanjuRecordEvent: (input: Record<string, unknown>) => Promise<unknown>
+  /** 南大埋点：事件类型/载荷由主进程 union 收口；sessionId 仅用于主进程解析归属项目 */
+  nanjuRecordEvent: (input: {
+    workspaceSlug: string
+    eventType: string
+    payload?: Record<string, unknown>
+    projectId?: string
+    sessionId?: string
+  }) => Promise<unknown>
   nanjuReadEvents: (input: Record<string, unknown>) => Promise<unknown[]>
 
   /** 南大项目：获取当前阶段 */
@@ -1300,13 +1317,24 @@ export interface ElectronAPI {
   /** 南大项目：快照管理（参数契约与 nanju-ipc.ts handler 对齐：双参对象 + snapshotId number） */
   nanjuCreateSnapshot: (input: { workspaceSlug: string; projectId: string; sessionId: string; description: string; triggerType?: string }) => Promise<unknown>
   nanjuListSnapshots: (input: { workspaceSlug: string; projectId: string }) => Promise<unknown[]>
-  nanjuRollbackSnapshot: (input: { workspaceSlug: string; projectId: string; snapshotId: number }) => Promise<unknown>
+  nanjuRollbackSnapshot: (input: { workspaceSlug: string; projectId: string; snapshotId: number }) => Promise<ProjectRecoveryResult>
 
   /** 南大项目：启动 HTML 文件监听 */
   nanjuStartHtmlWatcher: (workspaceSlug: string) => Promise<unknown>
 
   /** 南大项目：获取执行路由总图数据（阶段 + AC 攻防解析；含 id='delivered' 哨兵节点，渲染端自行过滤） */
   nanjuGetRoute: (mode: 'quick' | 'iterative') => Promise<unknown[]>
+
+  /** 南大向导·模型配置（W23）：读取设置界面初始态（无密钥出参；失败返回 {error}） */
+  nanjuModelGetState: () => Promise<NanjuModelSettingsState | { error: string }>
+  /** 逐端点连通测试（main 侧解密 + 直连测试；并发 ≤3、单项 15s 超时；不接受 baseUrl 入参） */
+  nanjuModelTestEndpoints: (endpoints: Array<{ channelId: string; modelId: string }>) => Promise<NanjuModelTestResultItem[] | { error: string }>
+  /** 智能配置推荐（确定性整套矩阵；无解时 matrix=null/applyable=false，UI 不可应用） */
+  nanjuModelRecommend: () => Promise<NanjuModelRecommendResponse | { error: string }>
+  /** 保存增量 patch（字段值 null=删除该键覆盖）→ 即时生效；shadowed 回传被层 1 遮蔽的字段 */
+  nanjuModelSave: (patch: NanjuModelSavePatch) => Promise<NanjuModelSaveResponse | { error: string }>
+  /** 恢复默认（整体）：删层 1.5 覆盖文件 → reload */
+  nanjuModelReset: () => Promise<NanjuModelSettingsState | { error: string }>
 
   /** 南大向导：向导图阶段内子步骤冷启动快照（W2 S1；项目不存在返回 null）。
    *  v0.17.69：附带 envState（W7 R9 环境三态）与 regressions（W2c 回归边投影，可选）。 */
@@ -1343,30 +1371,8 @@ export interface ElectronAPI {
   offNanjuHtmlPreview: (callback: (event: unknown, data: { filePath: string; fileName: string }) => void) => void
 
   /** 南大向导 GWT 验收测试进度事件（P1 Sprint B） */
-  onNanjuGwtProgress: (callback: (event: unknown, data: {
-    sessionId: string
-    projectId: string
-    phase: 'start' | 'scenario-start' | 'scenario-end' | 'done'
-    current: number
-    total: number
-    scenario?: string
-    scenarioStatus?: 'pass' | 'fail' | 'skip'
-    passed: number
-    failed: number
-    skipped: number
-  }) => void) => void
-  offNanjuGwtProgress: (callback: (event: unknown, data: {
-    sessionId: string
-    projectId: string
-    phase: 'start' | 'scenario-start' | 'scenario-end' | 'done'
-    current: number
-    total: number
-    scenario?: string
-    scenarioStatus?: 'pass' | 'fail' | 'skip'
-    passed: number
-    failed: number
-    skipped: number
-  }) => void) => void
+  onNanjuGwtProgress: (callback: (event: unknown, data: NanjuGwtProgressData) => void) => void
+  offNanjuGwtProgress: (callback: (event: unknown, data: NanjuGwtProgressData) => void) => void
 
   /** 南大 R1（W1）：L2 委派生命周期状态事件（等待/进度 Toast 数据源；5s/30s 阈值在渲染端） */
   onNanjuDelegationStatus: (callback: (event: unknown, data: {
@@ -1396,6 +1402,10 @@ export interface ElectronAPI {
     projectId: string
     stage: string
     message: string
+    /** I-P7（B-e）：熔断上下文（可选，向后兼容；渲染端按 US-U07 通俗口径重建文案） */
+    mode?: 'quick' | 'iterative'
+    consecutiveCircuitCount?: number
+    rolledBack?: boolean
   }) => void) => void
   offNanjuGuardAlert: (callback: (event: unknown, data: {
     sessionId: string
@@ -1409,7 +1419,12 @@ export interface ElectronAPI {
   offAgentOpenPreview: (callback: (event: unknown, data: { sessionId: string; filePath: string; version?: number }) => void) => void
 
   /** 点选纠错：预览 iframe 内点击事件转发（主进程 → 调度员会话消息）；panel-action 携带选项指令 */
-  reportClickToFix: (input: { workspaceSlug: string; sessionId: string; kind: string; id?: string; type?: string; text?: string; action?: string; color?: string }) => Promise<unknown>
+  reportClickToFix: (input: {
+    workspaceSlug: string; sessionId: string; kind: string
+    id?: string; type?: string; text?: string; action?: string; color?: string
+    /** I-P3（B-e）：框选批量点选的元素清单（只含 data-ai-id 与类型，不含文本/坐标） */
+    items?: Array<{ id: string; type?: string }>
+  }) => Promise<unknown>
 
   // ===== Windows Agent Island =====
 
@@ -3028,6 +3043,8 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('proma:get-tree-states', workspaceSlug ? { workspace_slug: workspaceSlug } : {}),
 
   // ===== 南大项目 =====
+  nanjuCancelAdvanceCorrection: (input) => ipcRenderer.invoke(NANJU_CANCEL_ADVANCE_CORRECTION, input),
+  nanjuGetDeliveryView: (input) => ipcRenderer.invoke('nanju:get-delivery-view', input),
   nanjuListProjects: (workspaceSlug: string) =>
     ipcRenderer.invoke('nanju:list-projects', workspaceSlug),
   nanjuCreateProject: (input: Record<string, unknown>) =>
@@ -3087,6 +3104,19 @@ const electronAPI: ElectronAPI = {
   /** 南大项目：获取执行路由总图数据（阶段 + AC 攻防解析；含 id='delivered' 哨兵节点，渲染端自行过滤） */
   nanjuGetRoute: (mode: 'quick' | 'iterative') =>
     ipcRenderer.invoke('nanju:get-route', mode),
+
+  // ===== 南大向导·模型配置（W23 D2；通道常量 NANJU_MODEL_IPC 见 @proma/shared） =====
+
+  nanjuModelGetState: () => ipcRenderer.invoke(NANJU_MODEL_IPC.GET_STATE),
+
+  nanjuModelTestEndpoints: (endpoints: Array<{ channelId: string; modelId: string }>) =>
+    ipcRenderer.invoke(NANJU_MODEL_IPC.TEST_ENDPOINTS, endpoints),
+
+  nanjuModelRecommend: () => ipcRenderer.invoke(NANJU_MODEL_IPC.RECOMMEND),
+
+  nanjuModelSave: (patch: NanjuModelSavePatch) => ipcRenderer.invoke(NANJU_MODEL_IPC.SAVE, patch),
+
+  nanjuModelReset: () => ipcRenderer.invoke(NANJU_MODEL_IPC.RESET),
 
   nanjuGetGuideProgress: (workspaceSlug: string, projectId: string) =>
     ipcRenderer.invoke('nanju:get-guide-progress', { workspaceSlug, projectId }),

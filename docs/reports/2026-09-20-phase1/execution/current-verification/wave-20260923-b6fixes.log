@@ -1,0 +1,768 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-click-to-fix-policy.test.ts:
+(pass) 点选纠错按业务阶段路由 > prototype仍改原型并允许同步PRD [0.13ms]
+(pass) 点选纠错按业务阶段路由 > testing改08_APP且必须重测，不能回写PRD [0.04ms]
+(pass) 点选纠错按业务阶段路由 > coding改应用但不把普通点选误判为需求变更 [0.03ms]
+(pass) 点选纠错按业务阶段路由 > delivered的修复同样失效旧交付事实并重测 [0.03ms]
+
+apps/electron/src/main/lib/nanju-delivery-view.test.ts:
+[配置] 配置目录: ~/.proma/（正式版本）
+(pass) 报告不存在时 > buildDeliveryViewModel workspace 不存在 → 返回 not-tested verdict 不 throw [7.48ms]
+(pass) 报告不存在时 > validateReportSchema 对不存在路径返回 null [0.28ms]
+(pass) 运行时 schema 校验（FP 类型错误不 throw） > generatedAt 非字符串 → 降级返回 null 不 throw [0.84ms]
+(pass) 运行时 schema 校验（FP 类型错误不 throw） > verdict 不在枚举中 → 降级返回 null 不 throw [0.72ms]
+(pass) 运行时 schema 校验（FP 类型错误不 throw） > JSON 非法 → 不 throw 返回 null [0.71ms]
+(pass) 运行时 schema 校验（FP 类型错误不 throw） > valid report → 正常解析不 throw [0.67ms]
+(pass) verdict 映射（fail/error 保持区分） > verdict=fail → 'fail'（不洗成 partial） [0.27ms]
+(pass) verdict 映射（fail/error 保持区分） > verdict=error → 'error'（不洗成 partial） [0.40ms]
+(pass) verdict 映射（fail/error 保持区分） > verdict=blocked → 'blocked' [0.25ms]
+(pass) stale 检测（指纹不符 → stale verdict） > 报告指纹与当前文件指纹不符 → verdict=stale [0.21ms]
+(pass) stale 检测（指纹不符 → stale verdict） > 报告指纹与当前文件指纹一致 → verdict=pass [0.18ms]
+(pass) stale 检测（指纹不符 → stale verdict） > 报告无指纹但入口文件存在 → 不标记 stale [0.21ms]
+(pass) 入口路径 realpath 验证 > symlink 入口 → realpath 解析到真实路径 [0.55ms]
+(pass) 入口路径 realpath 验证 > ../ 逃逸尝试 → 解析后路径仍在 projectDir 内 [0.38ms]
+(pass) 工程契约 target.kind 解析 > web kind → resolveDeliveryTypeFromContract 返回 web [0.14ms]
+(pass) 工程契约 target.kind 解析 > desktop kind → resolveDeliveryTypeFromContract 返回 desktop [0.14ms]
+(pass) 工程契约 target.kind 解析 > unknown kind → resolveDeliveryTypeFromContract 返回 unknown [0.14ms]
+(pass) 工程契约 target.kind 解析 > DELIVERY_TARGET_KINDS 与 engineering-contract.ts TARGET_KINDS 一致 [0.21ms]
+(pass) 启动说明（无 shell 执行指令） > .html 文件 → 含「预览」不含 node/命令 [0.26ms]
+(pass) 启动说明（无 shell 执行指令） > .ts 文件 → 不含 node 执行指令 [0.39ms]
+(pass) 启动说明（无 shell 执行指令） > README.md → 含「找到」不含命令 [0.28ms]
+(pass) 启动说明（无 shell 执行指令） > .json 文件 → 含「找到」不含命令行 [0.26ms]
+(pass) 报告一致性（verdict 字段不被无条件信任） > pass 且计数自洽 → 一致性成立（显示通过） [0.26ms]
+(pass) 报告一致性（verdict 字段不被无条件信任） > 篡改 verdict=pass 但 skipped>0 → 不成立（按未通过处理） [0.15ms]
+(pass) 报告一致性（verdict 字段不被无条件信任） > 篡改 verdict=pass 但 failed>0 → 不成立 [0.19ms]
+(pass) 报告一致性（verdict 字段不被无条件信任） > 篡改 verdict=pass 但 passed !== scenariosTotal → 不成立 [0.73ms]
+(pass) 报告一致性（verdict 字段不被无条件信任） > 篡改 verdict=pass 但 passed=0（空跑） → 不成立 [0.83ms]
+(pass) 交付视图 verdict 交叉核对（真实 mapReportVerdict，审计 B6-F-05） > 计数自洽的 pass → pass [0.29ms]
+(pass) 交付视图 verdict 交叉核对（真实 mapReportVerdict，审计 B6-F-05） > 篡改 pass + skipped>0 → fail + 计数不自洽警告 [0.20ms]
+(pass) 交付视图 verdict 交叉核对（真实 mapReportVerdict，审计 B6-F-05） > 篡改 pass + failed>0 → fail [0.17ms]
+(pass) 交付视图 verdict 交叉核对（真实 mapReportVerdict，审计 B6-F-05） > 篡改 pass + passed!==scenariosTotal → fail [0.19ms]
+(pass) 交付视图 verdict 交叉核对（真实 mapReportVerdict，审计 B6-F-05） > 篡改 pass + passed=0（空跑） → fail [0.17ms]
+(pass) 交付视图 verdict 交叉核对（真实 mapReportVerdict，审计 B6-F-05） > fail/error/blocked 映射不受计数核对影响 [0.20ms]
+(pass) 交付视图 verdict 交叉核对（真实 mapReportVerdict，审计 B6-F-05） > 合法报告已有 warnings 时追加而非覆盖 [0.61ms]
+(pass) 交付入口说明按品类等价（不代执行命令） > desktop 可执行入口 → 指向 README 安装/启动说明，且无 shell 指令 [0.29ms]
+(pass) 交付入口说明按品类等价（不代执行命令） > cli 入口 → 指向 README 安装与调用说明 [0.21ms]
+(pass) 交付入口说明按品类等价（不代执行命令） > api / ai / web / mobile 各有品类说明 [0.17ms]
+(pass) 交付入口说明按品类等价（不代执行命令） > html 入口各品类均走预览分支（不因品类丢失预览路径） [0.19ms]
+(pass) 交付入口说明按品类等价（不代执行命令） > unknown/未传品类 → 保持原有 08_APP 定位兜底 [0.22ms]
+(pass) 交付历史记录读取（隔离 HOME 子进程） > evidence/<runId>/index.json → 倒序摘要、坏索引跳过、路径穿越拒绝 [87.11ms]
+
+apps/electron/src/main/lib/nanju-router-prompt.test.ts:
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (quick): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-flash(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (iterative): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] attacker-author-family (iterative): planning 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-flash(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+(pass) minimax 渠道运行时解析 > 解析 provider=minimax 且含已启用 MiniMax-M3 模型的渠道（UUID 渠道 ID） [0.23ms]
+(pass) minimax 渠道运行时解析 > 兼容多种 M3 写法（minimax-m3 / MiniMax M3 名称匹配） [0.16ms]
+(pass) minimax 渠道运行时解析 > 跳过未启用渠道与未启用模型 [0.05ms]
+(pass) minimax 渠道运行时解析 > 跳过非 minimax provider 的渠道 [0.03ms]
+(pass) minimax 渠道运行时解析 > 无任何 minimax 渠道时返回 null（供上层抛中文提示） [0.02ms]
+(pass) minimax 渠道运行时解析 > 多个 minimax 渠道时取第一个含启用 M3 模型的 [0.04ms]
+(pass) L2 委派指令构建（视觉闭环） > prototype 阶段包含截图渲染自检循环（chrome-devtools + read 截图 + 连续 2 轮） [0.97ms]
+(pass) L2 委派指令构建（视觉闭环） > prototype 阶段强调逐条对照 PRD 用户故事 [3.51ms]
+(pass) L2 委派指令构建（视觉闭环） > prototype 阶段 AC 审计维度追加视觉还原度与交互可用性 [0.14ms]
+(pass) L2 委派指令构建（视觉闭环） > prototype 阶段 未配独立视觉端点 → 独立视觉裁决段为清晰 blocked，不退回作者端点冒充 [0.10ms]
+(pass) L2 委派指令构建（视觉闭环） > prototype 阶段 视觉验证者 resolved → inline 独立端点（只看 PRD 用户故事 + 最新截图，red 回修复循环） [0.12ms]
+(pass) L2 委派指令构建（视觉闭环） > prototype 阶段按模式取预设攻防：quick=light（flash 攻/5.3-flash 防） [0.08ms]
+(pass) L2 委派指令构建（视觉闭环） > prototype 阶段按模式取预设攻防：iterative=medium（pro 攻/GLM-5.3 防） [0.07ms]
+(pass) L2 委派指令构建（视觉闭环） > 非 prototype 阶段保持五维审计，不包含视觉闭环内容 [2.24ms]
+(pass) L2 委派指令构建（视觉闭环） > 防御者与作者同家族时构建指令抛错（首次构建期拦截） [0.26ms]
+(pass) L2 委派指令构建（coding 阶段，P1 Sprint A） > coding 包含架构驱动交付、目录边界与旧静态入口兼容 [0.89ms]
+(pass) L2 委派指令构建（coding 阶段，P1 Sprint A） > coding 强调 PRD 用户故事清单必读（自测对照基准）+ 原型大文件取舍提示 [0.45ms]
+(pass) L2 委派指令构建（coding 阶段，P1 Sprint A） > coding 自测依据真实架构与受管工具，缺能力不宣称实测 [1.21ms]
+(pass) L2 委派指令构建（coding 阶段，P1 Sprint A） > coding 不含 prototype 专属视觉闭环（截图自检/视觉裁决/视觉维度），沿用默认五维审计 [3.53ms]
+(pass) coding 工程品类注入（W3，v0.17.66） > 未传品类时降级 web-fullstack 并注入品类自检（旧签名兼容 + 第二道防线） [0.18ms]
+(pass) coding 工程品类注入（W3，v0.17.66） > 传入 desktop-app 时注入品类声明 + 验收载体对齐（实证问题直接对策） [0.15ms]
+(pass) coding 工程品类注入（W3，v0.17.66） > 模板已落位时注入全文路径引用；未落位时省略（降级仅要点） [0.24ms]
+(pass) coding 工程品类注入（W3，v0.17.66） > 非 coding 阶段不注入品类节（requirements/prototype/architecture/testing 均无） [0.28ms]
+(pass) testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；W13 作者换 glm-5.3-flash） > 包含 steps.json 机器可执行 schema 规范（op 白名单不含 eval + 双文件契约 + 透明 skip） [0.23ms]
+(pass) testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；W13 作者换 glm-5.3-flash） > 包含 PRD 用户故事清单必读强调（覆盖性判定的对照基准） [0.10ms]
+(pass) testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；W13 作者换 glm-5.3-flash） > W13：testing 作者（glm）与覆盖后的 AC 攻防满足家族多样性断言（防御者=minimax 覆盖，不抛错） [0.56ms]
+(pass) testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；W13 作者换 glm-5.3-flash） > W13 反例：glm 作者 + 预设防御者（glm 系）必抛错——acDefenderRuntime 不能回退到 glm 系端点 [0.21ms]
+(pass) testing 阶段 L2 委派指令（P1 Sprint B：GWT 场景生成；W13 作者换 glm-5.3-flash） > W13：acDefenderRuntime 运行时解析值优先——UUID 渠道写入攻防指令且家族断言通过（minimax UUID 与字面渠道异族） [0.12ms]
+(pass) AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①：UX 阶段 50min~3.5h 失控） > AC 审计状态机注入轮次预算：攻防修复 ≤2 轮 + 未清零收敛为已知问题清单（所有阶段） [3.80ms]
+(pass) AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①：UX 阶段 50min~3.5h 失控） > prototype 阶段：总预算 ≤30 分钟提示 + 视觉裁决 red 回炉 ≤2 次 [0.25ms]
+(pass) AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①：UX 阶段 50min~3.5h 失控） > 非 prototype 阶段不含 prototype 专属时长预算（内环预算仍注入） [0.25ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 调度员指令（v0.17.64：超时纪律 + 收口果断性） > 步骤 2 超时纪律：显式 timeoutSeconds=1200 + running 先 stop 再续接/重派（不催办）+ 不无限等待 [15.33ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 调度员指令（v0.17.64：超时纪律 + 收口果断性） > testing 收口果断性（实证④）：立即输出推进标记，不等用户确认、不以核实/澄清代替推进 [3.95ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 调度员指令（v0.17.64：超时纪律 + 收口果断性） > W13：testing L1 委派指令携带路由配置的作者/攻防渠道（动态断言——W22 M#6/M#7 模型矩阵演进后不再硬编码）；AC 防御者=minimax 家族 [1.92ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 调度员指令（v0.17.64：超时纪律 + 收口果断性） > 非 testing 阶段：用户确认后立即收口，不得以再核实/再澄清推迟推进（一句话强化，不改语义） [1.31ms]
+(pass) architecture L2 环境配置指令（W7 B3：探测 + projectEnv 标记行 + 缺失只报告） > 两模式 L2 任务均含环境节指令与 projectEnv 标记行要求 [0.74ms]
+(pass) architecture L2 环境配置指令（W7 B3：探测 + projectEnv 标记行 + 缺失只报告） > quick architecture 免 inline AC（U1 方案 A：无攻防段，产出自查替代）；iterative 保留攻防 [0.50ms]
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 指令：意见收集轮回归标记 + architecture 环境确认流程（A2 + B3） > prototype 意见收集轮指令含 NANJU_REGRESSION 标记要求（A2 触发点 2） [1.46ms]
+[nanju-autofix] phases.architecture.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 指令：意见收集轮回归标记 + architecture 环境确认流程（A2 + B3） > architecture L1 指令：环境缺失确认安装流程 + 合并确认 + 未就绪禁止推进 [2.87ms]
+[nanju-autofix] phases.architecture.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 指令：意见收集轮回归标记 + architecture 环境确认流程（A2 + B3） > M7 安装前预校验：architecture.md 清单含 typo 组件 → prompt 注入「预校验未通过」+ 禁止进入安装确认 [3.74ms]
+[nanju-autofix] phases.architecture.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L1 指令：意见收集轮回归标记 + architecture 环境确认流程（A2 + B3） > M7 安装前预校验：清单合法 → prompt 注入「预校验通过」 [1.32ms]
+[nanju-autofix] phases.coding.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W12：coding L1 轻过渡收口（故事覆盖交还 GWT 机器裁判） > coding 收口是轻过渡确认：预览确认 → 推进 testing 触发自动测试，故事完整性由自动测试判定 [8.73ms]
+[nanju-autofix] phases.coding.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W12：coding L1 轻过渡收口（故事覆盖交还 GWT 机器裁判） > coding 收口不再让用户背书故事实现：旧「应用验证」勾选收口与「全部通过，交付」选项删除 [4.99ms]
+[nanju-autofix] phases.coding.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W12：coding L1 轻过渡收口（故事覆盖交还 GWT 机器裁判） > coding 点选纠错入口与意见收集轮保留（真实意见通道不动） [5.19ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W12：coding L1 轻过渡收口（故事覆盖交还 GWT 机器裁判） > testing 三态指令：产出果断收口 / pass 后交付验收询问 / fail 回炉分流并存 [1.58ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：六确认话术 header「确认·」前缀改造（Defender #26：漏改则横幅被 deny） > requirements（PRD 等）通用收口补 header 指令：header「确认·{阶段标题}」 [1.30ms]
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：六确认话术 header「确认·」前缀改造（Defender #26：漏改则横幅被 deny） > prototype 收口 header「确认·原型交互验证」；点选五项加「设计·快速修改」header [0.82ms]
+[nanju-autofix] phases.architecture.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：六确认话术 header「确认·」前缀改造（Defender #26：漏改则横幅被 deny） > architecture 环境安装与合并确认 header 均带「确认·」前缀 [1.25ms]
+[nanju-autofix] phases.coding.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：六确认话术 header「确认·」前缀改造（Defender #26：漏改则横幅被 deny） > coding 轻过渡 header「确认·预览确认」；点选五项加「设计·快速修改」header [4.50ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：六确认话术 header「确认·」前缀改造（Defender #26：漏改则横幅被 deny） > testing 交付验收问句 header「确认·满意交付」（与 gwt-runner 双话术源一致） [1.02ms]
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：L1 自动补完协议段（auto 开启时注入，D7 §6 终版五条） > auto on（quick + enabled:true）→ 注入协议段：代理调用/自问规则/采纳 kind 标记（D8 §九同步：auto-degrade 替代 human 转述） [1.05ms]
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：L1 自动补完协议段（auto 开启时注入，D7 §6 终版五条） > auto off（字段缺失 / enabled:false）→ 协议段不注入（行为零变化） [1.90ms]
+[nanju-autofix] acPresets.medium.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) v2.4：L1 自动补完协议段（auto 开启时注入，D7 §6 终版五条） > iterative + enabled:true（升级残留非法态防御）→ 协议段不注入（仅快消型） [0.88ms]
+(pass) v2.4：AC 攻击者模板增补（代答清单披露 + 同族加倍攻击） > autoClarifyEnabled=true → L2 攻击者指令含代答清单披露与同族加倍攻击条款 [0.14ms]
+(pass) v2.4：AC 攻击者模板增补（代答清单披露 + 同族加倍攻击） > autoClarifyEnabled 缺省/false → 不注入（既有 AC 指令零变化） [0.18ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) 返工 F2-6（Defender #16）：「跳过」两处口径统一——跳过是确认形式之一，非直接推进 > 「用户说跳过」改写：视为确认形式，经确认通道授权推进（与词表口径一致） [1.19ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) 返工 F2-6（Defender #16）：「跳过」两处口径统一——跳过是确认形式之一，非直接推进 > 禁止条目同步改写：禁止的是「未经确认直接推进」，与跳过=确认不再矛盾 [0.80ms]
+(pass) 返工 F2-8：L2 任务模板携带 phase.role 显式标记（类别派生唯一权威信号） > 六个 phase 的 L2 任务均含行首 phase.role: <role> 标记（PHASE_ROLE_MARKER_RE 可解析） [163.06ms]
+(pass) 返工 F2-8：L2 任务模板携带 phase.role 显式标记（类别派生唯一权威信号） > 生产者-消费者闭环：模板喂 deriveBlockedEventCategory → 六角色类别正确（fail-closed 不退化） [0.90ms]
+(pass) 架构师阶段：quick 变体同样必读工程模板（与 iterative 前移契约对齐） > quick architecture L2 任务含「品类终判前 Read 00_ENGINEERING_TEMPLATE/template.md」指令 [0.17ms]
+(pass) 架构师阶段：quick 变体同样必读工程模板（与 iterative 前移契约对齐） > iterative architecture L2 任务仍含既有模板前移契约（回归锁定） [0.09ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto on：协议段含自动审核条款（不询问用户/直接推进标记/系统自动确认/环境安装例外） [1.19ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto on：auto-degrade 降级契约（登记 pending+继续+skipped 标记+不转述真人） [1.30ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto on：auto-degrade 解除动作（§十 F1-2：保守自答回注解除 / 无法作答则强停+terminated 标记 / 禁止悬空） [1.70ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto on：溯源 kind 标记（R7-10：kind:answer|decision 区分代答/代决） [1.14ms]
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto on：UX 意见收集轮整段替换（无邀请/收集轮，AC+视觉裁决后直接推进） [0.86ms]
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto off：UX 意见收集轮与收口确认原样保留（回归锁定） [0.81ms]
+[nanju-autofix] phases.coding.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto on：coding 轻过渡跳过（无预览确认 AskUser，直接推进 testing） [5.17ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto on：testing 交付挑战自动交付（GWT-pass 直接 delivered，不发起 AskUser） [1.18ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化 + 环境段机器值剥离） [3.73ms]
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.architecture.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto-degrade） > 返工二 F3-2：off 冻结串独立证明——architecture/prototype 关键话术行与 054f0721（v0.17.97）逐字一致 [21.06ms]
+(pass) D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05） > auto on：L2 任务含单攻击者 1 轮审查 + ac-verdict.json 必写指令 + 未写拒绝自动确认警告 [2.46ms]
+(pass) D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05） > auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定；W24-9 环境段机器值剥离） [0.37ms]
+(pass) W22 #14：testing L2 模板五类新 op 映射指引（Gherkin→steps 范例） > check/uncheck：勾选与取消勾选范例 + radio 不可取消约束 [0.14ms]
+(pass) W22 #14：testing L2 模板五类新 op 映射指引（Gherkin→steps 范例） > select：仅限原生 <select> + value 匹配语义 + 自定义下拉改 click 序列 [0.11ms]
+(pass) W22 #14：testing L2 模板五类新 op 映射指引（Gherkin→steps 范例） > hover/scroll/focus：悬停断言交给后续 op + 滚动不隐式等待 + 聚焦提示交给断言 [0.12ms]
+(pass) W22 #14：testing L2 模板五类新 op 映射指引（Gherkin→steps 范例） > selector 三档指引：data-ai-id 优先 + #id 唯一性校验 + aria-label 属性匹配 + 不规避标注纪律 [0.18ms]
+(pass) W22 #14：testing L2 模板五类新 op 映射指引（Gherkin→steps 范例） > schemaVersion:2 声明要求（A1：旧运行器遇新 op 判 schema 失败而非静默 skip）+ 示例 JSON 携带字段 [0.13ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 R1：testing 行为类失败回炉路由（回原 coding 委派，不新建修复会话） > 行为类失败：continue_delegation(<codingDelegationId>) 转交原全栈开发 + 不新建修复会话 + 未带 ID 时渠道=coding 配置 [1.39ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 R1：testing 行为类失败回炉路由（回原 coding 委派，不新建修复会话） > 修复守卫配合话术：代码修复不委派 minimax（M3 不用于代码修复）——行为类与用户调整两分支 [1.13ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 R1：testing 行为类失败回炉路由（回原 coding 委派，不新建修复会话） > mapping/coverage 回炉仍指「测试工程师」（R1 不改道） [1.92ms]
+[nanju-autofix] phases.testing.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.testing.acAttacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 R1：testing 行为类失败回炉路由（回原 coding 委派，不新建修复会话） > 修复边界保留：仅改 08_APP/ 不动 06_TESTS/ 与 01_PRD/（既有约束不回退） [1.33ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，不强制续接） > on 态 + 近期切换：协议段头部行「当前模式：自动审核开启（近期切换…）」 [1.88ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，不强制续接） > on 态 + 无切换记录/切换已久：头部行「当前模式：自动审核开启」无近期尾注 [2.13ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，不强制续接） > off 态 + 存在切换记录：头部行「当前模式：自动审核关闭（近期已停用…）」——L1 旧心智更新 [2.12ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] phases.requirements.primary 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ch-minimax-uuid:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，不强制续接） > off 态 + 无切换记录（从未开启/老项目）：零注入——v0.17.97 off 行为与快照不破坏 [1.84ms]
+(pass) W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，不强制续接） > parseAutoClarifyToggledAt：宽容解析 number(ms)/ISO 字符串；无效与缺失 → null [0.25ms]
+(pass) W23 配置级 autofix（getNanjuRouterPrompt 预检 + model.config-autofix 遥测） > 改名场景：配置仍指旧名 deepseek-v4-flash → prompt 委派值被临时替换为 deepseek-flash + 遥测载荷（slot/from/to/reason） [3.78ms]
+[nanju-autofix] phases.planning.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W23 配置级 autofix（getNanjuRouterPrompt 预检 + model.config-autofix 遥测） > 预检失败不阻断：渠道宇宙无 deepseek 家族（无同族替换）→ 降级原值，prompt 正常构建且零遥测 [1.66ms]
+(pass) W23 配置级 autofix（getNanjuRouterPrompt 预检 + model.config-autofix 遥测） > 端点全部有效：零替换零遥测（默认配置与全渠道宇宙匹配） [1.33ms]
+(pass) W23 配置级 autofix（getNanjuRouterPrompt 预检 + model.config-autofix 遥测） > buildL2TaskWithAC 新增 acAttackerRuntime 覆盖位（向后兼容：缺省不注入） [0.45ms]
+(pass) Given 直接构建工程coding委派 When 不经过L1外层 Then 产出路径仍指向工程交付说明 [0.39ms]
+[nanju-autofix] phases.prototype.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（kimi）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.defender 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W-B B1：显式 prototype 作者配置优先（不被默认 M3 覆盖） > 显式配置 channel=kimi model=k3（异族端点不踩中默认 M3）：prompt 委派值用 kimi:k3，不被 MiniMax-M3 覆盖 [2.52ms]
+[nanju-autofix] acPresets.medium.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.defender 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W-B B1：显式 prototype 作者配置优先（不被默认 M3 覆盖） > 默认配置 channel=minimax（family marker）：走 resolvePrototypeAuthor 解析 UUID（回归锁定） [1.59ms]
+[nanju-autofix] phases.prototype.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（nonexistent-channel）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.defender 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W-B B1：显式 prototype 作者配置优先（不被默认 M3 覆盖） > 显式配置但端点不可用（未配置渠道）：prompt 透传显式值，不静默替换到 family marker 解析 [1.62ms]
+[nanju-autofix] acPresets.medium.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.defender 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W-B B1：显式 prototype 作者配置优先（不被默认 M3 覆盖） > 显式配置 minimax 家族（保留 family marker）：仍走 resolvePrototypeAuthor 解析 UUID [2.55ms]
+(pass) W-B B1：默认配置与 resolvePhaseModelConfig 来源一致（层 3 兜底 = 参数文件解析基底） > FALLBACK_PHASE_MODELS.prototype === resolvePhaseModelConfig("prototype")（两层禁用态；来源同 = FALLBACK_PHASE_MODELS） [0.38ms]
+(pass) W-B B1：默认配置与 resolvePhaseModelConfig 来源一致（层 3 兜底 = 参数文件解析基底） > FALLBACK_PHASE_MODELS 全六阶段 === resolvePhaseModelConfig 全六阶段（端到端一致性锁定） [0.32ms]
+(pass) W-B B1：AC 默认 flash 仅无显式选择时使用（显式覆盖不被默认 flash 替换） > 用户未显式配置 AC：quick=light 用 flash 预设，iterative=medium 用 pro/5.3 预设 [0.12ms]
+(pass) W-B B1：AC 默认 flash 仅无显式选择时使用（显式覆盖不被默认 flash 替换） > 用户显式配置 acAttacker=glm-zhipu:deepseek-v4-pro：覆盖 light 预设的 flash（不被默认 flash 替换） [0.77ms]
+(pass) W-B B1：AC 默认 flash 仅无显式选择时使用（显式覆盖不被默认 flash 替换） > buildL2TaskWithAC：显式 acAttacker 透传到 L2 指令，不被默认 flash 替换 [0.14ms]
+(pass) W-B B2：slot producer（resolvePhaseDelegationSlots——slot 的唯一权威来源） > 按 config 产出四槽位：author 用解析端点，AC 攻防来自 resolveACActors（非 title 文本猜测） [0.07ms]
+(pass) W-B B2：slot producer（resolvePhaseDelegationSlots——slot 的唯一权威来源） > authorResolved 缺省 → author 槽位回落 phase 字面配置 [0.04ms]
+(pass) W-B B2：slot producer（resolvePhaseDelegationSlots——slot 的唯一权威来源） > 显式 visualReviewer 异端点（显式 capability）→ resolved，且与 author 解耦 [0.06ms]
+(pass) W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一） > 非 prototype 阶段 → not-applicable [0.06ms]
+(pass) W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一） > 未显式配置 → blocked（原因含「未显式配置」，非默认 minimax） [0.05ms]
+(pass) W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一） > 显式配置但与作者同端点 → blocked（同端点自证） [0.04ms]
+(pass) W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一） > family marker minimax 解析后与作者同 UUID → blocked（不按模型名猜视觉） [0.09ms]
+(pass) W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一） > family marker minimax + 作者端点未知 → blocked（无法证明异端点，不冒充独立能力） [0.05ms]
+(pass) W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一） > 显式异端点 → resolved（视觉能力来自显式声明，非模型名匹配） [0.04ms]
+(pass) W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一） > channel 同但 model 不同 → resolved（非同端点） [0.03ms]
+(pass) W-B B2：validateVisualValidatorDelegation（gate 端权威校验） > 未配置独立视觉端点 → ok:false（gate 拒绝，不静默放行） [0.09ms]
+(pass) W-B B2：validateVisualValidatorDelegation（gate 端权威校验） > 端点为 resolved 但 target 不匹配（退回作者端点）→ ok:false [0.07ms]
+(pass) W-B B2：validateVisualValidatorDelegation（gate 端权威校验） > target 与 producer resolved 端点完全一致 → ok:true [0.04ms]
+(pass) W-B B2：resolveDelegationSlot（内部 slot 权威优先于 legacy 文本推断） > 内部 slot=visual-validator 覆盖文本推断（即使文本不含视觉标记） [0.07ms]
+(pass) W-B B2：resolveDelegationSlot（内部 slot 权威优先于 legacy 文本推断） > 内部 slot 缺省/非法 → 回退 legacy 文本推断 [0.03ms]
+(pass) W-B B2：resolveDelegationSlot（内部 slot 权威优先于 legacy 文本推断） > detectDelegationSlot 为 legacy 低信任：title 含视觉标记 → visual-validator [0.19ms]
+(pass) W-B B2 R1：isVisualValidatorEndpointTarget（端点到槽位检测） > resolved 且 target 完全一致 → true；缺 target/状态非 resolved → false [0.10ms]
+(pass) W-B B1-1（R6）：显式配置的 prototype 作者端点失效 → 同族替换 + 遥测（非静默硬换） > prototype 显式作者 deepseek:deepseek-v4-flash（已下线）→ prompt 委派值替换为同族 deepseek-flash + model.config-autofix 遥测 [2.74ms]
+[nanju-autofix] phases.prototype.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) W-B B1-1（R6）：显式配置的 prototype 作者端点失效 → 同族替换 + 遥测（非静默硬换） > 跨族候选存在但不同族 → 放弃替换保持原值（家族拓扑守卫，零遥测） [2.46ms]
+(pass) L2-4 J2：architecture 任务书「已知环境事实」段注入（ATK-F-005：环境事实先于架构师首次决策） > Given architecture + 探测摘要行 When 构建任务 Then 注入「已知环境事实」段（摘要+通用集说明+品类补测提示+CP-A） [0.33ms]
+(pass) L2-4 J2：architecture 任务书「已知环境事实」段注入（ATK-F-005：环境事实先于架构师首次决策） > Given 探测失败说明行 When 构建任务 Then 失败说明注入（不阻断任务书生成的诚实退化） [0.14ms]
+(pass) L2-4 J2：architecture 任务书「已知环境事实」段注入（ATK-F-005：环境事实先于架构师首次决策） > Given envProbeLines 未传（null/undefined）When 构建任务 Then 无「已知环境事实」段（向后兼容旧调用） [0.16ms]
+(pass) L2-4 J2：architecture 任务书「已知环境事实」段注入（ATK-F-005：环境事实先于架构师首次决策） > Given 非 architecture 阶段 + 探测行 When 构建任务 Then 不注入（段仅 architecture 消费） [0.13ms]
+(pass) L2-4②：网络检索凭证三形态条文 + 证据记录节载体指令（ATK-G-002/G-007/U-006） > Given architecture 任务书 When 构建 Then 三形态条文完整（①②URL 凭证 + ③自我申报+事后抽检追责） [0.47ms]
+(pass) L2-4②：网络检索凭证三形态条文 + 证据记录节载体指令（ATK-G-002/G-007/U-006） > Given 非 architecture 阶段 When 构建 Then 不含证据记录节指令（阶段专属） [0.17ms]
+(pass) L2-4③：契约 env 声明字段提示（P0-1 schema v2 字段的提示词增补） > Given architecture 任务书 When 构建 Then 含云端服务 env 声明提示行（变量名清单，不落密钥） [0.16ms]
+[nanju-autofix] phases.architecture.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L2-4 J2 集成：getNanjuRouterPrompt 在 architecture 阶段执行探测并注入 > Given 项目内 check_env.sh 在场 When 生成 architecture prompt Then 执行探测：env_probe.json 落盘 + 已知环境事实段注入 [4.80ms]
+[nanju-autofix] phases.architecture.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.medium.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L2-4 J2 集成：getNanjuRouterPrompt 在 architecture 阶段执行探测并注入 > Given 项目内 check_env.sh 缺失（旧项目/前移钩子失败）When 生成 prompt Then 诚实退化注入失败说明，不阻断生成 [0.78ms]
+[nanju-autofix] phases.requirements.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.defender 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) L2-4 J2 集成：getNanjuRouterPrompt 在 architecture 阶段执行探测并注入 > Given 非 architecture 阶段 When 生成 prompt Then 无已知环境事实段（探测仅 architecture 触发） [1.08ms]
+[nanju-autofix] phases.architecture.primary 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-glm）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+[nanju-autofix] acPresets.light.attacker 替换候选 ad74ac74-1111-2222-3333-444455556666:MiniMax-M3（family-minimax）与原端点家族（family-deepseek）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）
+(pass) Task 10 接线：architecture 阶段 env 探测使用项目品类（2026-09-23） > Given PRD 标注 desktop-app 品类 When 生成 architecture prompt Then 探测按 desktop-app 品类集执行（非 universal 兜底） [5.11ms]
+
+apps/electron/src/main/lib/nanju-project-snapshots.test.ts:
+(pass) B-c 存储位置与捕获 > storageDir 在工程目录之外（D 布局守卫）且可被捕获复用 [5.01ms]
+(pass) B-c 存储位置与捕获 > 工程目录不存在 → fail-closed 不返回 snapshotId 也不建快照目录 [0.69ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > 捕获成功 → 会话快照携带 fileSnapshotId 且描述含文件恢复承诺 [4.96ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > 捕获失败（存储目录不可写）→ 会话快照仍在但 fileSnapshotId 不写（fail-closed） [2.04ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > S4 守卫：清单被篡改的捕获快照不得被关联为文件可恢复 [2.67ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S8：含符号链接的工程恢复后 complete=false 且文案列出 notRestored [11.47ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > 恢复完整时文案含备份占用与「不自动清理」 [6.91ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S9：快照 id 非法/快照目录缺失 → 给可行动提示且不动工程 [0.91ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S10：占用统计列出快照与备份数量/字节，且明确不自动清理 [4.30ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > 无任何快照时占用统计为零且不抛错 [0.75ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 已关联文件快照 → 回滚同时恢复工程文件 [13.22ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 未关联文件快照（legacy fork 快照）→ 明确只回滚会话分支 [3.99ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 快照不存在 → ok=false 且不抛错 [0.95ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > capture 成功返回 D 的 UUID 字符串快照 id（原样透传，不做数值派生） [1.76ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > capture 失败必须抛错（不得静默成功）：工程目录缺失 → 抛错且原因可读 [0.75ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > rollback 原样透传 D 结构结果：成功时 ok=true + restoredFiles + 备份目录 [8.20ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > rollback 快照目录不可用 → ok=false + 语义 reason（不抛错、不碰工程） [0.71ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 无快照 → null（调用方据此 fileRollbackAvailable=false） [0.98ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 存在 pre-modify 已关联快照 → 选它（本次修改前的健康态），标签取描述 [4.98ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 只有未关联文件快照的会话快照 → null（避免把「只切分支」说成能恢复工程） [1.63ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 完整恢复切到新的历史上下文分支，阶段回退且旧交付授权失效，恢复前版本可再次选择 [21.76ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 损坏目标文件快照不会切换会话/阶段，并返回失败而非非空对象成功 [8.58ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 会话快照丢失/工作区仍忙时恢复不修改文件 [3.19ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 状态提交失败先补偿文件与会话；补偿失败则保持硬阻塞 [20.71ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 旧快照阶段未知只报partial并阻止新执行，可回恢复前版本解除 [16.30ms]
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-h97P6Y/project-p1-file-snapshots/_project-recovery.json
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-h97P6Y/project-p1-file-snapshots/_project-recovery.json
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 中断日志损坏和快照路径逃逸均不能静默成功 [0.89ms]
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-BS8WpW/project-p1-file-snapshots/_project-recovery.json
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-BS8WpW/project-p1-file-snapshots/_project-recovery.json
+(pass) 恢复审计R3：可诊断、坏日志保留、项目边界 > 坏日志不自动放行；用户选择完整检查点后归档原始日志并恢复 [10.62ms]
+(pass) 恢复审计R3：可诊断、坏日志保留、项目边界 > 受影响工程仍可只读诊断；无关工程显式文件写不受阻，符号链接绕路仍被拒 [2.95ms]
+
+apps/electron/src/main/lib/nanju-evidence-reference.test.ts:
+(pass) file证据只验引用在场及边界 > URL编码/尖括号空格/中文标点；file只能用于实证且必须普通文件 [1.42ms]
+(pass) file证据只验引用在场及边界 > 未授权外部路径与项目内符号链接逃逸拒绝，显式附加目录可引用 [0.60ms]
+(pass) file证据只验引用在场及边界 > 文证可用有效HTTP(S)，日期必须真实日期而非格式近似 [0.66ms]
+
+apps/electron/src/main/lib/nanju-acceptance-baseline.test.ts:
+(pass) 编码前验收基线 > 规格要求每个US覆盖三类路径，边界不适用需具体理由 [1.60ms]
+(pass) 编码前验收基线 > 普通路径不能豁免、缺类型或缺US均拒绝 [1.07ms]
+(pass) 编码前验收基线 > 编码冻结后PRD或规格变化被拒，未冻结testing不能放行 [1.37ms]
+(pass) 编码前验收基线 > 测试绑定只接受工程契约验收test id或steps JSON中的AC编号 [2.02ms]
+
+apps/electron/src/main/lib/nanju-advance-recovery.test.ts:
+(pass) 推进拒因重启恢复 > 首次拒收即保存同源checks；同产物同拒因幂等键不变，变更产物后必须重验 [4.21ms]
+(pass) 推进拒因重启恢复 > 重新读取磁盘拒因形成下轮上下文，既不授权也不新增委派；旧schema同样可恢复 [0.99ms]
+(pass) 推进拒因重启恢复 > 跨阶段残留不注入，敏感拒因脱敏；目录伪装产出拒绝 [1.49ms]
+(pass) 同事件仅领取一次，取消不重新注入或续接；变化后必须重新生成事件 [4.03ms]
+
+apps/electron/src/main/lib/nanju-router-gate.test.ts:
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 正常相对引用：资源存在 → 通过（null） [1.68ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 缺失资源拦截：引用 style.css 未落盘 → 报资源不存在 [0.69ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 带 query：src="app.js?v=2" → 剥 query 后校验，通过 [0.68ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 带 hash+query：src="app.js?v=2#frag" → 先剥 hash 再剥 query，通过 [0.54ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 百分号非法编码不抛：src="%zz.js" 降级原始串后按缺失拦截（不 throw） [0.93ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 根绝对路径跳过：src="/favicon.ico" 不存在也不拦截（加载失败由预览暴露） [0.82ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 协议相对排除：src="//cdn.example.com/x.js" 不做本地校验 [0.54ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > data: URI 排除：内联 base64 图片不触发本地文件校验 [0.79ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > mailto: 排除（通用 scheme）：href="mailto:a@b.c" 不误拦截（修复前旧正则会拦） [0.59ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > 单引号属性识别：缺失的单引号引用同样被拦截 [0.57ms]
+(pass) verifyPhaseOutput 引用校验（coding 阶段，AC Z-001/Z-002/Z-003） > ../ 越界拦截：引用越出 08_APP 目录即使目标文件存在也拦截 [0.70ms]
+(pass) verifyPhaseOutput 分层边界（阶段与体积，AC F-002 存量回归） > 非 coding 阶段不做引用校验：prototype.html 引用缺失资源仍通过 [0.68ms]
+(pass) verifyPhaseOutput 分层边界（阶段与体积，AC F-002 存量回归） > 文件<100B 存量回归：产出过小仍被体积检查拦截 [1.17ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 合规汇总入口（Feature: + Scenario: 结构）通过；成对 steps.json 存在（v0.17.63 AC I-001） [1.15ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 全目录无 Scenario: 拦截（v0.17.64 目录兑底：index 仅 Feature + 有 steps.json 但无任何含场景的 .feature） [0.97ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 目录兑底通过（实证③「总览+分文件」结构：index.feature 纯索引无 Scenario + us-01.feature 含 Feature+Scenario + 成对 steps.json） [0.86ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 目录兑底拦截变体：分文件存在但全部无 Scenario:（仅有 steps.json）→ 拦截 [0.74ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > steps.json 存在性门禁（AC I-001）：只有汇总入口无任何 *.steps.json → 拦截 [0.61ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > steps.json 占位拦截（v0.17.65 AC I-1）：空 JSON / 缺 feature 或 scenario 的占位文件不算，需可解析且字段非空 [2.54ms]
+(pass) verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口门禁） > 汇总入口缺失拦截：index.feature 不存在 [0.53ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady=false → 拦截（消息含缺失组件清单） [1.93ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady 缺失（存量豁免，R8 禁裸 !==true）→ 放行 [2.42ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady=true + 清单合法 → 放行 [4.00ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 非 web 品类 + envReady=true + 清单 typo 组件 → 拦截（R2 第 4 层兜底） [4.62ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > web-default 品类（无标记/无写入）→ 免环境门禁（envReady=false 也不拦） [1.28ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 品类标记非法值（R2 品类幻觉）→ 拦截（合法值六枚举提示） [0.61ms]
+(pass) verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验） > 合法品类标记 + quick 模式 → 品类幻觉检查不误拦（desktop-app 在六枚举内） [1.57ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > iterative 六阶段合法推进全放行（route.next 同源） [0.29ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > iterative 跳级拒绝（expected 给出唯一合法目标） [0.09ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > iterative 回退拒绝（含原地自推——推进必须有位移） [0.06ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > testing 特判豁免：GWT 重入（testing→testing）与交付（testing→delivered）放行 [0.04ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > testing 非豁免目标仍拒绝（回炉 coding 走 GWT fail 路径，不是标记推进） [0.04ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > quick 链（无 planning）合法推进全放行 [0.05ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > quick 跳级/回退拒绝（quick 链 architecture.next=coding，无 planning 边） [0.07ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > 防御性放行：异常 mode / route 缺失节点维持现状（工单 §1 不新增拦截） [0.07ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > 垃圾标记目标拒绝（拼写错误不放行，expected 引导正确标记） [0.05ms]
+(pass) validateAdvanceTarget（W11 推进目标校验） > 终态 delivered：无合法下一阶段，任何目标拒绝（expected=null） [0.03ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Write 裸相对 01_PRD/x.md → deny + telemetry 留痕 [2.18ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Write delivered 项目 08_APP/index.html → 放行（指挥官裁决豁免） [0.99ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Write active 项目 08_APP/x.html → deny（非 delivered 不豁免） [0.69ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 未绑定会话 Read 01_PRD/prd.md → 放行（读类不拦，零 telemetry） [0.40ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > 非 nanju 工作区（无 _nanju-projects.json）未绑定会话 Write 任意 → 零行为变化 [0.40ms]
+(pass) W19 缺陷A：未绑定会话写保护（红测试，工单口径） > Bash 命令含裸阶段目录写操作（echo x > 01_PRD/y）→ deny + telemetry [1.24ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > Bash 命令提及 delivered 项目 08_APP 尾随路径 → 放行 [0.77ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > Bash 命令含 active 项目绝对路径（读命令也拦，保守口径）→ deny [0.60ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > project-<id> 提及带 id 边界检查：project-act2 不误配 project-act [0.53ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > L2 委派子会话（sourceDelegationId）写项目目录 → 放行（南大管线保护） [0.58ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 未绑定会话写工作区根散文件（项目外）→ 放行（零变化范围外） [0.50ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 未绑定会话写项目根散文件（project-act/readme.md）→ deny（工单：项目根散文件一律 deny） [0.53ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > Edit 工具同样拦截（写类工具集）；显式 project-<id>/ 前缀相对路径归因 [0.59ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 裸相对 08_APP 前缀：工作区存在未交付项目 → 保守 deny（无法归因） [0.48ms]
+(pass) W19 缺陷A：边界与豁免矩阵 > 绑定会话回归：项目自身会话不受未绑定写保护影响（走既有阶段门禁） [2.18ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针①：Write ./project-act/01_PRD/x.md（前导 ./ 前缀绕过归因）→ deny + 归因到项目 [0.70ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针②：delivered 豁免穿越 project-dlv/08_APP/../01_PRD/evil.html → deny（消解 .. 后不再豁免） [0.69ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针②-Bash：cat project-dlv/08_APP/../01_PRD/x（豁免穿越，命令形态）→ deny [0.51ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 探针③：Write ~/… 形态（~ 展开后归因）→ deny；~ 指向项目外 → 放行 [0.70ms]
+(pass) W19 F1（审查必修）：路径归一化——三个实证绕过形态全部封堵 > 归一化回归：相对路径重复斜杠与中段 ./ 仍归因（project-act//01_PRD/./x.md）→ deny [0.44ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 检索与只读工具放行（WebSearch/WebFetch/Read/LS/Glob/Grep） [0.22ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 红测（Defender #12）：AskUserQuestion / mcp__session__send_message / Write / Edit / Bash / NotebookEdit / delegate_agent 一律 deny [0.19ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 红测（Defender #13）：workspaceSlug=undefined（未绑定工作区）时代理会话仍走白名单分支而非早退放行 [0.09ms]
+(pass) v2.4 §4：nanjuProxy 代理会话工具面白名单（首分支，先于 workspaceSlug 早退） > 非代理会话现状回归：L1（session-1，requirements）AskUserQuestion 放行（非 auto 项目无路由约束） [0.94ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′）：auto on + 六确认收口 header（通用/原型交互验证/预览确认/架构与环境配置/满意交付）→ 一律 deny + 教育指向直接推进/调代理 [2.82ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′）：auto on + 设计/转述 header → deny（D7 三前缀放行面整体收窄） [1.06ms]
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > A3′ 唯一放行：精确「确认·安装缺失组件」→ 放行且不登记 activeConfirmAsk（环境安装=唯一人工点） [0.86ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′）：安装 + 其他混合 question → 整体 deny（fail-closed） [0.58ms]
+[南大路由门禁] AskUser 路由拒绝（自动审核开启，install-only）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > 红测（A3′/§九）：auto on 交付挑战机器豁免禁用（challenge 在场 + 无前缀 → deny；交付走 A2′ main 实跑 provenance） [0.96ms]
+[南大路由] 登记活跃确认问句（expectedTarget=prototype，10min TTL）: 门禁测试项目
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > auto off（缺失 / enabled:false）→ 全放行 + D7 登记逻辑恢复（收口 header 登记 activeConfirmAsk） [1.24ms]
+(pass) D8 A3′：auto on AskUser 路由 install-only（R7-03） > auto off 中间确认不登记（F2-3① 回归保持）：「确认·安装缺失组件」放行且不登记 [1.44ms]
+(pass) W22 O1/O2：minimax 修复守卫接线与 AC 覆写阶段感知（源码断言） > O1：resolveACOverride 生产调用点带第三参 guardStage（per-phase 覆盖位不失效） [1.07ms]
+(pass) W22 O1/O2：minimax 修复守卫接线与 AC 覆写阶段感知（源码断言） > O2：minimax-repair-misuse 分流消费 MINIMAX_REPAIR_GUIDANCE 专属文案 [0.60ms]
+(pass) Given 架构完成 When 推进阶段 Then 必须具备测试设计 > 历史架构缺少测试设计时明确要求补全，不静默放行 [1.46ms]
+(pass) Given 架构完成 When 推进阶段 Then 必须具备测试设计 > 两模式完整文档通过结构门，未宣称执行验收通过 [2.99ms]
+(pass) Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物 > Then 真实产物及说明存在时无需网页入口 [4.95ms]
+(pass) Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物 > Then 缺真实程序时明确报告路径，网页演示不能替代 [2.50ms]
+(pass) Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物 > Then 损坏工程契约不能静默改成网页模式 [1.02ms]
+(pass) Given 非浏览器工程的场景与实际驱动 When 确认testing产出 Then 不强迫伪造DOM steps.json [10.15ms]
+(pass) W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked） > 红测：prototype 阶段视觉验证者委派（文本命中）但未配独立端点 → deny（不静默放行） [7.76ms]
+(pass) W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked） > 内部 slot 权威：即使标题不含视觉标记，target.slot=visual-validator 也触发门禁 [1.72ms]
+(pass) W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked） > 对照：prototype 阶段普通作者委派（无视觉标记/slot）不被视觉门禁拦截 [1.97ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 机制一（title 兜底）：marker 标题 + 命中配置端点 → 放行（合法独立端点） [4.01ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 机制二（端点检测）：marker-less 标题但命中配置端点 → 同样纳入视觉门禁管辖 [2.76ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > marker 标题 + 端点错（非配置的独立端点）→ 拒 [1.12ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > marker 标题 + 端点=作者端点（同端点自证）→ 拒（不得削弱） [1.11ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 未配置 visualReviewer：端点检测不误拦普通委派（marker-less → 放行） [1.58ms]
+(pass) W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底） > 未配置 visualReviewer：阶段推进不被视觉槽位硬阻断（L1 正常委派 + 阶段序放行） [1.37ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目（archEvidenceGate=true）文档缺「## 证据升级与检索记录」节 When 推进 Then 拦截（无凭证视为未执行） [1.61ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 节内 [实证] 条目带 URL When 推进 Then 放行（形态①②凭证在场） [1.25ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 节内 [实证]/[文证] 条目无 URL When 推进 Then 拦截并指明条目 [1.51ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 实证条目引用已存在的 file:// 证据 When 推进 Then 放行（快消型本机实证无需伪造网络引用） [1.31ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 新项目 + 纯申报（未触发检索条件/已检索无结论）When 推进 Then 放行（形态③自我申报不做事前拦截） [0.88ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 存量项目（无 archEvidenceGate 字段）文档缺节 When 推进 Then 豁免放行（v0.17.127 前创建豁免） [1.02ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > Given 正文含 [实证] 引用（模版坑库既有条目）但节内无条目 When 推进 Then 不误拦（只查证据记录节内条目） [1.25ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > 纯函数：### 级节头与后缀括号注释容忍；节体到下一节头截断（下一节的实证条目不计入） [0.13ms]
+(pass) L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免） > 纯函数：节头匹配为「证据升级与检索记录」前缀形态，不误配相近词 [0.05ms]
+(pass) L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断） > 文档含 PENDING 标记 + 契约含 spikes 登记 → 门禁放行且双事件落盘（created=文档侧 / verdict=登记值） [2.16ms]
+(pass) L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断） > 同一文档重复推进不重复埋；PENDING 替换为结论后埋 verdict（resolved + pending-removed） [2.89ms]
+[南大埋点] 写入失败（不阻断主流程）: ENOTDIR: not a directory, open
+[南大埋点] 写入失败（不阻断主流程）: ENOTDIR: not a directory, open
+(pass) L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断） > 埋点写盘失败不阻断门禁（_telemetry 被同名文件占据 → 门禁仍放行） [1.27ms]
+
+apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts:
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > 标记在 run 中段（其后还有委派/兜底 assistant 消息）仍被收集——原末条扫描窗口的零消费场景 [1.52ms]
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > 多标记按「消息序 × 消息内偏移」收集；PHASE_COMPLETE 同型；大小写归一（S1 锚定形态：注释 ∪ 行首） [0.82ms]
+[南大路由] 丢弃 1 处未锚定推进标记引用（句中非声明形态）: architecture
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > S1 锚定收集：句中引用（正文/说明文字复述协议字面串）不收集 [0.63ms]
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > S1 锚定收集：独立行裸标记仍收集（欠收集比误收集致命，行首声明视为真实意图） [0.85ms]
+[南大路由] 丢弃 1 处未锚定推进标记引用（句中非声明形态）: prototype
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > S1 丢弃观测：未锚定命中记 phase.advance.discarded-unanchored telemetry（锚定命中仍正常收集） [1.49ms]
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > 非 assistant 消息（user/tool_result 回包/result/system）不参与扫描；无标记返回空数组 [0.69ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: test
+[南大路由] 推进目标校验拒绝: prototype → test（合法目标 architecture）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivery
+[南大路由] 推进目标校验拒绝: prototype → delivery（合法目标 architecture）
+(pass) W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费 > 终局复测案例重演：[prototype, test, delivery]——prototype 消费、test/delivery 按序拒绝并注入纠正教育消息 [11.08ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] 推进目标校验拒绝: requirements → delivered（合法目标 prototype）
+(pass) W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费 > 全部标记非法时：状态机不动、返回 null、逐个注入纠正消息 [4.15ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大路由] 文件验证失败，不推进: 产出文件不存在：01_PRD/prd.md
+(pass) W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费 > 合法目标但产出不达标：W11 放行 → verifyPhaseOutput 拦截（AC L-002 可见化注入） [1.92ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 标记 prototype 本轮已消费过，跳过（防重放）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 标记 prototype 本轮已消费过，跳过（防重放）
+(pass) W17 §3-3：已消费标记去重（防重放） > 同 run 重复声明同目标：第二次直接跳过，不二次推进、不注入拒绝消息 [2.25ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进目标校验拒绝: prototype → prototype（合法目标 architecture）
+(pass) W17 §3-3：已消费标记去重（防重放） > 前序消费推进状态机后，后续消费按新状态校验（不是按初始状态）；跨 run 不受去重影响 [3.09ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 user-message → prototype（W17 测试项目）
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 确认文本作为 run 初始输入（活跃收口问句在场 + humanOrigin）→ confirmPending 置位 + 授权 + 埋点落库（v2.4 F2-3/F2-4：散点不再置位） [2.20ms]
+[南大路由] 确认检测：反义词清除 confirmPending（W17 测试项目）
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 反义词清除（与事件流路径同一函数同一语义） [1.72ms]
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 产出不达标（PRD 缺失）→ 确认文本不置位（verifyPhaseOutput 门禁保持） [0.90ms]
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 非确认文本 → 无动作（置位语义不扩散） [0.96ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] GWT 交付门禁拦截，不推进: 尚未记录到用户满意交付确认。请先用 AskUserQuestion 发起交付验收（options 含「满意交付」），用户确认满意交付后再输出 delivered 标记。
+(pass) W18 前置：delivered 消费需 runId+ack 双事实（无 ack 拦截，有 ack 推进+completed） > 无 ack（用户尚未应答）→ 门禁拦截：状态机不动，注入含「满意交付确认」的拦截文案 [2.88ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] ✅ 阶段推进: W17 测试项目 → delivered（status=completed）
+(pass) W18 前置：delivered 消费需 runId+ack 双事实（无 ack 拦截，有 ack 推进+completed） > 有 ack（绑当前 runId）→ 推进 delivered + status=completed + project.finished 埋点 + ack 终态清理 [4.02ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > 事件流路径：user 消息检测调用 checkConfirmAdvanceInput（共用同一实现，未复制逻辑） [0.74ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > run 初始输入路径：sendMessage 入口在 getNanjuRouterPrompt 之前调用同一检测（本轮 prompt 即带强推进提示） [0.97ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > Q1 接线：result 块用 collectPhaseAdvanceStages(accumulatedMessages) 全量收集并交 consumePhaseAdvanceMarks 按序消费（经 hooks 装配） [1.64ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M4（A5 顺序断言）：result 块标记扫描先于 accumulatedMessages 清空（Q1 核心时序防静默回退） [0.62ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W11 规则零变化：validateAdvanceTarget 仍是消费链唯一目标校验（复用而非复制） [0.98ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M1（A1 横幅接活）：run 闭包登记 tool_use，AskUserQuestion 答案 tool_result → 同一确认检测（横幅主确认通道） [1.67ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M2（A2 系统消息豁免）：systemInitiated 续接不进用户意图检测，且不用 triggeredBy 替代 [1.28ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M3（A2 提示词缓和）：强提示末句扩用户修改请求优先 [1.09ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：纯 mark 无任何授权 → 拒绝推进 + 注入教育消息 + advance.gate-deny 埋点，状态机不动 [2.44ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：无授权时产出验证也不执行（拒绝先于文件验证——教育路径清晰） [2.82ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：confirm:ask-answer（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进目标校验拒绝: prototype → prototype（合法目标 architecture）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > ask-answer 授权（target 匹配）→ 推进成功且消费即清（单次授权单次有效） [5.58ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：ask-answer 授权但 expectedTarget 不匹配（确认 A 却推进 B）→ 拒绝且授权保留 [5.46ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > systemAdvanceAuthorized（I2）匹配 → 推进；消费即清（单次）；目标不符 → 拒且授权保留 [5.81ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：send_message 注入消息（humanOrigin 缺省 false）+ 确认词 → 不授权也不置 confirmPending（R4-01+F2-4：无 ⏩ 强推进提示） [3.88ms]
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：事件流路径显式 humanOrigin:false + 确认词 → 不授权（工具注入免疫） [3.24ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：真 UI 消息（humanOrigin:true）+ 确认词但无活跃确认问句（散点「继续」）→ 不授权（R4-02）+ 埋点观测 [2.52ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 user-message → prototype（W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：confirm:user-message（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > I1-② 完整链：活跃确认问句（harness 登记）+ humanOrigin:true + 确认词 → 授权并消费推进 [13.61ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 user-message → prototype（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 「跳过」入确认词表：活跃问句 + humanOrigin +「跳过」→ 授权（I1-②c） [1.41ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 ask-answer → prototype（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > ask-answer + 活跃收口问句匹配（F2-3②）→ 置位授权 + confirmPending（I1-① 主通道） [2.58ms]
+[南大路由] ask-answer 无匹配活跃收口问句（无问句），不授权（W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-3②/#3）：中间确认横幅答案（无活跃收口问句的 ask-answer）→ 不授权，仅埋 suspect-fake-confirm（Defender #4 收紧） [4.25ms]
+[南大路由] ask-answer 无匹配活跃收口问句（目标不匹配），不授权（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-3②）：活跃问句 expectedTarget 不匹配 → 不授权（reason=target-mismatch）且问句清除 [1.34ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-4/#15）：散点确认词不注入 ⏩ 强推进提示（无 activeConfirmAsk → confirmPending 不置位，仅埋点） [1.11ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-5/#5/§3）：新 humanOrigin 消息到达即清除活跃问句——非确认消息后续确认词不再授权 [0.86ms]
+[南大路由] 确认检测：反义词清除 confirmPending（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > F2-5 对照：反义词（humanOrigin）同样终结活跃问句 [1.89ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > TTL：授权与活跃问句 10min 过期后失效（惰性清除） [1.08ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: testing
+[南大路由] testing 重入推进：触发 GWT 验收测试（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 既有特判保留：testing 自环（isTestingSelfAdvance）与 delivered 交付不走授权门（无授权也可触发 GWT/交付门禁） [0.89ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 幂等：同 target 重复 registerSystemAdvance 不叠加（覆盖式刷新） [2.08ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > main/ipc.ts 用户消息通道（SEND_MESSAGE）权威打标：缺省 true，显式 false 优先（Defender #1/#2） [1.59ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > 三个工具/桥接注入入口显式 humanOrigin:false（R4-01 攻击面；缺省即 false 防回归） [1.26ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > canUseTool 门禁条件：nanjuProxy 代理会话重入门禁（triggeredBy 会话中代理仍过门禁，D7 §4） [1.00ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > systemInitiated 推进指令点统一 registerSystemAdvance（D7 §1 I2：delivered ×1 + testing ×5） [1.55ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > router-gate 第一行为 nanjuProxy 分支（先于 !workspaceSlug 早退与 project 查询，Defender #13） [0.93ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: D8 测试项目 → prototype
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ 主路径：auto on + quick + requirements 产出达标 → 无三形态授权直接推进（auto-confirm）+ 埋点 [3.36ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，D8 测试项目，auto 拒因=verify-failed）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（A1′/§六-1）：auto on + 产出未达标 → 拒 + advance.auto-gate 埋点 + auto 专属教育文案 [2.29ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（R7-08）：auto on + 跳级标记 → W11 目标校验先拒（target 校验不短路，非授权门文案） [2.31ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（planning → coding，D8 测试项目，auto 拒因=stage-not-whitelisted）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（§六-4 验收增补 10）：currentStage=planning 异常值 + 推进 → 拒（五阶段白名单，quick 无 planning） [1.82ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，D8 测试项目）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（A1′ 条件 2）：iterative + autoClarify 残留 enabled → 不自动确认（回落三形态，拒） [1.99ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（architecture → coding，D8 测试项目，auto 拒因=ac-red-missing）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ AC 三态（R7-05）：architecture 缺失 ac-verdict → 拒 + 回炉提示（未审查视为不通过） [3.25ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（architecture → coding，D8 测试项目，auto 拒因=ac-red）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ AC 三态：ac-verdict=red → 拒 + 回炉提示（含 findings 修复指令） [3.42ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门通过：auto-confirm（architecture → coding）
+[南大护栏] phaseGuard 更新 p1/architecture: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] 工程品类判定: D8 测试项目 → web-fullstack（architecture）
+[南大路由] ✅ 阶段推进: D8 测试项目 → coding
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ AC 三态：ac-verdict=green → 自动确认推进（architecture → coding） [9.93ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: D8 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: architecture
+[南大路由] 推进硬门拒绝：无授权（prototype → architecture，D8 测试项目）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 验收增补 11（关闭回落）：auto 推进成功后关闭开关 → 下一推进点真人门拒且不静默卡死（教育含真人确认路径） [5.45ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > 红测（验收增补 9/R7-02）：伪造 report（runId 无 main 登记）→ 拒 + reason:no-main-run + 教育触发 GWT [2.20ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ 主路径：main 实跑登记（recordMainGwtRun）+ 非运行中 → 四道过（放行交付，无需 deliveryAck） [1.24ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ d′：GWT 运行中 → gwt-running 拒（旧报告不可交付） [2.61ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] ✅ 阶段推进: D8 交付项目 → delivered（status=completed）
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ consumer 链：auto on testing + delivered 标记 + main 登记 → 推进 delivered + challenge 终态清理 [3.61ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ auto off 回归：非 auto 项目无 ack → no-ack 拒（W18 原文路径逐字节不变） [1.77ms]
+[南大向导图] 子步骤单调守卫拦截回退写入: REQ_ATK → REQ（同阶段序数回退，不落盘）
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > 同阶段序数回退 → 拦截不落盘（REQ_ATK 后写 REQ） [1.02ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > 同阶段序数前进/持平 → 写入（REQ → REQ_ATK → REQ_UC） [1.37ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > 跨阶段切换 → bypass（REQ_UC 后写 PROTO 主节点） [1.19ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > force 显式重置 bypass（delivered 清空等显式重置通道） [0.88ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > sentinel 排序（F2-4 前基准行为保留）：主节点后可写 _CLARIFY，_CLARIFY 后前进子步骤不被阻塞 [1.28ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > getClarifySentinelNodeId：六阶段主节点 sentinel；未知阶段 null [0.46ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > 归因失败（项目不存在）→ false 不写 [0.44ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > 当前阶段无 outputPath（异常值 planning，quick 无此路由）→ false 不写（S4′ 验收增补 10 同源） [0.54ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > requirements 有 outputPath → 写入成功（write-then-emit） [0.74ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > S4′-4：ATK 判据 = requiresAC（quick requirements requiresAC=false → ATK 由调用方 gating，本函数只管写入） [0.87ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > delegation-watch：blocked → sentinel + 解除恢复（S4′ b 点） [0.56ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > preview-watcher：产出写入 → 归因+verify+requiresAC → ATK（S4′ c 点） [0.48ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > gwt-runner：report 落盘 → provenance 登记 + TEST_JUDGE（S4′ d 点 / A2′） [1.52ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > consumer：autoConfirm 放行 → UC 写入（S4′ e 点 / R7-13）+ advance.auto-gate/confirm.auto-confirm 事件 [1.03ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > A3′：交付成功清 challenge + orchestrator GWT-pass 登记链未回归 [1.21ms]
+(pass) D8 F1-1（§十方案 B）：provenance 绑定 verdict+登记指纹（不信任 report 自述） > 红测①（F1-1）：登记 fail 轮 R → L2 改写 report 为 verdict:pass+runId:R+重算指纹 → 必拒 no-main-run（main 登记事实为准） [2.04ms]
+(pass) D8 F1-1（§十方案 B）：provenance 绑定 verdict+登记指纹（不信任 report 自述） > 红测②（F1-1）：登记 pass → 入口文件被改（report 自述指纹同步伪造成新实测使 b 道放行）→ d″ 登记指纹校验拒 [1.69ms]
+(pass) D8 F1-1（§十方案 B）：provenance 绑定 verdict+登记指纹（不信任 report 自述） > 对照：登记 pass+指纹未被改 → 放行（null） [1.25ms]
+[南大向导图] 子步骤单调守卫拦截回退写入: REQ_UC → REQ_CLARIFY（同阶段序数回退，不落盘）
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > 红测：已 UC 后 blocked 补问 → sentinel 写入被拦，图面保持 UC [0.64ms]
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > 主节点 → sentinel 前进可写；sentinel → 子步骤前进可写 [1.43ms]
+[南大向导图] 子步骤单调守卫拦截回退写入: REQ_CLARIFY → REQ（同阶段序数回退，不落盘）
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > sentinel → 主节点恢复走显式 force（watch 恢复通道，S4′ 纪律同款） [0.98ms]
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > watch 恢复接线：tryRestoreMainFromClarify 用 force（源码断言） [0.48ms]
+[南大护栏] L2 委派超时观察哨已登记: p1
+[南大护栏] auto-degrade blocked 硬停: projectId=p1 stage=prototype delegation=dg-1 stopped=true
+(pass) D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人） > 红测：auto on ∧ pendingQuestionIds 非空 → blocked 不重置时钟，10min 后强停 + auto 语义话术 + 不计熔断 [2.56ms]
+[南大护栏] L2 委派超时观察哨已登记: p1
+(pass) D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人） > 对照：auto off（或 pending 空）→ blocked 维持用户驱动重置（不硬停） [1.00ms]
+(pass) D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人） > 常量契约：AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS = 10 分钟 [0.40ms]
+(pass) D8 R2′ 源码断言：F2-3 接线 + F3 清理 > F2-3：orchestrator 交付续接消息走 resolveGwtDeliveryResumeMessage 分发（1 行接线） [1.19ms]
+(pass) D8 R2′ 源码断言：F2-3 接线 + F3 清理 > F3-4：未使用 NANJU_ASK_EXEMPT_PREFIXES 已删除 [0.75ms]
+(pass) D8 R2′ 源码断言：F2-3 接线 + F3 清理 > F3-5：gwt-runner auto 分支注释更正（delivered 质量由 GWT 门上游保证，非第四形态） [0.99ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测：无授权拒收 → 教育注入存在 且 systemInitiated 续接被触发（注入≠续接，D8-1/D8-2 真实缺口）+ gate-deny 埋点 [2.15ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测：W11 跳级拒收 → 注入+续接+advance.target-deny 埋点（D8-1 补齐）；off 版文案含确认问句指引 [3.53ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（W11 auto 版）：auto 项目跳级拒收文案含「直接输出推进标记」与 nanju_clarify_proxy 指引 [2.92ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（防环 F5③）：同产物同拒因只自动续接一次，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点 [4.03ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：confirm:ask-answer（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（计数复位）：阶段推进成功 → 拒收计数清零（新阶段重新计数）+ 待纠正拒因清除 [1.71ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（F5④续接失败降级）：onGiveUp 回调 → 可见注入 + reject-escalate(kind=continuation-giveup) 埋点 + 拒因登记 _project-info [2.07ms]
+[南大路由] ask-answer 无匹配活跃收口问句（install-only 横幅白名单豁免），不授权（W17 测试项目）
+(pass) W22 M-6：install-only 横幅答案回传豁免 suspect-fake-confirm（红测双向） > 豁免路径：install 标记在场 + ask-answer 确认词 → suspect 埋点 whitelisted:true + reason=install-whitelisted，不授权 [0.85ms]
+[南大路由] ask-answer 无匹配活跃收口问句（无问句），不授权（W17 测试项目）
+(pass) W22 M-6：install-only 横幅答案回传豁免 suspect-fake-confirm（红测双向） > 真伪造路径：install 标记不在场 + ask-answer 确认词 → 仍标 suspect（reason=no-active-ask，无 whitelisted 标记） [0.75ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 有 ID：可见注入版含 continue_delegation(<ID>) + 保留上下文 + 不新建修复会话 [0.48ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 无 ID：降级文案指明新建但沿用 coding 配置渠道（GLM） [0.57ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 续接指令（systemInitiated 版）双口径同源 [0.64ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > codingDelegationId 唯一写入点 + 幂等覆盖（setProjectCodingDelegationId） [1.59ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 源码断言（防退化）：orchestrator behavior-fail 分支消费 codingDelegationId + 纯函数；mapping/coverage 分支不经 R1 文案 [2.50ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 源码断言：gate AskUser 放行登记 install-ask（精确等值 header 才入白名单） [1.12ms]
+(pass) W22 M-9：autoClarify.lastToggledAt（updateNanjuProject 单一检测点，覆盖 IPC 直写路径） > enabled 变化自动盖戳；同值更新（预算扣减）不刷新 [1.60ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: B-c 测试项目 → prototype
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 普通阶段推进成功 → hook 收到 confirm 检查点请求（含工作区/项目/会话/描述） [4.24ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门通过：auto-confirm（architecture → coding）
+[南大护栏] phaseGuard 更新 p1/architecture: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] 工程品类判定: B-c 测试项目 → web-fullstack（architecture）
+[南大路由] ✅ 阶段推进: B-c 测试项目 → coding
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 推进进入 coding → triggerType=pre-modify（捕获的是改动前工程内容） [15.79ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（architecture → coding，B-c 测试项目，auto 拒因=ac-red）
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 推进被拒（产出/ac 拦截）→ 不请求检查点（不留假恢复点） [4.56ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: B-c 测试项目 → prototype
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 未接线（缺省 hook）→ 零副作用，推进仍成功（纯消费器零依赖） [2.96ms]
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > orchestrator 接线源码断言：hooks 装配注入三段式检查点且失败可见化 [1.08ms]
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > IPC 接线源码断言：create-project/create-snapshot/rollback-snapshot 走快照网关 [0.68ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] GWT 交付门禁拦截，不推进: 需要 verdict=pass 的测试报告
+(pass) P0-3/Y-06：交付门禁拦截附带授权链状态 > gateError 时注入消息含授权链状态（无活跃问句常态显式化——G3b testing 8 轮未登记场景） [1.08ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] GWT 交付门禁拦截，不推进: 需要 verdict=pass 的测试报告
+(pass) P0-3/Y-06：交付门禁拦截附带授权链状态 > 问句在场时 gateError 附注显示态②（在位+剩余时间） [1.63ms]
+(pass) P0-3：收口问句登记历史与三态拒因诊断 > 登记历史：setActiveConfirmAsk 带 stage 追加历史，getConfirmAskDiagnostics 可观测 [1.00ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) P0-3：收口问句登记历史与三态拒因诊断 > 散点确认（无活跃问句）→ notifyDenial 注入三态拒因提示（态①：本阶段登记 0 次） [1.56ms]
+[南大路由] ask-answer 无匹配活跃收口问句（目标不匹配），不授权（W17 测试项目）
+(pass) P0-3：收口问句登记历史与三态拒因诊断 > 横幅答案目标不匹配 → notifyDenial 态③（附期望/实际） [5.85ms]
+
+ 428 pass
+ 0 fail
+ 3 snapshots, 1413 expect() calls
+Ran 428 tests across 9 files. [1254.00ms]

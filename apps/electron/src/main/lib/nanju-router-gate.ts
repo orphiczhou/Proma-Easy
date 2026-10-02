@@ -8,15 +8,18 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, resolve, sep } from 'node:path'
-import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, type NanjuProject, type ProjectStage } from './nanju-project'
-import { getPhaseNode, getNextPhase, type PhaseId, checkOutputFormat } from './nanju-router'
+import { hasEvidenceDate, diagnoseEvidenceReference } from './nanju-evidence-reference'
+import { listNanjuProjects, getProjectCategory, getProjectEnvState, getProjectDeliveryChallenge, setActiveConfirmAsk, setActiveInstallAsk, readProjectInfo, type NanjuProject, type ProjectStage } from './nanju-project'
+import { getPhaseNode, getNextPhase, type PhaseId, type PhaseNode, checkOutputFormat } from './nanju-router'
 import { getWorkspaceFilesDir } from './config-paths'
 import {
   STAGE_ROLE_KEYWORDS,
+  findKeyword,
   STAGE_TITLES,
   checkDelegationAgainstStage,
   describeKeywordHit,
   detectACRole,
+  detectDelegationSlot,
   extractDelegationSources,
   injectStagePathConstraint,
   isDelegationTool,
@@ -24,8 +27,12 @@ import {
   matchStageKeyword,
   MINIMAX_REPAIR_GUIDANCE,
   resolveACOverride,
+  resolveDelegationSlot,
+  STAGE_AUTHOR_TITLE_MARKERS,
 } from './nanju-delegate-guard'
 import { recordTelemetry } from './nanju-telemetry'
+import { validateTestArchitecture } from './nanju-test-architecture'
+import type { ResolvedChannelModel, VisualValidatorResolution } from './nanju-router-prompt'
 
 // ===== 工具白名单（修正 Y9：移除 EnterPlanMode/ExitPlanMode） =====
 
@@ -42,6 +49,8 @@ const ACTIVE_PHASE_TOOLS = new Set([
   // v2.4（D7 §4）：自动补完需求代理工具（B 域注册给 L1；A 域 §3 deny 教育话术指向它，
   // 白名单缺行则 L1 被自身门禁拒——代理链路断。代理子会话自身的工具面在 nanjuProxy 首分支单独管制）
   'nanju_clarify_proxy', 'mcp__collaboration__nanju_clarify_proxy',
+  // 进度管理工具：调度员提示词要求每阶段建立/维护 Todo，必须与阶段工具白名单一致。
+  'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet',
   // 只读工具
   'Read', 'LS', 'Glob', 'Grep',
   // 交互工具
@@ -256,7 +265,7 @@ function registerConfirmAskIfEligible(
     const { getNextPhase } = require('./nanju-router') as typeof import('./nanju-router')
     const expected = getNextPhase(project.mode, stage as import('./nanju-router').PhaseId)
     if (!expected) return
-    setActiveConfirmAsk(workspaceSlug, project.projectId, expected)
+    setActiveConfirmAsk(workspaceSlug, project.projectId, expected, String(stage)) // P0-3：登记历史带阶段（三态拒因数据源）
     console.log(`[南大路由] 登记活跃确认问句（expectedTarget=${expected}，10min TTL）: ${project.name}`)
   } catch (e) {
     console.warn('[南大路由] activeConfirmAsk 登记异常（不影响放行）:', e instanceof Error ? e.message : String(e))
@@ -270,6 +279,17 @@ function registerConfirmAskIfEligible(
  * 返回 { behavior: 'deny', message } 表示拒绝。
  * W8（v0.17.71）：白名单放行委派工具后追加参数级三层强制
  * （checkNanjuDelegateGuard——阶段匹配 deny / AC 模型覆写 / 路径约束注入）。
+ */
+/**
+ * 南大向导路由门禁。
+ *
+ * 在 canUseTool 中调用，返回 null 表示放行（非南大会话或不限制），
+ * 返回 { behavior: 'deny', message } 表示拒绝。
+ * W8（v0.17.71）：白名单放行委派工具后追加参数级三层强制
+ * （checkNanjuDelegateGuard——阶段匹配 deny / AC 模型覆写 / 路径约束注入）。
+ *
+ * W-B B2：`STAGE_AUTHOR_TITLE_MARKERS` 已迁至 `nanju-delegate-guard.ts` 作为单一真源
+ * （`detectDelegationSlot` 复用），本文件改为 import——不再在本文件重复声明。
  */
 export function checkNanjuRouterGate(
   workspaceSlug: string | undefined,
@@ -372,9 +392,11 @@ export function findNanjuProjectBySession(workspaceSlug: string, sessionId: stri
 /** 写类工具（工单口径：Write/Edit/NotebookEdit；Bash 按命令文本保守拦截，单独判定） */
 const UNBOUND_WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 
-/** 项目脚手架阶段目录（nanju-project.ts createNanjuProject 的 docDirs 同源清单） */
+/** 项目脚手架阶段目录（nanju-project.ts createNanjuProject 的 docDirs 同源清单；
+ *  P0-5：含 00_SPIKES——Spike 实验产物目录，未绑定普通会话写入同样归因拦截，
+ *  委派子会话（Spike 子会话）按 isDelegationChildSession 豁免不受影响） */
 const STAGE_DIR_NAMES = new Set([
-  '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE', '04_API_SPEC',
+  '00_SPIKES', '01_PRD', '02_UX_DESIGN', '03_ARCHITECTURE', '04_API_SPEC',
   '05_PROJECT_PLAN', '06_TESTS', '07_VERSIONS', '08_APP',
 ])
 
@@ -549,7 +571,7 @@ function findUnboundBashHit(
   // 2) 裸阶段目录前缀（echo x > 01_PRD/y 类；08_APP 仅全 delivered 工作区放行）。
   //    落在已豁免项目路径提及范围内的阶段目录不重复计数（cat project-dlv/08_APP/x 的
   //    08_APP/ 已在第 1 步按项目归属豁免）
-  const stageDirRe = /\b(01_PRD|02_UX_DESIGN|03_ARCHITECTURE|04_API_SPEC|05_PROJECT_PLAN|06_TESTS|07_VERSIONS|08_APP)\//g
+  const stageDirRe = /\b(00_SPIKES|01_PRD|02_UX_DESIGN|03_ARCHITECTURE|04_API_SPEC|05_PROJECT_PLAN|06_TESTS|07_VERSIONS|08_APP)\//g
   for (const match of command.matchAll(stageDirRe)) {
     const start = match.index ?? 0
     if (exemptRanges.some(([s, e]) => start >= s && start < e)) continue
@@ -794,6 +816,28 @@ function checkNanjuDelegateGuard(
     result: checkDelegationAgainstStage(guardStage, source),
   }))
 
+  // 2a（2026-09-28 用户裁决）：显式 phase.role 匹配当前阶段的委派经豁免放行时记观测事件
+  // （不 deny；供监控统计豁免面与伪装检测——role-exempt 后仍 deny 的不会到这，
+  // 未被豁免的伪标记会正常进 stage-deny 遥测）。
+  const roleExempts = entries.filter((e) => e.result.allowed && e.result.roleExempt)
+  if (roleExempts.length > 0) {
+    recordTelemetry(
+      workspaceSlug,
+      'delegate.guard.role-exempt',
+      {
+        stage: guardStage,
+        toolName,
+        count: roleExempts.length,
+        entries: roleExempts.map((e) => ({
+          title: e.source.title,
+          matchKind: e.result.matchKind,
+          matchedKeyword: e.result.matchedKeyword,
+        })),
+      },
+      project.projectId,
+    )
+  }
+
   // ── 层一：任一命中其他阶段专属词（W8）或强动作动词（W10-V2.1）→ 拒绝 ──
   // W10 起拒绝原因分流（result.denialKind）：other-stage = 命中他阶段词（既有语义，
   // 未定义时也归此类向后兼容）；strong-verb = unmatched+强动词（W8 敞口兜底）。
@@ -888,14 +932,60 @@ function checkNanjuDelegateGuard(
     const target = targets[index]
     if (!isRecord(target)) continue
 
+    // ── B2：视觉验证者槽位门禁（prototype 阶段专属）──
+    // 有效槽位以内部 slot（target.slot，公开工具入口不暴露）为权威，缺省回退 legacy
+    // 文本推断（detectDelegationSlot，低信任）；门禁以内部 producer
+    // （resolvePhaseDelegationSlots → resolveVisualValidatorSlot）的显式端点为权威：
+    // 未配置独立视觉端点 / 与作者同端点自证 / 端点不匹配 → 一律拒绝（清晰 blocked）。
+    if (guardStage === 'prototype') {
+      const targetRecord = target as Record<string, unknown>
+      // 机制一：内部 slot（权威，公开工具面不暴露）→ 缺省回退 legacy 文本推断（低信任）。
+      let effectiveSlot = resolveDelegationSlot(targetRecord.slot, detectDelegationSlot(source, guardStage))
+      // 机制二（R1(b)）：无 slot、标题也无视觉标记时，看委派目标是否命中显式配置的独立
+      // 视觉端点——命中同样纳入视觉门禁管辖（title 仅兜底）。未配置/同端点自证时
+      // slot.status !== 'resolved' → 不命中，仍保留渲染层可见 blocked 语义。
+      if (effectiveSlot !== 'visual-validator') {
+        const gateSlot = resolvePrototypeVisualSlot(project)
+        if (gateSlot && gateSlot.ok && gateSlot.matchesEndpoint({
+          targetChannelId: typeof targetRecord.channelId === 'string' ? targetRecord.channelId : undefined,
+          targetModelId: typeof targetRecord.modelId === 'string' ? targetRecord.modelId : undefined,
+        })) {
+          effectiveSlot = 'visual-validator'
+        }
+      }
+      if (effectiveSlot === 'visual-validator') {
+        const visualGate = checkVisualValidatorDelegationGate(project, target)
+        if (visualGate) return visualGate
+      }
+    }
+
     // 层二：AC 模型程序化覆写（命中 AC 词且能区分攻/防；不受层一判定顺序影响）
     // W22 O1：第三参 guardStage——per-phase acAttacker 覆盖位（testing 攻击者=glm 跨族）
     // 必须在此接线，否则被全局 preset 静默覆写回 deepseek（与新作者同族）。
-    // 家族标记跳过：acDefender 的 'minimax' 是家族标记非真实渠道 ID（真实渠道为运行时
-    // 解析的 UUID，仅 router-prompt 侧能解析）——直接覆写会产生无效渠道，此情形不覆写
+    // W24-8（用户实测 23:2x 报障）：作者委派豁免——buildL2TaskWithAC 把 AC 攻防模板
+    // 内嵌进作者任务文本，作者委派必然同时命中 AC 词且攻防词并存（detectACRole 按
+    // 攻方处理）→ 作者被劫持到 AC 攻击者渠道（实测三阶段作者全中：v4-pro/M3/GLM-5.3
+    // 全被写成 light 攻击者 deepseek-flash，与设置面板矩阵不符；且作者与内嵌攻击者
+    // 同渠道会诱发 L2 自行换模型「纠偏」——架构阶段 AC 攻击者跑成 GLM-5.3 的根因链）。
+    // 修法：命中当前阶段角色/产出词 = 作者本体委派，不覆写（仅埋点观测）；纯 AC 委派
+    // （不含本阶段词）才程序化覆写。
     if (matchACKeyword(source) !== undefined) {
       const acRole = detectACRole(source)
-      if (acRole !== null) {
+      // 判定收紧：只认 title 含本阶段**作者标题标记**（「需求分析师：/UX 顾问：/架构师：…」——
+      // L1 委派标题约定）。不用 STAGE_ROLE_KEYWORDS：①该表同时服务层一交叉判定，扩词会
+      // 让 PRD 引文（「作者：Proma 需求分析师」）在 prototype 阶段误中 requirements 词被拒
+      // （W19-C 重放实测）；②「测试」等通用词与纯 AC 委派天然交叠。专用标记表零外溢。
+      const isStageAuthorBundle =
+        typeof source.title === 'string' &&
+        findKeyword(source.title, STAGE_AUTHOR_TITLE_MARKERS[guardStage] ?? []) !== undefined
+      if (isStageAuthorBundle) {
+        recordTelemetry(
+          workspaceSlug,
+          'delegate.guard.ac-override',
+          { stage: guardStage, acRole, mode: project.mode, skipped: 'stage-author-bundle', title: source.title },
+          project.projectId,
+        )
+      } else if (acRole !== null) {
         const override = resolveACOverride(acRole, project.mode, guardStage)
         if (override.channel !== 'minimax') {
         const originalChannelId = typeof target.channelId === 'string' ? target.channelId : '(inherit)'
@@ -957,38 +1047,268 @@ function checkNanjuDelegateGuard(
 }
 
 /**
+ * W-B B2：视觉验证者委派门禁（仅 prototype 阶段调用）。
+ *
+ * 把文本推断出的 visual-validator 委派与内部 producer（resolvePhaseDelegationSlots →
+ * resolveVisualValidatorSlot）的权威端点比对（懒加载避免与 router-prompt 静态环）：
+ * - 未显式配置独立视觉端点 / 与作者同端点自证 / 端点不匹配 → 拒绝（清晰 blocked，
+ *   不静默放行，也不退回作者端点冒充独立裁决）；
+ * - 命中显式独立端点且 target 与之一致 → 放行（返回 null）。
+ */
+function checkVisualValidatorDelegationGate(
+  project: NanjuProject,
+  target: Record<string, unknown>,
+): { behavior: 'deny'; message: string } | null {
+  const gateSlot = resolvePrototypeVisualSlot(project)
+  if (!gateSlot) return null
+  if (!gateSlot.ok) {
+    // fail-closed：无法确认独立能力时不放行
+    return {
+      behavior: 'deny',
+      message:
+        '🔒 南大向导门禁：无法裁定独立视觉验证者槽位（' + gateSlot.error + '），已拒绝（fail-closed）。',
+    }
+  }
+  const verdict = gateSlot.validate({
+    targetChannelId: typeof target.channelId === 'string' ? target.channelId : undefined,
+    targetModelId: typeof target.modelId === 'string' ? target.modelId : undefined,
+  })
+  if (verdict.ok) return null
+  return {
+    behavior: 'deny',
+    message:
+      `🔒 南大向导门禁：独立视觉裁决委派未就绪，已拒绝（不静默放行）。\n`
+      + `\n原因：${verdict.reason}\n`
+      + `\n视觉验证者必须由内部槽位管理：请在「设置 → 模型」为 prototype 阶段显式配置与作者异端点的 `
+      + `phases.prototype.visualReviewer，再重试；不得用作者自身或同端点模型冒充独立视觉裁决，`
+      + `也不得在未配置时声称视觉裁决已通过。`,
+  }
+}
+
+/**
+ * B2 R1 交接锚点（供 orchestrator 在 L1 委派工具调用上盖章内部 slot）。
+ *
+ * 返回 prototype 阶段生产者权威的视觉槽位（resolved / blocked / not-applicable）；
+ * 非 prototype 阶段或无法解析时返回 null。model 驱动的 delegate_agent 入参不可信，
+ * 但**该函数在主进程内调用**，其返回值可信用作内部 slot 盖章依据。
+ */
+export function resolveVisualValidatorSlotForProject(project: NanjuProject): VisualValidatorResolution | null {
+  const gateSlot = resolvePrototypeVisualSlot(project)
+  return gateSlot && gateSlot.ok ? gateSlot.slot : null
+}
+
+/**
+ * B2：解析 prototype 阶段的视觉槽位（producer 权威）——gate 两条识别机制与门禁校验共用。
+ *
+ * 懒 require('./nanju-router-prompt') 避免与 router-prompt 的静态循环依赖；解析或校验
+ * 抛错时返回 null（调用方据此 fail-closed 或跳过）。
+ */
+function resolvePrototypeVisualSlot(project: NanjuProject):
+  | {
+    ok: true
+    phase: PhaseNode
+    authorResolved: ResolvedChannelModel | null
+    slot: VisualValidatorResolution
+    validate: (args: { targetChannelId?: string; targetModelId?: string }) => { ok: true } | { ok: false; reason: string }
+    matchesEndpoint: (args: { targetChannelId?: string; targetModelId?: string }) => boolean
+  }
+  | { ok: false; error: string }
+  | null {
+  const phase = getPhaseNode(project.mode, 'prototype')
+  if (!phase) return null
+  try {
+    const promptModule = require('./nanju-router-prompt') as typeof import('./nanju-router-prompt')
+    // 作者端点：家族标记（minimax/MiniMax-M3）运行时解析 UUID；显式配置则取字面值
+    const isFamilyMarker = phase.channel === 'minimax' && phase.model === 'MiniMax-M3'
+    const authorResolved: ResolvedChannelModel | null = isFamilyMarker
+      ? (promptModule.resolveMinimaxM3Actor() ?? { channelId: phase.channel, modelId: phase.model })
+      : { channelId: phase.channel, modelId: phase.model }
+    const slot = promptModule.resolveVisualValidatorSlot(phase, { authorResolved })
+    return {
+      ok: true,
+      phase,
+      authorResolved,
+      slot,
+      validate: (args) => promptModule.validateVisualValidatorDelegation({ phase, authorResolved, ...args }),
+      matchesEndpoint: (args) => promptModule.isVisualValidatorEndpointTarget({ slot, ...args }),
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** 证据记录节标题匹配（容忍 #~### 级别与后缀括号注释——同库内环境节头惯例） */
+const EVIDENCE_RECORD_SECTION_RE = /^#{1,3}[ \t]*证据升级与检索记录/m
+
+/** 节内 [实证]/[文证] 条目标记（升级/新增形态①②的产物特征） */
+const EVIDENCE_BADGE_RE = /\[(实证|文证)\]/
+
+/**
+ * L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档产物检查（纯函数）。
+ *
+ * 三形态判定（推进门禁据产物检查，无凭证视为未执行）：
+ * - 缺「## 证据升级与检索记录」节 → 拦（新项目已注入任务书要求，缺节即未执行）；
+ * - 节内含 [实证]/[文证] 升级/新增条目（形态①②）而条目行无 URL（http(s):// 宽松形态）
+ *   → 拦并指明条目（本节语义 = 记录本轮证据变化，凡在此节出现的实证/文证标记
+ *   均视为本轮升级/新增条目）；
+ * - 纯声明行（「本轮无证据升级；未触发检索条件」/「已检索无结论」）不含实证/文证
+ *   标记 → 放行（形态③为自我申报，不做事前拦截——事后抽检追责，不在此门）。
+ *
+ * 存量兼容：本函数只对 _project-info.json 带 archEvidenceGate=true（v0.17.127+ 创建）
+ * 的项目生效（调用方判定）；旧项目豁免。
+ */
+export function validateEvidenceRecordSection(content: string, allowedDirectories: readonly string[] = []): string | null {
+  const headerMatch = content.match(EVIDENCE_RECORD_SECTION_RE)
+  if (!headerMatch || headerMatch.index === undefined) {
+    return '架构文档缺少「## 证据升级与检索记录」节：凡依据网络检索的结论须逐条附来源引用（URL+检索日期）；'
+      + '保持 [推断] 的结论点须注明「已检索无结论（关键词+日期）」或「未触发检索条件」；'
+      + '本轮无升级时也须显式声明「本轮无证据升级；未触发检索条件」。请补齐该节后重新推进。'
+  }
+  // 节体 = 节头行到下一节头（同库内 parseEnvChecklistFromDoc 截取惯例）
+  const after = content.slice(headerMatch.index)
+  const bodyStart = after.indexOf('\n') + 1
+  const nextSection = after.slice(bodyStart).search(/^#{1,3}\s/m)
+  const section = nextSection === -1 ? after : after.slice(0, bodyStart + nextSection)
+
+  const missing: string[] = []
+  const brokenFiles: string[] = []   // 修复A：引用在场但 file:// 路径不存在/越出目录——列出具体路径
+  const missingDate: string[] = []   // 引用有效但缺检索日期
+  const outsideFiles: string[] = []
+  const lines = section.split('\n')
+  // Y-2（审计，2026-09-18）：多行条目容忍——徽记行无 URL 时向下看最多 2 行（URL 另起一
+  // 行/表格条目跨行的常见写法），仍无 URL 才拦；防「徽记行与 URL 行分行」整批误拦。
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (!EVIDENCE_BADGE_RE.test(line)) continue
+    const badge = line.match(EVIDENCE_BADGE_RE)?.[1] as '实证' | '文证'
+    // 多行条目允许两行续写，但不能借用下一条带徽记记录的来源/日期。
+    const record = [line]
+    for (let j = i + 1; j <= i + 2 && j < lines.length; j++) {
+      if (EVIDENCE_BADGE_RE.test(lines[j]!)) break
+      record.push(lines[j]!)
+    }
+    const text = record.join('\n')
+    // 修复A（E2E 2026-10-01 架构卡死）：诊断版代替布尔版——「写了引用但路径不存在」
+    // 与「完全没写」分开反馈，拒因列出失效的具体路径，作者可自修正。
+    const diag = diagnoseEvidenceReference(text, badge, allowedDirectories)
+    if (diag.ok) continue
+    // 条目标识：表格行取首列，列表/普通行取行首截断（拦截消息指明条目用）
+    const trimmed = line.trim().replace(/^\|\s*/, '')
+    const label = (trimmed.split('|')[0] ?? '').trim() || trimmed.slice(0, 40)
+    if (diag.reason === 'file-not-found' || diag.reason === 'file-outside-allowed') {
+      const refs = (diag.failedRefs ?? []).map(r => `${r}`).join(' ')
+      const why = diag.reason === 'file-not-found' ? '路径不存在' : '在工程/授权目录之外'
+      if (label) brokenFiles.push(`「${label}」→ ${refs}（${why}）`)
+      if (diag.reason === 'file-outside-allowed' && label) outsideFiles.push(label)
+    } else if (diag.reason === 'missing-date') {
+      if (label) missingDate.push(label)
+    } else if (label) {
+      missing.push(label)
+    }
+  }
+  if (missing.length > 0 || brokenFiles.length > 0 || missingDate.length > 0) {
+    const parts: string[] = []
+    if (missing.length > 0) {
+      parts.push('以下 [实证]/[文证] 条目缺少有效来源或日期（须「URL+检索日期」YYYY-MM-DD；[文证]限 http(s)://，[实证]也可引用工程内或明确授权目录中的普通 file:// 文件；该检查不证明内容真实性）：'
+        + `${missing.join('；')}。请补来源引用或降级为 [推断] 并按形态③申报（已检索无结论/未触发检索条件）。`)
+    }
+    if (brokenFiles.length > 0) {
+      parts.push('以下条目已写 file:// 引用但引用无效（请核对工程内实际文件路径——先用 Read/ls 确认文件存在再引用；不允许引用不存在的路径）：'
+        + brokenFiles.join('；') + '。')
+    }
+    if (missingDate.length > 0) {
+      parts.push('以下条目引用有效但缺检索日期（在引用旁补 YYYY-MM-DD）：' + missingDate.join('；') + '。')
+    }
+    return '证据记录凭证缺失：' + parts.join('')
+  }
+  return null
+}
+
+/**
  * 验证阶段产出文件（修正 F6 + Y5）。
  * Harness 代码在 PHASE_COMPLETE 检测后调用。
  *
  * 返回 null 表示验证通过，返回 string 表示错误原因。
  */
+/** 结构化校验项直接在校验点产生，UI/模型/遥测共享，不解析错误文案。 */
+export type GateCheck = import('@proma/shared').AdvanceGateCheck
+
+export function evaluatePhaseOutput(workspaceSlug: string, projectId: string, phaseId: PhaseId): { error: string | null; checks: GateCheck[] } {
+  const checks: GateCheck[] = []
+  try {
+    const error = verifyPhaseOutput(workspaceSlug, projectId, phaseId, checks)
+    if (checks.length === 0) checks.push({ id: 'phase.output', pass: !error, expected: '阶段产出满足要求', actual: error ?? '符合要求' })
+    return { error, checks }
+  } catch (e) {
+    const error = `阶段产出无法校验：${e instanceof Error ? e.message : String(e)}`
+    checks.push({ id: 'output.readable', pass: false, expected: '可读取的阶段产出', actual: error, nextAction: '检查路径、权限与文件格式后重新校验。' })
+    return { error, checks }
+  }
+}
+
 export function verifyPhaseOutput(
   workspaceSlug: string,
   projectId: string,
   phaseId: PhaseId,
+  checks?: GateCheck[],
 ): string | null {
+  const reject = (id: string, actual: string | null, expected: string, path?: string): string | null => {
+    checks?.push({ id, path, expected, actual: actual ?? '符合要求', pass: actual === null, nextAction: actual ? `修正 ${path ?? phaseId} 后重新校验；不得跳过门禁。` : undefined })
+    return actual
+  }
   const projectDir = join(getWorkspaceFilesDir(workspaceSlug), `project-${projectId}`)
   const phase = getPhaseNode(
     listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)?.mode ?? 'iterative',
     phaseId,
   )
-  if (!phase || !phase.outputPath) return null
+  if (!phase || !phase.outputPath) return reject('route.missing', `阶段路由节点或产出路径缺失：${phaseId}`, '有效阶段路由与产出路径', phaseId)
+  if (readProjectInfo(workspaceSlug, projectId)?.acceptanceBaselineRequired) {
+    const { validateAcceptanceSpecification, validateAcceptanceBindings } = require('./nanju-acceptance-baseline') as typeof import('./nanju-acceptance-baseline')
+    const error = phaseId === 'architecture' ? validateAcceptanceSpecification(projectDir)
+      : phaseId === 'coding' ? validateAcceptanceSpecification(projectDir, true)
+      : phaseId === 'testing' ? validateAcceptanceBindings(projectDir) : null
+    if (error) return reject('acceptance.baseline', error, '编码前冻结规格、测试逐项绑定验收编号', phaseId === 'testing' ? '06_TESTS/features' : '03_ARCHITECTURE/acceptance.json')
+  }
+
+  // 校验时机前移（E2E 2026-09-29 六轮返工教训）：engineering.json 已存在时，把
+  // parseEngineeringContract 的静态 schema 检查（driver 必须引用 artifacts 内文件、
+  // 固定 runtime、service 路径合法等）在 architecture 推进时就拦，而不是等到 GWT
+  // 运行（三个阶段之后）才第一次暴露。不存在时不拦：浏览器工程无契约、或后续
+  // 阶段补写均属合法路径（coding/GWT 侧仍有兑底）。
+  if (phaseId === 'architecture') {
+    const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+    const contractPath = join(projectDir, ENGINEERING_CONTRACT_PATH)
+    if (existsSync(contractPath)) {
+      const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
+      if (!parsed.contract) {
+        return reject('architecture.engineering-contract', parsed.problems.join('；') || '契约解析失败', '驱动引用 artifacts 内文件、固定 runtime、target=被测产物', ENGINEERING_CONTRACT_PATH)
+      }
+    }
+  }
+
+  if (phaseId === 'coding') {
+    const { resolveCodingOutputPath, validateEngineeringCodingOutput, ENGINEERING_DELIVERY_PATH } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+    if (resolveCodingOutputPath(projectDir) === ENGINEERING_DELIVERY_PATH) {
+      return reject('coding.engineering-contract', validateEngineeringCodingOutput(projectDir), '契约、入口、驱动与被测产物齐全', ENGINEERING_DELIVERY_PATH)
+    }
+  }
 
   const filePath = join(projectDir, phase.outputPath)
 
   if (!existsSync(filePath)) {
-    return `产出文件不存在：${phase.outputPath}`
+    return reject('output.exists', `产出文件不存在：${phase.outputPath}`, '阶段产出是可读普通文件', phase.outputPath)
   }
 
   const stat = statSync(filePath)
+  if (!stat.isFile()) return reject('output.regular-file', `产出路径不是普通文件：${phase.outputPath}`, '普通文件', phase.outputPath)
   if (stat.size < 100) {
-    return `产出文件过小（${stat.size} 字节），内容可能不完整：${phase.outputPath}`
+    return reject('output.size', `产出文件过小（${stat.size} 字节），内容可能不完整：${phase.outputPath}`, '至少 100 字节完整内容', phase.outputPath)
   }
 
   // 最低格式检查
   const content = readFileSync(filePath, 'utf-8')
   if (!checkOutputFormat(phaseId, content)) {
-    return `产出文件格式不符合要求（缺少基本结构）：${phase.outputPath}`
+    return reject('output.format', `产出文件格式不符合要求（缺少基本结构）：${phase.outputPath}`, '符合阶段基本结构', phase.outputPath)
   }
 
   // testing 阶段（v0.17.63，AC I-001）：可执行契约存在性门禁——06_TESTS/features/ 下
@@ -1009,7 +1329,22 @@ export function verifyPhaseOutput(
         }
       })
       if (!hasScenarios) {
-        return '缺少可执行场景：06_TESTS/features/ 下至少一个 .feature 需同时含 Feature: 与 Scenario:（index.feature 可为纯索引，场景允许分布在 us-XX.feature 分文件）'
+        return reject('testing.scenarios', '缺少可执行场景：06_TESTS/features/ 下至少一个 .feature 需同时含 Feature: 与 Scenario:（index.feature 可为纯索引，场景允许分布在 us-XX.feature 分文件）', '至少一个 Feature/Scenario 规格', phase.outputPath)
+      }
+      const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract, captureEngineeringEvidence } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+      const contractPath = join(projectDir, ENGINEERING_CONTRACT_PATH)
+      if (existsSync(contractPath)) {
+        const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
+        if (!parsed.contract) return reject('testing.contract', '工程测试契约不完整：' + parsed.problems.join('；'), '有效工程测试契约', phase.outputPath)
+        if (parsed.contract.tests.some((test) => test.scenarioFiles)) {
+          const captured = captureEngineeringEvidence(projectDir)
+          if (!captured.evidence) return reject('testing.binding', '工程测试文件绑定不完整：' + captured.problems.join('；'), '测试规格与契约一致', phase.outputPath)
+        }
+        if (parsed.contract.tests.every((test) => test.adapter !== 'browser-file' && test.adapter !== 'browser-url')) {
+          if (parsed.contract.tests.some((test) => !test.driver)) return reject('testing.driver', '工程测试缺少driver执行计划，请回coding补齐真实驱动；不得伪造DOM步骤。', '非浏览器契约含真实驱动', phase.outputPath)
+          const captured = captureEngineeringEvidence(projectDir)
+          return reject('testing.execution-files', captured.evidence ? null : '工程驱动或被测产物不完整：' + captured.problems.join('；'), '驱动及被测产物完整', phase.outputPath)
+        }
       }
       // AC I-1（v0.17.65）：占位产物拦截——至少一个 *.steps.json 可 JSON.parse 且解析后
       // feature/scenario 均为非空字符串（与 GwtRunner 执行期 schema 校验闭环；
@@ -1026,7 +1361,7 @@ export function verifyPhaseOutput(
           }
         })
       if (!hasValidStepsJson) {
-        return '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个可解析且含非空 feature/scenario 的 *.steps.json（与 us-XX.feature 成对产出；空占位文件不算）'
+        return reject('testing.steps', '缺少可执行步骤映射：06_TESTS/features/ 下至少需要一个可解析且含非空 feature/scenario 的 *.steps.json（与 us-XX.feature 成对产出；空占位文件不算）', '至少一个有效步骤映射', phase.outputPath)
       }
     }
   }
@@ -1034,6 +1369,13 @@ export function verifyPhaseOutput(
   // architecture 阶段（W7，v0.17.69）：品类幻觉拦截 + 环境清单规则校验 + envReady 门禁
   // （R4 终裁挂点：拦 architecture→coding（quick）/ architecture→planning（iterative）推进）。
   if (phaseId === 'architecture') {
+    // L3-7d（2026-09-18）：Spike 埋点·文档侧观察——architecture.md 的 PENDING(SPIKE-NNN)
+    // 标记与内存快照对比（新增→spike.created / 消失→spike.verdict resolved+pending-removed）。
+    // 纯观察不阻断门禁：模块自身不抛（recordTelemetry 写失败只告警），此处 try/catch 再兑底。
+    try {
+      const { recordSpikeTelemetryFromDoc } = require('./nanju-spike-telemetry') as typeof import('./nanju-spike-telemetry')
+      recordSpikeTelemetryFromDoc(workspaceSlug, projectId, content)
+    } catch { /* 埋点观察失败不影响门禁判定 */ }
     const {
       resolveProjectCategoryForCoding,
       extractRawCategoryMarker,
@@ -1046,7 +1388,7 @@ export function verifyPhaseOutput(
     // 未标注不是错误（web-default 降级）；标注了但值非法 = 品类幻觉，拦。
     const rawMarker = extractRawCategoryMarker(content)
     if (rawMarker !== null && !isProjectCategory(rawMarker.toLowerCase())) {
-      return `架构文档品类标记非法：projectCategory: ${rawMarker}（合法值为 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一）`
+      return reject('architecture.category', `架构文档品类标记非法：projectCategory: ${rawMarker}（合法值为 web-fullstack / api-backend / mobile-app / desktop-app / cli-tool / ai-application 六选一）`, '合法工程品类', phase.outputPath)
     }
 
     // resolved 品类（W3 口径：existing ?? architecture/prd 提取 ?? web-default）。
@@ -1059,7 +1401,7 @@ export function verifyPhaseOutput(
       if (envReady === false) {
         // 显式未就绪：拦截（缺失组件清单可见化）
         const missing = missingComponents.length > 0 ? missingComponents.join('、') : '未知组件'
-        return `环境未就绪（${missing}）：请先完成工程环境配置（回到架构师环节执行安装/调通，或与用户确认换技术栈/降级）`
+        return reject('architecture.environment', `环境未就绪（${missing}）：请先完成工程环境配置（回到架构师环节执行安装/调通，或与用户确认换技术栈/降级）`, '必需环境组件就绪', phase.outputPath)
       }
       if (envReady === undefined) {
         // 存量豁免（R8 禁裸 !==true）：envReady 字段缺失 = 未检查，不误拦。
@@ -1072,9 +1414,44 @@ export function verifyPhaseOutput(
         const checklist = parseEnvChecklistFromDoc(content)
         const validation = validateEnvChecklist(resolved.category, checklist)
         if (!validation.ok) {
-          return `环境配置清单校验未通过：${validation.problems.join('；')}`
+          return reject('architecture.environment-schema', `环境配置清单校验未通过：${validation.problems.join('；')}`, '品类环境清单合法', phase.outputPath)
         }
       }
+    }
+    const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract } = require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+    const contractPath = join(projectDir, ENGINEERING_CONTRACT_PATH)
+    if (existsSync(contractPath)) {
+      try {
+        const parsed = parseEngineeringContract(readFileSync(contractPath, 'utf-8'))
+        if (!parsed.contract) return reject('architecture.contract', '工程契约需补全：' + parsed.problems.join('；'), '完整工程契约', phase.outputPath)
+        // L3-7d（2026-09-18）：Spike 埋点·契约侧观察——契约校验通过后 spikes[] 登记变化
+        // → spike.verdict（verdict 取登记值，source:contract-registration；与文档侧
+        // pending-removed 互补：此处可知结论方向）。选点理由：契约校验通过才可信为登记，
+        // 此处是读契约成功的唯一自然点；spike.timebox_hit 无可观测载体不在此接（见
+        // nanju-spike-telemetry.ts 头注诚实边界③）。try/catch 兑底不阻断门禁。
+        try {
+          const { recordSpikeTelemetryFromContract } = require('./nanju-spike-telemetry') as typeof import('./nanju-spike-telemetry')
+          recordSpikeTelemetryFromContract(workspaceSlug, projectId, parsed.contract)
+        } catch { /* 埋点观察失败不影响门禁判定 */ }
+      } catch { return reject('architecture.contract-readable', '工程契约不可读，请补全：' + ENGINEERING_CONTRACT_PATH, '可读工程契约', phase.outputPath) }
+    }
+    // 结构检查只证明设计资料齐全，不构成运行证据或权限授权。
+    const testArchitecture = validateTestArchitecture(content)
+    if (!testArchitecture.ok) {
+      return reject('architecture.test-design', '架构交付与测试设计不完整，请补全后再确认：' + testArchitecture.problems.join('；'), '架构交付与测试设计完整', phase.outputPath)
+    }
+    // L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档须含
+    // 「## 证据升级与检索记录」节，且节内 [实证]/[文证] 升级/新增条目附 URL；
+    // 纯声明（未触发/已检索无结论）放行（形态③自我申报，事后抽检不在此门）。
+    // 存量兼容：仅 _project-info.json 带 archEvidenceGate=true（v0.17.127+ 创建）的
+    // 项目生效，旧项目豁免（标记由 createNanjuProject 写入；非时间戳比对——版本
+    // 发布时刻依赖脆弱，显式标记确定性）。
+    if (readProjectInfo(workspaceSlug, projectId)?.archEvidenceGate === true) {
+      const { getAgentSessionMeta } = require('./agent-session-manager') as typeof import('./agent-session-manager')
+      const project = listNanjuProjects(workspaceSlug).find(item => item.projectId === projectId)
+      const attachedDirectories = project?.sessionId ? getAgentSessionMeta(project.sessionId)?.attachedDirectories ?? [] : []
+      const evidenceError = validateEvidenceRecordSection(content, [projectDir, ...attachedDirectories])
+      if (evidenceError) return reject('architecture.evidence', evidenceError, '来源证据记录齐全', phase.outputPath)
     }
   }
 
@@ -1100,10 +1477,10 @@ export function verifyPhaseOutput(
       if (refPath.startsWith('/')) continue
       const resolved = resolve(dirname(filePath), refPath)
       if (!resolved.startsWith(dirname(filePath) + sep)) {
-        return '入口文件引用越出 08_APP 目录：' + ref
+        return reject('coding.reference-boundary', '入口文件引用越出 08_APP 目录：' + ref, '入口资源位于08_APP内', phase.outputPath)
       }
       if (!existsSync(resolved)) {
-        return `入口文件引用的资源不存在：${ref}`
+        return reject('coding.reference-exists', `入口文件引用的资源不存在：${ref}`, '入口引用资源存在', phase.outputPath)
       }
     }
   }

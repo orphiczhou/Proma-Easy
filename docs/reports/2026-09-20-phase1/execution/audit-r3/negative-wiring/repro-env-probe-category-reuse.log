@@ -1,0 +1,24 @@
+bun test v1.3.14 (0d9b296a)
+
+src/main/lib/__r3-audit-repro-envprobe.test.ts:
+[R3] second.ok= true written.category= universal desktop-item-present= false
+[R3] second.lines= ["探测时间：2026-09-23T13:23:39.731Z","- node：可用（v22）"]
+43 |   const second = runEnvProbe('test-ws', 'r3cat', { category: 'desktop-app', timeoutMs: 30_000 })
+44 |   const w2 = JSON.parse(readFileSync(p1, 'utf-8'))
+45 |   const hasDesktop = w2.components.some((c: any) => c.component === 'webkit2gtk-4.1')
+46 |   console.log('[R3] second.ok=', second.ok, 'written.category=', w2.category, 'desktop-item-present=', hasDesktop)
+47 |   console.log('[R3] second.lines=', JSON.stringify(second.lines))
+48 |   expect(hasDesktop).toBe(true)
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/orphic/proma-patches/p1-quick-engineering/apps/electron/src/main/lib/__r3-audit-repro-envprobe.test.ts:48:22)
+(fail) R3 反例：universal 先探测 → desktop-app 再探测，品类变更是否复用旧结果 [7.75ms]
+
+ 0 pass
+ 1 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [74.00ms]

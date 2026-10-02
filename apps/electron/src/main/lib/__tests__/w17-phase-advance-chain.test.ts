@@ -1,3 +1,19 @@
+const testArchitectureDoc = `
+## 交付与运行
+目标平台：按项目约定平台
+交付产物：08_APP 下架构约定产物
+构建方式：执行项目构建配置
+启动方式：启动实际产物
+## 测试架构
+| 层级 | 框架 | 执行方式 | 证据 | 覆盖 |
+| --- | --- | --- | --- | --- |
+| 行为验收 | 平台测试驱动 | 执行真实产品 | 实际输出 | US-01 |
+### 真实与模拟边界
+模拟仅用于隔离单元，实际用户故事需真实行为证据。
+### 失败回流
+失败回开发或测试设计，环境缺失阻塞。
+`
+
 /**
  * W17（v0.17.77）：阶段推进链修复测试——PHASE_ADVANCE 全消息扫描消费 + 确认检测补 run 初始输入路径
  *
@@ -16,7 +32,7 @@
  * 副作用经 hooks 注入）+ nanju-router-gate.collectPhaseAdvanceStages（纯函数）。
  * 编排器侧接线（事件流/入口/result 三处调用 + hooks 装配）以源码断言锁定防退化。
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test, setSystemTime } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -411,7 +427,8 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
   const orchestratorSource = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
 
   test('事件流路径：user 消息检测调用 checkConfirmAdvanceInput（共用同一实现，未复制逻辑）', () => {
-    expect(orchestratorSource).toContain('checkConfirmAdvanceInput(sessionId, workspaceSlug, userText)')
+    // P0-3：事件流路径调用新增 notifyDenial（授权拒因 UI 注入）；断言锚定函数调用头部
+    expect(orchestratorSource).toMatch(/checkConfirmAdvanceInput\(sessionId, workspaceSlug, userText/)
     expect(orchestratorSource).toMatch(/msg\.type === 'user' && workspaceSlug && !automationContext/)
   })
 
@@ -461,7 +478,8 @@ describe('W17 §3-5/§3-6：编排器接线源码断言（防退化）', () => {
     expect(orchestratorSource).toContain("askToolUseNames.get(block.tool_use_id) !== 'AskUserQuestion'")
     // 答案文本（answers 值）送同一 checkConfirmAdvanceInput（三路径共用；W18 起横幅答案
     // 额外传 source='ask-answer'——唯一可置位交付 ack 的来源）
-    expect(orchestratorSource).toContain("checkConfirmAdvanceInput(sessionId, workspaceSlug, answerText, 'ask-answer')")
+    // P0-3：横幅答案路径调用新增 notifyDenial；断言锚定函数调用头部
+    expect(orchestratorSource).toMatch(/checkConfirmAdvanceInput\(sessionId, workspaceSlug, answerText, 'ask-answer'/)
   })
 
   test('W17-AC-M2（A2 系统消息豁免）：systemInitiated 续接不进用户意图检测，且不用 triggeredBy 替代', () => {
@@ -800,7 +818,7 @@ describe('D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格�
     } else if (stage === 'architecture') {
       mkdirSync(join(dir, 'project-p1', '03_ARCHITECTURE'), { recursive: true })
       writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'architecture.md'),
-        '# 架构文档\n\nprojectCategory: web-fullstack\n\n## 技术选型\n\n- 纯前端单页应用（原生 JS）\n\n## 环境配置\n\n| 组件 | 版本 |\n|---|---|\n| node | 20 |\n\nprojectEnv: ready\n'.repeat(2))
+        '# 架构文档\n\nprojectCategory: web-fullstack\n\n## 技术选型\n\n- 纯前端单页应用（原生 JS）\n\n## 环境配置\n\n| 组件 | 版本 |\n|---|---|\n| node | 20 |\n\nprojectEnv: ready\n'.repeat(2) + testArchitectureDoc)
       if (opts.acVerdict && opts.acVerdict !== 'missing') {
         writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'ac-verdict.json'), JSON.stringify({
           verdict: opts.acVerdict,
@@ -832,6 +850,7 @@ describe('D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格�
     const denied = hooks.injected.find((t) => t.includes('推进未被授权'))
     expect(denied).toBeTruthy()
     expect(denied).toContain('自动审核')
+    expect(denied).toContain('产出文件不存在')
     expect(denied).toContain('环境安装确认为唯一例外')
     const month = new Date().toISOString().slice(0, 7)
     const events = readFileSync(join(fixtureRoot, '_telemetry', `events-${month}.jsonl`), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
@@ -1418,20 +1437,20 @@ describe('W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 
     expect(getAdvanceRejectCount(WS, 'p1')).toBe(1)
   })
 
-  test('红测（防环 F5③）：前 2 次教育+续接，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点', () => {
+  test('红测（防环 F5③）：同产物同拒因只自动续接一次，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点', () => {
     const first = buildTestHooks()
     consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, first)
     const second = buildTestHooks()
     consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, second)
     expect(first.continuations.length).toBe(1)
-    expect(second.continuations.length).toBe(1)
+    expect(second.continuations.length).toBe(0) // 同一持久事件不重复自动续接
     // 第 3 次：转人工提示（不续接、不再教育注入）
     const third = buildTestHooks()
     consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, third)
     expect(third.continuations.length).toBe(0)
     expect(third.injected.some((t) => t.includes('自动纠偏闭环已达上限'))).toBe(true)
     expect(third.injected.some((t) => t.includes('人工介入'))).toBe(true)
-    expect(third.injected.some((t) => t.includes('推进未被授权'))).toBe(false) // 不再教育注入
+    expect(third.injected.some((t) => t.includes('当前拒因：'))).toBe(true) // 达限停止自动续接，但不能丢具体拒因
     const escalate = readTelemetryEvents().find((e) => e.eventType === 'advance.reject-escalate')
     expect(escalate).toBeTruthy()
     expect((escalate!.payload as Record<string, unknown>).kind).toBe('loop-limit')
@@ -1558,21 +1577,211 @@ describe('W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线
 
 describe('W22 M-9：autoClarify.lastToggledAt（updateNanjuProject 单一检测点，覆盖 IPC 直写路径）', () => {
   test('enabled 变化自动盖戳；同值更新（预算扣减）不刷新', () => {
-    const projects = readProjects() as Array<{ autoClarify?: { enabled?: boolean; lastToggledAt?: string } }>
-    expect(projects[0]?.autoClarify).toBeUndefined()
-    // 开启（模拟 IPC set-auto-clarify 直写 updateNanjuProject）
-    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } })
-    const afterOn = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
-    expect(typeof afterOn).toBe('string')
-    expect(Number.isNaN(Date.parse(afterOn!))).toBe(false)
-    // 同值更新（预算 20→19）不刷新时间戳
-    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 19, pendingQuestionIds: [] } })
-    const afterBudget = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
-    expect(afterBudget).toBe(afterOn)
-    // 关闭再次盖新戳
-    updateNanjuProject(WS, 'p1', { autoClarify: { enabled: false, proxyBudget: 19, pendingQuestionIds: [] } })
-    const afterOff = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
-    expect(typeof afterOff).toBe('string')
-    expect(afterOff!).not.toBe(afterOn)
+    // 固定时钟验证更新时间，而非依赖磁盘写入自然跨过1毫秒。
+    setSystemTime(new Date('2026-09-14T00:00:00.000Z'))
+    try {
+      const projects = readProjects() as Array<{ autoClarify?: { enabled?: boolean; lastToggledAt?: string } }>
+      expect(projects[0]?.autoClarify).toBeUndefined()
+      // 开启（模拟 IPC set-auto-clarify 直写 updateNanjuProject）
+      updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] } })
+      const afterOn = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+      expect(typeof afterOn).toBe('string')
+      expect(Number.isNaN(Date.parse(afterOn!))).toBe(false)
+      // 同值更新（预算 20→19）不刷新时间戳
+      updateNanjuProject(WS, 'p1', { autoClarify: { enabled: true, proxyBudget: 19, pendingQuestionIds: [] } })
+      const afterBudget = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+      expect(afterBudget).toBe(afterOn)
+      // 关闭再次盖新戳
+      setSystemTime(new Date('2026-09-14T00:00:01.000Z'))
+      updateNanjuProject(WS, 'p1', { autoClarify: { enabled: false, proxyBudget: 19, pendingQuestionIds: [] } })
+      const afterOff = (readProjects() as Array<{ autoClarify?: { lastToggledAt?: string } }>)[0]?.autoClarify?.lastToggledAt
+      expect(typeof afterOff).toBe('string')
+      expect(afterOff!).not.toBe(afterOn)
+    } finally { setSystemTime() }
+  })
+})
+
+// ═══════════════ W-I B-c：阶段推进/交付检查点 hook 接线 ═══════════════
+
+describe('W-I B-c：captureCheckpoint hook（阶段推进即工程检查点）', () => {
+  type CheckpointCall = { workspaceSlug: string; projectId: string; sessionId: string; triggerType: string; description: string }
+  const captured: CheckpointCall[] = []
+  const withCheckpointHook = (): PhaseAdvanceHooks => ({
+    ...buildTestHooks(),
+    captureCheckpoint: (input) => { captured.push(input) },
+  })
+
+  /** 与 D8 A1′ 同形的最小 fixture：auto on + quick，产出按阶段达标 */
+  function setupBC(stage: string, opts: { acVerdict?: 'green' | 'red' } = {}): void {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-bc-'))
+    fixtureRoot = dir
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'p1',
+      name: 'B-c 测试项目',
+      mode: 'quick',
+      status: 'active',
+      currentStage: stage,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      sessionId: SESSION_ID,
+      workspaceSlug: WS,
+      autoClarify: { enabled: true, proxyBudget: 20, pendingQuestionIds: [] },
+    }]))
+    if (stage === 'requirements') {
+      mkdirSync(join(dir, 'project-p1', '01_PRD'), { recursive: true })
+      writeFileSync(join(dir, 'project-p1', '01_PRD', 'prd.md'),
+        '# 单位换算工具 PRD\n\n## 用户故事\n\n- US-1 用户输入数值完成单位换算\n'.repeat(3))
+    } else if (stage === 'architecture') {
+      mkdirSync(join(dir, 'project-p1', '03_ARCHITECTURE'), { recursive: true })
+      writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'architecture.md'),
+        '# 架构文档\n\nprojectCategory: web-fullstack\n\n## 技术选型\n\n- 纯前端单页应用（原生 JS）\n\n## 环境配置\n\n| 组件 | 版本 |\n|---|---|\n| node | 20 |\n\nprojectEnv: ready\n'.repeat(2) + testArchitectureDoc)
+      writeFileSync(join(dir, 'project-p1', '03_ARCHITECTURE', 'ac-verdict.json'), JSON.stringify({
+        verdict: opts.acVerdict ?? 'green',
+        findings: opts.acVerdict === 'red' ? [{ severity: 'red', evidence: '品类终判与部署形态不符' }] : [],
+        attackerModel: 'glm-4.7',
+        ts: new Date().toISOString(),
+      }))
+    }
+  }
+
+  beforeEach(() => { captured.length = 0 })
+
+  test('普通阶段推进成功 → hook 收到 confirm 检查点请求（含工作区/项目/会话/描述）', () => {
+    setupBC('requirements')
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, withCheckpointHook())
+    expect(advanced).toBe('prototype')
+    expect(captured.length).toBe(1)
+    expect(captured[0]!.triggerType).toBe('confirm')
+    expect(captured[0]!.workspaceSlug).toBe(WS)
+    expect(captured[0]!.projectId).toBe('p1')
+    expect(captured[0]!.sessionId).toBe(SESSION_ID)
+    expect(captured[0]!.description).toContain('阶段推进')
+    expect(captured[0]!.description).toContain('prototype')
+  })
+
+  test('推进进入 coding → triggerType=pre-modify（捕获的是改动前工程内容）', () => {
+    setupBC('architecture', { acVerdict: 'green' })
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, withCheckpointHook())
+    expect(advanced).toBe('coding')
+    expect(captured.length).toBe(1)
+    expect(captured[0]!.triggerType).toBe('pre-modify')
+  })
+
+  test('推进被拒（产出/ac 拦截）→ 不请求检查点（不留假恢复点）', () => {
+    setupBC('architecture', { acVerdict: 'red' })
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['coding'], RESUME, withCheckpointHook())
+    expect(advanced).toBe(null)
+    expect(captured.length).toBe(0)
+  })
+
+  test('未接线（缺省 hook）→ 零副作用，推进仍成功（纯消费器零依赖）', () => {
+    setupBC('requirements')
+    const advanced = consumePhaseAdvanceMarks(SESSION_ID, WS, ['prototype'], RESUME, buildTestHooks())
+    expect(advanced).toBe('prototype')
+    expect(readProjects()[0]?.currentStage).toBe('prototype')
+  })
+
+  test('orchestrator 接线源码断言：hooks 装配注入三段式检查点且失败可见化', () => {
+    const source = readFileSync(new URL('../agent-orchestrator.ts', import.meta.url), 'utf-8')
+    const hooksBlock = source.slice(source.indexOf('private buildPhaseAdvanceHooks('), source.indexOf('v2.4（D7 §1 I2）'))
+    expect(hooksBlock).toContain('captureCheckpoint: (input) => {')
+    expect(hooksBlock).toContain('createProjectCheckpoint(')
+    expect(hooksBlock).toContain('检查点创建失败（不影响阶段推进）')
+    expect(hooksBlock).toContain('阶段检查点未创建')
+  })
+
+  test('IPC 接线源码断言：create-project/create-snapshot/rollback-snapshot 走快照网关', () => {
+    const source = readFileSync(new URL('../nanju-ipc.ts', import.meta.url), 'utf-8')
+    expect(source).toContain('createProjectCheckpoint(')
+    expect(source).toContain('rollbackProjectSnapshot(')
+    expect(source).toContain("'init',")
+    expect(source).not.toContain('return createSnapshot(input.workspaceSlug')
+    expect(source).not.toContain('return rollbackToSnapshot(input.workspaceSlug')
+  })
+})
+
+// ═══════════════ P0-3（L1，2026-09-18）：授权阻塞态显式化（三态拒因） ═══════════════
+// AC 审计 Y-06：GWT 交付门禁拦截时的授权链状态附注（态②在位/无问句常态的呈现路径）
+describe('P0-3/Y-06：交付门禁拦截附带授权链状态', () => {
+  test('gateError 时注入消息含授权链状态（无活跃问句常态显式化——G3b testing 8 轮未登记场景）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({ stage: 'testing' })
+    const base = buildTestHooks()
+    const injected = base.injected
+    // 构造 gateError：checkGwtDeliveryGate 返回拦截理由
+    const marks = consumePhaseAdvanceMarks(SESSION_ID, WS, ['delivered'],
+      { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
+      { ...base, checkGwtDeliveryGate: () => '需要 verdict=pass 的测试报告' })
+    expect(marks).toBeNull() // 未推进
+    const deliveryNotice = injected.find((x) => x.includes('交付被拦截'))
+    expect(deliveryNotice).toBeTruthy()
+    expect(deliveryNotice).toContain('需要 verdict=pass 的测试报告')
+    expect(deliveryNotice).toContain('授权链状态：当前无活跃收口确认问句')
+    expect(deliveryNotice).toContain('testing 阶段登记 0 次')
+  })
+  test('问句在场时 gateError 附注显示态②（在位+剩余时间）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({ stage: 'testing' })
+    mod.setActiveConfirmAsk(WS, 'p1', 'delivered', 'testing')
+    const base = buildTestHooks()
+    const injected = base.injected
+    consumePhaseAdvanceMarks(SESSION_ID, WS, ['delivered'],
+      { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
+      { ...base, checkGwtDeliveryGate: () => '需要 verdict=pass 的测试报告' })
+    const deliveryNotice = injected.find((x) => x.includes('交付被拦截'))
+    expect(deliveryNotice).toContain('收口确认问句在位（目标 → delivered')
+    expect(deliveryNotice).toContain('剩余约')
+    mod.clearActiveConfirmAsk(WS, 'p1')
+  })
+})
+
+
+describe('P0-3：收口问句登记历史与三态拒因诊断', () => {
+  test('登记历史：setActiveConfirmAsk 带 stage 追加历史，getConfirmAskDiagnostics 可观测', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    mod.setActiveConfirmAsk(WS, 'p1', 'coding', 'architecture')
+    const diag = mod.getConfirmAskDiagnostics(WS, 'p1', 'architecture')
+    expect(diag.stageRegisteredCount).toBe(1)
+    expect(diag.active?.expectedTarget).toBe('coding')
+    expect(diag.active?.remainingMs).toBeGreaterThan(0)
+    expect(diag.lastRegistration?.stage).toBe('architecture')
+    expect(diag.lastRegistration?.expectedTarget).toBe('coding')
+    mod.clearActiveConfirmAsk(WS, 'p1')
+  })
+  test('散点确认（无活跃问句）→ notifyDenial 注入三态拒因提示（态①：本阶段登记 0 次）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({}) // requirements 阶段（verify 通过、确认词可命中的既有可跑形态）
+    const notices: string[] = []
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进', 'message', {
+      humanOrigin: true,
+      notifyDenial: (text) => notices.push(text),
+    })
+    expect(notices.length).toBe(1)
+    expect(notices[0]).toContain('推进授权未生效')
+    expect(notices[0]).toContain('无活跃的收口确认问句')
+    expect(notices[0]).toContain('登记 0 次')
+  })
+  test('横幅答案目标不匹配 → notifyDenial 态③（附期望/实际）', async () => {
+    const mod = await import('../nanju-project')
+    mod.__resetConfirmAskLogForTests()
+    mod.clearActiveConfirmAsk(WS, 'p1')
+    setupFixture({}) // requirements 阶段；合法下一阶段=prototype
+    mod.setActiveConfirmAsk(WS, 'p1', 'coding', 'requirements') // 期望目标 coding ≠ 合法下一阶段 prototype → 目标不匹配
+    const notices: string[] = []
+    checkConfirmAdvanceInput(SESSION_ID, WS, '确认，PRD 没问题，继续推进', 'ask-answer', {
+      notifyDenial: (text) => notices.push(text),
+    })
+    expect(notices.length).toBe(1)
+    expect(notices[0]).toContain('期望推进目标与当前阶段不一致')
+    expect(notices[0]).toContain('coding')
+    mod.clearActiveConfirmAsk(WS, 'p1')
   })
 })

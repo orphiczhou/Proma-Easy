@@ -20,6 +20,7 @@
 import type { PromaPermissionMode } from '@proma/shared'
 import type { NanjuGuardStage } from './nanju-project'
 import { verifyPhaseOutput } from './nanju-router-gate'
+import { persistAdvanceCorrection, claimAdvanceCorrectionContinuation } from './nanju-advance-recovery'
 
 /** 编排器副作用注入（eventBus 注入 / GWT 触发 / Todo 收尾——见 agent-orchestrator 薄壳装配） */
 export interface PhaseAdvanceHooks {
@@ -47,6 +48,21 @@ export interface PhaseAdvanceHooks {
   checkGwtDeliveryGate: (workspaceSlug: string, projectId: string) => string | null
   /** 阶段推进 Todo 兜底收尾 */
   finalizePhaseTodos: (sessionId: string) => void
+  /**
+   * W-I B-c：阶段推进成功后的工程检查点（会话快照 + 工程文件快照）。
+   *
+   * 为什么是注入项而不是消费器内直调：本模块保持无 fs/无快照依赖（纯消费器），
+   * 三段式（createSnapshot → captureFileSnapshot → linkFileSnapshot）由接线层（orchestrator）完成。
+   * **缺省不创建**（测试/未接线环境零行为变化）；实现必须自行吞错，不得影响推进。
+   */
+  captureCheckpoint?: (input: {
+    workspaceSlug: string
+    projectId: string
+    sessionId: string
+    /** `pre-modify` = 进入 coding 之前（即将开始改工程）；`confirm` = 其余阶段确认/交付 */
+    triggerType: 'init' | 'pre-modify' | 'confirm'
+    description: string
+  }) => void
 }
 
 // ═══ W22（G 域）：F5 拒收教育闭环 + R1 回炉文案（内部段/纯函数） ═══
@@ -79,19 +95,23 @@ function rejectWithEducationLoop(
 ): number {
   const count = (() => {
     try {
-      const { bumpAdvanceRejectCount } = require('./nanju-project') as typeof import('./nanju-project')
-      return bumpAdvanceRejectCount(workspaceSlug, projectId)
+      const { bumpAdvanceRejectCount, getProjectPendingAdvanceCorrection, getNanjuProject } = require('./nanju-project') as typeof import('./nanju-project')
+      const previous = getProjectPendingAdvanceCorrection(workspaceSlug, projectId)
+      const stage = getNanjuProject(workspaceSlug, projectId)?.currentStage
+      const persistedCount = previous?.fromStage === stage ? previous?.count ?? 0 : 0
+      return Math.max(bumpAdvanceRejectCount(workspaceSlug, projectId), persistedCount + 1)
     } catch {
       return 0
     }
   })()
+  persistAdvanceCorrection(workspaceSlug, projectId, { kind, ...correction, count, message })
   // F5 ③ 防环：教育闭环已达上限 → 转人工提示（不再注入教育/续接——防拒收→注入→续接→再拒收死循环烧 token）
   if (count > ADVANCE_REJECT_EDUCATION_LIMIT) {
     hooks.injectAssistantMessage(
       sessionId,
       '⛔ 推进标记已连续 ' + count + ' 次被拒（自动纠偏闭环已达上限，系统停止继续注入纠偏指令）。'
       + '\n\n请人工介入：查看上述拒收原因（目标合法性/授权/产出校验），与用户确认处理方式后，'
-      + '由用户/调度员按指引重新声明合法推进，或调整项目状态。',
+      + '由用户/调度员按指引修正产出后重新声明合法推进，不得手改阶段状态。\n当前拒因：' + message,
     )
     try {
       const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
@@ -108,6 +128,7 @@ function rejectWithEducationLoop(
   }
   hooks.injectAssistantMessage(sessionId, message)
   // F5 ①：systemInitiated 续接驱动 L1 下一轮（拒收后本轮照常 completeRun，无续接则 L1 看不到拒收）
+  if (!claimAdvanceCorrectionContinuation(workspaceSlug, projectId)) return count
   hooks.sendContinuation(sessionId, message, {
     onGiveUp: () => {
       // F5 ④：续接失败降级——可见注入 + 遥测 + 拒因登记（不静默；下一轮 prompt 消费侧接线后可提示 L1）
@@ -129,14 +150,9 @@ function rejectWithEducationLoop(
         }, projectId)
       } catch { /* 域点失败不影响 */ }
       try {
-        const { setProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
-        setProjectPendingAdvanceCorrection(workspaceSlug, projectId, {
-          kind,
-          target: correction.target,
-          expected: correction.expected,
-          at: new Date().toISOString(),
-          count,
-        })
+        const { getProjectPendingAdvanceCorrection, setProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')
+        const pending = getProjectPendingAdvanceCorrection(workspaceSlug, projectId)
+        if (pending && pending.executionState !== 'cancelled') setProjectPendingAdvanceCorrection(workspaceSlug, projectId, { ...pending, executionState: 'blocked' })
       } catch { /* 登记失败不影响（遥测已有同拍事件） */ }
     },
   })
@@ -211,12 +227,62 @@ export function buildGwtBehaviorFailReworkResumeMessage(
  *   AgentSendInput.humanOrigin 透传（真 UI 人类输入=true）；事件流路径缺省不传
  *   （false——事件流 user 消息实际为工具注入，入口路径已覆盖真用户初始输入）
  */
+export interface CheckConfirmAdvanceOptions {
+  humanOrigin?: boolean
+  /** P0-3：确认词命中但未构成授权时，向 UI 注入三态拒因提示（复用 notice/助手消息
+   * 通道；调用方 orchestrator 接 injectNanjuAssistantMessage）。G3b 实测 7 次文字确认
+   * 无效且仅落日志（×9），授权阻塞态必须显式化。 */
+  notifyDenial?: (text: string) => void
+}
+
+/** P0-3：构建授权阻塞态三态拒因提示文本（数据源=平台既有授权判定路径：活跃收口问句
+ * 登记+10min TTL+目标匹配；期望/实际即问句期望推进目标 vs 当前合法下一阶段）。 */
+function buildConfirmDenialNotice(opts: {
+  workspaceSlug: string
+  projectId: string
+  currentStage: string
+  kind: 'no-active-ask' | 'ask-not-matching' | 'scatter-no-auth'
+  expectedFromAsk?: string
+  harnessExpected?: string | null
+}): string {
+  try {
+    const { getConfirmAskDiagnostics } = require('./nanju-project') as typeof import('./nanju-project')
+    const diag = getConfirmAskDiagnostics(opts.workspaceSlug, opts.projectId, opts.currentStage)
+    const last = diag.lastRegistration
+    const lastText = last
+      ? `上次登记：${last.stage} 阶段 → 目标 ${last.expectedTarget}（${new Date(last.ts).toLocaleString('zh-CN')}，${last.by}）`
+      : '本项目（本次进程内）从未登记过收口确认问句'
+    const lines: string[] = ['🔒 推进授权未生效（当前确认不构成推进授权）']
+    if (opts.kind === 'ask-not-matching' && opts.expectedFromAsk) {
+      // 态③：问句在场但目标不匹配（附期望/实际）
+      lines.push(`原因：活跃收口问句的期望推进目标与当前阶段不一致（期望 → ${opts.expectedFromAsk}，实际合法下一阶段 → ${opts.harnessExpected ?? '未知'}）。请等当前阶段的收口确认问句弹出后再应答。`)
+    } else if (diag.active) {
+      // 态②：已登记未确认（附剩余时间）。注（AC 审计 Y-06）：当前三个调用点的
+      // kind 推导下本分支为防御性代码（no-active-ask/scatter 时 active 必空、
+      // ask-not-matching 时走态③）——态②的常态呈现路径在 GWT 交付拦截的授权状态
+      // 附注（下方 isDeliverFromTesting gateError 分支的 authStateNote）。
+      const remainMin = Math.ceil(diag.active.remainingMs / 60000)
+      lines.push(`原因：收口确认问句已登记但尚未收到有效应答（目标 → ${diag.active.expectedTarget}，剩余有效期约 ${remainMin} 分钟）。请在向导会话弹出「确认·阶段收口」横幅时点确认，或直接回复确认词。`)
+    } else if (diag.lastRegistration) {
+      // 态②另一形态：曾有登记但已消费或超过 10 分钟 TTL 过期
+      lines.push(`原因：收口确认问句不在有效期（已应答消费或超过 10 分钟 TTL）。${lastText}。需要重新触发一次收口确认问句（推进到本阶段产出确认环节时自动弹出）后再确认。`)
+    } else {
+      // 态①：无活跃收口问句（附本阶段登记数+上次登记信息）
+      lines.push(`原因：当前无活跃的收口确认问句（本阶段「${opts.currentStage}」登记 0 次；${lastText}）。散点确认词不构成推进授权——请等待向导流程在阶段产出达标后弹出「确认·阶段收口」问句，或让向导 Agent 重新发起收口确认。`)
+    }
+    lines.push(`登记数据：本阶段登记 ${diag.stageRegisteredCount} 次。授权链口径=阶段收口类问句登记（10 分钟 TTL）+ 确认词应答；中间类确认（如环境安装）不登记、不授权。`)
+    return lines.join('\n')
+  } catch {
+    return '🔒 推进授权未生效：当前无活跃的收口确认问句，本次确认不构成推进授权（详见向导日志）。'
+  }
+}
+
 export function checkConfirmAdvanceInput(
   sessionId: string,
   workspaceSlug: string,
   userText: string,
   source: 'message' | 'ask-answer' = 'message',
-  opts?: { humanOrigin?: boolean },
+  opts?: CheckConfirmAdvanceOptions,
 ): void {
   if (userText.trim() === '') return
   try {
@@ -281,6 +347,15 @@ export function checkConfirmAdvanceInput(
               }, project.projectId)
             } catch { /* 域点失败不影响 */ }
             console.log(`[南大路由] ask-answer 无匹配活跃收口问句（${ask ? '目标不匹配' : installWhitelisted ? 'install-only 横幅白名单豁免' : '无问句'}），不授权（${project.name}）`)
+            // P0-3：拒因提升到 UI（态③目标不匹配/态①无问句；install-only 白名单豁免属
+            // 正常路径不注入拒因提示）
+            if (!installWhitelisted) {
+              opts?.notifyDenial?.(buildConfirmDenialNotice({
+                workspaceSlug, projectId: project.projectId, currentStage: String(project.currentStage),
+                kind: ask ? 'ask-not-matching' : 'no-active-ask',
+                expectedFromAsk: ask?.expectedTarget, harnessExpected,
+              }))
+            }
           }
         } else if (opts?.humanOrigin === true) {
           // I1-②：真 UI 人类消息 + 活跃收口问句绑定（R4-02：散点确认词不授权）
@@ -298,6 +373,12 @@ export function checkConfirmAdvanceInput(
               }, project.projectId)
             } catch { /* 埋点失败不影响 */ }
             console.log(`[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，${project.name}）`)
+            // P0-3（ATK-L-002）：原「不提示」改为显式注入——G3b 实测 testing 8 轮从未
+            // 登记问句、指挥官 7 次文字确认全部无效；仅落日志的拒因必须提升到 UI。
+            opts?.notifyDenial?.(buildConfirmDenialNotice({
+              workspaceSlug, projectId: project.projectId, currentStage: String(project.currentStage),
+              kind: 'scatter-no-auth',
+            }))
           }
         }
         // 其余（source='message' 且 humanOrigin≠true）：send_message/HTTP bridge/事件流
@@ -399,6 +480,21 @@ function checkDeliveryConfirmation(
           at,
         }, project.projectId)
       } catch { /* 埋点失败不影响置位 */ }
+      // #12 satisfaction.marked（PRD §12.4，I-P8）：与 delivery.ack-recorded 同拍发射。
+      // 不做行为推断——verdict 直接来自本次 ack 的确认词；活跃时长 = 从交付问句登记
+      // （challenge.askedAt，交付门禁置位时刻）到用户应答（ack.at）的真实间隔，取不到时按 0 记。
+      try {
+        const { emitQuickEvent, buildSatisfactionPayload } = require('./nanju-quick-events') as typeof import('./nanju-quick-events')
+        const challengeAt = typeof challenge.askedAt === 'string' ? Date.parse(challenge.askedAt) : Number.NaN
+        const ackAt = Date.parse(at)
+        const activeMsSinceStart = Number.isFinite(challengeAt) && Number.isFinite(ackAt) && ackAt >= challengeAt
+          ? ackAt - challengeAt
+          : 0
+        emitQuickEvent(workspaceSlug, project.projectId, 'satisfaction.marked', buildSatisfactionPayload({
+          verdict: 'satisfied',
+          activeMsSinceStart,
+        }) as unknown as Record<string, unknown>)
+      } catch { /* 埋点失败不影响置位 */ }
       console.log(`[南大路由] 交付确认检测：登记 deliveryAck（runId=${reportRunId}，${project.name}）`)
     }
     return
@@ -455,7 +551,7 @@ function readArchitectureAcVerdict(workspaceSlug: string, projectId: string): 'g
 function evaluateAutoConfirmAuthorized(
   workspaceSlug: string,
   project: { projectId: string; mode: string; currentStage: string; autoClarify?: { enabled?: boolean } },
-): { ok: boolean; reason?: string } {
+): { ok: boolean; reason?: string; detail?: string } {
   if (project.autoClarify?.enabled !== true) return { ok: false, reason: 'disabled' }
   if (project.mode !== 'quick') return { ok: false, reason: 'not-quick' }
   const stage = project.currentStage
@@ -470,8 +566,9 @@ function evaluateAutoConfirmAuthorized(
   } catch {
     return { ok: false, reason: 'no-output-path' }
   }
-  if (verifyPhaseOutput(workspaceSlug, project.projectId, stage as import('./nanju-router').PhaseId) !== null) {
-    return { ok: false, reason: 'verify-failed' }
+  const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, stage as import('./nanju-router').PhaseId)
+  if (verifyError !== null) {
+    return { ok: false, reason: 'verify-failed', detail: verifyError }
   }
   if (stage === 'architecture') {
     const verdict = readArchitectureAcVerdict(workspaceSlug, project.projectId)
@@ -538,7 +635,25 @@ hooks: PhaseAdvanceHooks,
           const gateError = hooks.checkGwtDeliveryGate(workspaceSlug, project.projectId)
           if (gateError) {
             console.log(`[南大路由] GWT 交付门禁拦截，不推进: ${gateError}`)
-            hooks.injectAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}`)
+            // P0-3：交付拦截时附带授权链状态（testing 阶段无活跃收口问句的常态显式化
+            //——G3b 实测 8 轮从未登记问句；用户此时手动确认推进也不会生效，提前告知）
+            let authStateNote = ''
+            try {
+              const { getConfirmAskDiagnostics } = require('./nanju-project') as typeof import('./nanju-project')
+              const diag = getConfirmAskDiagnostics(workspaceSlug, project.projectId, 'testing')
+              authStateNote = diag.active
+                ? `\n📋 授权链状态：收口确认问句在位（目标 → ${diag.active.expectedTarget}，剩余约 ${Math.ceil(diag.active.remainingMs / 60000)} 分钟）。`
+                : `\n📋 授权链状态：当前无活跃收口确认问句（testing 阶段登记 ${diag.stageRegisteredCount} 次）——此时聊天框发送确认词不构成推进授权；交付需等待 GWT 验收 verdict=pass 后按向导流程收口。`
+            } catch { /* 诊断失败不阻断拦截提示 */ }
+            hooks.injectAssistantMessage(sessionId, `⚠️ 交付被拦截：${gateError}${authStateNote}`)
+            // P0''（2026-09-28，E2E-Desktop 21:53 停摆根因）：交付拦截此前只注入不驱动——
+            // 调度员 run 已结束（PHASE_ADVANCE 输出后 completeRun），拦截指引无 Agent 消费，
+            // 流程静默停摆。追加 systemInitiated 续接（经 runNanjuGuardContinuation 的
+            // busy 重试/空闲巡检），把「拦截+行动指引」真正送达调度员驱动下一轮。
+            hooks.sendContinuation(
+              sessionId,
+              `交付声明被拦截：${gateError}${authStateNote}\n请按上述指引处理后重新声明推进；若是「测试尚未执行」，下一步行动是输出 <!-- PHASE_ADVANCE: testing --> 触发自动验收测试，全部通过后再声明交付。`,
+            )
           } else {
             // W18 Wave2：交付成功单次写双字段（currentStage=delivered + status=completed
             // 同拍落库）；finishedFirstTime 守门幂等——跨 run 重复 delivered 声明不重复计埋点
@@ -580,6 +695,14 @@ hooks: PhaseAdvanceHooks,
               clearProjectConfirmPending(workspaceSlug, project.projectId)
             } catch { /* 清除失败不影响推进（残留提示无害，下次推进再清） */ }
             hooks.finalizePhaseTodos(sessionId)
+            // W-I B-c：交付确认检查点（会话快照 + 工程文件快照）；实现自行吞错，不影响交付
+            hooks.captureCheckpoint?.({
+              workspaceSlug,
+              projectId: project.projectId,
+              sessionId,
+              triggerType: 'confirm',
+              description: `交付确认：${project.name} → ${newStage ?? 'delivered'}`,
+            })
             // W2 S1 推进点 A：交付清空子步骤（delivered 无子步骤态）并广播。
             // write-then-emit；失败不阻断交付（渲染端 10s 轮询兑底）。
             try {
@@ -670,6 +793,7 @@ hooks: PhaseAdvanceHooks,
               let authSource = ''
               let autoConfirmPassed = false
               let autoBlockReason = ''
+              let autoBlockDetail = ''
               try {
                 const {
                   getConfirmAuthorization, consumeConfirmAuthorization,
@@ -702,6 +826,7 @@ hooks: PhaseAdvanceHooks,
                   autoConfirmPassed = true
                 } else {
                   autoBlockReason = autoVerdict.reason ?? ''
+                  autoBlockDetail = autoVerdict.detail ?? ''
                 }
               }
               if (!advanceAuthorized) {
@@ -715,7 +840,7 @@ hooks: PhaseAdvanceHooks,
                     from_stage: project.currentStage,
                     target: newStage,
                     mode: project.mode,
-                    ...(isAutoProject ? { auto_block_reason: autoBlockReason } : {}),
+                    ...(isAutoProject ? { auto_block_reason: autoBlockReason, auto_block_detail: autoBlockDetail || undefined } : {}),
                   }, project.projectId)
                 } catch { /* 埋点失败不影响拒绝 */ }
                 // W22（F5①/②）：三档文案构建后统一走 rejectWithEducationLoop——注入 +
@@ -742,7 +867,9 @@ hooks: PhaseAdvanceHooks,
                     + '请先 continue_delegation 委派本阶段角色完成产出（产出达标后系统自动确认推进，无需询问用户；'
                     + '环境安装确认为唯一例外，仍需用户横幅应答）；信息不足时调 nanju_clarify_proxy 补完。'
                     + `产出达标后直接输出 <!-- PHASE_ADVANCE: ${newStage} --> 推进标记即可。当前拒因：`
-                    + (autoBlockReason === 'verify-failed' ? '阶段产出未达标' : autoBlockReason) + '。'
+                    + (autoBlockReason === 'verify-failed'
+                      ? '阶段产出未达标：' + (autoBlockDetail || '校验器未返回详细原因；请读取对应阶段产物与校验清单。')
+                      : autoBlockReason) + '。'
                 } else {
                   hardGateMessage =
                     '⚠️ 推进未被授权：阶段推进需要真人确认（或系统指令）才能生效。\n\n'
@@ -794,14 +921,47 @@ hooks: PhaseAdvanceHooks,
                 console.warn('[南大路由] 环境状态置位失败（不阻断验证）:', e instanceof Error ? e.message : String(e))
               }
             }
-            const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage)
+            const checks: import('./nanju-router-gate').GateCheck[] = []
+            const verifyError = verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage, checks)
             if (verifyError) {
+              persistAdvanceCorrection(workspaceSlug, project.projectId, { kind: 'gate-deny', target: newStage, expected: newStage, count: 0, message: verifyError, checks })
               console.log(`[南大路由] 文件验证失败，不推进: ${verifyError}`)
               // 可见化（AC L-002）：校验失败时 PHASE_ADVANCE 不推进，除主进程日志外
               // 向会话注入 assistant 消息，让用户/调度员在 UI 直接看到拦截原因；
               // 不自动续接，待修复后重新声明推进（本轮照常 completeRun）。
               hooks.emitAssistantMessage(sessionId, `⚠️ 阶段推进被拦截：${verifyError}\n产出未达交付标准，请继续修复后重新声明推进。`)
             } else {
+              // #4 prd.confirmed / #5 prototype.confirmed（PRD §12.4，I-P5 归属修正版）：
+              // 归属在本消费器的「推进成功」分支（推进即事实），与 coding.executed/arch.executed 同口径。
+              // - requirements 收口（requirements→prototype）→ #4；
+              // - prototype 收口（prototype→architecture/coding）→ #5。
+              if (project.currentStage === 'requirements' || project.currentStage === 'prototype') {
+                try {
+                  const { emitQuickEvent } = require('./nanju-quick-events') as typeof import('./nanju-quick-events')
+                  emitQuickEvent(workspaceSlug, project.projectId,
+                    project.currentStage === 'requirements' ? 'prd.confirmed' : 'prototype.confirmed', {
+                      project_id: project.projectId,
+                      mode: project.mode,
+                      from_stage: project.currentStage,
+                      to_stage: newStage,
+                      // 产出验证已通过（本分支在 verifyError 为空时进入），此处只报事实
+                      verified: true,
+                    })
+                } catch { /* 埋点失败不影响推进 */ }
+              }
+              // #14 architecture.confirmed（PRD §12.4，I-P8）：与 arch.executed 同拍但语义不同——
+              // arch.executed = 架构师环节交付事实（含环境探测）；architecture.confirmed = 用户/门禁
+              // 对架构产出的确认收口事实（两条各自独立观测，不互为别名）。
+              if (project.currentStage === 'architecture') {
+                try {
+                  const { emitQuickEvent } = require('./nanju-quick-events') as typeof import('./nanju-quick-events')
+                  emitQuickEvent(workspaceSlug, project.projectId, 'architecture.confirmed', {
+                    project_id: project.projectId,
+                    mode: project.mode,
+                    to_stage: newStage,
+                  })
+                } catch { /* 埋点失败不影响推进 */ }
+              }
               // coding.executed 埋点（P1 Sprint A）：coding 阶段推进成功 = 用户已确认的可运行应用交付事实
               // （推进即事实；不用 verifyPhaseOutput 通过后记，避免把重试中的半成品计入）
               if (project.currentStage === 'coding') {
@@ -906,8 +1066,33 @@ hooks: PhaseAdvanceHooks,
                       console.warn('[南大路由] 工程品类判定异常（不阻断推进）:', e instanceof Error ? e.message : String(e))
                     }
                   }
+                  if (newStage === 'coding') {
+                    const { readProjectInfo, getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
+                    if (readProjectInfo(workspaceSlug, project.projectId)?.acceptanceBaselineRequired) {
+                      try {
+                        (require('./nanju-acceptance-baseline') as typeof import('./nanju-acceptance-baseline')).freezeAcceptanceSpecification(
+                          getNanjuProjectDir(workspaceSlug, project.projectId),
+                          `advance:${project.projectId}:${newStage}`,
+                        )
+                      } catch (error) {
+                        const message = `无法冻结编码前验收规格：${error instanceof Error ? error.message : String(error)}`
+                        persistAdvanceCorrection(workspaceSlug, project.projectId, { kind: 'gate-deny', target: newStage, expected: newStage, count: 0, message })
+                        hooks.injectAssistantMessage(sessionId, message)
+                        return null
+                      }
+                    }
+                  }
                   updateNanjuProject(workspaceSlug, project.projectId, { currentStage: newStage })
                   console.log(`[南大路由] ✅ 阶段推进: ${project.name} → ${newStage}`)
+                  // W-I B-c：阶段确认检查点；进入 coding 前一刻属于「即将修改工程」→ pre-modify
+                  // （捕获的是 coding 开始前的工程内容，正是回滚到修复前所需的那份）。
+                  hooks.captureCheckpoint?.({
+                    workspaceSlug,
+                    projectId: project.projectId,
+                    sessionId,
+                    triggerType: newStage === 'coding' ? 'pre-modify' : 'confirm',
+                    description: `阶段推进：${project.name} → ${newStage}`,
+                  })
                   // W22（F5③）：推进成功——拒收防环计数清零（新阶段重新计数）+ 待纠正拒因登记清除
                   try {
                     const { resetAdvanceRejectCount, clearProjectPendingAdvanceCorrection } = require('./nanju-project') as typeof import('./nanju-project')

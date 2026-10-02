@@ -1,0 +1,180 @@
+@startuml
+' DOC-3.3-SEQ4 | v0.3 | 日期: 2026-06-06 | 状态: 终审修正
+' 文档ID: DOC-3.3 | 文件: judge-review-flow.seq.puml
+' 依赖: architecture.md §5, class-diagram.puml v0.5, PRD §9, US-J01/J02
+' 覆盖: 文档提交 → 硬约束逐项检查 → 退回/通过 → 代码提交 → PlantUML一致性校验 → GWT覆盖检查 → 综合判定
+' 参与者: GuideAgent, CodingAgent, JudgeAgent, HardConstraintChecker, SoftConstraintEvaluator, ProjectDocumentSystem
+
+participant GuideAgent
+participant CodingAgent
+participant JudgeAgent
+participant HardConstraintChecker
+participant SoftConstraintEvaluator
+participant ProjectDocumentSystem
+
+== 第一道关: 文档体系审查 ==
+
+GuideAgent -> ProjectDocumentSystem : 触发文档审查
+activate ProjectDocumentSystem
+ProjectDocumentSystem -> JudgeAgent : 提交审查(project-root)
+deactivate ProjectDocumentSystem
+activate JudgeAgent
+
+JudgeAgent -> HardConstraintChecker : executeHardCheck(project-root)
+activate HardConstraintChecker
+
+Note over HardConstraintChecker : 硬约束逐项检查(不可通融)
+
+HardConstraintChecker -> ProjectDocumentSystem : 读取01_PRD/prd.md
+activate ProjectDocumentSystem
+HardConstraintChecker -> HardConstraintChecker : checkPRDCompleteness(prd)
+Note over HardConstraintChecker : ✓ 项目名称?\n✓ 目标用户?\n✓ 核心功能列表?\n✓ 验收标准?
+
+HardConstraintChecker -> HardConstraintChecker : checkGWTExistence(06_TESTS/)
+Note over HardConstraintChecker : ✓ 目录下有.feature文件?\n✓ (feature文件存在性属硬约束\nPRD-GWT对应关系属软约束\n→ 由SoftConstraintEvaluator评估)
+
+alt 快消型
+  Note over HardConstraintChecker : 快消型硬约束仅检查核心项:\nPRD必填项 ✓\nGWT文件存在 ✓\nPlantUML/Sprint Plan/API Spec不检查
+else 长期迭代型
+  HardConstraintChecker -> HardConstraintChecker : checkPlantUMLSyntax(03_ARCHITECTURE/*.puml)
+  Note over HardConstraintChecker : ✓ @startuml/@enduml配对?\n✓ 语法可解析?
+
+  HardConstraintChecker -> HardConstraintChecker : checkAPIEndpoints(04_API_SPEC/api-spec.md)
+  Note over HardConstraintChecker : ✓ 每个端点有Method+Path+Schema?
+
+  HardConstraintChecker -> HardConstraintChecker : checkSprintGranularity(05_PROJECT_PLAN/sprint-plan.md)
+  Note over HardConstraintChecker : ✓ Sprint粒度<=2周?
+
+  HardConstraintChecker -> HardConstraintChecker : checkTeamConfig(05_PROJECT_PLAN/team-config.md)
+  Note over HardConstraintChecker : ✓ 列出激活角色+职责+交付物?
+end
+
+deactivate ProjectDocumentSystem
+
+HardConstraintChecker --> JudgeAgent : HardCheckReport{通过/退回+缺失清单}
+deactivate HardConstraintChecker
+
+alt 硬约束不通过
+  JudgeAgent -> JudgeAgent : verdict("退回")
+  JudgeAgent --> ProjectDocumentSystem : 退回 + 缺失项清单
+  activate ProjectDocumentSystem
+  ProjectDocumentSystem --> GuideAgent : 退回通知
+  deactivate ProjectDocumentSystem
+  activate GuideAgent
+
+  alt 快消型 && 退回次数 < 2
+    Note over GuideAgent : 修复缺失项 → 重新提交
+  else 快消型 && 退回次数 >= 2
+    Note over GuideAgent : 通知用户人工介入
+  else 长期迭代型(不限次数)
+    Note over GuideAgent : 修复缺失项 → 重新提交
+  end
+  deactivate GuideAgent
+
+  deactivate JudgeAgent
+  detach
+
+else 硬约束通过
+  JudgeAgent -> SoftConstraintEvaluator : executeSoftEval(project-root)
+  activate SoftConstraintEvaluator
+
+  Note over SoftConstraintEvaluator : 软约束AI评估\n(快消型: 仅PRD-GWT对应+可读性\n长期型: 全维度)
+
+  SoftConstraintEvaluator -> SoftConstraintEvaluator : evaluateLogicConsistency(prd, arch)
+  Note over SoftConstraintEvaluator : PRD功能 → 架构模块 是否对齐?
+
+  alt 快消型
+    SoftConstraintEvaluator -> SoftConstraintEvaluator : evaluateTestability(prd, features)
+    Note over SoftConstraintEvaluator : 快消型核心: 每个F-xx有GWT Scenario?\n覆盖正常+异常路径?
+
+    SoftConstraintEvaluator -> SoftConstraintEvaluator : evaluateReadability(docs)
+    Note over SoftConstraintEvaluator : 零基础用户能否大致理解?
+  else 长期迭代型
+    SoftConstraintEvaluator -> SoftConstraintEvaluator : evaluateTestability(prd, features)
+    Note over SoftConstraintEvaluator : 每个F-xx有GWT Scenario?\n覆盖正常+异常路径?
+
+    SoftConstraintEvaluator -> SoftConstraintEvaluator : evaluateCompleteness(docs)
+    Note over SoftConstraintEvaluator : 异常场景/边界条件是否被覆盖?
+
+    SoftConstraintEvaluator -> SoftConstraintEvaluator : evaluateReadability(docs)
+    Note over SoftConstraintEvaluator : 零基础用户能否大致理解?(无未解释技术术语)
+  end
+
+  SoftConstraintEvaluator --> JudgeAgent : SoftEvalReport{通过/建议改进/退回}
+  deactivate SoftConstraintEvaluator
+
+  alt 软约束通过
+    JudgeAgent -> JudgeAgent : verdict("通过")
+    JudgeAgent --> ProjectDocumentSystem : 审查通过
+    activate ProjectDocumentSystem
+    ProjectDocumentSystem --> GuideAgent : 通过通知
+    deactivate ProjectDocumentSystem
+    Note over JudgeAgent : 通知编程Agent可开工
+
+  else 软约束不通过
+    JudgeAgent -> JudgeAgent : verdict("退回")
+    JudgeAgent --> ProjectDocumentSystem : 退回 + 具体矛盾点 + 改进建议
+    activate ProjectDocumentSystem
+    ProjectDocumentSystem --> GuideAgent : 退回通知
+    deactivate ProjectDocumentSystem
+    activate GuideAgent
+    Note over GuideAgent : 修复矛盾 → 重新提交硬+软约束
+    deactivate GuideAgent
+  end
+end
+
+deactivate JudgeAgent
+
+== 第二道关: 代码审查(编程Agent提交后) ==
+
+CodingAgent -> JudgeAgent : 提交代码(project-root + 测试报告)
+activate JudgeAgent
+
+JudgeAgent -> HardConstraintChecker : checkCodeClassMatches(code, 03_ARCHITECTURE/*.puml)
+activate HardConstraintChecker
+
+Note over HardConstraintChecker : 代码结构 vs PlantUML逐项对比
+
+HardConstraintChecker -> HardConstraintChecker : 提取代码中所有自定义类定义
+Note over HardConstraintChecker : 判定规则:\n- 不需要import/require → 语言内置类型(跳过)\n- 需要import或外部包提供 → 自定义类(必须匹配)
+
+loop PlantUML中每个类
+  HardConstraintChecker -> HardConstraintChecker : 检查: 代码中是否存在同名类?
+  alt 存在
+    HardConstraintChecker -> HardConstraintChecker : 检查: 属性名+类型是否一致?
+    HardConstraintChecker -> HardConstraintChecker : 检查: 方法签名是否一致?
+  else 不存在
+    Note over HardConstraintChecker : → "规约要求但未实现"
+  end
+end
+
+loop 代码中每个自定义类
+  HardConstraintChecker -> HardConstraintChecker : 检查: PlantUML中是否已定义?
+  alt 未定义
+    Note over HardConstraintChecker : → "未在规约中定义"
+  end
+end
+
+HardConstraintChecker --> JudgeAgent : PlantUML一致性报告
+deactivate HardConstraintChecker
+
+JudgeAgent -> HardConstraintChecker : checkGWTExistence → 测试报告{passed==total?}
+activate HardConstraintChecker
+HardConstraintChecker --> JudgeAgent : 测试全量通过 ✓/✗
+deactivate HardConstraintChecker
+
+alt 全部通过
+  JudgeAgent -> JudgeAgent : verdict("通过")
+  JudgeAgent --> CodingAgent : 代码审查通过 ✓ → 可交付
+
+else 未通过
+  JudgeAgent -> JudgeAgent : verdict("退回")
+  JudgeAgent --> CodingAgent : 退回 + 不一致清单(GWT失败+PlantUML不匹配)
+  activate CodingAgent
+  Note over CodingAgent : 修复代码 → 重新提交
+  deactivate CodingAgent
+end
+
+deactivate JudgeAgent
+
+@enduml

@@ -196,10 +196,30 @@ describe('W8 层一：checkDelegationAgainstStage 匹配矩阵（6 阶段全组�
     expect(result.violatedKeyword).toBe('实现')
   })
 
-  test('大小写不敏感：PrD / ANALYST / Requirements 均命中', () => {
+  test('大小写不敏感：PrD / ANALYST 命中；Requirements 裸词已移除（2c，deny#15 requirements.txt 碰撞）', () => {
     expect(checkDelegationAgainstStage('requirements', { task: 'update the PRD' }).matchKind).toBe('stage')
     expect(checkDelegationAgainstStage('requirements', { task: 'act as ANALYST' }).matchKind).toBe('stage')
-    expect(checkDelegationAgainstStage('requirements', { task: 'Requirements gathering' }).matchKind).toBe('stage')
+    // 2c（2026-10-01）：裸 'requirements' 移出词表（Python requirements.txt 文件名高频碰撞）——
+    // 'Requirements gathering' 从 stage 降为 unmatched：放行语义不变，仅观测分类变化（W19-C 同模式）。
+    const g = checkDelegationAgainstStage('requirements', { task: 'Requirements gathering' })
+    expect(g.allowed).toBe(true)
+    expect(g.matchKind).toBe('unmatched')
+  })
+
+  test('2c（E2E 番茄 deny#15）：任务书列产出物 requirements.txt 不再命中他阶段词表', () => {
+    // 架构阶段委派，任务书列产出「requirements.txt、setup.sh、README」——纯文件名，无角色声明意图
+    const result = checkDelegationAgainstStage('architecture', {
+      title: '产出物清单核对',
+      task: '按契约清单核对 08_APP 产出物：requirements.txt、setup.sh、README 与 main.py',
+    })
+    expect(result.allowed).toBe(true)
+    // 对照：同一委派若含真实 coding 角色词仍照常拦（去词不削弱拦截能力）
+    const r2 = checkDelegationAgainstStage('architecture', {
+      title: '',
+      task: '你是开发工程师，直接实现应用代码',
+    })
+    expect(r2.allowed).toBe(false)
+    expect(r2.violatedStage).toBe('coding')
   })
 
   test('词边界：ac 不误命中 trace/space；裸 AC 不再判 ac（W18 翻转）', () => {
@@ -241,8 +261,8 @@ describe('W8 层二：AC 攻防识别与模型覆写', () => {
     expect(detectACRole({ task: '复审 06_TESTS 产出并出审计报告' })).toBeNull()
   })
 
-  test('quick 模式 → light 预设（attacker=deepseek-v4-flash / defender=glm-5.3-flash）', () => {
-    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+  test('quick 模式 → light 预设（attacker=deepseek-flash / defender=glm-5.3-flash；W23 a96a045a 改名对齐）', () => {
+    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'quick')).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
   })
 
@@ -268,16 +288,16 @@ describe('W22 M#7：resolveACOverride 第三参 stage（per-phase 覆盖优先�
   })
 
   test('无 attacker 覆盖的阶段（coding/architecture/requirements）→ 节点 taskWeight 对应预设，行为与两参一致', () => {
-    expect(resolveACOverride('attacker', 'quick', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('attacker', 'iterative', 'coding')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-pro' })
-    expect(resolveACOverride('attacker', 'quick', 'requirements')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick', 'requirements')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'quick', 'prototype')).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
   })
 
   test('节点缺失（quick 无 planning）→ 回退全局 preset；不传 stage（两参旧签名）→ 向后兼容不变', () => {
-    expect(resolveACOverride('attacker', 'quick', 'planning')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick', 'planning')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'iterative', 'planning')).toEqual({ channel: 'glm-zhipu', model: 'GLM-5.3' })
-    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-v4-flash' })
+    expect(resolveACOverride('attacker', 'quick')).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
     expect(resolveACOverride('defender', 'iterative')).toEqual({ channel: 'glm-zhipu', model: 'GLM-5.3' })
   })
 
@@ -585,7 +605,7 @@ describe('W8 集成：checkNanjuRouterGate 参数级三层强制', () => {
 // ═══════════════ 修订轮 R1-R3（AC 裁决 20260903 CONVERGED_CERTIFIED 随批） ═══════════════
 
 describe('R1：层三注入与层二识别同源（matchACKeyword 替代 matchKind）', () => {
-  test('混合文本 1：本阶段词+攻击词并存（testing「测试攻击审计」）→ 不注入但覆写', () => {
+  test('混合文本 1：本阶段词+攻击词并存（testing「测试攻击审计」）→ 不注入；W24-8 起 title 无作者标记=纯 AC 委派仍覆写', () => {
     setupProject({ stage: 'testing', mode: 'quick' })
     const input: Record<string, unknown> = {
       title: '测试攻击审计',
@@ -594,7 +614,9 @@ describe('R1：层三注入与层二识别同源（matchACKeyword 替代 matchKi
     expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
     // R1 修复前：matchKind='stage'（「测试」本阶段词先命中）→ 误注入；修复后：AC 词在场 → 同源不注入
     expect(String(input.task)).not.toContain(PATH_CONSTRAINT_MARKER)
-    // 层二独立性保持：攻方覆写（W22 起 testing per-phase 攻击者=glm，与新作者 deepseek 跨族）
+    // W24-8：豁免只认作者标题标记（测试工程师/GWT…）；「测试攻击审计」无标记=纯 AC 委派
+    // → 层二覆写保持（W22 起 testing per-phase 攻击者=glm，与新作者 deepseek 跨族）。
+    // 作者劫持由「标记命中」分支豁免（见 W24-8 describe 的两条红测）。
     expect(input.modelId).toBe('glm-5.3-flash')
     expect(input.channelId).toBe('glm-zhipu')
   })
@@ -842,7 +864,9 @@ describe('W10-V2.1：router-gate 集成（deny 文案与 telemetry）', () => {
     setupProject({ stage: 'requirements' })
     const result = checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agents', {
       items: [
-        { title: '测试工程师', task: '写验收用例' },
+        // Task 8（标题降权）后：拒绝面由 task/expectedOutput 判定，title 不再承载拒证——
+        // 原样本拒证在 title（'测试工程师'），改为 task 内含他阶段词，集成语义不变
+        { title: '测试工程师', task: '编写验收测试用例' },
         { title: '助手', task: '把这个工具做出来' },
       ],
     })
@@ -1202,5 +1226,266 @@ describe('W19-C：E2E 9 连拒实测样本重放（telemetry-e2e-w18-验收2 逐
     expect(result).toBeNull()
     const events = readTelemetryEvents()
     expect(events.filter((e) => e.eventType === 'delegate.guard.stage-deny')).toHaveLength(0)
+  })
+})
+// ===== W24-8：作者委派豁免（AC 词内嵌不劫持作者渠道）=====
+
+describe('W24-8 层二覆写·作者委派豁免', () => {
+  test('红测：需求分析师作者委派（任务内嵌 AC 攻防模板）→ 渠道不被覆写为攻击者', () => {
+    setupProject({ stage: 'requirements', mode: 'quick' })
+    const input: Record<string, unknown> = {
+      title: '需求分析师：语音输入法 PRD',
+      task: '你是需求分析师。与用户对话收集需求，产出 PRD。\n\n## AC 对抗审计\n你是【攻击者】，尽最大努力攻击这份 PRD……攻击完成后由【防御者】裁决……',
+      channelId: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+    }
+    expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
+    // 作者渠道保持（deepseek-v4-pro 是配置的 requirements 作者），不被劫持为 light 攻击者 deepseek-flash
+    expect(input.modelId).toBe('deepseek-v4-pro')
+    const events = readTelemetryEvents()
+    const override = events.find((e) => e.eventType === 'delegate.guard.ac-override')
+    expect(override?.payload.skipped).toBe('stage-author-bundle')
+  })
+
+  test('对照：纯 AC 委派（不含本阶段词）仍覆写（quick/testing per-phase glm 攻击者）', () => {
+    setupProject({ stage: 'testing', mode: 'quick' })
+    const input: Record<string, unknown> = {
+      title: '攻击者复审：验证修复',
+      task: '攻击者复审 GWT 修复是否闭合',
+      channelId: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+    }
+    expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
+    expect(input.modelId).toBe('glm-5.3-flash')
+    expect(input.channelId).toBe('glm-zhipu')
+  })
+
+  test('红测：架构师作者委派（GLM-5.3）带内嵌 AC → 保持 GLM-5.3（E2E 实测被劫持场景）', () => {
+    setupProject({ stage: 'architecture', mode: 'quick' })
+    const input: Record<string, unknown> = {
+      title: '架构师：语音输入法架构文档与环境探测',
+      task: '你是架构设计师……## AC 对抗审计（攻击者模板）……攻击……防御者裁决……',
+      channelId: 'glm-zhipu',
+      modelId: 'GLM-5.3',
+    }
+    expect(checkNanjuRouterGate('test-ws', 'session-1', 'delegate_agent', input)).toBeNull()
+    expect(input.modelId).toBe('GLM-5.3')
+    expect(input.channelId).toBe('glm-zhipu')
+  })
+})
+
+// ═══════════════ Task 8（2026-09-20，Phase1 加固）：门禁按实际操作判断 ═══════════════
+// 样本来源：workspace-1786847832507/_telemetry/events-2026-09.jsonl 中
+// projectId=真流程e2e-剪贴板历史 的 19 条 delegate.guard.stage-deny +
+// 27 条 router.gate.unbound-write-deny（事件级人工标注见 execution/delegate/report.md）。
+
+describe('Task 8 正样本：合法引用不被当新阶段施工（stage-deny 误拦类修复）', () => {
+  test('SD-4 重放：architecture「根据 PRD 和原型，产出精简架构文档」→ 放行（stage，引用词不再触发 prototype ROLE deny）', () => {
+    const result = checkDelegationAgainstStage('architecture', {
+      title: '架构师：剪贴板历史',
+      task: '你是架构师。你是架构设计师。根据 PRD 和原型，产出精简架构文档（以完整说明交付与验证方式）。',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('SD-5 重放：architecture「根据 PRD 与既有 UX 产出（可交互 HTML），产出精简架构」→ 放行', () => {
+    const result = checkDelegationAgainstStage('architecture', {
+      task: '你是架构设计师。根据 PRD 与既有 UX 产出（可交互 HTML），产出精简架构文档。',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('SD-1 重放：requirements 提「Python 技术栈可用」→ 放行（裸「技术」移出 architecture ROLE）', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '目标形态：Linux/X11 桌面程序（Python 技术栈可用，本机 python3/xclip 就绪）。请完成需求调研并收集需求。',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+
+  test('护栏：architecture 本阶段词不削弱（架构/技术选型/环境配置仍命中）', () => {
+    expect(checkDelegationAgainstStage('architecture', { task: '完成技术选型并产出架构文档' }).matchKind).toBe('stage')
+    expect(STAGE_ROLE_KEYWORDS.architecture).not.toContain('技术')
+    expect(STAGE_OUTPUT_KEYWORDS.architecture).toContain('技术选型')
+  })
+})
+
+describe('Task 8 反样本：真实越界仍阻塞（deny 侧不松动）', () => {
+  test('SD-11..15 重放：architecture 阶段委派「开发工程师—编码落地」（title+task 同为 coding）→ deny', () => {
+    const result = checkDelegationAgainstStage('architecture', {
+      title: '开发工程师 — 剪贴板历史编码落地',
+      task: '你是开发工程师。你是编码工程师。根据 PRD、总体设计与工程契约，在 08_APP 内落地真实可运行的剪贴板历史工具产品代码。',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+  })
+
+  test('标题降权不产生漏放：title「需求分析师」掩护 task 产出动作 → 仍 deny（task 权重决定拒绝）', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      title: '需求分析师',
+      task: '按 PRD 生成应用代码并跑通主流程',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('other-stage')
+    expect(result.violatedStage).toBe('coding')
+  })
+
+  test('借审计名义改代码仍阻塞：requirements「review 架构并实现应用」→ deny（既有语义保持）', () => {
+    const result = checkDelegationAgainstStage('requirements', { task: 'review 架构并实现应用' })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('architecture')
+  })
+
+  test('引用豁免不豁免真产出：requirements「根据原型生成界面稿」→ deny（下游 OUTPUT+强动词仍拦）', () => {
+    // 「原型」是引用（豁免），但「生成界面稿」是 prototype 真产出——步骤2 ROLE 子串「界面」
+    // （「界面稿」是其子串）与 2.5 OUTPUT 守卫均照常拒绝；关键词取键序首命中词
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '根据原型生成界面稿，覆盖首屏交互',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('prototype')
+    expect(['界面', '界面稿']).toContain(result.violatedKeyword!)
+  })
+
+  test('引用豁免不可构造绕过：requirements「直接按开发方案编写代码」→ deny（「按」非引用标记，第二出现计违规）', () => {
+    // 攻击样本：把「开发」伪装成引用宾语（「按开发方案」）——出现级判定只豁免紧邻标记的那次出现
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '直接按开发方案编写完整应用代码',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('coding')
+  })
+})
+
+describe('Task 8 硬化：CJK 插空格/换行分词不能改变授权结果', () => {
+  test('requirements「评审通过后再开 发 对应功能模块」→ 插空格仍 deny（coding，拆词不绕过）', () => {
+    // 隔离样本：唯一拒证是被插空的「开发」（无其他连续违规词）——修复前 includes 漏放，修复后命中
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '先完成评审结论汇总，再开 发 对应功能模块',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('coding')
+    expect(result.violatedKeyword).toBe('开发')
+  })
+
+  test('requirements「对照 PRD 需求，编 写 测 试 场 景」→ 插空格仍 deny（testing）', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      task: '对照 PRD 需求，编 写 测 试 场 景 清单',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('testing')
+  })
+
+  test('引用豁免同样抗分词：「根据 PRD 和原 型，产出精简架构文档」→ 放行（不因分词改变结果）', () => {
+    const result = checkDelegationAgainstStage('architecture', {
+      task: '根据 PRD 和原 型，产出精简架构文档。',
+    })
+    expect(result.allowed).toBe(true)
+  })
+})
+
+describe('Task 8 标题降权：标题仅作描述，不与实际任务同权重', () => {
+  test('标题单独命中他阶段词（task 干净）→ 不拒绝（按辅助类放行并注入约束）', () => {
+    const result = checkDelegationAgainstStage('requirements', {
+      title: 'UX 顾问复核记录',
+      task: '整理各阶段结论与经验规约为摘要',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('unmatched')
+  })
+
+  test('标题声明本阶段角色 + task 为辅助动作 → 仍按本阶段放行（放行面不收紧）', () => {
+    const result = checkDelegationAgainstStage('prototype', {
+      title: 'UX 顾问',
+      task: '先只读浏览用户故事清单并列出问题清单',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('stage')
+  })
+})
+
+describe('2a（2026-09-28 用户裁决）：phase.role 显式标记豁免他阶段词扫描', () => {
+  // E2E-Desktop 2026-09-28 21:35/21:36 两次真实误拦样本原文片段（14/14 中的 #13/#14）
+  const testerTask = '你是测试工程师（phase.role: tester）。对已交付的桌面便签工具做独立核验与真实验收。'
+    + '人工清单项（托盘菜单视觉、置顶 z 序观感、拖拽手感）按架构测试规范用环境证据替代核查。'
+
+  test('E2E 真实样本：testing + phase.role: tester + 引用「视觉」「架构」→ 豁免放行并带标记', () => {
+    const result = checkDelegationAgainstStage('testing', { title: '测试工程师：桌面便签工具独立核验与验收（tester）', task: testerTask })
+    expect(result.allowed).toBe(true)
+    expect(result.roleExempt).toBe(true)
+    expect(result.matchKind).toBe('stage') // task 含「测试/验收」本阶段词 → ③ 放行
+  })
+
+  test('六角色全映射：标记角色=当前阶段 → 均豁免（他阶段词不拦）', () => {
+    const cases: Array<[Stage, string, string]> = [
+      ['requirements', 'requirement-analyst', '根据视觉稿与架构说明做需求梳理'],
+      ['prototype', 'ux-advisor', '对照测试反馈与架构约束做原型'],
+      ['architecture', 'architect', '统筹开发与测试的技术选型与架构'],
+      ['planning', 'engineering-manager', '排期覆盖开发与测试的规划'],
+      ['coding', 'fullstack-developer', '实现并测试索引页'],
+      ['testing', 'test-engineer', '按架构测试规范跑测试'],
+    ]
+    for (const [stage, role, tail] of cases) {
+      const result = checkDelegationAgainstStage(stage, { title: '', task: `你是角色（phase.role: ${role}）。${tail}` })
+      expect(result.allowed).toBe(true)
+      expect(result.roleExempt).toBe(true)
+    }
+  })
+
+  test('伪标记：声明 tester 却只有产出动作与下游 OUTPUT 词、无 testing 本阶段词 → 强动词兜底仍拒', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: tester\ndevelop the index.html 应用代码',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.denialKind).toBe('strong-verb')
+  })
+
+  test('多标记歧义 → fail-closed 不豁免（他阶段词照常拦）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: tester\nphase.role: architect\n做架构评审',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('architecture')
+  })
+
+  test('角色与当前阶段不匹配 → 不豁免（coding 阶段声明 test-engineer + prototype 词被拦）', () => {
+    const result = checkDelegationAgainstStage('coding', {
+      title: '',
+      task: 'phase.role: test-engineer\n做一个原型 视觉稿',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('prototype')
+  })
+
+  test('未知角色 → fail-closed 不豁免', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: hacker\n做一个原型',
+    })
+    expect(result.allowed).toBe(false)
+  })
+
+  test('标题里的 phase.role 不豁免（Task 8 标题降权：标题声明既不拒绝也不豁免）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: 'phase.role: tester 的人',
+      task: '做一个原型 视觉稿',
+    })
+    expect(result.allowed).toBe(false)
+    expect(result.violatedStage).toBe('prototype')
+  })
+
+  test('豁免不含本阶段词且无强动词的边缘文本 → unmatched 放行 + roleExempt 标记（可观测）', () => {
+    const result = checkDelegationAgainstStage('testing', {
+      title: '',
+      task: 'phase.role: tester\n汇总环境证据',
+    })
+    expect(result.allowed).toBe(true)
+    expect(result.matchKind).toBe('unmatched')
+    expect(result.roleExempt).toBe(true)
   })
 })

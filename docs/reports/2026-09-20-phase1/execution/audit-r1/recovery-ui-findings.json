@@ -1,0 +1,169 @@
+{
+  "audit": "recovery-ui-r1",
+  "timestamp": "2026-09-20T06:16:00Z",
+  "baseline": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+  "scope": ["Task 2: 回滚四层透传+UI结论", "Task 3: 中断后首次打开"],
+  "filesAudited": [
+    "packages/shared/src/types/nanju-recovery.ts",
+    "apps/electron/src/preload/index.ts",
+    "apps/electron/src/main/lib/nanju-ipc.ts",
+    "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+    "apps/electron/src/main/lib/nanju-snapshot.ts",
+    "apps/electron/src/main/lib/nanju-file-snapshot.ts",
+    "apps/electron/src/renderer/components/nanju/guide/GuidePanel.tsx",
+    "apps/electron/src/renderer/components/nanju/guide/StageNodeDetail.tsx",
+    "apps/electron/src/renderer/components/nanju/guide/useNanjuGuideData.ts",
+    "apps/electron/src/renderer/components/nanju/NanjuToast.tsx",
+    "apps/electron/src/main/lib/nanju-project-snapshots.test.ts",
+    "apps/electron/src/renderer/components/nanju/useNanjuDelegationToast.test.ts"
+  ],
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "yellow",
+      "title": "partial 恢复后打开新会话但无差异化提示",
+      "files": [
+        "apps/electron/src/renderer/components/nanju/guide/GuidePanel.tsx:268",
+        "apps/electron/src/renderer/components/nanju/guide/StageNodeDetail.tsx:80-96"
+      ],
+      "evidence": {
+        "openSession_condition": "result.activeSessionId && result.status !== 'failed'",
+        "toast_condition": "result.ok && result.status === 'restored'",
+        "partial_status_behavior": "status=partial时：toast不出现，但openSession仍被调用（因status!=='failed'）",
+        "backend_return_partial": "ok=false, status='partial'，rollbackProjectSnapshot返回的result含activeSessionId"
+      },
+      "analysis": "条件A（toast）要求status==='restored'；条件B（openSession）只要求status!=='failed'。当status='partial'时，条件A为false（toast不出现），条件B为true（会话被打开）。用户看到：浮层内错误消息+UI切换到新fork会话，但没有Toast告知发生了什么。",
+      "recommendation": "将openSession条件改为result.status==='restored'，与toast条件对齐；或为partial增加专门提示（Toast+不自动切换会话）",
+      "testEvidence": "nanju-project-snapshots.test.ts:340-350：expect(result.ok).toBe(false); expect(result.status).toBe('partial'); activeSessionId在partial时仍被设置"
+    },
+    {
+      "id": "F2",
+      "severity": "yellow",
+      "title": "Toast显示后端原始消息，对普通用户过长且含内部术语",
+      "files": [
+        "apps/electron/src/renderer/components/nanju/NanjuToast.tsx:76",
+        "apps/electron/src/renderer/components/nanju/guide/StageNodeDetail.tsx:96"
+      ],
+      "evidence": {
+        "toastCall": "showNanjuToast('rollback', { text: result.message })",
+        "toastImpl": "const text = opts.text ?? NANJU_TOAST_TEXT[kind]; opts.text被传入则用它",
+        "backend_message_restored": "已恢复会话、工程文件与阶段；恢复前版本已保存为快照X。请重新验收后交付。{fileRestore.userMessage}",
+        "default_hardcoded": "已经回到之前的版本了，一切都在。要继续的话随时告诉我。"
+      },
+      "analysis": "opts.text被传入（result.message），Toast确实显示后端消息。但restored的后端消息含快照ID等内部术语，对普通用户不够友好。建议在restored成功时使用面向用户的简洁文案（如buildRollbackSuccessToastText的描述部分），文件恢复详情保留在StageNodeDetail内联显示。",
+      "recommendation": "restored成功时Toast使用简洁用户文案，失败/partial用内联错误消息；或按result.message长度决定是否截断",
+      "testEvidence": "useNanjuDelegationToast.test.ts:111 仅测试常量值，未测试实际显示内容"
+    },
+    {
+      "id": "F3",
+      "severity": "yellow",
+      "title": "forkAgentSession后isBusy检查的时序竞态",
+      "files": [
+        "apps/electron/src/main/lib/nanju-project-snapshots.ts"
+      ],
+      "evidence": {
+        "code": "const resumed = await forkAgentSession({ sessionId: target.forkedSessionId })\nif (ports.isBusy()) return failed('保存恢复点期间有会话启动...', preId)",
+        "returned_result": "failed()返回值的activeSessionId为null，resumed未被使用"
+      },
+      "analysis": "forkAgentSession创建fork并激活（Pi runtime）；若激活触发了isAgentSessionActive=true，则紧接着的isBusy()返回true。此时resumed已创建但未被跟踪（failed()不含resumed.id），产生孤儿fork会话。锁在finally中释放，项目状态未改变。",
+      "recommendation": "在forkAgentSession之前先检查isBusy()；或者forkAgentSession本身不应触发busy状态（需验证Pi runtime的session activation语义）",
+      "testEvidence": "nanju-project-snapshots.test.ts未覆盖此竞态场景"
+    },
+    {
+      "id": "F4",
+      "severity": "yellow",
+      "title": "recoverBeforeProjectOpen同步I/O在关键路径（项目列表/详情/向导图）",
+      "files": [
+        "apps/electron/src/main/lib/nanju-ipc.ts:recoverBeforeProjectOpen",
+        "apps/electron/src/main/lib/nanju-project-snapshots.ts:getProjectRecoveryBlock"
+      ],
+      "evidence": {
+        "isRecoveryWorkspaceBusy": "调用listAgentSessions()——读取每个会话的JSON元数据文件",
+        "calledFrom": "nanju:list-projects（列表页）, nanju:get-project（详情）, nanju:get-project-stage（向导图）",
+        "getProjectRecoveryBlock": "每次调用readJsonFileSafe读_project-recovery.json（对每个项目）",
+        "projectCount": "项目数量增长时O(n)次同步磁盘读取"
+      },
+      "analysis": "每次项目列表加载、详情查看或向导图打开，都会对每个项目调用recoverBeforeProjectOpen。isRecoveryWorkspaceBusy调用listAgentSessions()对每个活跃会话读磁盘；getProjectRecoveryBlock读_project-recovery.json。nanju:get-guide-progress也会触发此路径（通过nanju:get-project-stage→recoverBeforeProjectOpen）。",
+      "recommendation": "将recoverBeforeProjectOpen结果缓存（TTL 5s）；只在用户主动打开项目时检查，不在列表轮询中调用",
+      "testEvidence": "现有测试未测量IPC handler的性能开销"
+    },
+    {
+      "id": "F5",
+      "severity": "yellow",
+      "title": "Toast集成测试缺失条件守卫覆盖",
+      "files": [
+        "apps/electron/src/renderer/components/nanju/useNanjuDelegationToast.test.ts:111"
+      ],
+      "evidence": {
+        "testCode": "expect(NANJU_TOAST_TEXT.rollback).toBe('已经回到之前的版本了，一切都在...')\nexpect(NANJU_TOAST_DURATION_MS.rollback).toBe(4000)",
+        "actualCallSite": "StageNodeDetail.tsx: if (result.ok && result.status === 'restored') showNanjuToast('rollback', {text: result.message})",
+        "missingCoverage": "条件守卫(result.status==='restored')的toast行为未测试；partial/failed/restored三种状态的分流未覆盖"
+      },
+      "analysis": "测试验证了NANJU_TOAST_TEXT.rollback常量值，但没有测试StageNodeDetail.handleRollback的条件守卫。实际条件'ok&&status==='restored'决定了toast是否出现，测试未覆盖三种status的分支。",
+      "recommendation": "新增集成测试：mock IPC返回三种status，验证toast是否出现及显示内容",
+      "testEvidence": "useNanjuDelegationToast.test.ts:108-120仅测试常量"
+    },
+    {
+      "id": "F6",
+      "severity": "green",
+      "title": "新用户措辞基本适当",
+      "files": [
+        "apps/electron/src/renderer/components/nanju/NanjuToast.tsx"
+      ],
+      "evidence": {
+        "rollback_success": "已经回到之前的版本了，一切都在。要继续的话随时告诉我。",
+        "rollback_error": "刚才的修改没有成功，我已经帮你回到上一个正常版本，你的内容没有丢失。我们换个思路试试？"
+      },
+      "analysis": "两条消息均面向普通用户，口语化、清晰，'一切都在'传达了文件未丢失的安心，'内容没有丢失'明确消除了用户的顾虑。措辞适当。",
+      "recommendation": "无立即行动项。建议在F1修复后，确认partial场景有合适的差异化消息",
+      "testEvidence": "N/A"
+    },
+    {
+      "id": "F7",
+      "severity": "green",
+      "title": "忙碌时恢复入口保留，符合要求",
+      "files": [
+        "apps/electron/src/main/lib/nanju-project-snapshots.ts:getProjectRecoveryBlock",
+        "apps/electron/src/main/lib/nanju-ipc.ts:recoverBeforeProjectOpen"
+      ],
+      "evidence": {
+        "busyReturn": "返回'工程正在恢复，请等待恢复结束后继续。'",
+        "renderedIn": "GuidePanel.noticeBar: {data.project?.recoveryMessage && <NoticeBar...>}",
+        "projectListReturn": "nanju:list-projects对每个项目附加recoveryMessage"
+      },
+      "analysis": "isRecoveryWorkspaceBusy检测到活跃会话时，recoverBeforeProjectOpen返回阻塞消息，通过recoveryMessage字段在项目列表、详情和向导图中展示'工程正在恢复'提示。用户无法发起新的恢复，但能看到项目存在并等待恢复，符合'UI失败不会失去恢复前入口'的要求。",
+      "recommendation": "无立即行动项",
+      "testEvidence": "nanju-project-snapshots.test.ts:309：expect(busy.status).toBe('failed')，busy时返回failed而非crash"
+    },
+    {
+      "id": "F8",
+      "severity": "green",
+      "title": "IPC四层类型一致性正确",
+      "files": [
+        "packages/shared/src/types/nanju-recovery.ts",
+        "apps/electron/src/preload/index.ts:9,1317",
+        "apps/electron/src/main/lib/nanju-ipc.ts"
+      ],
+      "evidence": {
+        "sharedType": "ProjectRecoveryResult{ok,status,message,activeSessionId,restoredSnapshotId,preRestoreSnapshotId,fileRestore}",
+        "preloadImport": "import type { ProjectRecoveryResult } from '@proma/shared'",
+        "preloadReturn": "nanjuRollbackSnapshot: Promise<ProjectRecoveryResult>",
+        "ipcHandler": "rollbackProjectSnapshot返回ProjectSnapshotRollbackResult extends ProjectRecoveryResult"
+      },
+      "analysis": "shared定义类型，preload正确导入并用作返回类型，main IPC handler返回子类型（兼容），renderer接收时使用ProjectRecoveryResult。四层IPC类型一致性正确。",
+      "recommendation": "无立即行动项",
+      "testEvidence": "nanju-project-snapshots.test.ts:280-290：验证了完整恢复的ok/status/activeSessionId/fileRestore字段"
+    }
+  ],
+  "summary": {
+    "total": 8,
+    "red": 0,
+    "yellow": 5,
+    "green": 3,
+    "p1_fixes": ["F1"],
+    "p2_fixes": ["F4"],
+    "p3_fixes": ["F3"],
+    "p4_fixes": ["F5"],
+    "low_fixes": ["F2"]
+  }
+}

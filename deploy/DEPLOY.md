@@ -27,11 +27,13 @@ cp $DEV/app.asar $DEV/app.asar.bak-v<旧版本>-$(date +%Y%m%d-%H%M)
 cp $SRC/app.asar $DEV/app.asar
 rm -rf $DEV/app.asar.unpacked-staging
 cp -r $SRC/app.asar.unpacked $DEV/app.asar.unpacked
+# W23（v0.17.115）起：内置模型矩阵 json 随发版同步（换包脚本必须带上）
+cp $SRC/nanju-model-config.json $DEV/nanju-model-config.json
 ```
 
 ## 三、坑清单（每条都实测踩过）
 
-1. **外置 model-config 覆盖包内配置**：`$DEV/resources/nanju-model-config.json` 在 asar 外、运行时优先——改模型矩阵必须**两份同步**（包内 apps/electron/resources/ + 外置实例）。
+1. **外置 model-config 覆盖包内配置（W23 起策略变更）**：`$DEV/resources/nanju-model-config.json` 在 asar 外、运行时优先。**W23（v0.17.115）起废除「直改实例外置 json 热修矩阵」惯例**：矩阵变更只走两条路——①发版随包（换包脚本同步该 json，见 §二）；②实例级调整一律走设置界面「南大向导·模型配置」页（写用户数据目录 `~/.proma-dev/nanju-model-config-override.json`，保存即生效无需重启）。不再手改外置 json（历史坑：与仓库 builtin 两份漂移、热修后忘同步导致静默旧值）。
 2. **DISPLAY 换号**：xrdp 会话重连后 display 可能从 :10.0 换到 :11——启动失败先查 `ls /tmp/.X*-unix/` 与 `xdpyinfo`。
 3. **陈旧 SingletonLock**：异常退出后 `~/.config/Proma-dev/SingletonLock` 残留会静默拒启——启动前清理三件套（Lock/Socket/Cookie）。
 4. **CDP 需要 allow-origins**：新 Chromium 拒绝无白名单的 ws 连接——启动必须带 `--remote-allow-origins='*'`（start-dev.sh 已内置 `--remote-debugging-port=9224`）。

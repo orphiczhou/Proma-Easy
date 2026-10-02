@@ -10,8 +10,9 @@
  * - 预览面板由 Harness 代码自动打开（文件监听 → IPC 通知）
  */
 
+import { resolveCodingOutputPath } from './nanju-engineering-contract'
 import { findNanjuProjectBySession } from './nanju-router-gate'
-import { assertACFamilyDiversity, getPhaseNode, resolveACActors, type PhaseId, type PhaseNode } from './nanju-router'
+import { channelFamily, assertACFamilyDiversity, getPhaseNode, resolveACActors, type PhaseId, type PhaseNode } from './nanju-router'
 import {
   buildCategoryGuideLines,
   resolveProjectCategoryForCoding,
@@ -21,6 +22,8 @@ import type { ProjectCategory, ProjectCategorySource } from './nanju-project'
 import { PHASE_TODO_PREFIX } from '@proma/shared'
 import { getNanjuProjectDir } from './nanju-project'
 import type { Channel } from '@proma/shared'
+import { loadNanjuModelConfig } from './nanju-model-config'
+import { computeNanjuModelHealth, recommendEndpointReplacement, type NanjuChannelSnapshot } from './nanju-model-health'
 import { join } from 'node:path'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -33,6 +36,121 @@ const MINIMAX_M3_PATTERN = /minimax[-_\s]?m3/i
 export interface ResolvedChannelModel {
   channelId: string
   modelId: string
+}
+
+// ===== W23 §六.3：配置级 autofix（渠道现状预检 + 单槽临时替换，不落盘） =====
+
+/** 渠道快照家族归并：字面前缀命中用 channelFamily；UUID 渠道回退 provider 归族
+ *  （minimax UUID 渠道 → family-minimax，与家族标记 'minimax' 同族对齐） */
+function channelSnapshotFamily(channel: Channel): string {
+  const byPrefix = channelFamily(channel.id)
+  if (byPrefix !== channel.id) return byPrefix
+  return channel.provider ? `family-${channel.provider}` : channel.id
+}
+
+/** autofix 三角色替换结果（null = 无需/无法替换，保持原值） */
+interface ConfigAutofixResult {
+  author: { channel: string; model: string } | null
+  attacker: { channel: string; model: string } | null
+  defender: { channel: string; model: string } | null
+}
+
+const EMPTY_AUTOFIX: ConfigAutofixResult = { author: null, attacker: null, defender: null }
+
+/**
+ * W23 §六.3：构建 L1 委派指令前对当前阶段 author/attacker/defender 端点预检
+ * （electron 可用性探测 + listChannels 快照，模式照抄 resolveMinimaxM3Actor）；
+ * 失效 → recommendEndpointReplacement 单槽替换（仅本次 prompt，不落盘）+
+ * `model.config-autofix` 遥测（slot/from/to/reason）。
+ *
+ * 硬约束守卫（家族拓扑保持）：autofix 只接受与原端点【同家族】的替换（改名/同族
+ * 同档位场景——W23 触发实证即厂商改名）；跨族候选（规格兑底/任意 enabled）放弃并
+ * warn 降级原值。同族替换不改变 defender≠作者族、attacker≠defender 族、
+ * coding↔testing 跨族的拓扑（家族断言在 buildL2TaskWithAC 内执行，跨族替换可能
+ * 导致 prompt 构建抛错；跨族重构属设置界面 recommend+save 的职责，不在热路径做）。
+ * 渠道快照不完整的观察视角（测试 mock、部分渠道读取异常）也天然安全：异族端点
+ * 在同族约束下无替换即降级原值，不会误换。
+ * 任何异常都不得阻断 prompt 构建（try/catch 降级原值 + console.warn）。
+ */
+export function applyConfigAutofix(
+  workspaceSlug: string,
+  projectId: string | undefined,
+  phase: PhaseNode,
+): ConfigAutofixResult {
+  try {
+    // electron 可用性探测（先例 resolveMinimaxM3Actor）：测试环境（bun）解析到真实
+    // npm 包时只导出安装路径字符串 → 降级零注入
+    const electronModule = require('electron') as unknown
+    if (typeof electronModule !== 'object' || electronModule === null) return EMPTY_AUTOFIX
+    const { listChannels } = require('./channel-manager') as typeof import('./channel-manager')
+    const snapshots: NanjuChannelSnapshot[] = listChannels().map((ch) => ({
+      channelId: ch.id,
+      family: channelSnapshotFamily(ch),
+      models: ch.models.map((m) => ({ modelId: m.id, enabled: m.enabled })),
+    }))
+    const config = loadNanjuModelConfig()
+    const health = computeNanjuModelHealth(config, snapshots)
+    const statusOf = (slot: string) => health.slots.find((s) => s.slot === slot)?.status ?? 'ok'
+
+    const weight = phase.taskWeight ?? 'medium'
+    const actors = resolveACActors(phase)
+    const targets: Array<{
+      role: keyof ConfigAutofixResult
+      slot: string
+      channelId: string
+      modelId: string
+    }> = [
+      { role: 'author', slot: `phases.${phase.id}.primary`, channelId: phase.channel, modelId: phase.model },
+      {
+        role: 'attacker',
+        slot: phase.acAttackerChannel ? `phases.${phase.id}.acAttacker` : `acPresets.${weight}.attacker`,
+        channelId: actors.attacker.channel,
+        modelId: actors.attacker.model,
+      },
+      {
+        role: 'defender',
+        slot: phase.acDefenderChannel ? `phases.${phase.id}.acDefender` : `acPresets.${weight}.defender`,
+        channelId: actors.defender.channel,
+        modelId: actors.defender.model,
+      },
+    ]
+
+    // 家族拓扑守卫基准（替换前有效值；替换只在失效端点上发生，有效角色家族不变）
+    const snapshotFamilyOf = (channelId: string) =>
+      snapshots.find((s) => s.channelId === channelId)?.family ?? channelFamily(channelId)
+    const result: ConfigAutofixResult = { author: null, attacker: null, defender: null }
+    for (const target of targets) {
+      if (statusOf(target.slot) === 'ok') continue
+      const replacement = recommendEndpointReplacement(target.slot, target.channelId, target.modelId, config, snapshots)
+      if (!replacement) {
+        console.warn(`[nanju-autofix] ${target.slot}（${target.channelId}:${target.modelId}）失效且无可用替换，保持原值（委派将走既有 fallback 链）`)
+        continue
+      }
+      // 同族守卫：跨族替换会改变家族多样性拓扑（且可能在渠道快照不完整时误判），热路径不做
+      const originalFamily = snapshotFamilyOf(target.channelId)
+      const replacementFamily = snapshotFamilyOf(replacement.channelId)
+      if (replacementFamily !== originalFamily) {
+        console.warn(`[nanju-autofix] ${target.slot} 替换候选 ${replacement.channelId}:${replacement.modelId}（${replacementFamily}）与原端点家族（${originalFamily}）不同，放弃替换保持原值（跨族重构请用设置界面智能配置）`)
+        continue
+      }
+      result[target.role] = { channel: replacement.channelId, model: replacement.modelId }
+      try {
+        const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
+        recordTelemetry(workspaceSlug, 'model.config-autofix', {
+          slot: target.slot,
+          from: `${target.channelId}:${target.modelId}`,
+          to: `${replacement.channelId}:${replacement.modelId}`,
+          reason: replacement.reason,
+        }, projectId)
+      } catch (err) {
+        console.warn('[nanju-autofix] 遥测写入失败（不阻断）:', err instanceof Error ? err.message : err)
+      }
+    }
+    return result
+  } catch (err) {
+    console.warn('[nanju-autofix] 预检异常，降级原值（不阻断 prompt 构建）:', err instanceof Error ? err.message : err)
+    return EMPTY_AUTOFIX
+  }
 }
 
 /**
@@ -92,6 +210,135 @@ export function resolveMinimaxM3Actor(): ResolvedChannelModel | null {
   }
 }
 
+/**
+ * W-B B2：视觉验证者槽位解析结果（显式 capability 或清晰 blocked，二者必居其一）。
+ *
+ * 语义要点（纠正早期实现的自相矛盾）：
+ * - 「未配置」不再是「跳过」——prototype 阶段必须给出可判定结果：显式端点为 resolved，
+ *   否则为 blocked（附原因）。禁止默认 null 静默跳过后再宣称「已做独立视觉裁决」。
+ * - 不按模型名猜视觉能力（不做 /vision|vl|视觉/ 之类模型名匹配）；能力只来自用户在
+ *   nanju-model-config 中显式声明的 visualReviewer 端点。
+ * - 与作者同端点 = 同端点自证 → blocked（视觉裁决无独立价值），不抛错也不静默硬换。
+ */
+export type VisualValidatorResolution =
+  | { status: 'resolved'; channelId: string; modelId: string }
+  | { status: 'blocked'; reason: string }
+  | { status: 'not-applicable' }
+
+/**
+ * W-B B2：解析 prototype 阶段的独立视觉验证者槽位（显式 capability 或清晰 blocked）。
+ *
+ * @param phase 当前阶段节点（含 visualReviewerChannel/Model 显式配置）
+ * @param options.authorResolved 作者解析后的端点（用于同端点自证判定；未知时传 null）
+ */
+export function resolveVisualValidatorSlot(
+  phase: PhaseNode,
+  options: { authorResolved: ResolvedChannelModel | null },
+): VisualValidatorResolution {
+  if (phase.id !== 'prototype') return { status: 'not-applicable' }
+  const cfgChannel = phase.visualReviewerChannel
+  const cfgModel = phase.visualReviewerModel
+  if (typeof cfgChannel !== 'string' || cfgChannel === '' || typeof cfgModel !== 'string' || cfgModel === '') {
+    return {
+      status: 'blocked',
+      reason: '未显式配置独立视觉验证者端点（phases.prototype.visualReviewer 缺省）',
+    }
+  }
+  // family marker 'minimax' → 运行时解析为真实 UUID 渠道（与作者同源解析）
+  let endpoint: ResolvedChannelModel
+  if (cfgChannel === 'minimax') {
+    const resolved = resolveMinimaxM3Actor()
+    if (!resolved) {
+      return { status: 'blocked', reason: 'minimax 家族标记无法解析为具体渠道（未配置可用的 MiniMax-M3 渠道）' }
+    }
+    endpoint = resolved
+  } else {
+    endpoint = { channelId: cfgChannel, modelId: cfgModel }
+  }
+  const author = options.authorResolved
+  if (author && author.channelId === endpoint.channelId && author.modelId === endpoint.modelId) {
+    return { status: 'blocked', reason: '视觉验证者与作者同端点（同端点自证，无独立裁决价值）' }
+  }
+  if (!author && cfgChannel === 'minimax') {
+    // 家族标记 + 作者端点未知：无法证明异端点 → 不冒充独立能力
+    return { status: 'blocked', reason: '无法确认视觉验证者与作者异端点（作者端点未解析）' }
+  }
+  return { status: 'resolved', channelId: endpoint.channelId, modelId: endpoint.modelId }
+}
+
+/**
+ * W-B B2：显式内部 slot producer——按阶段配置产出四个委派槽位的权威端点。
+ *
+ * 这是 slot 的**唯一权威来源**（config/schema 驱动）。公开工具 schema 不暴露 slot；
+ * title/task 文本推断（nanju-delegate-guard.detectDelegationSlot）仅为 legacy 低信任
+ * 回退，不能作为视觉槽位权威。
+ */
+export interface NanjuPhaseDelegationSlots {
+  author: { channel: string; model: string }
+  acAttacker: { channel: string; model: string }
+  acDefender: { channel: string; model: string }
+  visualValidator: VisualValidatorResolution
+}
+
+export function resolvePhaseDelegationSlots(
+  phase: PhaseNode,
+  options: { authorResolved?: ResolvedChannelModel | null } = {},
+): NanjuPhaseDelegationSlots {
+  const authorResolved = options.authorResolved ?? null
+  const actors = resolveACActors(phase)
+  return {
+    author: {
+      channel: authorResolved?.channelId ?? phase.channel,
+      model: authorResolved?.modelId ?? phase.model,
+    },
+    acAttacker: { channel: actors.attacker.channel, model: actors.attacker.model },
+    acDefender: { channel: actors.defender.channel, model: actors.defender.model },
+    visualValidator: resolveVisualValidatorSlot(phase, { authorResolved }),
+  }
+}
+
+/**
+ * W-B B2：gate 端校验——视觉验证者委派必须命中 producer 解析的独立端点。
+ * 返回 ok=false 时 gate 拒绝（清晰 blocked，不静默放行）。
+ */
+export function validateVisualValidatorDelegation(args: {
+  phase: PhaseNode
+  authorResolved: ResolvedChannelModel | null
+  targetChannelId?: string
+  targetModelId?: string
+}): { ok: true } | { ok: false; reason: string } {
+  const slot = resolveVisualValidatorSlot(args.phase, { authorResolved: args.authorResolved })
+  if (slot.status === 'not-applicable') return { ok: false, reason: '当前阶段不支持独立视觉验证者（仅 UX 原型阶段）' }
+  if (slot.status === 'blocked') return { ok: false, reason: slot.reason }
+  if (args.targetChannelId !== slot.channelId || args.targetModelId !== slot.modelId) {
+    return {
+      ok: false,
+      reason: '视觉验证者端点与配置的独立视觉端点不一致（配置 '
+        + slot.channelId + ':' + slot.modelId + '，实际 '
+        + (args.targetChannelId ?? '(继承)') + ':' + (args.targetModelId ?? '(继承)') + '）',
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * W-B B2 R1(b)：端点检测——委派目标是否命中 producer 解析出的独立视觉端点。
+ *
+ * gate 的第二识别机制：即使委派**无内部 slot、标题也无视觉标记**，只要目标
+ * (channelId+modelId) 与显式配置的 visualReviewer 解析端点一致，就纳入视觉门禁
+ * 管辖（标题推断仅兜底）。未配置/同端点自证 → slot.status !== 'resolved' → false，
+ * 不开门（仍由标题兜底与渲染层 blocked 文案负责）。
+ */
+export function isVisualValidatorEndpointTarget(args: {
+  slot: VisualValidatorResolution
+  targetChannelId?: string
+  targetModelId?: string
+}): boolean {
+  if (args.slot.status !== 'resolved') return false
+  if (typeof args.targetChannelId !== 'string' || typeof args.targetModelId !== 'string') return false
+  return args.targetChannelId === args.slot.channelId && args.targetModelId === args.slot.modelId
+}
+
 /** 读取前序阶段产出文件路径列表 */
 function getPriorArtifacts(workspaceSlug: string, projectId: string, currentPhase: PhaseId): string[] {
   const projectDir = getNanjuProjectDir(workspaceSlug, projectId)
@@ -102,9 +349,9 @@ function getPriorArtifacts(workspaceSlug: string, projectId: string, currentPhas
     architecture: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html'],
     planning: ['01_PRD/prd.md', '03_ARCHITECTURE/architecture.md'],
     // quick 模式下后两个文件不存在，existsSync 自动过滤（零特判）
-    coding: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '05_PROJECT_PLAN/plan.md'],
+    coding: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '03_ARCHITECTURE/engineering.json', '05_PROJECT_PLAN/plan.md'],
     // testing：PRD（用户故事清单）+ 原型（交互基准）；实码 08_APP 由 constraints 强制 L2 自读
-    testing: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html'],
+    testing: ['01_PRD/prd.md', '02_UX_DESIGN/prototype.html', '03_ARCHITECTURE/architecture.md', '03_ARCHITECTURE/engineering.json', '08_APP/DELIVERY.md'],
   }
 
   const files = priorFiles[currentPhase] ?? []
@@ -142,6 +389,9 @@ function getPrdSummary(workspaceSlug: string, projectId: string): string {
  * @param autoClarifyEnabled v2.4（D7）：auto 开启时 AC 攻击者模板增补两条——代答清单披露
  *   （产物 auto-clarify 标记→代答决策重点审查）+ 同族加倍攻击（diversityDegraded 时双倍怀疑）；
  *   缺省/false = 零注入（既有 AC 指令不变）
+ * @param acAttackerRuntime W23（§六.3）：AC 攻击者 autofix 临时替换值（渠道现状预检失效时的
+ *   单槽推荐，仅本次指令不落盘）。提供时覆盖 resolveACActors 解析出的攻击者；
+ *   null/缺省 = 用节点解析值（向后兼容，既有调用点不变）
  */
 export function buildL2TaskWithAC(
   phase: PhaseNode,
@@ -152,6 +402,21 @@ export function buildL2TaskWithAC(
   categoryInfo?: { category: ProjectCategory; source: ProjectCategorySource } | null,
   acDefenderRuntime?: { channel: string; model: string } | null,
   autoClarifyEnabled?: boolean,
+  acAttackerRuntime?: { channel: string; model: string } | null,
+  /**
+   * B2：独立视觉验证者槽位解析结果（prototype 阶段专属）。
+   * - status='resolved'：渲染独立端点委派（与 author 解耦）。
+   * - status='blocked'/'not-applicable'/缺省：不得退回 author 端点，渲染清晰 blocked 说明。
+   * 调用方应使用 resolvePhaseDelegationSlots(phase, { authorResolved }) 产出。
+   */
+  visualValidator?: VisualValidatorResolution | null,
+  /**
+   * L2-4 J2（2026-09-18）：已知环境事实注入行（仅 architecture 阶段消费）。
+   * - string[]：注入「## 已知环境事实」段（runEnvProbe 产出：探测摘要或失败说明）；
+   * - null/undefined：不注入（非 architecture 阶段，或调用方不接探测——向后兼容）。
+   * ATK-F-005 裁决：注入时点 = 架构师任务书生成时，环境事实先于架构师首次决策。
+   */
+  envProbeLines?: string[] | null,
 ): string {
   const isPrototype = phase.id === 'prototype'
   const isCoding = phase.id === 'coding'
@@ -164,6 +429,21 @@ export function buildL2TaskWithAC(
     'phase.role: ' + phase.role,
     '',
   ]
+
+  // W24-9：本地环境事实（全阶段可见）——需求/架构/编码的产出都应与本地运行环境一致，
+  // 代理代答与作者产出此前因无环境事实输入而假设了错误平台（实测 macOS vs 实际 Linux）。
+  try {
+    const osMod = require('node:os') as typeof import('node:os')
+    const osName = osMod.platform() === 'linux' ? `Linux（${osMod.release()}）`
+      : osMod.platform() === 'darwin' ? `macOS（${osMod.release()}）`
+      : `${osMod.platform()}（${osMod.release()}）`
+    parts.push('## 本地环境事实')
+    parts.push(`- 操作系统：${osName}${process.env.DISPLAY ? `，图形会话可用（DISPLAY=${process.env.DISPLAY}）` : '，无图形会话'}`)
+    if (phase.id === 'requirements') {
+      parts.push('- 目标运行环境默认与本地一致（快消型交付须本机可直接运行与验收）；除非用户明确要求其他平台——类比产品（如“类似某 macOS 工具”）只参考功能形态，不得带出平台假设。')
+    }
+    parts.push('')
+  } catch { /* 环境段失败不阻断任务构建 */ }
 
   // 前序上下文
   if (prdSummary !== '无（这是需求阶段）') {
@@ -217,11 +497,16 @@ export function buildL2TaskWithAC(
 
   // 产出文件
   parts.push('## 产出文件')
-  parts.push('请将产出写入：' + projectDir + '/' + phase.outputPath)
+  parts.push('请将产出写入：' + projectDir + '/' + (isCoding ? resolveCodingOutputPath(projectDir) : phase.outputPath))
   parts.push('')
 
   // testing 阶段：steps.json 机器可执行 schema（双文件契约的机器侧）
   if (isTesting) {
+    parts.push('工程浏览器场景按engineering.json中scenarioFiles逐项写入06_TESTS，必须对应所属test.id的covers且含Then行为断言；不遗漏清单，不把同一场景重复归给多个测试。')
+    parts.push('适用边界：本节steps.json仅用于浏览器场景。非浏览器工程按engineering.json中driver执行，先Read并审查08_APP内驱动是否真正验证PRD行为，再产出Gherkin与审查说明；不伪造DOM步骤、不跨目录修改驱动。')
+    parts.push('驱动协议硬约束（宿主 GWT 逐字段校验，E2E 实证六轮返工教训）：驱动必须从 00_ENGINEERING_TEMPLATE/driver-skeleton.py（Node 用 .cjs）复制起手；')
+    parts.push('stdout 只输出单个 JSON，顶层必须含 testId/target/exitCode(数值)/checks；每条 check 的 expected 与 actual 必须同构可比（宿主按字符串等值判过，描述性文案必 fail）、')
+    parts.push('evidence 必须是非空字符串数组、storyId 在 acceptance 层必须是本测试 covers 内的 US-xx（辅助检查才可为 null）。')
     parts.push('## steps.json 格式规范（机器可执行，Harness 会严格校验并执行）')
     parts.push('每个 ' + projectDir + '/06_TESTS/features/us-XX.feature 配一个同名 us-XX.steps.json，结构如下：')
     parts.push('```json')
@@ -272,6 +557,16 @@ export function buildL2TaskWithAC(
   // （U3：用户显式确认后安装，安装指令由 L1 确认后续接委派）；结尾 projectEnv 标记行
   // 由主进程解析置位 envReady（write-then-gate，见 agent-orchestrator）。
   if (phase.id === 'architecture') {
+    // L2-4 J2（2026-09-18）：已知环境事实段（探测产出，先于架构师首次决策）。
+    // envProbeLines 由 getNanjuRouterPrompt 调用 runEnvProbe 产出（幂等：
+    // env_probe.json 已存在则沿用）；探测失败时为失败说明行（不阻断任务书生成）。
+    if (envProbeLines !== null && envProbeLines !== undefined && envProbeLines.length > 0) {
+      parts.push('## 已知环境事实（探测产出，先于你的决策）')
+      parts.push(...envProbeLines)
+      parts.push('探测为跨品类通用集（脚本 00_ENGINEERING_TEMPLATE/check_env.sh，完整输出存于 03_ARCHITECTURE/env_probe.json）；品类专用探测项按品类模版 §2.3 自行补测。')
+      parts.push('CP-A 环境普查对照：对照品类模版 §2 组件清单，缺失的必须级组件须决定安装或降级替代，写入架构文档环境约束相关结论。')
+      parts.push('')
+    }
     const isQuick = phase.taskWeight === 'light'
     parts.push('## 环境配置（必须执行，产出验证的一部分）')
     parts.push('按品类对本机工具链逐组件「版本探测 → 记录结果」：')
@@ -286,9 +581,17 @@ export function buildL2TaskWithAC(
     parts.push('- 有缺失：`projectEnv: missing:<组件逗号清单>`（如 projectEnv: missing:rustc,cargo）')
     if (isQuick) {
       parts.push('')
-      parts.push('【快消型定位提醒】架构文档保持 30-60 行精简：品类终判 + 技术选型 + 组件清单 + 环境结论四块为主，')
+      parts.push('【快消型定位提醒】架构文档保持精简：品类终判 + 技术选型 + 组件清单 + 环境结论 + 交付与运行 + 测试架构，')
       parts.push('不展开目录树逐文件说明与接口定义（长期演进细节由工程模板承载）。')
     }
+    // L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁——架构文档载体指令。
+    // 三形态完整条文在约束节（nanju-router ARCHITECT_SPIKE_CONSTRAINTS）；此处为
+    // 产出载体格式（推进门禁据产物检查：无凭证视为未执行，verifyPhaseOutput 拦截）。
+    parts.push('## 证据升级与检索记录（架构文档必须含此节）')
+    parts.push('架构文档必须含「## 证据升级与检索记录」小节（表格或列表，逐条：结论点 | 证据等级变化或新增 | 来源 URL | 检索日期）：')
+    parts.push('- 网络检索使结论从 [推断] 升级为 [实证]/[文证]，或直接新增 [实证]/[文证] 条目 → 每条必须附来源引用（URL+检索日期）；缺 URL 的 [实证]/[文证] 条目会被推进门禁拦截；')
+    parts.push('- 保持 [推断] 的结论点 → 注明「已检索无结论（关键词+日期）」或「未触发检索条件」——检索行为发生在你的推理内部、事前不可观测，此形态为自我申报（平台事后抽检追责，不得伪造申报）；')
+    parts.push('- 本轮无任何升级/新增 → 节内显式声明「本轮无证据升级；未触发检索条件」（或列出已检索无结论项）。')
     parts.push('')
   }
 
@@ -315,6 +618,10 @@ export function buildL2TaskWithAC(
   // W13：防御者运行时解析值优先（testing 阶段 minimax UUID 渠道；缺省回退节点解析值）
   if (acDefenderRuntime) {
     actors.defender = { channel: acDefenderRuntime.channel, model: acDefenderRuntime.model }
+  }
+  // W23 §六.3：攻击者 autofix 临时替换值优先（渠道现状预检失效时的单槽推荐，仅本次指令）
+  if (acAttackerRuntime) {
+    actors.attacker = { channel: acAttackerRuntime.channel, model: acAttackerRuntime.model }
   }
   const attackerCh = actors.attacker.channel
   const attackerModel = actors.attacker.model
@@ -360,13 +667,28 @@ export function buildL2TaskWithAC(
   parts.push('   随产出文件一并返回，交调度员内用户裁决。禁止第 3 轮攻击修复。')
   if (isPrototype) {
     parts.push('4. 独立视觉裁决（防作者自证，仅 UX 原型阶段）：攻防通过后，')
-    parts.push('   用 delegate_agent(inline:true, channel=' + author.channel + ', model=' + author.model + ') 创建视觉验证者。')
-    parts.push('   只给它两样输入：PRD 用户故事清单 + 最新原型截图（先让它用 read 实际查看截图）。')
-    parts.push('   要求它仅依据这两样证据输出 red/yellow/green 结论与逐条对照结果，不允许参考你的自述。')
-    parts.push('   审查项必含「导航布局合规」：场景索引是否为顶部横向分页窄条（≤48px、sticky 置顶、US-xx 命名）、是否出现纵向全屏索引、核心场景是否首屏可见。')
-    parts.push('5. 视觉裁决为 red → 回到「截图渲染自检循环」修复，再重新走攻防与视觉裁决；green/yellow 才算审计通过。')
-    parts.push('   ⏱ 视觉裁决 red 回炉 ≤2 次（v0.17.64）：第 2 次回炉后仍 red → 收敛交付，未解决项进「已知问题清单」交用户裁决，不再回炉。')
-    parts.push('6. 审计通过后，返回产出文件路径、AC 审计结论摘要与视觉裁决结论。')
+    // B2：视觉验证者端点只来自显式内部 slot producer（resolvePhaseDelegationSlots →
+    // resolveVisualValidatorSlot）。resolved 才渲染独立端点委派；blocked 时给出清晰阻塞
+    // 说明——禁止退回 author 端点（同端点自证）或静默跳过后再宣称已验证。
+    if (visualValidator?.status === 'resolved') {
+      parts.push('   用 delegate_agent(inline:true, channel=' + visualValidator.channelId + ', model=' + visualValidator.modelId + ', title=「独立视觉裁决」) 创建视觉验证者。')
+      // R1(a)：title 稳定锚点——门禁对无 slot 的委派必须先能识别出它是视觉委派。
+      // 逐字使用 VISUAL_VALIDATOR_TITLE_MARKERS 内的标记（「独立视觉裁决」），
+      // 否则 gate 只有在端点检测命中时才拦得住（title 是两者中的兜底机制）。
+      parts.push('   ⚠️ title 必须逐字写作「独立视觉裁决」（不得改写/加前缀/换同义词）：门禁据此识别独立视觉委派，标题不含该标记时无法确认这是视觉裁决（可能被当作普通委派放行）。')
+      parts.push('   只给它两样输入：PRD 用户故事清单 + 最新原型截图（先让它用 read 实际查看截图）。')
+      parts.push('   要求它仅依据这两样证据输出 red/yellow/green 结论与逐条对照结果，不允许参考你的自述。')
+      parts.push('   审查项必含「导航布局合规」：场景索引是否为顶部横向分页窄条（≤48px、sticky 置顶、US-xx 命名）、是否出现纵向全屏索引、核心场景是否首屏可见。')
+      parts.push('5. 视觉裁决为 red → 回到「截图渲染自检循环」修复，再重新走攻防与视觉裁决；green/yellow 才算审计通过。')
+      parts.push('   ⏱ 视觉裁决 red 回炉 ≤2 次（v0.17.64）：第 2 次回炉后仍 red → 收敛交付，未解决项进「已知问题清单」交用户裁决，不再回炉。')
+      parts.push('6. 审计通过后，返回产出文件路径、AC 审计结论摘要与视觉裁决结论。')
+    } else {
+      const reason = visualValidator?.status === 'blocked' ? visualValidator.reason : '未配置独立视觉验证者端点'
+      parts.push('   ⛔ 视觉裁决 unavailable（独立视觉验证者槽位未就绪：' + reason + '）。')
+      parts.push('   禁止用作者自身或同端点模型冒充「独立视觉裁决」，禁止在返回中声称视觉裁决已通过。')
+      parts.push('   请在返回中明确报告「视觉裁决 blocked：' + reason + '」，由调度员交用户裁决或先配置独立视觉验证者端点后重试。')
+      parts.push('5. 除视觉裁决外，攻防审计仍按上述步骤收敛；返回产出文件路径与 AC 审计结论摘要，并显式标注视觉裁决 blocked。')
+    }
   } else {
     parts.push('4. 审计通过后，返回产出文件路径和 AC 审计结论摘要。')
   }
@@ -385,6 +707,11 @@ export function buildL2TaskWithAC(
     parts.push('1. 品类终判标记是否在文档显目位置且为六枚举合法值；')
     parts.push('2. 环境清单是否按探测结果如实填写（缺失标记不遗漏）；')
     parts.push('3. 结尾 projectEnv: 标记行是否存在且与清单一致（ready/missing 与探测结果矛盾会导致系统误拦或误放）。')
+    parts.push('4. 交付与运行字段、测试架构表、真实与模拟边界及失败回流说明是否完整；计划完整不代表验收通过。')
+    parts.push('5. engineering.json 契约（若本品类需要）：tests[].driver.path 必须指向 artifacts 清单内已声明的驱动文件；')
+    parts.push('   tests[].target 是被测产物路径（如 src/xxx.py），不是驱动自身；tests[].covers 必须与 PRD 用户故事一一对应；')
+    parts.push('   驱动文件必须是输出 JSON 协议的驱动（骨架见 00_ENGINEERING_TEMPLATE/driver-skeleton.py），')
+    parts.push('   不要把普通测试脚本（如 unittest 文本输出）直接绑为 driver——GWT 验收时会因驱动无 JSON 协议而 error。')
     parts.push('')
     // D8 §九 A1′（R7-05）：auto 开启时 quick architecture 补轻量 AC 载体契约——
     // ac-verdict.json 是 autoConfirmAuthorized 的第 6 条件（A 域已消费），缺失/red 拒自动确认。
@@ -487,10 +814,11 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   if (!project) return undefined
 
   const stage = project.currentStage as PhaseId
-  const phase = getPhaseNode(project.mode, stage)
+  let phase = getPhaseNode(project.mode, stage)
   if (!phase || stage === 'delivered') return undefined
 
   const projectDir = getNanjuProjectDir(workspaceSlug, project.projectId)
+  if (stage === 'coding') phase = { ...phase, outputPath: resolveCodingOutputPath(projectDir) }
   const prdSummary = getPrdSummary(workspaceSlug, project.projectId)
   const priorArtifacts = getPriorArtifacts(workspaceSlug, project.projectId, stage)
   const nextPhase = phase.next ?? 'delivered'
@@ -539,33 +867,55 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
 
   // prototype 阶段作者 = MiniMax-M3（视觉模型）：渠道 ID 是 UUID，运行时解析。
   // W13：testing 作者换 glm-5.3-flash（字面渠道即可，与 AC 预设防御者同惯例）；
-  // testing 的 AC 防御者=minimax 家族覆盖（UUID 渠道），构建 L2 指令时运行时解析
-  const authorOverride = phase.id === 'prototype' ? resolvePrototypeAuthor() : null
-  const authorChannel = authorOverride?.channelId ?? phase.channel
-  const authorModel = authorOverride?.modelId ?? phase.model
+  // testing 的 AC 防御者=minimax 家族覆盖（UUID 渠道），构建 L2 指令时运行时解析。
+  // W-B：显式 prototype 作者配置优先——仅 phase.channel===phase.model===默认
+  // 'minimax':'MiniMax-M3' 家族标记时才走 resolvePrototypeAuthor 解析 UUID；
+  // 用户显式配置非家族标记（如 glm-zhipu:GLM-5.3）时直接使用 phase.channel/phase.model，
+  // resolvePrototypeAuthor 不被调用以避免其按家族解析覆盖用户选择。家族标记是
+  // resolvePrototypeAuthor 唯一合法触发条件；用户保留 family marker 默认值即
+  // 表达“启用运行时解析”意图。
+  const isPrototypeFamilyMarker = phase.id === 'prototype'
+    && phase.channel === 'minimax'
+    && phase.model === 'MiniMax-M3'
+  const authorOverride = isPrototypeFamilyMarker ? resolvePrototypeAuthor() : null
+  // W23 §六.3：配置级 autofix——当前阶段 author/attacker/defender 端点预检（渠道现状快照），
+  // 失效则单槽推荐替换（仅本次 prompt，不落盘）+ model.config-autofix 遥测；
+  // 任何异常在 applyConfigAutofix 内部降级（不阻断 prompt 构建）。prototype 作者已有
+  // 运行时 UUID 解析优先（解析器本身只返回 enabled 端点）。
+  const autofix = applyConfigAutofix(workspaceSlug, project.projectId, phase)
+  const authorChannel = authorOverride?.channelId ?? autofix.author?.channel ?? phase.channel
+  const authorModel = authorOverride?.modelId ?? autofix.author?.model ?? phase.model
   // W22 R1（#10 后半）：testing 回炉话术引用 coding 阶段渠道/模型（动态读，不硬编码——
   // 模型矩阵演进时话术自适应；与 M 域 nanju-model-config 单一真相源对齐）
   const codingPhase = stage === 'testing' ? getPhaseNode(project.mode, 'coding') : null
   const codingPhaseEndpoint = codingPhase ? codingPhase.channel + ' / ' + codingPhase.model : 'coding 配置'
   const acDefenderRuntime = phase.acDefenderChannel === 'minimax' ? resolveMinimaxM3Actor() : null
+  // W23：防御者优先级——W13 UUID 运行时解析 > autofix 替换 > 节点解析值
   const acDefenderEndpoint = acDefenderRuntime
     ? { channel: acDefenderRuntime.channelId, model: acDefenderRuntime.modelId }
-    : null
+    : autofix.defender
 
-  // 工程品类（W3，v0.17.66，仅 coding 消费）：优先读推进钩子写入的判定结果；
+  // 工程品类（W3，v0.17.66，coding 消费）：优先读推进钩子写入的判定结果；
   // 读不到（老项目/钩子未触发）时现场从文档提取降级判定，并顺手补写元信息与模板落位
   // （幂等：钩子已处理时此处零开销）
+  // Task 10 接线（2026-09-23）：architecture 阶段的 env 探测也需要品类（品类专用组件清单），
+  // 但**只读**——不写元信息、不落模板（落位仍归 coding 阶段/推进钩子）。
   let categoryInfo: { category: ProjectCategory; source: ProjectCategorySource } | null = null
-  if (stage === 'coding') {
+  if (stage === 'coding' || stage === 'architecture') {
     const { getProjectCategory, setProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
     categoryInfo = getProjectCategory(workspaceSlug, project.projectId)
     if (!categoryInfo) {
       const resolved = resolveProjectCategoryForCoding(workspaceSlug, project.projectId)
-      categoryInfo = resolved ?? { category: 'web-fullstack', source: 'default' }
-      try {
-        setProjectCategory(workspaceSlug, project.projectId, categoryInfo.category, categoryInfo.source)
-        materializeEngineeringTemplate(workspaceSlug, project.projectId, categoryInfo.category)
-      } catch { /* 补写失败不阻断：注入节已有降级自检兑底 */ }
+      if (stage === 'coding') {
+        categoryInfo = resolved ?? { category: 'web-fullstack', source: 'default' }
+        try {
+          setProjectCategory(workspaceSlug, project.projectId, categoryInfo.category, categoryInfo.source)
+          materializeEngineeringTemplate(workspaceSlug, project.projectId, categoryInfo.category)
+        } catch { /* 补写失败不阻断：注入节已有降级自检兑底 */ }
+      } else {
+        // architecture：仅用于品类专用环境探测；文档无标记时返回 null → 探测降级 universal
+        categoryInfo = resolved ?? null
+      }
     }
   }
 
@@ -580,9 +930,41 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
     ? buildAutoClarifyModeLines(autoClarifyEnabled, autoClarifyField?.lastToggledAt, Date.now())
     : []
 
+  // B2：prototype 阶段 显式内部 slot producer 解析（config 驱动；视觉槽位 resolved 或
+  // 清晰 blocked）。authorResolved 传 authorOverride（已是 UUID）或 phase 字面/自动修复值。
+  const authorResolvedForSlots: ResolvedChannelModel = authorOverride ?? { channelId: authorChannel, modelId: authorModel }
+  const phaseSlots = resolvePhaseDelegationSlots(phase, { authorResolved: authorResolvedForSlots })
+
+  // L2-4 J2（2026-09-18）：architecture 任务书生成时执行通用环境探测（注入时点 = 任务书
+  // 生成时，环境事实先于架构师首次决策——ATK-F-005 裁决）。幂等：env_probe.json 已存在
+  // 则直接沿用；探测失败/超时不阻断 prompt 构建（runEnvProbe 内部退化失败说明行）。
+  // lazy require 规避模块环（nanju-env-probe → nanju-project 同源静态导入，无环风险，
+  // 但与库内惯例一致：探测失败说明本身也注入——诚实退化优于静默无段）。
+  let envProbeLines: string[] | null = null
+  if (stage === 'architecture') {
+    try {
+      const { runEnvProbe } = require('./nanju-env-probe') as typeof import('./nanju-env-probe')
+      envProbeLines = runEnvProbe(workspaceSlug, project.projectId, { category: categoryInfo?.category as import('./nanju-env-probe').ProjectCategoryForProbe ?? 'universal' }).lines
+    } catch { /* 探测异常不阻断 prompt 构建（无注入即无段，诚实退化） */ }
+  }
+
   // 构建给 L2 的完整任务（含 AC 审计指令；内含家族多样性断言；coding 含品类工程指导；
-  // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击）
-  const l2Task = buildL2TaskWithAC(phase, { channel: authorChannel, model: authorModel }, prdSummary, priorArtifacts, projectDir, categoryInfo, acDefenderEndpoint, autoClarifyEnabled)
+  // v2.4：auto 开启时攻击者模板增补代答清单披露+同族加倍攻击；
+  // B2：prototype 阶段 视觉验证者使用 slot producer 产出的独立端点/blocked 结论；
+  // L2-4：architecture 阶段注入已知环境事实段（探测产出，先于架构师首次决策））
+  const l2Task = buildL2TaskWithAC(
+    phase,
+    { channel: authorChannel, model: authorModel },
+    prdSummary,
+    priorArtifacts,
+    projectDir,
+    categoryInfo,
+    acDefenderEndpoint,
+    autoClarifyEnabled,
+    autofix.attacker,
+    phaseSlots.visualValidator,
+    envProbeLines,
+  )
 
   // M7（AC 审计 A9-timing，v0.17.69）：主进程预校验——architecture 阶段构建 L1 指令时
   // 现场对 architecture.md 环境清单跑 validateEnvChecklist（§九「清单执行前过确定性规则
@@ -632,6 +1014,13 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
   const prompt = [
     '## 🔒 南大向导 — 当前阶段：' + phase.title + '（' + stage + '）',
     ...confirmHintLines,
+    ...(() => {
+      try {
+        const { buildPendingAdvanceRecoveryPrompt } = require('./nanju-advance-recovery') as typeof import('./nanju-advance-recovery')
+        const recovery = buildPendingAdvanceRecoveryPrompt(workspaceSlug, project.projectId)
+        return recovery ? [recovery] : []
+      } catch { return ['待纠正拒因读取失败；请核对本阶段产出后再请求推进，不能跳过门禁。'] }
+    })(),
     '项目名：' + project.name + '（' + (project.mode === 'quick' ? '快消型' : '长期迭代型') + '）',
     '项目目录：' + projectDir,
     '',
@@ -729,7 +1118,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ? (autoClarifyEnabled
         ? [
           '4. 【自动审核模式：应用验收全自动】（auto-clarify 已开启）：',
-          '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
+          '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）展示产出说明或适用的静态网页。非Web应按架构启动真实程序，文档/网页预览不代表程序已运行。',
           '   b. 子会话产出已含内部 AC 对抗审计——用 Read 检查产出文件确认完整可用（机器前提）。',
           '   c. 检查通过后【直接输出推进标记】<!-- PHASE_ADVANCE: testing -->（不发起预览确认',
           '      AskUser，系统自动确认进入自动测试；用户故事的完整性由自动测试判定）。',
@@ -737,7 +1126,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
         ]
         : [
         '4. 【交互验证 + 轻过渡确认】（编码阶段核心环节：预览应用 → 收集意见 → 批量修复 → 确认进入自动测试）：',
-        '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）确保右侧分屏展示可运行应用。',
+        '   a. 【必须】先调用 open_preview（file_path=' + projectDir + '/' + phase.outputPath + '）展示产出说明或适用的静态网页。非Web应按架构启动真实程序，文档/网页预览不代表程序已运行。',
         '   b. 向用户宣布代码已生成，邀请直接用自然语言提修改意见；同时告知：',
         '      「也可以直接在右侧预览上【点击】想改的元素，点选后元素会出现在输入框，',
         '        你接着打字描述想怎么改（如“这个按钮改大”），一起发送即可精准修改」。',
@@ -768,7 +1157,7 @@ export function getNanjuRouterPrompt(workspaceSlug: string, sessionId: string): 
       ? [
         '4. 【架构确认 + 环境配置环节】（W7，v0.17.69：架构师环节两模式必经；环境缺失时先收口再确认）：',
         '   a. 子会话完成后，用 Read 检查产出文件：' + projectDir + '/' + phase.outputPath,
-        '      确认三要素齐全：品类终判标记（projectCategory:）、「## 环境配置」清单表、结尾 projectEnv: 标记行。',
+        '      确认品类终判标记（projectCategory:）、「## 环境配置」清单表、结尾 projectEnv: 标记行，以及「## 交付与运行」「## 测试架构」及其真实边界/失败回流说明齐全。',
         '   b. 若结尾标记为 projectEnv: missing:<组件清单>（环境有缺失）：',
         ...envPrecheckLines,
         '      - 先用 AskUserQuestion 向用户确认（header「确认·安装缺失组件」）：「环境缺失 {组件清单}，安装约需 X 分钟（按组件估算，',

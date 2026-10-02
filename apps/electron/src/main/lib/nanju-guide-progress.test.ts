@@ -1,3 +1,19 @@
+const testArchitectureDoc = `
+## 交付与运行
+目标平台：按项目约定平台
+交付产物：08_APP 下架构约定产物
+构建方式：执行项目构建配置
+启动方式：启动实际产物
+## 测试架构
+| 层级 | 框架 | 执行方式 | 证据 | 覆盖 |
+| --- | --- | --- | --- | --- |
+| 行为验收 | 平台测试驱动 | 执行真实产品 | 实际输出 | US-01 |
+### 真实与模拟边界
+模拟仅用于隔离单元，实际用户故事需真实行为证据。
+### 失败回流
+失败回开发或测试设计，环境缺失阻塞。
+`
+
 /**
  * 南大向导「向导图」阶段内进度单测（W2 S1）
  *
@@ -319,7 +335,7 @@ describe('syncNanjuGuideConfirmState · M4 环境状态先行（L2 报 missing �
     const projectDir = join(dir, `project-${PROJECT_ID}`)
     mkdirSync(join(projectDir, '03_ARCHITECTURE'), { recursive: true })
     writeFileSync(join(projectDir, '03_ARCHITECTURE', 'architecture.md'),
-      `# 架构文档\n\nprojectCategory: ${category}\n\n## 技术选型\n\nTauri v2 桌面程序，两层架构。\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| node | 20 | 前端 |\n| rustc | 1.75 | 编译 |\n\n${envLine}\n`)
+      `# 架构文档\n\nprojectCategory: ${category}\n\n## 技术选型\n\nTauri v2 桌面程序，两层架构。\n\n## 环境配置\n\n| 组件 | 版本 | 用途 |\n| --- | --- | --- |\n| node | 20 | 前端 |\n| rustc | 1.75 | 编译 |\n\n${envLine}\n${testArchitectureDoc}`)
     writeFileSync(join(projectDir, '_project-info.json'), JSON.stringify({
       projectId: PROJECT_ID, subStage: 'ARCH', projectCategory: category, projectCategorySource: 'architecture',
     }))

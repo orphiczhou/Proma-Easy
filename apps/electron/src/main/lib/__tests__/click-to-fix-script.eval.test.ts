@@ -8,6 +8,7 @@
  * - WO1④：finish 上报 finalTransform 一等字段 = 写入 el.style.transform 的同一字符串
  * - M8/WO1⑤：exitDragMode 中止进行中的拖拽会话并还原 prevInline
  * - e2e 断言语义：translate(51px, -5px) 输出格式（含空格风格）不变
+ * - W24-EF F2：框选多元素批量点选（仅 F2 范围增补，详见末尾 describe）
  */
 import { describe, expect, test } from 'bun:test'
 import { CLICK_TO_FIX_INJECT_SCRIPT } from '../click-to-fix-script'
@@ -74,6 +75,10 @@ class StubEl {
   getBoundingClientRect() {
     return { x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 20, width: 100, height: 20 }
   }
+  closest(sel: string): StubEl | null {
+    // 覆盖注入脚本唯一用法 closest('[data-ai-id]')：自身上带该属性即命中
+    return sel === '[data-ai-id]' && this.attributes.has('data-ai-id') ? this : null
+  }
   contains(n: unknown) { return n === this || this.children.includes(n as StubEl) }
   setPointerCapture() { /* no-op */ }
   focus() { this._focused = true }
@@ -138,8 +143,14 @@ function buildSandbox(): Sandbox {
       return id ? (elements.get(id) ?? null) : null
     },
     querySelectorAll(sel: string) {
-      // 只需覆盖 undo-all 的 proma-ctf-* 清扫
-      return sel.includes('proma-ctf-') ? created.filter((n) => (n.getAttribute('id') ?? '').startsWith('proma-ctf-')) : []
+      // 需覆盖三处：(1) undo-all 的 proma-ctf-* 清扫，(2) F2 框选的 [data-ai-id] 收集
+      if (sel.includes('proma-ctf-')) {
+        return created.filter((n) => (n.getAttribute('id') ?? '').startsWith('proma-ctf-'))
+      }
+      if (sel === '[data-ai-id]') {
+        return Array.from(elements.values())
+      }
+      return []
     },
     addEventListener(t: string, fn: Listener) {
       const arr = docListeners.get(t) ?? []
@@ -321,5 +332,287 @@ describe('click-to-fix-script eval 沙箱：拖拽会话（WO1③④⑤/M3/M8/M9
     expect(node.style.transform).toBe('translate(15px, 15px)')
     sb.send({ __promaCtfApply: true, action: 'undo-all' })
     expect(node.style.transform).toBe('')
+  })
+})
+
+
+// ===== W24-6：tab/分页类点击不弹点选（原生切换放行）=====
+
+describe('W24-6 tab 排除：标签页点击不上报不弹面板', () => {
+  function docClick(sb: ReturnType<typeof buildSandbox>, node: StubEl): void {
+    for (const fn of [...(sb.docListeners.get('click') ?? [])]) {
+      fn({ target: node, preventDefault() {}, stopPropagation() {} })
+    }
+  }
+
+  test('data-ai-type=标签页 的点击零上报（原生行为放行）', () => {
+    const sb = buildSandbox()
+    const tab = sb.el('tab-scene-2')
+    tab.setAttribute('data-ai-type', '标签页')
+    docClick(sb, tab)
+    expect(sb.posted.filter((p) => p.kind === 'element-click').length).toBe(0)
+  })
+
+  test('对照：普通元素（按钮）点击仍上报 element-click', () => {
+    const sb = buildSandbox()
+    const btn = sb.el('btn-record')
+    btn.setAttribute('data-ai-type', '按钮')
+    btn.innerText = '按住说话'
+    docClick(sb, btn)
+    const rep = sb.posted.find((p) => p.kind === 'element-click')
+    expect(rep?.id).toBe('btn-record')
+    expect(rep?.type).toBe('按钮')
+  })
+
+  test('变体兼容：类型词表全档（含旧生成器的「标签」）同样排除', () => {
+    const sb = buildSandbox()
+    const variants = ['标签页', '标签', '选项卡', '切换', 'tab', '分页', '页签', '导航', ' Tab ']
+    for (const [i, t] of variants.entries()) {
+      const n = sb.el('x-el-' + i)
+      n.setAttribute('data-ai-type', t)
+      docClick(sb, n)
+    }
+    expect(sb.posted.filter((p) => p.kind === 'element-click').length).toBe(0)
+  })
+
+  test('id 启发式：nav-*/tab-*/*-tab-* 排除（两代生成器命名 scene-tab-us01 / nav-scene-tabs / tab-us01）', () => {
+    const sb = buildSandbox()
+    for (const id of ['nav-scene-tabs', 'tab-us01', 'scene-tab-us02', 'navbar-main']) {
+      const n = sb.el(id)
+      n.setAttribute('data-ai-type', '按钮') // 类型不命中，靠 id 兜底
+      docClick(sb, n)
+    }
+    expect(sb.posted.filter((p) => p.kind === 'element-click').length).toBe(0)
+    // 对照：普通 id 不受 id 启发式影响
+    const normal = sb.el('btn-judge-299')
+    normal.setAttribute('data-ai-type', '按钮')
+    normal.innerText = '判定'
+    docClick(sb, normal)
+    expect(sb.posted.some((p) => p.kind === 'element-click' && p.id === 'btn-judge-299')).toBe(true)
+  })
+})
+
+// ===== W24-EF F2：框选多元素（mousedown/mousemove/mouseup）=====
+// BDD #1：框选含 2 元素 → 上报 kind='box-select' 且含元素数组
+// BDD #2：框选结束 → 每元素 3 秒高亮（覆盖层），3 秒后全部消失
+// BDD #3：框选含不可交互背景（带 data-ai-id 但 type 为标签页，或背景节点）→ 过滤后只保留有效元素
+// 注：本沙箱 StubEl.getBoundingClientRect 固定返回 100×20@原点；框选坐标需覆盖原矩形范围。
+
+describe('W24-EF F2：框选多元素批量点选', () => {
+  /** 模拟一次完整的 mousedown→mousemove*2→mouseup（动运超过 3px 阈值） */
+  function doBox(sb: ReturnType<typeof buildSandbox>, x1: number, y1: number, x2: number, y2: number): void {
+    // 在背景 documentElement 上发 mousedown
+    for (const fn of [...(sb.docListeners.get('mousedown') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: x1, clientY: y1, preventDefault() {} })
+    }
+    for (const fn of [...(sb.docListeners.get('mousemove') ?? [])]) {
+      fn({ clientX: x1, clientY: y1 })
+      fn({ clientX: x2, clientY: y2 })
+    }
+    for (const fn of [...(sb.docListeners.get('mouseup') ?? [])]) {
+      fn({ clientX: x2, clientY: y2 })
+    }
+  }
+
+  test('框选覆盖 2 个相邻元素 → 上报 box-select 且 items 含两个 id', () => {
+    const sb = buildSandbox()
+    sb.el('btn-add') // 默认 StubEl.getBoundingClientRect = 100×20@原点
+    sb.el('btn-edit')
+    // StubEl 默认 bounding rect 重叠：x:0 y:0 w:100 h:20，两个元素位置重叠
+    // 框选起点 (-5, -5) → (200, 50) 会覆盖两者
+    doBox(sb, -5, -5, 200, 50)
+    const boxSelects = sb.posted.filter((p) => p.kind === 'box-select')
+    expect(boxSelects).toHaveLength(1)
+    const items = (boxSelects[0] as { items?: Array<{ id: string; type: string }> }).items ?? []
+    const ids = items.map((i) => i.id).sort()
+    expect(ids).toEqual(['btn-add', 'btn-edit'])
+    // 隐私边界：只含 id + type，不含 text/rect
+    for (const it of items) {
+      expect(Object.keys(it).sort()).toEqual(['id', 'type'])
+    }
+  })
+
+  test('框选结束后为每元素创建独立高亮覆盖层（documentElement.appendChild 调用次数 = 选中元素数 + 选区框）', () => {
+    const sb = buildSandbox()
+    sb.el('btn-a')
+    sb.el('btn-b')
+    sb.el('btn-c')
+    const before = sb.created.length
+    doBox(sb, -10, -10, 200, 50)
+    const after = sb.created.length
+    // 新增：选区框（启动时已创建，3 个高亮
+    // （选区框是 ensureBoxSelectLayers 在 mousedown 时创建，3 个高亮是 mouseup performBoxSelect 创建）
+    const newNodes = after - before
+    // 1 选区框 + 3 高亮 = 4
+    expect(newNodes).toBe(4)
+    // 注：sandbox StubEl 的 className 属性不会写入 attributes map；脚本里设的是 hl.className，
+    // 因此这里通过元素 style 包含 'z-index:2147483647' 间接识别高亮节点（脚本对选区框用 z-index 2147483646）。
+    const highlights = sb.created.filter((n) => {
+      const css = (n.style as { cssText?: string }).cssText ?? ''
+      return css.includes('z-index:2147483647') && css.includes('background:rgba(79,70,229')
+    })
+    expect(highlights).toHaveLength(3)
+  })
+
+  test('空选（框选范围内无 data-ai-id） → 不上报 box-select 且不报错', () => {
+    const sb = buildSandbox()
+    // 不放任何元素，只对纯背景框选
+    const before = sb.posted.filter((p) => p.kind === 'box-select').length
+    expect(() => doBox(sb, 1000, 1000, 2000, 2000)).not.toThrow()
+    const after = sb.posted.filter((p) => p.kind === 'box-select').length
+    expect(after - before).toBe(0)
+  })
+
+  test('框选包含 tab/分页类元素（id 启发式） → 过滤后只保留有效元素', () => {
+    const sb = buildSandbox()
+    sb.el('tab-scene-2') // id 命中 /^.*(tab)/i 启发式
+    sb.el('btn-real') // 普通按钮
+    doBox(sb, -10, -10, 200, 50)
+    const boxSelects = sb.posted.filter((p) => p.kind === 'box-select')
+    expect(boxSelects).toHaveLength(1)
+    const items = (boxSelects[0] as { items?: Array<{ id: string; type: string }> }).items ?? []
+    const ids = items.map((i) => i.id).sort()
+    expect(ids).toEqual(['btn-real'])
+    expect(ids).not.toContain('tab-scene-2')
+  })
+
+  test('框选包含 data-ai-type=标签页 的元素 → 过滤后只保留有效元素', () => {
+    const sb = buildSandbox()
+    const tab = sb.el('some-tab')
+    tab.setAttribute('data-ai-type', '标签页')
+    sb.el('btn-real')
+    doBox(sb, -10, -10, 200, 50)
+    const items = (sb.posted.find((p) => p.kind === 'box-select') as { items?: Array<{ id: string }> })?.items ?? []
+    expect(items.map((i) => i.id).sort()).toEqual(['btn-real'])
+  })
+
+  test('起点为 data-ai-id 元素 → 不进入框选会话（留给 click 路径）', () => {
+    const sb = buildSandbox()
+    const btn = sb.el('btn-source')
+    btn.setAttribute('data-ai-type', '按钮')
+    // mousedown 起点在 btn 上（被 closest 命中），不进框选
+    for (const fn of [...(sb.docListeners.get('mousedown') ?? [])]) {
+      fn({ target: btn, clientX: 50, clientY: 10, preventDefault() {} })
+    }
+    // mousemove + mouseup 应无效果
+    for (const fn of [...(sb.docListeners.get('mousemove') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    for (const fn of [...(sb.docListeners.get('mouseup') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    expect(sb.posted.filter((p) => p.kind === 'box-select').length).toBe(0)
+  })
+
+  test('微抖动（<3px） → 不结算框选，让 click 路径正常处理', () => {
+    const sb = buildSandbox()
+    sb.el('btn-a')
+    // mousedown → mousemove(2px) → mouseup
+    for (const fn of [...(sb.docListeners.get('mousedown') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: 10, clientY: 10, preventDefault() {} })
+    }
+    for (const fn of [...(sb.docListeners.get('mousemove') ?? [])]) {
+      fn({ clientX: 11, clientY: 11 })
+    }
+    for (const fn of [...(sb.docListeners.get('mouseup') ?? [])]) {
+      fn({ clientX: 12, clientY: 12 })
+    }
+    expect(sb.posted.filter((p) => p.kind === 'box-select').length).toBe(0)
+    // 选区框隐藏，未留下 pending 状态
+    const marquee = sb.created.find((n) => n.getAttribute('id') === 'proma-ctf-box-marquee')
+    expect(marquee?.style.display).toBe('none')
+  })
+
+  test('框选不拦 blank-click：背景单击仍上报 blank-click（无双重拦截）', () => {
+    const sb = buildSandbox()
+    // 背景单击：mousedown → mouseup（<3px，不结算框选）→ click
+    for (const fn of [...(sb.docListeners.get('mousedown') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: 10, clientY: 10, preventDefault() {} })
+    }
+    for (const fn of [...(sb.docListeners.get('mouseup') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: 12, clientY: 12 })
+    }
+    for (const fn of [...(sb.docListeners.get('click') ?? [])]) {
+      fn({ target: sb.documentElement, preventDefault() {}, stopPropagation() {} })
+    }
+    // 空白单击照常上报，且不产生 box-select
+    expect(sb.posted.some((p) => p.kind === 'blank-click')).toBe(true)
+    expect(sb.posted.filter((p) => p.kind === 'box-select').length).toBe(0)
+  })
+
+  test('框选不拦 text-edit：起点在 input/textarea 不进框选（文本选区保留）', () => {
+    const sb = buildSandbox()
+    const input = new StubEl('INPUT')
+    for (const fn of [...(sb.docListeners.get('mousedown') ?? [])]) {
+      fn({ target: input, clientX: 50, clientY: 10, preventDefault() {} })
+    }
+    for (const fn of [...(sb.docListeners.get('mousemove') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    for (const fn of [...(sb.docListeners.get('mouseup') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    expect(sb.posted.filter((p) => p.kind === 'box-select').length).toBe(0)
+  })
+
+  test('框选不拦拖拽：dragMode 会话期间背景 mousedown 不进框选', () => {
+    const sb = buildSandbox()
+    sb.el('t-drag-guard', { computed: 'none', text: 'X' })
+    sb.send({ __promaCtfApply: true, action: 'drag-start', id: 't-drag-guard' })
+    for (const fn of [...(sb.docListeners.get('mousedown') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: 10, clientY: 10, preventDefault() {} })
+    }
+    for (const fn of [...(sb.docListeners.get('mousemove') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    for (const fn of [...(sb.docListeners.get('mouseup') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    expect(sb.posted.filter((p) => p.kind === 'box-select').length).toBe(0)
+  })
+
+  test('中心点落框：边缘轻触但中心在框外的大容器不过选', () => {
+    const sb = buildSandbox()
+    const centerIn = sb.el('center-in')
+    const edgeOnly = sb.el('edge-only')
+    // 中心 (20,20) 在选框内 → 选中
+    centerIn.getBoundingClientRect = () => ({ x: 10, y: 10, top: 10, left: 10, right: 30, bottom: 30, width: 20, height: 20 })
+    // 左边缘与选框轻触（left=90 < 100），但中心 (145,20) 在框外 → 不过选
+    edgeOnly.getBoundingClientRect = () => ({ x: 90, y: 10, top: 10, left: 90, right: 200, bottom: 30, width: 110, height: 20 })
+    doBox(sb, 0, 0, 100, 50)
+    const items = (sb.posted.find((p) => p.kind === 'box-select') as { items?: Array<{ id: string }> })?.items ?? []
+    expect(items.map((i) => i.id).sort()).toEqual(['center-in'])
+  })
+
+  test('框选抑制窗只限同一释放坐标 → 其他位置 click 不被吞', () => {
+    const sb = buildSandbox()
+    sb.el('btn-a')
+    // 框选结算（>3px 拖拽），释放点 (200,50)
+    doBox(sb, 10, 10, 200, 50)
+    // 同一释放坐标 (200,50) 附近的合成 click → 被抑制（不报 blank-click）
+    for (const fn of [...(sb.docListeners.get('click') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: 200, clientY: 50, preventDefault() {}, stopPropagation() {} })
+    }
+    expect(sb.posted.filter((p) => p.kind === 'blank-click').length).toBe(0)
+    // 其他位置 (10,10) 的 click → 不被抑制（仍报 blank-click）
+    for (const fn of [...(sb.docListeners.get('click') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: 10, clientY: 10, preventDefault() {}, stopPropagation() {} })
+    }
+    expect(sb.posted.filter((p) => p.kind === 'blank-click').length).toBe(1)
+  })
+
+  test('右键（button=2）拖拽不进框选', () => {
+    const sb = buildSandbox()
+    sb.el('btn-a')
+    for (const fn of [...(sb.docListeners.get('mousedown') ?? [])]) {
+      fn({ target: sb.documentElement, clientX: 10, clientY: 10, button: 2, preventDefault() {} })
+    }
+    for (const fn of [...(sb.docListeners.get('mousemove') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    for (const fn of [...(sb.docListeners.get('mouseup') ?? [])]) {
+      fn({ clientX: 200, clientY: 50 })
+    }
+    expect(sb.posted.filter((p) => p.kind === 'box-select').length).toBe(0)
   })
 })

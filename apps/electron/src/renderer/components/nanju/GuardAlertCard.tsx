@@ -12,6 +12,8 @@ import { cn } from '@/lib/utils'
 import { getDefaultStore } from 'jotai'
 import { AlertTriangle, ExternalLink, X } from 'lucide-react'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
+// I-P7（B-e）：熔断安抚文案唯一真源（US-U07；F2 模块）——本卡片不再自写一套话术
+import { buildCircuitBreakMessage } from './quick-ux-model'
 
 /** nanju:guard-alert 事件载荷（preload 桥同构） */
 export interface NanjuGuardAlertPayload {
@@ -19,6 +21,12 @@ export interface NanjuGuardAlertPayload {
   projectId: string
   stage: string
   message: string
+  /** I-P7（B-e）：熔断上下文——存在时按 US-U07 通俗口径渲染（缺失回退 message 原文） */
+  mode?: 'quick' | 'iterative'
+  /** 同一阶段连续熔断次数（1 起） */
+  consecutiveCircuitCount?: number
+  /** 是否已回滚到健康快照（D1 已就绪；未尝试/失败一律 false） */
+  rolledBack?: boolean
 }
 
 /** 阶段名映射（展示用；与 STAGE_LABELS 口径一致的本地最小面） */
@@ -66,6 +74,15 @@ export function GuardAlertCard({ sessionId }: { sessionId: string }): React.Reac
 
   if (!alert) return null
   const stageLabel = STAGE_LABELS[alert.stage] ?? alert.stage
+  // I-P7：有熔断上下文就用通俗安抚口径（第 1/2 次 vs ≥3 次特化 + 已回滚尾句），
+  // 否则回退主进程广播的原文（老版本主进程/其它发射点）。
+  const displayMessage = alert.mode
+    ? buildCircuitBreakMessage({
+        mode: alert.mode,
+        consecutiveCircuitCount: alert.consecutiveCircuitCount ?? 1,
+        rolledBack: alert.rolledBack === true,
+      })
+    : alert.message
 
   return (
     <div
@@ -77,7 +94,7 @@ export function GuardAlertCard({ sessionId }: { sessionId: string }): React.Reac
     >
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
       <div className="flex-1 min-w-0">
-        <div className="break-words">{alert.message}</div>
+        <div className="break-words">{displayMessage}</div>
         <div className="mt-0.5 text-muted-foreground">
           阶段「{stageLabel}」已暂停自动尝试（项目文件未删除）。
         </div>

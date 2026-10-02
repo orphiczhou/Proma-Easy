@@ -807,6 +807,19 @@ export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorSta
     map.set(id, hasBlock ? 'blocked' : 'running')
   }
 
+  // 跨 turn 的后台批准（如工程 host-task 单次批准）：工程运行由独立宿主任务发起，
+  // 发起它的 turn 早已收尾（running=false），此时侧栏若只看 running 就完全看不出「在等你批准」。
+  // 待处理请求本身就是阻塞事实，与是否 streaming 解耦；blocked 优先级最高。
+  const sessionsAwaitingDecision = new Set<string>([
+    ...pendingPerms.keys(), ...pendingAskUser.keys(), ...pendingExitPlan.keys(),
+  ])
+  for (const id of sessionsAwaitingDecision) {
+    const pending = (pendingPerms.get(id)?.length ?? 0)
+      + (pendingAskUser.get(id)?.length ?? 0)
+      + (pendingExitPlan.get(id)?.length ?? 0)
+    if (pending > 0) map.set(id, 'blocked')
+  }
+
   for (const id of unviewedCompleted) {
     if (!map.has(id)) {
       map.set(id, 'completed')

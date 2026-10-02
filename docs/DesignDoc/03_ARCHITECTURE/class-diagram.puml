@@ -1,0 +1,269 @@
+@startuml
+' DOC-3.2 | v0.5 | 日期: 2026-06-06 | 依赖: architecture.md v0.3
+' 覆盖: 5域22类, 前端UI/向导Agent/编程Agent/裁判Agent/基础设施
+' 变更: v0.4→v0.5, 终审R2(C不通过) → CODE→SANDBOX关系线改为注释(§3 mermaid无此边, §6文字保留设计意图)
+'       v0.3→v0.4, 新增前端UI层(AppShell)+移除幽灵关系+修正ROUTE→GUIDE方向+DevOps补关系+裁判引擎补属性
+
+package "前端UI层" #FCE4EC {
+
+  class AppShell {
+    -activePage: PageEnum
+    -previewState: PreviewState
+    -userEvents: EventQueue
+    +renderPage(page): void
+    +captureUserIntent(input): Intent
+    +forwardToRouter(intent): void
+    +injectDataAiId(html): HTMLFile
+  }
+
+}
+
+package "向导Agent引擎" #E8F4FD {
+  class GuideAgent {
+    -currentStage: StageEnum
+    -contextSummary: JSON
+    +route(stage): Role
+    +serializeContext(): JSON
+    +backfillContext(summary): void
+    +detectCompletion(signal): boolean
+  }
+
+  class RequirementAnalyst {
+    -userIntent: IntentTree
+    -interviewRounds: int
+    -prdDraft: PRDDocument
+    +conductInterview(input): Question[]
+    +generatePRD(intent): PRDDocument
+    +generateGWT(prd): Feature[]
+    +detectContradiction(old, new): Conflict[]
+  }
+
+  class UIUXAdvisor {
+    -prototypeFiles: HTMLFile[]
+    -visualReviewResults: ReviewNote[]
+    +generatePrototype(prd): HTMLFile[]
+    +reviewUI(screenshot): ReviewNote[]
+    +injectDataAiId(html): HTMLFile
+    +suggestFeatures(prd): Suggestion[]
+  }
+
+  class ArchitectDesigner {
+    -techStack: TechStack
+    -plantumlDraft: PlantUMLSource
+    +selectTech(prd, template): TechStack
+    +generatePUML(prd, tech): PlantUMLSource
+    +generateAPISpec(prd, puml): APISpec
+    +isFrontstage(mode): boolean
+  }
+
+  class EngineeringManager {
+    -template: ProjectTemplate
+    -sprintPlan: SprintPlan
+    -teamConfig: TeamConfig
+    +matchTemplate(prd): ProjectTemplate
+    +configureTeam(template): TeamConfig
+    +planSprints(prd, template): SprintPlan
+    +isFrontstage(mode): boolean
+  }
+
+  GuideAgent --> RequirementAnalyst : 调度
+  GuideAgent --> UIUXAdvisor : 调度
+  GuideAgent --> ArchitectDesigner : 调度
+  GuideAgent --> EngineeringManager : 调度
+
+  RequirementAnalyst ..> UIUXAdvisor : 共享上下文
+  ArchitectDesigner ..> EngineeringManager : 共享上下文
+}
+
+package "编程Agent引擎" #FFF3E0 {
+  class CodingAgent {
+    -language: LanguageEnum
+    -fixAttempts: int
+    -currentCode: CodeTree
+    +generateCode(spec): CodeTree
+    +autoHeal(error): CodeTree
+    +readDocumentSystem(path): Spec
+    ' maxFixAttempts 固定为 3，枚举值由架构规约硬约束
+  }
+
+  class FrontendDeveloper {
+    -componentTree: ComponentTree
+    -apiMockData: MockData
+    +implementUI(prototype, spec): CodeTree
+    +integrateAPI(endpoints): CodeTree
+  }
+
+  class BackendDeveloper {
+    -dbSchema: DBSchema
+    -apiEndpoints: Endpoint[]
+    +implementAPI(spec): CodeTree
+    +setupDatabase(model): DBSchema
+  }
+
+  class TestAgent {
+    -featureFiles: FeatureFile[]
+    -testReport: TestReport
+    +executeGWT(features): TestReport
+    +generateScenarios(prd): FeatureFile[]
+    +reportResults(): TestReport
+    +attackWithEdgeCases(features): FeatureFile[]
+  }
+
+  class ReviewerAgent {
+    -reviewStandards: CodeStandard[]
+    +reviewCode(code): ReviewNote[]
+    +approve(changes): Approval
+  }
+
+  class CodingArchitect {
+    -plantumlSpec: PlantUMLSource
+    +verifyCompliance(code, puml): ComplianceReport
+    +auditClassStructure(code, puml): Diff[]
+  }
+
+  class DevOpsAgent {
+    -deployConfig: DeployConfig
+    -ciPipeline: CIPipeline
+    +setupCI(project): CIPipeline
+    +deploy(target): DeployResult
+  }
+
+  class ProjectManager {
+    -sprintBoard: SprintBoard
+    -riskLog: Risk[]
+    +trackProgress(sprint): Progress
+    +flagRisk(sprint): Risk
+  }
+
+  CodingAgent --> TestAgent : 交付测试
+  CodingAgent --> ReviewerAgent : 提交审查
+  CodingArchitect --> CodingAgent : 约束审核
+  CodingArchitect --> FrontendDeveloper : 约束审核
+  CodingArchitect --> BackendDeveloper : 约束审核
+  ProjectManager --> CodingAgent : 进度追踪
+  ProjectManager --> TestAgent : 进度追踪
+  ProjectManager --> DevOpsAgent : 部署协调
+
+  ' 角色覆盖说明：快消型仅激活 CodingAgent+TestAgent; 长期迭代型按模板激活 Frontend/Backend/DevOps
+}
+
+package "裁判Agent引擎" #E8F5E9 {
+  class JudgeAgent {
+    -hardCheckers: HardConstraintChecker[]
+    -softEvaluator: SoftConstraintEvaluator
+    -maxRetries: int
+    +executeHardCheck(docPath): HardCheckReport
+    +executeSoftEval(docPath): SoftEvalReport
+    +verdict(hard, soft): Verdict
+    ' maxRetries: 快消型=2, 长期迭代型=∞ (见architecture.md §9.3)
+  }
+
+  class HardConstraintChecker {
+    -ruleset: CheckRule[]
+    -failures: CheckFailure[]
+    +checkPRDCompleteness(prd): CheckResult
+    +checkPlantUMLSyntax(puml): CheckResult
+    +checkAPIEndpoints(spec): CheckResult
+    +checkSprintGranularity(plan): CheckResult
+    +checkTeamConfig(config): CheckResult
+    +checkGWTExistence(testDir): CheckResult
+    +checkCodeClassMatches(code, puml): CheckResult
+  }
+
+  class SoftConstraintEvaluator {
+    -criteria: EvalCriteria[]
+    -scores: EvalScore[]
+    +evaluateLogicConsistency(prd, arch): EvalResult
+    +evaluateTestability(prd, features): EvalResult
+    +evaluateCompleteness(docs): EvalResult
+    +evaluateReadability(docs): EvalResult
+  }
+
+  JudgeAgent *-- HardConstraintChecker : 组合
+  JudgeAgent *-- SoftConstraintEvaluator : 组合
+}
+
+package "基础设施" #F3E5F5 {
+  class SnapshotManager {
+    -snapshotIndex: JSON
+    +createSnapshot(projectPath): Snapshot
+    +listSnapshots(projectId): Snapshot[]
+    +rollback(snapshotId, projectPath): void
+    +autoTrigger(event): void
+  }
+
+  class TelemetryCollector {
+    -eventBuffer: JSONLFile
+    -events: Event[]
+    +collect(event): void
+    +flush(): void
+    +listEvents(): Event[]
+  }
+
+  class ProjectDocumentSystem {
+    -rootPath: string
+    +createStructure(template): DirTree
+    +validateStructure(path): CheckResult
+    +getDoc(path, docId): Document
+  }
+
+  class SandboxManager {
+    -projectBoundary: Path
+    -resourceLimits: Limits
+    +isolate(projectPath): void
+    +enforceLimits(process): void
+    +validatePath(path): boolean
+  }
+
+  class SessionRouter {
+    -roleSequence: Role[]
+    -systemPrompts: Map<Role, Prompt>
+    -modelConfigs: Map<Role, ModelConfig>
+    +switchTo(nextRole, context): Session
+    +backfill(session, summary): void
+    +skipToBackstage(role): void
+  }
+
+  SnapshotManager --> ProjectDocumentSystem : 操作
+  SandboxManager --> ProjectDocumentSystem : 约束
+}
+
+' ==================== 跨域关系 ====================
+' 以下关系与 architecture.md §3 模块依赖图一致
+
+' 文档交接与审查流
+ProjectDocumentSystem ..> JudgeAgent : 提交审查
+JudgeAgent ..> GuideAgent : 退回
+JudgeAgent ..> CodingAgent : 通过
+
+' 编程↔裁判 测试反馈
+TestAgent ..> JudgeAgent : 提交测试报告
+
+' 编程→快照 错误触发
+CodingAgent ..> SnapshotManager : 错误触发快照
+
+' 向导→快照 阶段完成触发 (PRD确认/原型确认/架构确认)
+GuideAgent ..> SnapshotManager : 阶段完成触发快照
+
+' 快照→文档 回滚操作 (已在基础设施package内: SnapshotManager → ProjectDocumentSystem)
+
+' 辅助依赖
+SessionRouter --> GuideAgent : 配置会话
+GuideAgent ..> ProjectDocumentSystem : 写入文档
+' PlantUML契约通过DOCS间接流转: ArchitectDesigner→DOCS→CodingArchitect(详见architecture.md §3)
+CodingAgent ..> ProjectDocumentSystem : 读写
+' 设计约束: CodingAgent受SandboxManager L0+L1约束(architecture.md §6)
+
+' 前端UI层连接
+AppShell --> SessionRouter : 转发用户意图
+AppShell ..> TelemetryCollector : 用户操作事件
+
+' 埋点上报 — 覆盖 architecture.md §3 全部6条 TELE 路径(UI/ROUTE/GUIDE/CODE/JUDGE/SNAP)
+SessionRouter ..> TelemetryCollector : 角色切换事件
+GuideAgent ..> TelemetryCollector : 阶段流转事件
+CodingAgent ..> TelemetryCollector : 编程执行事件
+TestAgent ..> TelemetryCollector : 测试上报
+JudgeAgent ..> TelemetryCollector : 判定事件
+SnapshotManager ..> TelemetryCollector : 快照事件
+
+@enduml

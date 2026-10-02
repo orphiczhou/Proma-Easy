@@ -13,10 +13,12 @@ import type {
   AgentSessionMeta,
   AgentStreamPayload,
   AskUserRequest,
+  NanjuDelegationSlot,
   PermissionRequest,
   PromaPermissionMode,
   SDKMessage,
 } from '@proma/shared'
+import { isNanjuDelegationSlot } from '@proma/shared'
 import {
   createAgentSession,
   getAgentSessionMeta,
@@ -38,8 +40,9 @@ import {
 } from './agent-collaboration-utils'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel, pickDefaultModelForChannel } from './agent-model-selection'
 import { findNanjuFallbackProject, getFallbackChain, recordModelFallbackUsed, shouldSkipFallbackChainForDelegation, type ModelEndpoint } from './nanju-model-fallback'
+import { waitForLiveRecords as waitForLiveRecordsPure } from './agent-collaboration-wait'
 
-interface CollaborationToolContext {
+export interface CollaborationToolContext {
   sessionId: string
   channelId: string
   modelId?: string
@@ -73,11 +76,23 @@ interface DelegationRecord {
   resolveCompletion: () => void
   /** v2.4：nanju_clarify_proxy 代理委派标记（独立时钟/渠道固定/工具面封闭的判定源） */
   nanjuProxy?: boolean
+  /**
+   * W-B B2：委派槽位（内部 producer 权威写入；公开工具入口不可设置）。
+   * 由 startDelegation 从内部参数 args.slot 写入，并同步到子会话 meta。
+   */
+  slot?: NanjuDelegationSlot
 }
 
 
 const MAX_WAIT_SECONDS = 2 * 60 * 60
 const DEFAULT_WAIT_SECONDS = 30 * 60
+/**
+ * W24/M-1 修复（用户裁定 2026-09-13 19:34）：南大向导 auto 开启项目的 wait 分段上限 = 2 分钟。
+ * 背景：wait_for_delegations 不被 blocked 唤醒 → L1 白等默认 30min（实测体验≈20min），
+ * 自动补全介入被拖慢、全链 6h 的主因。auto 项目分段轮询：每 2min 回到 L1 手里重估局面；
+ * 通用 blocked 即唤醒（waitForLiveRecords）对所有会话生效。
+ */
+const NANJU_AUTO_WAIT_SECONDS = 2 * 60
 const RESULT_SUMMARY_CHAR_LIMIT = 50_000
 const DELEGATION_GOAL_CHAR_LIMIT = 1_000
 /** live Map 中保留的已结束委派上限，超出时按完成时间清理最老的（持久化仍可回查） */
@@ -200,6 +215,30 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
   console.log('[协作工具] EventBus 阻塞事件监听已注册')
 }
 
+/**
+ * W24-3：按 root 会话归属枚举运行中委派标题（向导图子步骤推导的事实源）。
+ * 覆盖任意深度嵌套（L1 直接子委派 + L2 内部 inline AC 攻防孙委派——rootSessionId 链）；
+ * nanjuProxy 代理委派除外（代答不是阶段工序）。
+ */
+export function listRunningDelegationTitlesByRoot(rootSessionId: string): string[] {
+  const out: string[] = []
+  for (const record of delegations.values()) {
+    if (record.status !== 'running') continue
+    if (record.nanjuProxy === true) continue
+    if (record.parentSessionId === rootSessionId) {
+      out.push(record.title)
+      continue
+    }
+    // W24-3 实测修正：inline 委派（L2 内部 AC 攻防）不写 child meta（parentSessionId/
+    // rootSessionId 均空）——改走 DelegationRecord.parentSessionId 查父会话 meta 的
+    // rootSessionId（L2 由 L1 非 inline 委派创建，meta 齐全：root=L1）。
+    const parentMeta = getAgentSessionMeta(record.parentSessionId)
+    const parentRoot = parentMeta?.rootSessionId ?? parentMeta?.id
+    if (parentRoot === rootSessionId) out.push(record.title)
+  }
+  return out
+}
+
 function getPendingBlockedEvents(delegationId: string): BlockedEvent[] {
   return Array.from(blockedEvents.values()).filter((be) => be.delegationId === delegationId && !be.resolved)
 }
@@ -222,6 +261,62 @@ function pruneFinishedDelegations(): void {
     .forEach((item) => delegations.delete(item.delegationId))
 }
 
+
+/**
+ * B2：公开工具入口剥离内部字段（slot）——L1/L2 无自报载体，视觉槽位权威只在内部
+ * producer。此函数只用于工具 execute 分支；内部调用（startNanjuProxyDelegation 等）
+ * 不经此处，slot 不会被剥离。
+ */
+function stripInternalDelegationFields<T extends DelegateAgentArgs>(args: T): T {
+  const { slot: _internalSlot, ...rest } = args
+  return rest as T
+}
+
+/**
+ * B-a：主进程授权的独立视觉委派端点（唯一可信写入点 = orchestrator canUseTool）。
+ *
+ * 为什么需要它：L1 的 `delegate_agent` 入参由模型生成，不可信；而公开工具入口会剥离 `slot`
+ * （stripInternalDelegationFields），所以「在 canUseTool 里改 toolInput」的写法会写入后立刻被剥掉。
+ * 这里改用同进程共享的登记表：orchestrator 用 `resolveVisualValidatorSlotForProject`（config 驱动的
+ * producer 权威）判定端点后登记，工具 execute 只在「委派目标与该端点完全一致」时补 slot。
+ * 模型无法伪造：公开 schema 无 slot，登记值只能由主进程写入，且端点为 config 事实。
+ */
+const authorizedVisualEndpoints = new Map<string, { channelId: string; modelId: string }>()
+
+/**
+ * 登记/撤销某父会话被授权的独立视觉端点（orchestrator 在 L1 委派放行时调用）。
+ * 传 null 表示撤销（非活跃项目/未配置/同端点自证等），避免陈旧登记跨阶段生效。
+ */
+export function registerAuthorizedVisualDelegationEndpoint(
+  parentSessionId: string,
+  endpoint: { channelId: string; modelId: string } | null,
+): void {
+  if (!endpoint) {
+    authorizedVisualEndpoints.delete(parentSessionId)
+    return
+  }
+  authorizedVisualEndpoints.set(parentSessionId, { channelId: endpoint.channelId, modelId: endpoint.modelId })
+}
+
+/** 供测试/诊断观察当前登记（不进工具面，不可由模型读写） */
+export function getAuthorizedVisualDelegationEndpoint(
+  parentSessionId: string,
+): { channelId: string; modelId: string } | undefined {
+  return authorizedVisualEndpoints.get(parentSessionId)
+}
+
+/**
+ * B-a：按登记端点判定是否给该委派补内部 slot（端点是 channel+model 全等，判据与 gate 机制二同源）。
+ * 已有内部 slot 的调用（startSlotBoundDelegation）保持不变。
+ */
+function applyAuthorizedDelegationSlot<T extends DelegateAgentArgs>(parentSessionId: string, args: T): T {
+  if (isNanjuDelegationSlot(args.slot)) return args
+  const endpoint = authorizedVisualEndpoints.get(parentSessionId)
+  if (!endpoint) return args
+  if ((args.channelId?.trim() ?? '') !== endpoint.channelId) return args
+  if ((args.modelId?.trim() ?? '') !== endpoint.modelId) return args
+  return { ...args, slot: 'visual-validator' }
+}
 
 function normalizeTitle(input: string | undefined, fallback: string): string {
   const trimmed = input?.trim()
@@ -267,6 +362,8 @@ export interface RunningDelegationView {
   isNanjuProxy?: boolean
   /** v2.4 兼容视图：nanju-ipc 关闭处置按 meta.nanjuProxy 形态消费（B 域接线字段，D7 §7） */
   meta?: { nanjuProxy?: boolean }
+  /** W-B B2：内部 producer 写入的委派槽位（权威；缺省表示未标注） */
+  slot?: NanjuDelegationSlot
 }
 
 /** 列出父会话下全部运行中委派（内存 live Map；重启后的遗留委派不在内） */
@@ -282,6 +379,7 @@ export function listRunningDelegationsForParent(parentSessionId: string): Runnin
       hasPendingBlockedEvents: getPendingBlockedEvents(item.delegationId).length > 0,
       isNanjuProxy: item.nanjuProxy === true,
       meta: item.nanjuProxy === true ? { nanjuProxy: true } : undefined,
+      slot: item.slot,
     }))
 }
 
@@ -341,6 +439,26 @@ export function startNanjuProxyDelegation(
     status: record.status,
     resultSummary: record.resultSummary,
     completion: record.completion,
+  }
+}
+
+/**
+ * B2：内部 slot 绑定的委派（供 orchestrator/I 接线；**不经公开工具面**）。
+ *
+ * 与 delegate_agent 的区别：slot 由内部 producer 权威传入（不进工具 schema），
+ * startDelegation 会把它写入 DelegationRecord.slot 与子会话 meta.delegationSlot。
+ * 公开工具入口会剥离 slot（stripInternalDelegationFields），所以 L1/L2 无法伪造。
+ */
+export function startSlotBoundDelegation(
+  ctx: CollaborationToolContext,
+  args: DelegateAgentArgs & { slot: NanjuDelegationSlot },
+): PiDelegationToolResult {
+  const parent = assertCanCreateDelegation(ctx)
+  const created = startDelegation(ctx, parent, args)
+  return {
+    delegationId: created.record.delegationId,
+    effectivePermissionMode: created.effectivePermissionMode,
+    effectiveModelId: created.effectiveModelId,
   }
 }
 
@@ -477,6 +595,12 @@ interface DelegateAgentArgs {
    * 内部通道传入：inline 最小 meta{nanjuProxy:true} + 渠道固定跳 fallback 链 + 独立时钟。
    */
   nanjuProxy?: boolean
+  /**
+   * W-B B2：委派槽位（**内部专用**，不暴露在 delegate_agent/delegate_agents 工具 schema）。
+   * 权威来源为 nanju-router-prompt.resolvePhaseDelegationSlots（config/schema 驱动）；
+   * 公开工具入口会剥离此字段（见 stripInternalDelegationFields），防 L1/L2 伪造内部身份。
+   */
+  slot?: NanjuDelegationSlot
 }
 
 interface StartDelegationResult {
@@ -620,6 +744,7 @@ function getDelegationSummary(record: DelegationRecord): Record<string, unknown>
     resultSummary: record.resultSummary,
     pendingBlockedEvents: getPendingBlockedEvents(record.delegationId),
     nanjuProxy: record.nanjuProxy === true,
+    slot: record.slot,
   }
 }
 
@@ -787,37 +912,15 @@ function getFinishedDelegationCount(records: DelegationRecord[]): number {
   return records.filter((record) => record.status !== 'running').length
 }
 
-async function waitForLiveRecords(
+function waitForLiveRecords(
   records: DelegationRecord[],
   timeoutSeconds: number,
   liveTarget: number,
-): Promise<'completed' | 'timeout'> {
-  if (getFinishedDelegationCount(records) >= liveTarget) {
-    return 'completed'
-  }
-
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      new Promise<'completed'>((resolve) => {
-        const check = () => {
-          if (getFinishedDelegationCount(records) >= liveTarget) {
-            resolve('completed')
-          }
-        }
-        for (const record of records) {
-          if (record.status === 'running') {
-            record.completion.then(check)
-          }
-        }
-      }),
-      new Promise<'timeout'>((resolve) => {
-        timeout = setTimeout(() => resolve('timeout'), timeoutSeconds * 1000)
-      }),
-    ])
-  } finally {
-    if (timeout) clearTimeout(timeout)
-  }
+): Promise<'completed' | 'timeout' | 'blocked'> {
+  // W24/M-1：实现抽至 agent-collaboration-wait（纯逻辑可单测）；此处注入真实阻塞计数
+  return waitForLiveRecordsPure(records, timeoutSeconds, liveTarget, {
+    countPendingBlocked: (delegationId: string) => getPendingBlockedEvents(delegationId).length,
+  })
 }
 
 function getCurrentParentPermissionMode(
@@ -892,6 +995,8 @@ function startDelegation(
   const task = assertNonBlank(args.task, 'task')
   const delegationId = randomUUID()
   const role = args.role ?? 'custom'
+  // B2：内部 slot（白名单校验；未知值不写入——回退文本检测由 gate 侧完成）
+  const slot = isNanjuDelegationSlot(args.slot) ? args.slot : undefined
   const title = normalizeTitle(args.title, `协作：${task}`)
   const goal = truncateText(task, DELEGATION_GOAL_CHAR_LIMIT)
   const parentPermissionMode = getCurrentParentPermissionMode(parent, ctx.permissionMode)
@@ -988,12 +1093,19 @@ function startDelegation(
       delegationDepth: (parent?.delegationDepth ?? 0) + 1,
       delegationGoal: goal,
       permissionMode,
+      ...(slot ? { delegationSlot: slot } : {}),
     })
   } else if (args.nanjuProxy === true) {
     // v2.4（D7 §4）：inline 代理委派写最小 meta——仅 {nanjuProxy:true}，不写
     // sourceDelegationId（避免 W19 未绑定写豁免扩散到普通 inline 会话）；路由门禁
     // 首分支（isNanjuProxySession）据此走代理工具面白名单（思考/WebSearch/WebFetch/Read/LS）。
     updateAgentSessionMeta(child.id, { nanjuProxy: true })
+  } else if (slot) {
+    // R3：inline（非代理）委派同样写 delegationSlot meta——视觉验证者按 prompt 要求走
+    // inline:true，若只在 !inlineMode 写 meta，该槽位在 inline 路径永远写不进去（自相矛盾）。
+    // 与 record.slot 保持同一事实：仅在内部 slot 存在时写，不新增其他 meta 字段。
+    // B-a：updateAgentSessionMeta 白名单已含 delegationSlot，类型桥接已删除。
+    updateAgentSessionMeta(child.id, { delegationSlot: slot })
   }
 
   const record: DelegationRecord = {
@@ -1011,6 +1123,7 @@ function startDelegation(
     completion,
     resolveCompletion,
     nanjuProxy: args.nanjuProxy === true ? true : undefined,
+    slot,
   }
   delegations.set(delegationId, record)
   pruneFinishedDelegations()
@@ -1161,7 +1274,8 @@ export function buildPiCollaborationTools(
         allowSubDelegation: Type.Optional(Type.Boolean({ description: '允许子会话内部创建 inline 子会话（南大向导 AC 审计用）。' })),
       }),
       async execute(toolCallId: string, params: unknown) {
-        const args = params as DelegateAgentArgs
+        // B-a：先剥离模型自报 slot，再按主进程登记端点补权威 slot（端点全等才盖章）
+        const args = applyAuthorizedDelegationSlot(ctx.sessionId, stripInternalDelegationFields(params as DelegateAgentArgs))
         const result = piDelegateAgentCalls.getOrCreate(ctx.sessionId, toolCallId, () => {
           const parent = assertCanCreateDelegation(ctx)
           const created = startDelegation(ctx, parent, args)
@@ -1188,7 +1302,9 @@ export function buildPiCollaborationTools(
         items: Type.Array(delegateItemType, { description: '要创建的子会话列表，最多 50 个' }),
       }),
       async execute(toolCallId: string, params: unknown) {
-        const args = params as { sharedContext?: string; items: DelegateAgentArgs[] }
+        const raw = params as { sharedContext?: string; items: DelegateAgentArgs[] }
+        // B2：公开工具入口剥离内部 slot 字段（批量项同样处理）；B-a：再按登记端点补权威 slot
+        const args = { ...raw, items: (raw.items ?? []).map((item) => applyAuthorizedDelegationSlot(ctx.sessionId, stripInternalDelegationFields(item))) }
         const batch = piDelegateAgentsCalls.getOrCreate(ctx.sessionId, toolCallId, () => {
           const parent = assertCanCreateDelegation(ctx, args.items.length)
           const created: PiDelegationToolResult[] = []
@@ -1242,7 +1358,7 @@ export function buildPiCollaborationTools(
         delegationIds: Type.Optional(Type.Array(Type.String(), { description: '要等待的委派 ID' })),
         mode: Type.Optional(Type.Union([Type.Literal('all'), Type.Literal('any')])),
         minCompleted: Type.Optional(Type.Number({ description: 'mode=any 时至少等待完成的数量，默认 1' })),
-        timeoutSeconds: Type.Optional(Type.Number({ description: '最长等待秒数，默认 1800' })),
+        timeoutSeconds: Type.Optional(Type.Number({ description: '最长等待秒数，默认 1800；南大向导 auto 项目自动分段为 120 秒（W24/M-1）。检测到子会话阻塞事件会提前返回 status=blocked（不等到超时）' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { delegationIds?: string[]; mode?: 'all' | 'any'; minCompleted?: number; timeoutSeconds?: number }
@@ -1258,19 +1374,45 @@ export function buildPiCollaborationTools(
         }
         const mode = args.mode ?? 'all'
         const minCompleted = args.minCompleted ?? 1
-        const timeoutSeconds = Math.min(args.timeoutSeconds ?? DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS)
+        // W24/M-1：南大 auto 项目 wait 分段 2min（未显式传更短值时）；显式传值尊重但不放大
+        const nanjuAutoProject = findNanjuFallbackProject(ctx.workspaceSlug, ctx.sessionId)
+        const isNanjuAuto = nanjuAutoProject?.autoClarify?.enabled === true
+        const requestedSeconds = args.timeoutSeconds ?? DEFAULT_WAIT_SECONDS
+        const timeoutSeconds = Math.min(
+          isNanjuAuto ? Math.min(requestedSeconds, NANJU_AUTO_WAIT_SECONDS) : requestedSeconds,
+          MAX_WAIT_SECONDS,
+        )
         const targetCompleted = mode === 'all' ? totalTargets : Math.max(1, Math.min(minCompleted, totalTargets))
         const liveTarget = Math.max(0, targetCompleted - settled.length)
         const waitResult = liveRecords.length > 0
           ? await waitForLiveRecords(liveRecords, timeoutSeconds, liveTarget)
           : 'completed'
         const allDelegations = [...liveRecords.map(getDelegationSummary), ...settled]
+        // W24/M-1：blocked 提前返回——把未解决阻塞事件带回给 L1（nanju auto → nanju_clarify_proxy；普通会话 → answer_delegation_question 或再 wait）
+        const pendingBlockedEvents = waitResult === 'blocked'
+          ? liveRecords.flatMap((record) =>
+            getPendingBlockedEvents(record.delegationId).map((be) => ({
+              id: be.id,
+              delegationId: be.delegationId,
+              type: be.type,
+              category: be.category ?? 'other',
+              question: be.askUserQuestions?.[0]?.question?.slice(0, 80) ?? be.permissionToolName ?? '',
+            })))
+          : []
         return piJsonResult({
           status: waitResult,
           mode,
           completedCount: allDelegations.filter((item) => item.status !== 'running').length,
           runningCount: allDelegations.filter((item) => item.status === 'running').length,
           delegations: allDelegations,
+          ...(pendingBlockedEvents.length > 0
+            ? {
+              pendingBlockedEvents,
+              note: '检测到子会话阻塞事件（等待应答），提前返回。南大向导 auto 模式：请立即调用 nanju_clarify_proxy（blockedEventIds）代答/代决；普通会话：answer_delegation_question 应答或处理后再次 wait_for_delegations。',
+            }
+            : waitResult === 'blocked'
+              ? { note: '检测到子会话阻塞事件但已解除（竞态），如仍需结果请再次 wait_for_delegations。' }
+              : {}),
         })
       },
     }),

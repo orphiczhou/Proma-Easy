@@ -1,0 +1,81 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-project-snapshots.test.ts:
+(pass) B-c 存储位置与捕获 > storageDir 在工程目录之外（D 布局守卫）且可被捕获复用 [4.96ms]
+(pass) B-c 存储位置与捕获 > 工程目录不存在 → fail-closed 不返回 snapshotId 也不建快照目录 [0.67ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > 捕获成功 → 会话快照携带 fileSnapshotId 且描述含文件恢复承诺 [4.10ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > 捕获失败（存储目录不可写）→ 会话快照仍在但 fileSnapshotId 不写（fail-closed） [1.70ms]
+(pass) B-c 三段式检查点（S4：fileSnapshotId 唯一写入路径） > S4 守卫：清单被篡改的捕获快照不得被关联为文件可恢复 [2.38ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S8：含符号链接的工程恢复后 complete=false 且文案列出 notRestored [15.55ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > 恢复完整时文案含备份占用与「不自动清理」 [9.39ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S9：快照 id 非法/快照目录缺失 → 给可行动提示且不动工程 [1.17ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > S10：占用统计列出快照与备份数量/字节，且明确不自动清理 [3.00ms]
+(pass) B-c 恢复（S8 完整性 / S9 跨设备 / S10 占用） > 无任何快照时占用统计为零且不抛错 [0.64ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 已关联文件快照 → 回滚同时恢复工程文件 [14.59ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 未关联文件快照（legacy fork 快照）→ 明确只回滚会话分支 [4.04ms]
+(pass) B-c 回滚语义（会话分支 vs 工程文件不得混说） > 快照不存在 → ok=false 且不抛错 [0.76ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > capture 成功返回 D 的 UUID 字符串快照 id（原样透传，不做数值派生） [1.80ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > capture 失败必须抛错（不得静默成功）：工程目录缺失 → 抛错且原因可读 [1.13ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > rollback 原样透传 D 结构结果：成功时 ok=true + restoredFiles + 备份目录 [7.12ms]
+(pass) B-d FileRollbackPort 薄壳（E 的 D 端口适配） > rollback 快照目录不可用 → ok=false + 语义 reason（不抛错、不碰工程） [1.14ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 无快照 → null（调用方据此 fileRollbackAvailable=false） [1.19ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 存在 pre-modify 已关联快照 → 选它（本次修改前的健康态），标签取描述 [6.51ms]
+(pass) B-d 回滚目标选取（只认已关联文件快照的快照） > 只有未关联文件快照的会话快照 → null（避免把「只切分支」说成能恢复工程） [1.38ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 完整恢复切到新的历史上下文分支，阶段回退且旧交付授权失效，恢复前版本可再次选择 [22.20ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 损坏目标文件快照不会切换会话/阶段，并返回失败而非非空对象成功 [9.92ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 会话快照丢失/工作区仍忙时恢复不修改文件 [3.83ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 状态提交失败先补偿文件与会话；补偿失败则保持硬阻塞 [23.03ms]
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 旧快照阶段未知只报partial并阻止新执行，可回恢复前版本解除 [21.07ms]
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-ljoh7a/project-p1-file-snapshots/_project-recovery.json
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-ljoh7a/project-p1-file-snapshots/_project-recovery.json
+(pass) B1 恢复事务：会话、文件、阶段和失败补偿 > 中断日志损坏和快照路径逃逸均不能静默成功 [1.14ms]
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-i4k6GO/project-p1-file-snapshots/_project-recovery.json
+[数据恢复] 主索引文件损坏: /tmp/nanju-proj-snap-i4k6GO/project-p1-file-snapshots/_project-recovery.json
+(pass) 恢复审计R3：可诊断、坏日志保留、项目边界 > 坏日志不自动放行；用户选择完整检查点后归档原始日志并恢复 [9.04ms]
+(pass) 恢复审计R3：可诊断、坏日志保留、项目边界 > 受影响工程仍可只读诊断；无关工程显式文件写不受阻，符号链接绕路仍被拒 [1.89ms]
+
+apps/electron/src/main/lib/nanju-snapshot.test.ts:
+(pass) 场景：旧 fork 会话快照（无文件快照）不得声称可恢复工程文件 > 缺 fileSnapshotId → fileRollback=false，描述明确「不恢复工程文件」，fork 元数据不当证据 [1.69ms]
+(pass) 场景：旧 fork 会话快照（无文件快照）不得声称可恢复工程文件 > 未知会话快照 id 回滚返回 null；link 对不存在会话快照返回 session-snapshot-missing 且不改数据 [0.68ms]
+(pass) 场景：S4 只有校验通过的真实文件快照才能声明可恢复 > createSnapshot 不接受文件快照参数：新建会话快照默认无文件恢复能力 [0.79ms]
+(pass) 场景：S4 只有校验通过的真实文件快照才能声明可恢复 > 任意 UUID 关联 → file-snapshot-missing，hasFileSnapshot 仍为 false（不得冒称可恢复） [1.00ms]
+(pass) 场景：S4 只有校验通过的真实文件快照才能声明可恢复 > 非法 id（含路径分隔符）→ invalid-id，拒绝防逃逸 [0.98ms]
+(pass) 场景：S4 只有校验通过的真实文件快照才能声明可恢复 > 真实存在的 W-D 快照 → 关联成功且持久化，fileRollback=true [2.83ms]
+
+apps/electron/src/main/lib/__tests__/nanju-file-snapshot.test.ts:
+(pass) 场景：正常捕获生成不可变文件快照 > 快照是真实拷贝：修改/删除源文件后快照内容不变，且 inode 不同（非 hardlink） [3.32ms]
+(pass) 场景：正常捕获生成不可变文件快照 > 清单 hash 与磁盘文件一致，contentHash 可重算验证 [3.72ms]
+(pass) 场景：捕获期间源文件被修改 → 拒绝并失败 > onProgress 注入变更：捕获中止、changedPaths 指明被改文件、无快照残留 [3.87ms]
+(pass) 场景：依赖/密钥/会话控制文件不入快照 > 清单与快照磁盘均不含排除项，但 .env.example 保留 [3.77ms]
+(pass) 场景：正常恢复到快照内容，恢复前当前工程保留 > 恢复后工程回到快照内容；恢复前状态（含新增文件）完整保留在备份目录 [11.09ms]
+(pass) 场景：排除类文件（密钥/依赖）跨恢复保留当前值 > 恢复后 .env 与 node_modules 是恢复前的当前内容，不来自快照也不丢失 [9.63ms]
+(pass) 场景：快照损坏或被篡改 → 恢复中止，当前工程原样保留 > 快照文件内容被改写（hash 不符）→ 中止，工程保持当前内容 [4.28ms]
+(pass) 场景：快照损坏或被篡改 → 恢复中止，当前工程原样保留 > 清单被篡改含路径逃逸（../）→ unsafe-path 拒绝，工程原样保留 [3.21ms]
+(pass) 场景：快照损坏或被篡改 → 恢复中止，当前工程原样保留 > 快照目录不存在 → snapshot-missing，工程原样保留 [1.77ms]
+(pass) 场景：恢复落位后校验失败 → 失败补偿回滚到恢复前状态 > 补偿后工程与恢复前逐字节一致，journal 记录 compensated [8.14ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > rename1 之前崩溃（备份后）：工程未动，recover 清理 staging 并报告 aborted-clean [10.50ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > rename1 之后、rename2 之前崩溃：工程目录缺失，recover 完成恢复并保留备份 [8.23ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > rename2 之后崩溃：工程已是快照内容，recover 清理 trash 报告 completed-restore [8.13ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > 无中断残留时 recover 报告 nothing-to-recover 且不动工程 [1.02ms]
+(pass) 场景：存储目录只读 → 捕获/恢复干净失败 > 捕获阶段 staging 无法创建 → io-error，源工程未动 [1.33ms]
+(pass) 场景：存储目录只读 → 捕获/恢复干净失败 > 恢复阶段备份无法写入 → 中止，当前工程未动 [3.59ms]
+(pass) 场景：已有活跃恢复事务 → 第二个恢复被锁拒绝 > 持锁方 pid 存活时 restore 返回 locked；pid 已死时接管并先 recover [9.18ms]
+(pass) 场景：产物形状稳定（供 D2/集成消费） > storageDir 只含 snapshots/_staging/_pre-restore-backups 与 journal，快照目录含 manifest.json+files/ [6.70ms]
+(pass) 场景 S1：恢复锁在所有出口都被自己释放，且不误删他人锁 > 补偿成功后 _restore.lock 已释放，同进程第二次 restore 不再返回 locked [13.14ms]
+(pass) 场景 S1：恢复锁在所有出口都被自己释放，且不误删他人锁 > 早期被他人活跃锁拒绝时不删除他人锁（token 不被误清） [1.95ms]
+(pass) 场景 S2：Proma 控制状态文件不入快照，恢复不回滚当前控制状态 > _project-info.json / _repair-log.json（含 .bak）不进清单不进快照，恢复后保持当前值 [18.06ms]
+(pass) 场景 S3：projectDir / storageDir 布局非法 → invalid-layout fail-closed 且无写入残留 > storageDir 嵌套在 projectDir 内：capture/restore/recover 全部 invalid-layout，不创建 staging/journal [2.40ms]
+(pass) 场景 S3：projectDir / storageDir 布局非法 → invalid-layout fail-closed 且无写入残留 > projectDir 与 storageDir 同址：capture/restore 拒绝，工程不受影响 [2.49ms]
+(pass) 场景 S5：陈旧锁被接管而非永久 locked > 锁内 procStart 与当前进程不符（pid 被复用）→ 接管并完成恢复 [9.01ms]
+(pass) 场景 S5：陈旧锁被接管而非永久 locked > 锁超过 TTL（pid 存活但 startedAt 过旧）→ 接管并完成恢复 [7.89ms]
+(pass) 场景 S6：rename2 完成但 journal 未更新窗口（掉电）→ recover 判已完成 > 故障点 after-restore-rename-before-journal：落位已发生，recover 报 completed-restore 且清 trash [9.63ms]
+(pass) 场景 S7：同 size 同 mtime 的内容变更被 sha256 二次比对检出 > 把已处理文件改成等长内容并还原 mtime → changed-during-capture 而非静默放过 [2.69ms]
+(pass) 场景 S8：symlink 不入快照且列入不可恢复清单，恢复语义不夸大 > manifest.unrecoverable 记录 symlink；restore 返回 notRestored 且 complete=false [8.54ms]
+(pass) 场景 S9：projectDir 与 storageDir 跨文件系统 → restore 明确 cross-device 拒绝 > 跨设备 rename 不静默降级；无第二文件系统时跳过（Linux 上 /dev/shm 常为 tmpfs） [2.22ms]
+(pass) 场景 S10：备份为全量（含 node_modules/.git）且返回 backupSizeBytes，不自动删除 > 恢复前备份包含依赖与 .git，结果携带 backupSizeBytes，备份目录保留 [11.96ms]
+(pass) 场景 S11：清单 contentHash 与实际 entries 自洽性校验 > 篡改 entries（重复条目使文件 hash 仍过）→ contentHash 不符被拒 [9.03ms]
+
+ 65 pass
+ 0 fail
+ 311 expect() calls
+Ran 65 tests across 3 files. [490.00ms]

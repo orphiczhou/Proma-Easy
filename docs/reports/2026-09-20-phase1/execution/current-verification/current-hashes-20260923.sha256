@@ -1,0 +1,7 @@
+40460eb82bc6cfebdc4a7519d6117111fb011de2be08ab3a55911dece9f46218  apps/electron/src/main/lib/nanju-acceptance-baseline.ts
+288388630acdf82aa1e123316042211e9e294d0485dafaa774c5e4f89a6e53cd  apps/electron/src/main/lib/nanju-project-snapshots.ts
+99451ad8f2dd8814fe3e3e76edb8af2d9ac023280e0c5cf135a50cfeab62b25a  apps/electron/src/main/lib/nanju-advance-recovery.ts
+b16f7fefb48b6053cd1db7b81e349613616ed7fa568871503a3e53df1b5459b6  apps/electron/src/main/lib/nanju-engineering-template.ts
+13fe6c527f6f99159824e1d468e5ae075a2f4e31e364761a820ea4f57482b5d9  apps/electron/src/main/lib/nanju-env-probe.ts
+c284906eec37f7f67dcd9bc6b539500bf0593ca3edf60b3a7ebaba94d8399cbf  apps/electron/resources/nanju-engineering-templates/check_env.sh
+42cab62d8fb37dd188e6ef7c5db68c4e1d2bfb486d8a2d0cd5f6788a9013a531  apps/electron/electron-builder.yml

@@ -9,7 +9,7 @@
  * 2. 模板落位：推进到 coding 时把对应品类模板全文从 resources 复制到项目目录
  *    00_ENGINEERING_TEMPLATE/template.md（L2 确定可读的路径）。
  * 3. 注入构建：coding 委派任务中注入「工程品类」节——品类声明 + 精简工程要点内联
- *    + 模板全文路径引用 + 与 GWT 验收锚点的对齐说明（08_APP/index.html 浏览器载体不变）。
+ *    + 模板全文路径引用 + 与真实工程验收的对齐说明（产物由架构契约决定）。
  *
  * 设计取舍（token 预算）：
  * - 内联仅精简要点（每品类 ~40 行，约 1-1.5K tokens），指令密度不稀释；
@@ -19,14 +19,22 @@
  * （electron-builder extraResources，与 nanju-roles 同模式）。测试可注入显式目录。
  */
 
-import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, copyFileSync, writeFileSync, unlinkSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import {
   isProjectCategory,
   getNanjuProjectDir,
+  getProjectEnvState,
+  setProjectEnvState,
+  listNanjuProjects,
+  getProjectSubStage,
   type ProjectCategory,
   type ProjectCategorySource,
 } from './nanju-project'
+import { resolveEngineeringTemplatesDirInternal, loadEngineeringResources, type EngineeringResourceIssue } from './nanju-engineering-resources'
+import { recordTelemetry } from './nanju-telemetry'
+import { emitGuideProgress } from './nanju-guide-progress'
 
 // ===== 品类元数据（注入用精简要点；全文见 resources/nanju-engineering-templates/） =====
 
@@ -43,7 +51,7 @@ export interface CategoryMeta {
   patterns: string[]
   /** 反模式警示（要点行） */
   antiPatterns: string[]
-  /** 08_APP/index.html 验收载体的品类化角色定义（与 GWT/预览锚点对齐） */
+  /** 品类交付与验收边界（字段名兼容已有消费者） */
   carrierRole: string[]
 }
 
@@ -52,35 +60,35 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
     label: 'Web 全栈应用',
     oneLiner: '浏览器访问的 Web 应用（前端 UI + 可选后端/数据），不是本地程序或命令行工具',
     stack: [
-      '零构建载体：纯 HTML/CSS/原生 JS（管线约束），单页多面板组织',
-      '长期演进锚点：Next.js App Router + TypeScript + Tailwind + Drizzle + tRPC（见模板全文）',
+      '按PRD选择静态页面或前后端工程，技术栈由架构确定，不施加零构建约束',
+      '技术栈参考：Next.js App Router + TypeScript + Tailwind + Drizzle + tRPC（见模板全文）',
     ],
     structure: [
-      '08_APP/：index.html 入口 + assets/ 资源 + js/ 模块（按 feature 分文件，不写单文件巨石）',
-      '状态与数据：stores/（状态）+ services/（数据访问），localStorage 键名加项目前缀',
+      '08_APP/：按架构组织前端、可选后端与构建配置（按feature分文件）',
+      '状态与数据：stores/（状态）+ services/（数据访问），持久化方案服从架构',
     ],
     patterns: [
       '组件与逻辑分离：UI 渲染层薄，业务逻辑集中在可独立测试的模块',
-      '环境差异：file:// 打开时无服务端，一切持久化走本地存储',
+      '环境差异：静态页面与真实服务分别测试；本地存储不得替代PRD要求的后端数据',
     ],
     antiPatterns: [
       '把整个应用写进一个 script 标签（>1000 行巨石）',
-      '假设有 Node/服务器环境（fetch 本地 json、require 等）',
+      '把未启动的后端服务或模拟响应当作实际运行成功',
     ],
     carrierRole: [
-      '08_APP/index.html 就是应用本体：全部用户故事在此实现，预览/点选纠错/GWT 验收都指向它',
+      '静态Web可用HTML本体验收；全栈Web必须测试真实前后端与持久化，不能统一使用file://替代服务。',
     ],
   },
   'api-backend': {
     label: 'API 后端服务',
     oneLiner: '为 Web/Mobile/第三方客户端提供接口的后端服务，核心资产是 API 与数据层，不是页面',
     stack: [
-      '长期演进锚点：Hono（TS）或 FastAPI（Python）+ PostgreSQL + Drizzle/SQLAlchemy + Zod/Pydantic',
+      '技术栈参考：Hono（TS）或 FastAPI（Python）+ PostgreSQL + Drizzle/SQLAlchemy + Zod/Pydantic',
       '统一契约：OpenAPI 文档自动生成；统一响应格式（data/meta/error + 错误码前缀）',
     ],
     structure: [
       '08_APP/server/：modules/<feature>/{routes,service,schema} 三件套 + middleware/（认证/限流/错误）',
-      '08_APP/index.html：API 演控台载体（见下）',
+      '08_APP/：真实服务入口、依赖与配置；可选API说明页不承担服务验收',
     ],
     patterns: [
       'feature-based 模块划分：每个业务域自带 routes/service/schema，禁止全局散落',
@@ -91,20 +99,19 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '无错误码体系的裸 throw；无验证直接透传用户输入',
     ],
     carrierRole: [
-      '08_APP/index.html = API 演控台（浏览器可打开）：端点清单 + 每个端点的参数/响应演示（用内置模拟数据）',
-      '演控台承担用户故事的验收演示；真实服务代码在 08_APP/server/ 按上述结构组织（可运行性由演控台模拟层展示）',
+      '交付真实API服务及其运行配置；必须向实际服务发送测试请求并验证响应和数据状态，演控台模拟不算服务验收。',
     ],
   },
   'mobile-app': {
     label: '移动应用',
     oneLiner: 'iOS/Android 移动应用（原生能力：相机/GPS/推送），不是响应式网页',
     stack: [
-      '长期演进锚点：React Native + Expo（Expo Router 文件路由）+ NativeWind + Zustand + TanStack Query',
+      '技术栈参考：React Native + Expo（Expo Router 文件路由）+ NativeWind + Zustand + TanStack Query',
       '存储：MMKV（KV）+ expo-sqlite（关系）；不是 localStorage',
     ],
     structure: [
       '08_APP/app/：Expo Router 文件路由（(tabs)/ 分组 + [id].tsx 动态路由）',
-      '08_APP/src/：components/ + hooks/ + stores/ + services/ + types/；08_APP/index.html 为验收载体（见下）',
+      '08_APP/src/：components/ + hooks/ + stores/ + services/ + types/；交付目标为移动应用构建产物',
     ],
     patterns: [
       '移动交互范式：底部 Tab 导航、原生手势、安全区适配（safe-area）',
@@ -115,24 +122,25 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '移动特性（手势/键盘避让/深链）完全缺席',
     ],
     carrierRole: [
-      '08_APP/index.html = 移动视口 UI 实现：以手机尺寸视口（如 390x844 框）呈现应用界面与交互',
-      '原生能力（相机/推送等）以清晰标注的模拟层呈现；RN/Expo 工程骨架按上述结构生成并存',
+      '交付实际移动构建产物；在对应模拟器或设备上验证界面与原生能力，手机尺寸网页不能替代移动验收。',
     ],
   },
   'desktop-app': {
     label: '桌面应用',
     oneLiner: '本地桌面程序（Windows/macOS/Linux），不是网站——不存在「部署上线」，运行在用户本机，有系统层能力',
     stack: [
-      '长期演进锚点：Tauri v2 + React + TypeScript（Vite + Tailwind + Zustand）；无 Rust 经验或重 Node 原生模块时备选 Electron',
-      '两层架构：UI 层（Web 技术，可浏览器渲染）+ 系统层（Rust/Node：文件/窗口/托盘/快捷键/输入法 hook 等，经 IPC 命令暴露）',
+      // P0-4（L1，2026-09-18）：双路径文案——与 desktop v2 模板 §1 技术栈矩阵对齐
+      //（P1 Python 快速验证 / P2 Tauri 正式交付），纠正 v1 仅推荐 Tauri 与实测 Python 栈的脱节。
+      '双路径技术栈（见模板全文 §1）：P1 快速验证路径（Python 3.10+，系统集成栈 pynput/sounddevice/pystray/xclip，本机可验证优先，适用系统集成类工具）',
+      'P2 正式交付路径（Tauri v2 + React + TypeScript + Vite + Tailwind + Zustand，UI 密集/跨平台分发；无 Rust 经验且重 Node 原生模块时备选 Electron；环境风险被 Spike 排除后转入）',
     ],
     structure: [
       '08_APP/src/：UI 层（components/layouts/features + stores + hooks，与 Web 前端同构）',
-      '08_APP/src-tauri/（或 electron/）：系统层骨架——commands/（IPC 命令清单与签名）、配置、权限声明（按模板组织）',
-      '08_APP/index.html：主窗口 UI 验收载体（见下）',
+      '08_APP/src-tauri/（或 electron/）：真实系统层——commands/（IPC 命令清单与签名）、配置、权限声明（按模板组织）',
+      '08_APP/：主窗口UI、原生壳与实际打包产物，清单见engineering.json',
     ],
     patterns: [
-      'IPC 边界：系统调用全部收敛到 commands 层（明确清单），UI 不直接触系统 API——载体与真实壳共用同一命令接口（载体中 mock 实现）',
+      'IPC 边界：系统调用全部收敛到 commands 层（明确清单），UI 不直接触系统 API——真实壳调用经批准的系统能力；mock仅用于隔离单测，不替代原生验收',
       '桌面惯例：自定义标题栏（macOS traffic lights 间距）、多窗口（主/设置/关于）、系统托盘、开机自启、自动更新',
       '安全：CSP 收紧、禁 eval、capabilities 按需授权（见模板 §4）',
     ],
@@ -142,21 +150,20 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '忽略离线/本地数据边界（桌面程序的数据在本机，不走云端）',
     ],
     carrierRole: [
-      '08_APP/index.html = 主窗口/设置界面的同构实现（零构建，浏览器直接打开）：桌面 UI 全部用户故事在此实现',
-      '系统层能力（托盘/全局快捷键/IME hook/文件访问等）在载体中以「模拟层」呈现（界面可见、标注为系统层 mock，经 commands 接口调用）',
-      '真实桌面工程骨架（src-tauri/ 或 electron/）按模板结构生成并存于 08_APP/，commands 签名与载体 mock 一致——后续接入真实壳时 UI 层零改动',
+      '交付真实桌面壳与系统层实现以及可运行产物；在目标桌面上测试全局快捷键、托盘或输入等PRD要求的能力。',
+      '浏览器同构UI只证明该UI上下文，系统mock不能证明原生链路。',
     ],
   },
   'cli-tool': {
     label: 'CLI 工具',
     oneLiner: '命令行工具（终端运行、参数驱动），不是图形界面应用',
     stack: [
-      '长期演进锚点：citty（unjs，声明式命令定义）+ unbuild + Vitest；或 Python/Go 按模板备选',
+      '技术栈参考：citty（unjs，声明式命令定义）+ unbuild + Vitest；或 Python/Go 按模板备选',
       '输出规范：chalk 颜色 + ora 进度 + 结构化退出码（0 成功/非 0 失败）',
     ],
     structure: [
       '08_APP/src/：index.ts 入口（命令树）+ commands/（子命令）+ lib/（可独立测试的核心逻辑）+ utils/',
-      '08_APP/index.html：命令演控台载体（见下）',
+      '08_APP/：CLI入口、参数帮助及可运行产物；命令演控台只可作为可选演示',
     ],
     patterns: [
       '命令薄、逻辑厚：commands/ 只做参数解析与输出编排，核心逻辑在 lib/ 可单测',
@@ -167,25 +174,24 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '无 --help 的命令；吞错误不输出',
     ],
     carrierRole: [
-      '08_APP/index.html = 命令演控台（浏览器可打开）：命令清单 + 参数说明 + 模拟执行演示（输入参数 → 展示输出）',
-      '用户故事的验收演示在演控台完成；真实 CLI 代码在 08_APP/src/ 按上述结构组织',
+      '交付实际CLI程序；驱动真实入口验证参数、标准输入输出、退出状态与实际副作用，演控台不是CLI验收。',
     ],
   },
   'ai-application': {
     label: 'AI 应用',
     oneLiner: '以 LLM 调用为核心逻辑的应用（聊天/生成/RAG/Agent），LLM 是主功能而非点缀',
     stack: [
-      '长期演进锚点：Vercel AI SDK（streamText/useChat）+ pgvector 或 LibSQL + Drizzle',
+      '技术栈参考：Vercel AI SDK（streamText/useChat）+ pgvector 或 LibSQL + Drizzle',
       'Prompt 管理：独立文件（.prompt/.md）+ {{placeholder}} 变量，Git 可追踪，不硬编码在代码里',
     ],
     structure: [
-      '08_APP/：index.html 入口 + prompts/（prompt 模板文件）+ js/（对话状态/流式渲染/护栏逻辑）',
-      '载体中 LLM 调用以本地模拟引擎呈现（见下），真实接入点集中在一个 provider 模块',
+      '08_APP/：按实际Web/桌面/CLI形态组织入口 + prompts/ + provider/ + 状态与交互层',
+      '真实模型接入集中在provider模块；模拟引擎只用于隔离测试，真实业务验收需实际端点证据',
     ],
     patterns: [
       '流式输出：逐 token 渲染 + 思考中指示；会话历史持久化（本地存储）',
       '护栏双端：输入（长度/注入检测）+ 输出（格式校验/敏感信息）',
-      '成本意识：每次调用记录 token 用量（模拟层也要展示用量概念）',
+      '成本意识：真实调用记录实际token用量，付费或外部发送必须经过用户确认',
     ],
     antiPatterns: [
       '在客户端/UI 层硬编码 API key',
@@ -193,8 +199,8 @@ export const CATEGORY_META: Record<ProjectCategory, CategoryMeta> = {
       '无长度/频率限制直接透传用户输入',
     ],
     carrierRole: [
-      '08_APP/index.html = 应用本体（AI 应用天然是 Web 形态）：聊天/生成界面全部用户故事在此实现',
-      'LLM 调用在载体中由「模拟引擎」承担（规则/模板生成，界面标注为演示模型），真实 provider 接入点预留为独立模块',
+      'AI应用不天然等于网页：平台和产物由PRD及架构决定；真实模型调用与数据链路须有对应测试证据。',
+      'mock只作明确标注的辅助测试，不可把规则生成替代实际ASR/LLM等主功能。',
     ],
   },
 }
@@ -246,28 +252,19 @@ export function resolveProjectCategoryForCoding(
 
 /**
  * 解析模板资源目录。候选依次探测（首个存在者胜）：
- * 1. 打包后 process.resourcesPath（electron-builder extraResources 落点）
- * 2. process.cwd()/apps/electron/resources（仓库根跑测试/脚本）
- * 3. process.cwd()/resources（dev:electron，cwd=apps/electron）
- * 全部不存在时返回候选 2（调用方 materialize 会 existsSync 降级为 null）。
+ * 1. 打包后 process.resourcesPath/app.asar（v0.17.131 加入；asar 内模板优先避免历史散装遮蔽）
+ * 2. 打包后 process.resourcesPath（electron-builder extraResources 落点）
+ * 3. process.cwd()/apps/electron/resources（仓库根跑测试/脚本）
+ * 4. process.cwd()/resources（dev:electron，cwd=apps/electron）
+ * 全部不存在时返回候选 0（调用方 existsSync 降级为 null/失败）。
  * 测试注入 explicitBase 时直接使用。
+ *
+ * v0.17.132：本实现下沉至 nanju-engineering-resources.resolveEngineeringTemplatesDirInternal
+ * 统一权威（manifest 校验逻辑与目录解析共用同源），本处 re-export 保持既有 import
+ * 不破坏 W3 既有 64 用例。
  */
 export function resolveEngineeringTemplatesDir(explicitBase?: string): string {
-  if (explicitBase) return join(explicitBase, 'nanju-engineering-templates')
-  const bases: string[] = []
-  // Electron 主进程检测用 process.versions.electron（无副作用）：bun/node 测试环境下
-  // require('electron') 会触发包 wrapper 的二进制下载副作用，禁止在模块加载路径引入
-  if (typeof process.versions.electron === 'string' && (process as { type?: string }).type === 'browser') {
-    bases.push(process.resourcesPath as string)
-  }
-  bases.push(join(process.cwd(), 'apps', 'electron', 'resources'))
-  bases.push(join(process.cwd(), 'resources'))
-  for (const base of bases) {
-    if (existsSync(join(base, 'nanju-engineering-templates'))) {
-      return join(base, 'nanju-engineering-templates')
-    }
-  }
-  return join(bases[0]!, 'nanju-engineering-templates')
+  return resolveEngineeringTemplatesDirInternal(explicitBase)
 }
 
 /** 项目内模板落位目录（00_ENGINEERING_TEMPLATE/，L2 可读） */
@@ -279,9 +276,26 @@ export function getProjectTemplateDir(workspaceSlug: string, projectId: string):
  * 把品类模板全文复制到项目目录 00_ENGINEERING_TEMPLATE/template.md。
  * 资源缺失/复制失败返回 null（降级：注入节退化为仅精简要点，不阻断 coding）。
  *
+ * **Task 4 修订语义**（基线 v0.17.131+task4，待父集成 bump）：
+ * - **必须先走 manifest 校验**：调用 loadEngineeringResources 并检查 verify.ok。
+ *   校验失败 → 返回 null + console.warn 诊断（**禁止 silently fallback 到旧源**）。
+ * - **同时复制 Spike 协议**到项目 00_ENGINEERING_TEMPLATE/02-Spike实验协议.md
+ *   （修订前只复制 check_env.sh / driver-skeleton.*；现 Spike 也随模板落位，
+ *   满足各品类 §6 引用闭环）。
+ * - **写项目侧 template-manifest.json**：记录实际采用的 templateVersion /
+ *   templateHash / bundleVersion / bundleHash / copiedAt / sourceTemplatesDir，
+ *   便于项目交付后独立核验落位资源版本与哈希。
+ *
  * opts.annotateInitialGuess（W7 R3 前移契约，v0.17.69）：prototype→architecture 推进
  * 钩子的前移落位传 true——模板头部注入一行「⏳ 初判参考，以架构师终判为准」标注；
  * coding 推进钩子的权威落位不传（无标注）。已存在旧模板时覆盖重写（源相同幂等）。
+ *
+ * L2-4 J2（2026-09-18，v0.17.127+）：随模板落位同时把通用环境探测脚本
+ * resources/nanju-engineering-templates/check_env.sh 复制到项目
+ * 00_ENGINEERING_TEMPLATE/check_env.sh（同时机同机制——前移落位与权威落位
+ * 两条路径都带；品类无关的通用版，幂等覆盖重写。项目创建时品类未知故落通用版，
+ * 品类专用探测项由架构师按品类模版 §2.3 自行补测，任务书注入段明示）。
+ * 脚本复制失败不影响模板落位返回值（探测执行侧有「脚本未落位」退化路径）。
  */
 export function materializeEngineeringTemplate(
   workspaceSlug: string,
@@ -290,26 +304,220 @@ export function materializeEngineeringTemplate(
   explicitBase?: string,
   opts?: { annotateInitialGuess?: boolean },
 ): string | null {
+  // Step 1：manifest 校验（Task 4 修订：mandatory；无 silently fallback）
+  const resources = loadEngineeringResources(explicitBase)
+  if (!resources.manifest || !resources.verify.ok) {
+    console.warn(
+      `[工程模板] 资源验证失败（projectId=${projectId}, category=${category}）：禁止 silently fallback 到旧源`,
+    )
+    for (const issue of resources.verify.issues) {
+      console.warn(`  [${issue.severity}] ${issue.kind}: ${issue.message}`)
+    }
+    return null
+  }
+  const templateEntry = resources.byCategory[category]
+  if (!templateEntry) {
+    console.warn(`[工程模板] 品类 ${category} 在 manifest 中缺失（projectId=${projectId}）`)
+    return null
+  }
   try {
-    const src = join(resolveEngineeringTemplatesDir(explicitBase), `${category}.md`)
-    if (!existsSync(src)) return null
+    const templatesDir = resources.baseDir
+    const src = join(templatesDir, templateEntry.path)
     const destDir = getProjectTemplateDir(workspaceSlug, projectId)
     if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+
+    // ===== S-1 修订：实测算落地 hash + 复制前后源变更拒绝 =====
+    // Step 2：复制前快照源文件 hash（防止复制期间源被并发改写）
+    const srcBytesBefore = readFileSync(src)
+    const srcHashBefore = createHash('sha256').update(srcBytesBefore).digest('hex')
+
+    // Step 3：品类模板落位（copyFile 或 annotate 注入；两者 dest 物理写入均回读 sha256）
     const dest = join(destDir, 'template.md')
+    let annotated = false
     if (opts?.annotateInitialGuess) {
-      // 标注行注入：首行标题后插入（保留原首行锚点，标注以注释形式紧跟其后）
-      const raw = readFileSync(src, 'utf-8')
+      const raw = srcBytesBefore.toString('utf-8')
       const lines = raw.split('\n')
       const firstTitle = lines.findIndex((l) => l.startsWith('# '))
       const note = '> ⏳ 初判参考，以架构师终判为准（本模板由 PRD 初判品类落位；架构师可在架构阶段修正品类，coding 推进时按终判权威重落位）'
       lines.splice(firstTitle + 1, 0, '', note)
       writeFileSync(dest, lines.join('\n'))
+      annotated = true
     } else {
       copyFileSync(src, dest)
+    }
+
+    // Step 4：复制后实测 dest hash（非 annotate 路径必须等于 srcHashBefore；annotate 路径必不等）
+    const destBytes = readFileSync(dest)
+    const landedTemplateHash = createHash('sha256').update(destBytes).digest('hex')
+    if (!annotated && landedTemplateHash !== srcHashBefore) {
+      // 罕见：copyFileSync 后内容与源不一致（盘错误/中转污染）→ 拒
+      console.warn(
+        `[工程模板] 落位 hash 与源不一致（projectId=${projectId}）：`,
+        `src=${srcHashBefore.slice(0, 16)}… landed=${landedTemplateHash.slice(0, 16)}…`,
+      )
+      try { unlinkSync(dest) } catch { /* 清理失败容忍 */ }
+      return null
+    }
+
+    // Step 5：复制后再次读取源 hash，校验复制期间源未被改写（防"中间漂移"）
+    const srcHashAfter = createHash('sha256').update(readFileSync(src)).digest('hex')
+    if (srcHashAfter !== srcHashBefore) {
+      console.warn(
+        `[工程模板] 源在复制期间被改写（projectId=${projectId}）：`,
+        `before=${srcHashBefore.slice(0, 16)}… after=${srcHashAfter.slice(0, 16)}…`,
+      )
+      try { unlinkSync(dest) } catch { /* 清理失败容忍 */ }
+      return null
+    }
+
+    // Step 6：shared 落位（Spike + check_env + skeleton）—— 每个都实测 landed hash
+    const sharedFiles: Array<{ name: string; srcHash: string; landedHash: string }> = []
+    const sharedNames = ['02-Spike实验协议.md', 'check_env.sh', 'driver-skeleton.py', 'driver-skeleton.cjs'] as const
+    for (const sharedFile of sharedNames) {
+      try {
+        const sharedSrc = join(templatesDir, sharedFile)
+        if (!existsSync(sharedSrc)) continue
+        const sharedSrcBytes = readFileSync(sharedSrc)
+        const sharedSrcHash = createHash('sha256').update(sharedSrcBytes).digest('hex')
+        const sharedDest = join(destDir, sharedFile)
+        copyFileSync(sharedSrc, sharedDest)
+        const sharedDestBytes = readFileSync(sharedDest)
+        const sharedLandedHash = createHash('sha256').update(sharedDestBytes).digest('hex')
+        if (sharedLandedHash !== sharedSrcHash) {
+          // shared 落位失败不阻断主流程（spec：脚本/骨架侧有退化路径），但记入日志
+          console.warn(`[工程模板] shared 落位 hash 与源不一致（${sharedFile}）：src=${sharedSrcHash.slice(0, 16)}… landed=${sharedLandedHash.slice(0, 16)}…`)
+        }
+        sharedFiles.push({ name: sharedFile, srcHash: sharedSrcHash, landedHash: sharedLandedHash })
+      } catch { /* 共享资源落位失败不阻断模板落位（探测/骨架侧有退化路径） */ }
+    }
+
+    // Step 7：写项目侧 template-manifest.json（含 templateHash + landedTemplateHash + shared 落位 hash）
+    try {
+      const projectManifest = {
+        category,
+        templateVersion: templateEntry.version ?? null,
+        templateHash: templateEntry.sha256,        // manifest 声明的源 hash（cross-reference）
+        landedTemplateHash,                         // S-1：实测落位 hash（交付后核验链）
+        annotated,                                  // 是否注入初判参考标注
+        bundleVersion: resources.manifest.bundleVersion,
+        bundleHash: resources.manifest.bundleSha256,
+        sourceTemplatesDir: templatesDir,
+        copiedAt: new Date().toISOString(),
+        sharedLanded: Object.fromEntries(sharedFiles.map((s) => [s.name, { srcHash: s.srcHash, landedHash: s.landedHash }])),
+      }
+      writeFileSync(join(destDir, 'template-manifest.json'), JSON.stringify(projectManifest, null, 2) + '\n')
+    } catch (e) {
+      console.warn(
+        `[工程模板] 项目侧 template-manifest.json 写盘失败（projectId=${projectId}）：`,
+        e instanceof Error ? e.message : String(e),
+      )
     }
     return dest
   } catch {
     return null
+  }
+}
+
+
+/**
+ * Materialize 结构化结果（Task 4 修订新增）。供调用方需要诊断/状态而非仅路径时使用。
+ */
+export interface MaterializeEngineeringTemplateResult {
+  /** 是否成功 */
+  ok: boolean
+  /** 模板全文绝对路径（成功时存在） */
+  templatePath: string | null
+  /** 项目侧 template-manifest.json 绝对路径（成功时存在） */
+  projectManifestPath: string | null
+  /** 实际采用的 templateVersion（来自 manifest；ok=false 时为 null） */
+  templateVersion: string | null
+  /** 实际采用的 templateHash（来自 manifest；ok=false 时为 null） */
+  templateHash: string | null
+  /** 资源整包 bundleVersion（ok=false 时为 null） */
+  bundleVersion: string | null
+  /** 资源整包 bundleSha256（ok=false 时为 null） */
+  bundleHash: string | null
+  /** 校验与落位问题清单（structured） */
+  issues: EngineeringResourceIssue[]
+}
+
+/**
+ * materializeEngineeringTemplate 的结构化版本，返回完整诊断。
+ *
+ * 与旧版差异：
+ * - 返回完整 MaterializeEngineeringTemplateResult 而非 string | null
+ * - 列出校验与落位阶段的所有 issue，便于 caller 不丢失上下文
+ * - verify 失败仍返回 issues（不抛），与 loadEngineeringResources 语义一致
+ */
+export function materializeEngineeringTemplateWithVerification(
+  workspaceSlug: string,
+  projectId: string,
+  category: ProjectCategory,
+  explicitBase?: string,
+  opts?: { annotateInitialGuess?: boolean },
+): MaterializeEngineeringTemplateResult {
+  const issues: EngineeringResourceIssue[] = []
+  const resources = loadEngineeringResources(explicitBase)
+  if (!resources.manifest || !resources.verify.ok) {
+    issues.push(...resources.verify.issues)
+    return {
+      ok: false,
+      templatePath: null,
+      projectManifestPath: null,
+      templateVersion: null,
+      templateHash: null,
+      bundleVersion: resources.manifest?.bundleVersion ?? null,
+      bundleHash: resources.manifest?.bundleSha256 ?? null,
+      issues,
+    }
+  }
+  const templateEntry = resources.byCategory[category]
+  if (!templateEntry) {
+    issues.push({
+      kind: 'manifest-unparseable',
+      severity: 'blocking',
+      message: `品类 ${category} 在 manifest 中缺失（byCategory 未索引到）`,
+      path: `${category}.md`,
+    })
+    return {
+      ok: false,
+      templatePath: null,
+      projectManifestPath: null,
+      templateVersion: null,
+      templateHash: null,
+      bundleVersion: resources.manifest.bundleVersion,
+      bundleHash: resources.manifest.bundleSha256,
+      issues,
+    }
+  }
+  const templatePath = materializeEngineeringTemplate(workspaceSlug, projectId, category, explicitBase, opts)
+  if (!templatePath) {
+    issues.push({
+      kind: 'file-missing',
+      severity: 'blocking',
+      message: `materialize 返回 null（写盘失败或源不可达），但 manifest verify 通过——IO 异常需独立排查`,
+    })
+    return {
+      ok: false,
+      templatePath: null,
+      projectManifestPath: null,
+      templateVersion: templateEntry.version ?? null,
+      templateHash: templateEntry.sha256,
+      bundleVersion: resources.manifest.bundleVersion,
+      bundleHash: resources.manifest.bundleSha256,
+      issues,
+    }
+  }
+  const projectManifestPath = join(getProjectTemplateDir(workspaceSlug, projectId), 'template-manifest.json')
+  return {
+    ok: true,
+    templatePath,
+    projectManifestPath,
+    templateVersion: templateEntry.version ?? null,
+    templateHash: templateEntry.sha256,
+    bundleVersion: resources.manifest.bundleVersion,
+    bundleHash: resources.manifest.bundleSha256,
+    issues,
   }
 }
 
@@ -327,14 +535,11 @@ export interface CategoryGuideInput {
 /**
  * 构建「工程品类」注入节（coding 委派任务专用）。
  *
- * 与下游验收链路的契约（不可破坏）：预览/点选纠错/GWT 的锚点始终是
- * 08_APP/index.html（零构建浏览器载体）；品类差异只改变载体的角色定义与
- * 工程骨架的组织方式，不改变验收锚点本身。
+ * 品类只提供工程参考；实际产物与执行方式以PRD和engineering.json为准。
  */
 export function buildCategoryGuideLines(input: CategoryGuideInput): string[] {
   const meta = CATEGORY_META[input.category]
   const isDefault = input.source === 'default'
-  const isWeb = input.category === 'web-fullstack'
 
   const lines: string[] = [
     '## 工程品类判定：' + input.category + '（' + meta.label + '）',
@@ -354,7 +559,7 @@ export function buildCategoryGuideLines(input: CategoryGuideInput): string[] {
     )
   }
 
-  lines.push('### 品类工程要点（源自工程模板；结构与选型按此组织）')
+  lines.push('### 品类工程要点（模板参考；架构结合PRD确定选型）')
   for (const s of meta.stack) lines.push('- 技术栈：' + s)
   for (const s of meta.structure) lines.push('- 目录：' + s)
   for (const s of meta.patterns) lines.push('- 模式：' + s)
@@ -366,26 +571,18 @@ export function buildCategoryGuideLines(input: CategoryGuideInput): string[] {
       '### 模板全文（按需精读）',
       '完整工程模板已复制到：' + input.templatePath,
       '包含目录结构逐文件注释、关键配置内容、代码示例与参考项目。生成工程骨架前建议 Read 一遍',
-      '（Web 品类模板较长时至少读目录结构与测试策略两节）；细节拿不准时以模板为准。',
+      '（Web 品类模板较长时至少读目录结构与测试策略两节）；细节拿不准时结合PRD与架构澄清，不得因模板缩减真实交付范围。',
       '',
     )
   }
 
   lines.push('### 验收载体对齐（重要——决定产出怎么被验收）')
   for (const s of meta.carrierRole) lines.push('- ' + s)
-  if (!isWeb) {
-    lines.push(
-      '- 无论品类：08_APP/index.html 必须零构建可直接浏览器打开（约束节另有要求），',
-      '  所有可交互 UI 元素标注 data-ai-id/data-ai-type——预览、点选纠错与 GWT 验收测试都锚定在该文件；',
-      '- 品类工程骨架（服务端/系统层/CLI 代码等）与载体并存于 08_APP/ 下，骨架代码服务于真实工程演进，',
-      '  用户故事的验收演示以载体为准；模板中的测试骨架（Vitest/cargo test 等）作为长期工程参考，',
-      '  管线内验收以 06_TESTS 的 GWT 场景（浏览器载体执行）为准。',
-    )
-  } else {
-    lines.push(
-      '- 所有可交互 UI 元素标注 data-ai-id/data-ai-type（约束节已有要求）——预览、点选纠错与 GWT 验收都锚定在该文件。',
-    )
-  }
+  lines.push(
+    '- 交付与测试对象以03_ARCHITECTURE/engineering.json为准；构建、单测、集成测试和GWT行为验收分别报告。',
+    '- HTML交互元素保留data-ai-id/data-ai-type用于点选和适用的浏览器测试；非HTML平台使用实际驱动。',
+    '- 环境或执行器不具备时明确阻塞，保留真人安装/权限/外部发送确认；不得以mock、骨架或历史截图宣称交付完成。',
+  )
   lines.push('')
   return lines
 }
@@ -405,14 +602,46 @@ export const CATEGORY_MARKER_GUIDE =
  */
 const ENV_COMPONENT_SHARED = new Set([
   'node', 'npm', 'bun', 'bunx', 'pnpm', 'yarn', 'deno', 'git',
+  // W24-10：环境事实类探测项（架构师实测把 DISPLAY 会话可用性列为清单行）
+  'display',
+  // P0-4 补齐（2026-09-26，E2E-桌面便签实测）：check_env.sh 通用探测集（52-64 行）对
+  // 所有品类都会探测 python3/pip/rustc/cargo/go/docker，但此前只列在 desktop-app/api-backend
+  // 专属集；架构师照抄 env_probe.json 探测结果（含 go/docker）进环境清单时被误判「幻觉包名」。
+  // 通用探测项一律进共享集（与 check_env.sh 通用集对齐，避免品类专属集遗漏）。
+  'python3', 'pip', 'rustc', 'cargo', 'go', 'docker',
 ])
 const ENV_COMPONENTS_BY_CATEGORY: Record<ProjectCategory, Set<string>> = {
-  'web-fullstack': new Set([]),
-  'api-backend': new Set(['python3', 'pip', 'uv', 'poetry', 'go', 'rustc', 'cargo', 'docker', 'docker-compose']),
-  'mobile-app': new Set(['watchman', 'adb', 'xcodebuild', 'xcode-select', 'swift', 'pod', 'cocoapods', 'java', 'gradle']),
-  'desktop-app': new Set(['rustc', 'cargo', 'rustup', 'electron', 'pkg-config', 'cmake', 'clang', 'gcc', 'make', 'python3']),
-  'cli-tool': new Set(['python3', 'pip', 'uv', 'go', 'rustc', 'cargo']),
-  'ai-application': new Set(['python3', 'pip', 'uv', 'poetry', 'ollama', 'docker']),
+  'web-fullstack': new Set(['corepack', 'nvm', 'postgresql', 'psql', 'pg_isready', 'sqlite', 'sqlite3', 'playwright', 'docker', 'docker-compose']),
+  'api-backend': new Set(['python3', 'pip', 'uv', 'poetry', 'go', 'rustc', 'cargo', 'docker', 'docker-compose',
+    // P0-4：api-backend v2 模板 §2.1 组件对齐（curl/httpie 驱动、postgres/redis、原生哈希依赖）
+    'curl', 'httpie', 'postgresql', 'psql', 'pg_isready', 'redis', 'argon2', 'bcrypt', 'build-essential', 'node-gyp']),
+  'mobile-app': new Set(['watchman', 'adb', 'xcodebuild', 'xcode-select', 'swift', 'pod', 'cocoapods', 'java', 'gradle',
+    // P0-4：mobile v2 模板 §2.1 组件对齐（Expo/EAS/模拟器工具链；npx 为共享 npm 生态入口）
+    'expo', 'eas', 'eas-cli', 'avdmanager', 'sdkmanager', 'android-studio', 'npx',
+    // v0.17.129：mobile 真机/模拟器闭环实测回填（2026-09-19，WiFi 调试 adb 实测 + 无 KVM 环境 QEMU TCG 替代路线；
+    // aria2c 为 SF/GitHub 大镜像多连接下载工具；qemu-img 为 QEMU 配套工具超集预置，模版 §2.2 C4 路线实测必需）
+    'qemu-system-x86_64', 'qemu-img', 'aria2c']),
+  // W24-10：补 Tauri v2 Linux 真实依赖（desktop-app 模板默认栈；架构师实测探测出
+  // webkit2gtk-4.1/gtk+-3.0/libsoup-3.0/ayatana-appindicator3 被白名单误判幻觉包名）
+  'desktop-app': new Set(['rustc', 'cargo', 'rustup', 'electron', 'pkg-config', 'cmake', 'clang', 'gcc', 'cc', 'make', 'python3',
+    'webkit2gtk-4.1', 'webkit2gtk-4.0', 'gtk+-3.0', 'gtk3', 'libsoup-3.0', 'libsoup', 'ayatana-appindicator3-0.1', 'libappindicator', 'appindicator', 'javascriptcoregtk-4.1', 'libsoup-3.0-dev',
+    // P0-4（L1，2026-09-18）：desktop v2 模板双路径——P1 快速验证路径（Python）组件补齐。
+    // 品类白名单与 v2 模板 §2 组件环境清单对齐（pynput/sounddevice/pystray/xclip/xdotool/
+    // notify-send/pyaudio/portaudio/pip 为测试定死最小集；pillow/numpy/requests/httpx/
+    // libnotify/libportaudio2/pyperclip/xsel 为 §2.1/§2.2 卡片与降级替代项）。
+    'pynput', 'sounddevice', 'pyaudio', 'pystray', 'pillow', 'xclip', 'xsel', 'xdotool',
+    'notify-send', 'libnotify', 'portaudio', 'libportaudio2', 'pyperclip', 'requests', 'httpx', 'numpy', 'pip',
+    // venv/音频探测项（§2.3 check_env.sh 探测行；架构师实测会照抄进环境清单表）
+    'venv', 'audio-devices',
+    // P0-4 补充（2026-09-26，E2E-桌面便签 architecture→coding 实测）：desktop-app P1 Python 路径
+    // 真实组件——tkinter（Python GUI 标准库）、gi/PyGObject（appindicator 依赖）、
+    // AyatanaAppIndicator3（托盘后端 Python 包，import 名小写归一）、SNI host/StatusNotifierItem
+    //（托盘显示协议宿主服务）。此前白名单只列了 apt 包名（ayatana-appindicator3-0.1），
+    // 架构师手写清单含 Python import 名/语义服务名时被误判「幻觉包名」。
+    'tkinter', 'gi', 'pygobject', 'ayatanaappindicator3',
+    'sni host', 'statusnotifieritem', 'status-notifier-watcher', 'statusnotifierwatcher', 'indicator-application-service']),
+  'cli-tool': new Set(['python3', 'pip', 'uv', 'go', 'rustc', 'cargo', 'tsx', 'execa']),
+  'ai-application': new Set(['python3', 'pip', 'uv', 'poetry', 'ollama', 'docker', 'psql', 'pgvector', 'libsql']),
 }
 
 /** 环境清单校验结果 */
@@ -467,10 +696,24 @@ export function validateEnvChecklist(
     return { ok: false, problems: ['环境配置清单为空：architecture.md 未解析到环境组件清单（## 环境配置 节缺失或表格为空）'] }
   }
   for (const raw of checklist) {
-    const name = raw.trim().toLowerCase()
-    if (!name) continue
-    if (!allowed.has(name)) {
-      problems.push(`环境组件「${raw}」不在${source}内：请核对拼写（常见组件如 node/npm/bun/rustc/cargo/python3），避免幻觉包名`) 
+    // P0-4（2026-09-18）：先整串精确匹配——保护白名单内含 "+" 的合法名（gtk+-3.0 等），
+    // 再做复合名拆分校验。实测拆分符补 "+"（v2 模板 §2.1 用「python3 + venv」/
+    // 「pystray + Pillow」并联写法，架构师照抄会被误拦「幻觉包名」）。
+    if (allowed.has(raw.trim().toLowerCase())) continue
+    // W24-10：复合名拆分校验——实测架构师会写「pkg-config / cc (gcc)」一行的多组件
+    // 合写（斜杠/加号并列/括号别名），按 token 逐个校验（全合法即过），不再整体误拦。
+    const tokens = raw
+      .split(/[/+,，、]/)
+      .flatMap((seg) => {
+        const paren = /\(([^)]*)\)/.exec(seg)
+        return [seg.replace(/\([^)]*\)/g, ''), paren?.[1] ?? '']
+      })
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean)
+    if (tokens.length === 0) continue
+    const unknown = tokens.filter((t) => !allowed.has(t))
+    if (unknown.length > 0) {
+      problems.push(`环境组件「${raw}」不在${source}内：请核对拼写（常见组件如 node/npm/bun/rustc/cargo/python3），避免幻觉包名`)
     }
   }
   return { ok: problems.length === 0, problems }
@@ -481,7 +724,10 @@ export function validateEnvChecklist(
  * 表格行第一列（| 组件 | 版本 | ...）；表头/分隔行自动跳过。
  */
 export function parseEnvChecklistFromDoc(content: string): string[] {
-  const sectionMatch = content.match(/^#{1,3}\s*环境(?:配置)?\s*$/m)
+  // W24-10：节头后缀容忍——实测 L2 会给节头加注释（「## 环境配置（探测时间 …；命令幂等…）」），
+  // 严格行尾匹配解析为空清单 → 环境门禁误拦推进（E2E 实测 architecture→coding verify-failed）。
+  // 锚定：行首标题 + 「环境/环境配置」后跟行尾/括号/冒号/空白（防「环境变化」类误配）。
+  const sectionMatch = content.match(/^#{1,3}\s*环境(?:配置)?(?=[（(：:\s]|$)/m)
   if (!sectionMatch || sectionMatch.index === undefined) return []
   const after = content.slice(sectionMatch.index)
   // 跳过当前节头行再找下一节（避免把节头自己当「下一节」截空）
@@ -556,11 +802,6 @@ export function syncProjectEnvStateFromArchitectureDoc(
   sessionId?: string,
 ): void {
   try {
-    const { readFileSync, existsSync } = require('node:fs') as typeof import('node:fs')
-    const { join } = require('node:path') as typeof import('node:path')
-    const {
-      getNanjuProjectDir, setProjectEnvState, getProjectEnvState,
-    } = require('./nanju-project') as typeof import('./nanju-project')
     const archPath = join(getNanjuProjectDir(workspaceSlug, projectId), '03_ARCHITECTURE', 'architecture.md')
     if (!existsSync(archPath)) return
     const content = readFileSync(archPath, 'utf-8')
@@ -587,8 +828,6 @@ export function syncProjectEnvStateFromArchitectureDoc(
     setProjectEnvState(workspaceSlug, projectId, marker.ready, envCheck)
 
     try {
-      const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
-      const { recordTelemetry } = require('./nanju-telemetry') as typeof import('./nanju-telemetry')
       const mode = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)?.mode
       recordTelemetry(workspaceSlug, 'env.check.executed', {
         project_id: projectId, mode,
@@ -602,8 +841,6 @@ export function syncProjectEnvStateFromArchitectureDoc(
 
     if (sessionId) {
       try {
-        const { emitGuideProgress } = require('./nanju-guide-progress') as typeof import('./nanju-guide-progress')
-        const { getProjectSubStage, listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
         const project = listNanjuProjects(workspaceSlug).find((p) => p.projectId === projectId)
         if (project) {
           emitGuideProgress(sessionId, projectId, project.currentStage,

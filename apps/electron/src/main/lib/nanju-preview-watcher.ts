@@ -11,6 +11,7 @@
  * 并为每个目录分别创建 watcher。
  */
 
+import { resolveCodingOutputPath } from './nanju-engineering-contract'
 import { watch, type FSWatcher } from 'node:fs'
 import { join, basename, sep } from 'node:path'
 import { readdirSync, existsSync } from 'node:fs'
@@ -39,7 +40,8 @@ function maybeAdvanceAtkSubStage(workspaceSlug: string, fullPath: string): void 
       const projectDir = join(filesRoot, `project-${project.projectId}`)
       const node = getPhaseNode(project.mode, project.currentStage as import('./nanju-router').PhaseId)
       if (!node?.outputPath) continue
-      if (join(projectDir, node.outputPath) !== fullPath) continue
+      const outputPath = node.id === 'coding' ? resolveCodingOutputPath(projectDir) : node.outputPath
+      if (join(projectDir, outputPath) !== fullPath) continue
       if (node.requiresAC !== true) continue
       if (verifyPhaseOutput(workspaceSlug, project.projectId, project.currentStage as import('./nanju-router').PhaseId) !== null) continue
       const main = getGuideStageMainNodeId(project.currentStage)

@@ -1,0 +1,103 @@
+{
+  "audit": "R3-wiring-semantics",
+  "auditedAt": "2026-09-23T21:35:00+08:00",
+  "repoSha": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+  "worktree": { "modified": 46, "untracked": 26, "dirty": true },
+  "versions": { "electron": "0.17.132", "shared": "0.1.63" },
+  "discipline": "只读；未改产品代码；未部署；未启动 release/dev；未委派；测试夹具隔离（mktemp/mock config-paths）",
+  "report": "docs/reports/2026-09-20-phase1/execution/audit-r3/wiring-semantics.md",
+  "artifacts": {
+    "repro": "docs/reports/2026-09-20-phase1/execution/audit-r3/negative-wiring/__r3-audit-repro-envprobe.test.ts",
+    "reproLog": "docs/reports/2026-09-20-phase1/execution/audit-r3/negative-wiring/repro-env-probe-category-reuse.log",
+    "wiringRerunLog": "docs/reports/2026-09-20-phase1/execution/audit-r3/negative-wiring/w-i-b-e-wiring-rerun.log"
+  },
+  "findings": [
+    {
+      "id": "R3-W-01",
+      "severity": "green",
+      "title": "architecture 品类解析只读语义正确，无副作用/语义错位反例",
+      "evidence": "nanju-router-prompt.ts:896-912 写路径仅 coding 分支；buildL2TaskWithAC categoryInfo 仅 isCoding 消费(479-490)；推进钩子唯一写入点 nanju-phase-advance-consumer.ts:1050-1056；官方单测复跑 1 pass（architecture 构建后 getProjectCategory 仍 null）",
+      "impact": "无",
+      "repro": "bun test src/main/lib/nanju-router-prompt.test.ts -t 'Task 10 接线' → 1 pass",
+      "suggestion": "无需改动"
+    },
+    {
+      "id": "R3-W-02",
+      "severity": "yellow",
+      "title": "env_probe.json 幂等不比对 category：同项目品类变更复用旧探测结果，品类专用组件缺失（反例实证）",
+      "evidence": "nanju-env-probe.ts:180-220 isEnvProbeFresh 仅看 probedAt/模板时间，不读 result.category；runEnvProbe:246-266 fresh 直接沿用；反例实测 [R3] second.ok=true written.category=universal desktop-item-present=false（universal→desktop-app 未重跑，webkit2gtk-4.1 缺失）；单测无 category 变更用例（nanju-env-probe.test.ts:333-393）",
+      "impact": "品类变更后（如架构终判与初判不同）architecture 重入的「已知环境事实」缺品类专用组件，env ready/missing 门禁输入可能不完整；缓解：注入行要求按 §2.3 自行补测 + 任务书硬性逐组件探测 + envPrecheck/gate 第二道",
+      "repro": "negative-wiring/README.md（脚本临时置于 apps/electron/src/main/lib 运行，日志 repro-env-probe-category-reuse.log）",
+      "suggestion": "沿用分支增加 existing.category !== category → 判不新鲜删除重跑；补品类变更重跑单测"
+    },
+    {
+      "id": "R3-W-03",
+      "severity": "green",
+      "title": "runEnvProbe 探测失败诚实退化，不阻断 prompt；品类参数不致探测失败",
+      "evidence": "nanju-router-prompt.ts:934-941 try/catch 零注入；nanju-env-probe.ts:133-137 失败说明行含『自行探测不得跳过』；check_env.sh:19,141 未知品类 fail-safe 只跑通用集（实测 bash check_env.sh desktop-app 正常）",
+      "impact": "无阻断路径",
+      "repro": "静态核对 + 脚本实跑",
+      "suggestion": "无需改动"
+    },
+    {
+      "id": "R3-W-04",
+      "severity": "green",
+      "title": "pick-other 在 ClickToFixStage 合法枚举与事件表内；无 pick-color 假设残留；历史数据桶口径不可逆迁移",
+      "evidence": "nanju-quick-events.ts:34-39,121-127；PRD §12.4 #7 不枚举 stage 字面值（docs/DesignDoc/01_PRD/prd.md:820）；全仓 grep pick-color 仅动作映射/单测/报告文本；w-i-b-e-wiring.test.ts:137-141 断言更新，审计复跑 24 pass / 0 fail",
+      "impact": "element-click 由 pick-color 桶迁入 pick-other 桶：修复前的误标历史数据与真实颜色动作混桶，跨修复期 pick-color 时序对比出现断崖；仓库内无按 stage 分桶的分析代码（grep 无命中）",
+      "repro": "bun test src/main/lib/__tests__/w-i-b-e-wiring.test.ts",
+      "suggestion": "分析口径注明 2026-09-23 桶迁移切点；存量 pick-color 数据不作颜色动作归因",
+      "notVerified": "真实遥测存储历史数据未核验（产品未运行）"
+    },
+    {
+      "id": "R3-W-05",
+      "severity": "red",
+      "title": "product-acceptance.md 与 findings.json 的 B6-F-06 证据『w-i-b-e-wiring 46/46』不可复现（证据数夸大）",
+      "evidence": "实测 bun test w-i-b-e-wiring.test.ts = 24 pass / 0 fail / 104 expect（negative-wiring/w-i-b-e-wiring-rerun.log）；文件 test() 计数 24；与 nanju-quick-events.test.ts 合跑 42 pass；HEAD 与工作树无 46 版本；修复本身真实（两处 pick-other + 断言更新 + 复跑全绿）",
+      "impact": "验收矩阵证据可信度受损；不推翻 B6-F-06 已修结论本身",
+      "repro": "cd apps/electron && bun test src/main/lib/__tests__/w-i-b-e-wiring.test.ts（对照 46/46）",
+      "suggestion": "更正两处 46/46 为实测统计并注明口径"
+    },
+    {
+      "id": "R3-W-06",
+      "severity": "yellow",
+      "title": "product-acceptance.md 头部工作树统计过时（68=42M+26??；实测 72=46M+26??）",
+      "evidence": "git status --porcelain → 46 M + 26 ??；差异 4 文件与 v1.2 修复轮改动相符，头部截面未更新；版本/HEAD 声明核实无误（0.17.132 / 0.1.63 / 34f72fbc）",
+      "impact": "低危截面统计失真；untracked 目录计数口径仍准确",
+      "repro": "git status --porcelain | awk '{print $1}' | sort | uniq -c",
+      "suggestion": "v1.3 刷新或标注统计时点"
+    },
+    {
+      "id": "R3-W-07",
+      "severity": "green",
+      "title": "b6/product-acceptance.md B6-F-05~10 已修/部分修声明逐条与代码一致，无能力夸大",
+      "evidence": "F-05 mapReportVerdict 交叉核对（nanju-delivery-view.ts:236-250）+7 单测+e2e 9/9 日志；F-06 两处 pick-other（ipc:597-601/listeners:649）；F-07 品类等价入口（shared nanju-delivery.ts:165-200）+5 单测且 DoD 差异未降；F-08 manifest.json.bak 已删+JSDoc 对齐+resources:strict exit 0；F-09 history 字段（nanju-delivery-view.ts:46-97,366）+DeliveryCard 历史列表（315-319）+隔离 HOME 单测；复验数字与日志一致（428/0/1413）",
+      "impact": "无",
+      "repro": "见 wiring-semantics.md W-07 逐条表",
+      "suggestion": "无"
+    },
+    {
+      "id": "R3-W-08",
+      "severity": "info",
+      "title": "探测注入措辞与品类参数轻微不一致（传品类时仍称『跨品类通用集』且摘要不标注品类）",
+      "evidence": "nanju-router-prompt.ts:1043 静态行 vs buildEnvProbeSummaryLines（nanju-env-probe.ts:141-149）无 category 标注",
+      "impact": "保守无害（仍要求自行补测）",
+      "repro": "静态核对",
+      "suggestion": "摘要首行附（探测品类：xxx），可与 W-02 一并修"
+    }
+  ],
+  "notVerified": [
+    "遥测存储/聚合的修复前历史数据口径（产品未运行，未读真实 telemetry 存储）",
+    "element-click/panel-action 的 GUI 真机链路（沿 B6-F-01 阻塞口径）",
+    "iterative 项目真实多轮 architecture 重入的终判品类探测全链路（静态+quick 夹具单测）",
+    "『46/46』原始统计口径来源（无对应日志文件）",
+    "dev 部署漂移与端口监听现状复核（照录 B6 v1.1 事实）",
+    "仓库外遥测消费方（外部看板/导出）",
+    "envPrecheck 兜底 web-fullstack 在『有 env 标记无品类标记』时的误报边界（M7 既有逻辑，非本轮增量）"
+  ],
+  "verdict": {
+    "wiringSemantics": "pass（W-01/W-03/W-04 无阻断反例）",
+    "envProbeCategoryReuse": "defect-confirmed（W-02 反例成立，yellow）",
+    "docConsistency": "1 red（W-05 证据数夸大）+ 1 yellow（W-06 统计过时）+ 其余一致"
+  }
+}

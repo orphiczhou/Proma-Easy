@@ -13,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 
 /** 当前 fixture 根目录（mock 的 getWorkspaceFilesDir 每次调用时读取） */
 let fixtureRoot = ''
@@ -40,7 +40,8 @@ mock.module('./agent-session-manager', () => ({
   },
 }))
 
-const { verifyPhaseOutput, validateAdvanceTarget, checkNanjuRouterGate } = await import('./nanju-router-gate')
+const { verifyPhaseOutput, validateAdvanceTarget, checkNanjuRouterGate, resolveVisualValidatorSlotForProject } = await import('./nanju-router-gate')
+const { reloadNanjuModelConfig } = await import('./nanju-model-config')
 
 const WORKSPACE_SLUG = 'test-ws'
 const PROJECT_ID = 'p1'
@@ -294,10 +295,26 @@ describe('verifyPhaseOutput testing 阶段（P1 Sprint B：Gherkin 汇总入口�
 
 // ===== W7 环境门禁（v0.17.69）：verifyPhaseOutput architecture 分支扩展 =====
 
+const testArchitectureDoc = `
+## 交付与运行
+目标平台：按项目约定平台
+交付产物：08_APP 下架构约定产物
+构建方式：执行项目构建配置
+启动方式：启动实际产物
+## 测试架构
+| 层级 | 框架 | 执行方式 | 证据 | 覆盖 |
+| --- | --- | --- | --- | --- |
+| 行为验收 | 平台测试驱动 | 执行真实产品 | 实际输出 | US-01 |
+### 真实与模拟边界
+模拟仅用于隔离单元，实际用户故事需真实行为证据。
+### 失败回流
+失败回开发或测试设计，环境缺失阻塞。
+`
+
 describe('verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规则 + R2 规则校验）', () => {
   /** 合法架构文档（desktop-app 品类 + 环境清单 + ready 标记行） */
   const validArchDoc = (category: string, envLine: string, components: string): string =>
-    `# 架构文档\n\n## 技术选型\n\nTauri v2 桌面程序。\n\nprojectCategory: ${category}\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n${components}\n\n${envLine}\n`
+    `# 架构文档\n\n## 技术选型\n\nTauri v2 桌面程序。\n\nprojectCategory: ${category}\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n${components}\n\n${envLine}\n${testArchitectureDoc}`
 
   const { setProjectCategory, setProjectEnvState } = require('./nanju-project') as typeof import('./nanju-project')
 
@@ -358,7 +375,7 @@ describe('verifyPhaseOutput 环境门禁（W7 B4：envReady 拦截 + 降级规�
     const ws = setupFixture({
       stage: 'architecture',
       mode: 'quick',
-      html: '# 架构文档（web-default 免检用例，补足最低 100 字节）\n\n## 技术选型\n\n纯前端应用，无后端依赖，浏览器直接打开即可运行。\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档。\n\nprojectEnv: ready\n',
+      html: '# 架构文档（web-default 免检用例，补足最低 100 字节）\n\n## 技术选型\n\n纯前端应用，无后端依赖，浏览器直接打开即可运行。\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档。\n\nprojectEnv: ready\n' + testArchitectureDoc,
     })
     // 不写 projectCategory：resolved = web-default → 免 envReady 校验
     // （即便此前置位 false 也不拦——web 品类按 W7 v3 §6.1 免环境门禁）
@@ -876,5 +893,414 @@ describe('W22 O1/O2：minimax 修复守卫接线与 AC 覆写阶段感知（源�
     expect(src).toContain("v.result.denialKind === 'minimax-repair-misuse'")
     expect(src).toContain('MINIMAX_REPAIR_GUIDANCE}')
     expect(src).toContain('MINIMAX_REPAIR_GUIDANCE,')
+  })
+})
+
+
+describe('Given 架构完成 When 推进阶段 Then 必须具备测试设计', () => {
+  test('历史架构缺少测试设计时明确要求补全，不静默放行', () => {
+    const ws = setupFixture({ stage: 'architecture', html: '# 架构文档\n\n' + '已有技术选型与环境说明。'.repeat(15) })
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toContain('架构交付与测试设计不完整')
+  })
+  test('两模式完整文档通过结构门，未宣称执行验收通过', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const ws = setupFixture({ stage: 'architecture', mode, html: '# 架构文档\n' + testArchitectureDoc })
+      expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+      rmSync(fixtureRoot, { recursive: true, force: true })
+      fixtureRoot = ''
+    }
+  })
+})
+
+
+describe('Given 架构声明真实工程，When 检查coding产出，Then 不用HTML替代原生产物', () => {
+  function setupNativeContract(): string {
+    const ws = setupFixture({ stage: 'coding', html: htmlDoc('旧演示页不能作为原生交付') })
+    const root = join(fixtureRoot, 'project-p1')
+    mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+    mkdirSync(join(root, '01_PRD'), { recursive: true })
+    writeFileSync(join(root, '01_PRD/prd.md'), '# PRD\nUS-01 终端输出结果')
+    writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({
+      schemaVersion: 1, target: { platform: 'Linux', kind: 'cli', entry: 'main.ts' },
+      artifacts: ['main.ts'], build: 'Bun原生运行，无需编译', run: 'bun main.ts',
+      tests: [{ id: 'cli-output', layer: 'acceptance', adapter: 'cli-driver', target: 'main.ts', command: '调用实际程序检查输出', covers: ['US-01'], requiresReal: true }],
+    }))
+    writeFileSync(join(root, '08_APP/main.ts'), 'console.log("测试程序")')
+    writeFileSync(join(root, '08_APP/DELIVERY.md'), '# 交付说明\n\n## 构建与运行\nBun原生运行无需编译，启动main.ts。\n\n## 测试状态\n尚未通过真实行为验收；源文件存在不等于可交付。\n')
+    return ws
+  }
+  test('Then 真实产物及说明存在时无需网页入口', () => {
+    const ws = setupNativeContract()
+    rmSync(join(fixtureRoot, 'project-p1/08_APP/index.html'))
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'coding')).toBeNull()
+  })
+  test('Then 缺真实程序时明确报告路径，网页演示不能替代', () => {
+    const ws = setupNativeContract()
+    rmSync(join(fixtureRoot, 'project-p1/08_APP/main.ts'))
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'coding')).toContain('main.ts')
+  })
+  test('Then 损坏工程契约不能静默改成网页模式', () => {
+    const ws = setupNativeContract()
+    writeFileSync(join(fixtureRoot, 'project-p1/03_ARCHITECTURE/engineering.json'), '{}')
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'coding')).toContain('工程契约')
+  })
+})
+
+test('Given 非浏览器工程的场景与实际驱动 When 确认testing产出 Then 不强迫伪造DOM steps.json', () => {
+  const ws = setupFixture({ stage: 'testing', html: 'Feature: US-01 终端输出\nScenario: US-01 输出结果\nGiven 已构建实际程序\nWhen 使用项目驱动运行程序\nThen 返回预期结果\n' + '真实行为由宿主执行驱动，文档本身不代表通过。'.repeat(3) })
+  const root = join(fixtureRoot, 'project-p1')
+  mkdirSync(join(root, '03_ARCHITECTURE'), { recursive: true })
+  mkdirSync(join(root, '08_APP'), { recursive: true })
+  mkdirSync(join(root, '01_PRD'), { recursive: true })
+  writeFileSync(join(root, '08_APP/app'), 'fixture')
+  writeFileSync(join(root, '08_APP/test.cjs'), '// fixture driver')
+  writeFileSync(join(root, '01_PRD/prd.md'), '# PRD\nUS-01 终端输出')
+  writeFileSync(join(root, '03_ARCHITECTURE/engineering.json'), JSON.stringify({ schemaVersion: 1, target: { kind: 'cli', platform: 'Linux', entry: 'app' }, artifacts: ['app', 'test.cjs'], build: 'fixture', run: 'fixture', tests: [{ id: 'cli', layer: 'acceptance', adapter: 'cli-driver', target: 'app', command: '驱动读取实际输出', covers: ['US-01'], requiresReal: true, driver: { runtime: 'node', path: 'test.cjs', args: [], timeoutMs: 1000 } }] }))
+  expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toBeNull()
+  rmSync(join(root, '08_APP/test.cjs'))
+  expect(verifyPhaseOutput(ws, PROJECT_ID, 'testing')).toContain('test.cjs')
+})
+
+// ═══════════════ W-B B2：视觉验证者委派门禁（内部 producer → gate）═══════════════
+
+describe('W-B B2：视觉验证者委派门禁（producer→gate；未配独立端点 = 清晰 blocked）', () => {
+  test('红测：prototype 阶段视觉验证者委派（文本命中）但未配独立端点 → deny（不静默放行）', () => {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论与逐条对照结果。',
+      channelId: 'glm-zhipu',
+      modelId: 'glm-5.3-vision',
+    })
+    // 未显式配置 phases.prototype.visualReviewer → producer 返回 blocked → gate 拒绝
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('独立视觉裁决')
+    expect(result?.message).toContain('未显式配置')
+  })
+
+  test('内部 slot 权威：即使标题不含视觉标记，target.slot=visual-validator 也触发门禁', () => {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型界面',
+      task: '生成原型界面稿。',
+      slot: 'visual-validator',
+      channelId: 'glm-zhipu',
+      modelId: 'glm-5.3-vision',
+    })
+    expect(result?.behavior).toBe('deny')
+  })
+
+  test('对照：prototype 阶段普通作者委派（无视觉标记/slot）不被视觉门禁拦截', () => {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型设计',
+      task: '生成原型界面稿。',
+    })
+    expect(result).toBeNull()
+  })
+})
+
+// ═══════════════ W-B B2 R1：视觉委派的可靠触发（prompt 稳定标题 + 端点检测）═══════════════
+
+describe('W-B B2 R1：视觉委派可靠触发（配置端点检测，title 仅兜底）', () => {
+  let visualCfgDir = ''
+
+  /** 写入用户层配置并 reload（ROUTES 按代次重建）；visual 省略 = 保持未配置 */
+  function setupVisualReviewer(visual?: { channel: string; model: string }): void {
+    visualCfgDir = mkdtempSync(join(tmpdir(), 'nanju-gate-visual-'))
+    const cfgPath = join(visualCfgDir, 'nanju-model-config.json')
+    writeFileSync(cfgPath, JSON.stringify({ phases: { prototype: visual ? { visualReviewer: visual } : {} } }))
+    reloadNanjuModelConfig({ userConfigPath: cfgPath, overrideConfigPath: null })
+  }
+
+  afterEach(() => {
+    if (visualCfgDir) rmSync(visualCfgDir, { recursive: true, force: true })
+    visualCfgDir = ''
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+  })
+
+  const VISUAL = { channel: 'kimi', model: 'k3-vision' }
+
+  test('机制一（title 兜底）：marker 标题 + 命中配置端点 → 放行（合法独立端点）', () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: '独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论。',
+      channelId: 'kimi',
+      modelId: 'k3-vision',
+    })
+    expect(result).toBeNull()
+  })
+
+  test('机制二（端点检测）：marker-less 标题但命中配置端点 → 同样纳入视觉门禁管辖', async () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    // 先证检测本身为真（无 slot、无标题标记也认得出来）
+    const { isVisualValidatorEndpointTarget, resolveVisualValidatorSlot } = await import('./nanju-router-prompt')
+    const { getPhaseNode } = await import('./nanju-router')
+    const phase = getPhaseNode('quick', 'prototype')!
+    const slot = resolveVisualValidatorSlot(phase, { authorResolved: { channelId: 'minimax', modelId: 'MiniMax-M3' } })
+    expect(slot).toEqual({ status: 'resolved', channelId: 'kimi', modelId: 'k3-vision' })
+    expect(isVisualValidatorEndpointTarget({ slot, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(true)
+    expect(isVisualValidatorEndpointTarget({ slot, targetChannelId: 'deepseek', targetModelId: 'deepseek-v4-pro' })).toBe(false)
+    // I 交接锚点：同一权威槽位可从 gate 侧解析（供 orchestrator 盖章内部 slot）
+    const { findNanjuProjectBySession } = await import('./nanju-router-gate')
+    const project = findNanjuProjectBySession(WORKSPACE_SLUG, 'session-1')
+    expect(resolveVisualValidatorSlotForProject(project!)).toEqual(slot)
+    // 再证端到端：标题无视觉标记，但因端点命中而受门禁管辖（端点合法 → 放行）
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型界面复核',
+      task: '生成原型界面稿。',
+      channelId: 'kimi',
+      modelId: 'k3-vision',
+    })
+    expect(result).toBeNull()
+  })
+
+  test('marker 标题 + 端点错（非配置的独立端点）→ 拒', () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: '独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论。',
+      channelId: 'deepseek',
+      modelId: 'deepseek-v4-pro',
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(result?.message).toContain('独立视觉裁决')
+    expect(result?.message).toContain('端点与配置的独立视觉端点不一致')
+  })
+
+  test('marker 标题 + 端点=作者端点（同端点自证）→ 拒（不得削弱）', () => {
+    setupVisualReviewer(VISUAL)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: '独立视觉裁决',
+      task: '对照最新截图逐条输出 red/yellow/green 结论。',
+      channelId: 'minimax',
+      modelId: 'MiniMax-M3',
+    })
+    expect(result?.behavior).toBe('deny')
+  })
+
+  test('未配置 visualReviewer：端点检测不误拦普通委派（marker-less → 放行）', () => {
+    setupVisualReviewer(undefined)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型设计',
+      task: '生成原型界面稿。',
+      channelId: 'kimi',
+      modelId: 'k3-vision',
+    })
+    expect(result).toBeNull()
+  })
+
+  test('未配置 visualReviewer：阶段推进不被视觉槽位硬阻断（L1 正常委派 + 阶段序放行）', () => {
+    setupVisualReviewer(undefined)
+    setupFixture({ stage: 'prototype', html: htmlDoc('<div>x</div>') })
+    // 视觉槽位 blocked 只影响「视觉裁决」这一个动作，不阻断阶段推进：
+    // L1 仍可委派作者（产出 prototype.html），阶段序校验也不受其影响。
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'delegate_agent', {
+      title: 'UX 顾问：原型设计',
+      task: '生成原型界面稿。',
+    })).toBeNull()
+    expect(validateAdvanceTarget('quick', 'prototype', 'architecture')).toEqual({ ok: true })
+  })
+})
+
+// ===== L2-4（2026-09-18，ATK-G-002/G-007/U-006）：网络检索凭证门禁（产物检查 + 存量兼容） =====
+
+describe('L2-4：架构文档证据记录门禁（archEvidenceGate 标记项目：缺节拦截 / 条目无 URL 拦截 / 申报放行 / 存量豁免）', () => {
+  const { validateEvidenceRecordSection } = require('./nanju-router-gate') as typeof import('./nanju-router-gate')
+  const { writeFileSync: wfs } = require('node:fs') as typeof import('node:fs')
+
+  /** 合法架构文档（品类合法 + 环境清单 + ready 标记 + 测试架构节 + 可选证据记录节） */
+  const archDocWithEvidence = (evidenceSection: string): string =>
+    `# 架构文档\n\n## 技术选型\n\nWeb 全栈。\n\nprojectCategory: web-fullstack\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n| node | 20 | 运行时 | 就绪 | - |\n\nprojectEnv: ready\n${testArchitectureDoc}\n${evidenceSection}`
+
+  /** 写 _project-info.json（archEvidenceGate 开关——新项目 true / 存量项目无字段） */
+  function setEvidenceGate(slug: string, enabled: boolean | undefined): void {
+    const info: Record<string, unknown> = {
+      projectId: PROJECT_ID, name: '凭证门禁项目', mode: 'iterative',
+      createdAt: '2026-09-18T00:00:00.000Z', workspaceSlug: slug,
+      projectDir: `project-${PROJECT_ID}`, docDirs: [],
+    }
+    if (enabled !== undefined) info.archEvidenceGate = enabled
+    wfs(join(fixtureRoot, `project-${PROJECT_ID}`, '_project-info.json'), JSON.stringify(info))
+  }
+
+  test('Given 新项目（archEvidenceGate=true）文档缺「## 证据升级与检索记录」节 When 推进 Then 拦截（无凭证视为未执行）', () => {
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: archDocWithEvidence('') })
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('缺少「## 证据升级与检索记录」节')
+    expect(error).toContain('URL+检索日期')
+    expect(error).toContain('本轮无证据升级；未触发检索条件')
+  })
+
+  test('Given 新项目 + 节内 [实证] 条目带 URL When 推进 Then 放行（形态①②凭证在场）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'iterative',
+      html: archDocWithEvidence('## 证据升级与检索记录\n| 结论点 | 证据等级变化 | 来源 URL | 检索日期 |\n| --- | --- | --- | --- |\n| Node 20 LTS 支持策略 | [推断]→[实证] | https://nodejs.org/en/about/previous-releases | 2026-09-18 |\n'),
+    })
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('Given 新项目 + 节内 [实证]/[文证] 条目无 URL When 推进 Then 拦截并指明条目', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'iterative',
+      html: archDocWithEvidence('## 证据升级与检索记录\n- Tauri v2 Linux 依赖清单：新增 [实证]（凭训练记忆，未检索）\n- DashScope ASR 端点：[推断]→[文证] 来源缺失\n'),
+    })
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('证据记录凭证缺失')
+    expect(error).toContain('http(s)://')
+    expect(error).toContain('Tauri v2 Linux 依赖清单')
+    expect(error).toContain('DashScope ASR 端点')
+  })
+
+  test('Given 新项目 + 实证条目引用已存在的 file:// 证据 When 推进 Then 放行（快消型本机实证无需伪造网络引用）', () => {
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: archDocWithEvidence('') })
+    const evidencePath = resolve(fixtureRoot, `project-${PROJECT_ID}`, 'local-evidence.md')
+    writeFileSync(evidencePath, 'local evidence')
+    writeFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '03_ARCHITECTURE', 'architecture.md'),
+      archDocWithEvidence(`## 证据升级与检索记录\n- xclip 往返验证：[实证] file://${evidencePath} 2026-09-20\n`))
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('修复A（2026-10-01 番茄卡死）：file:// 引用路径不存在 → 拒因区分「引用无效」并列出具体路径与条目', () => {
+    // E2E 番茄工程实录：架构师按格式补了 file://+日期，但虚构了不存在的
+    // pomodoro-spike-evidence/ 目录——旧拒因只说「缺少来源或日期」，与完全没写不可区分，
+    // 两轮一字不差，修正方向被封死（count 累计 5 次 loop-limit，停摆 40 分钟）。
+    const fake = resolve(fixtureRoot, `project-${PROJECT_ID}`, 'pomodoro-spike-evidence', 'probe-result.json')
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: '' })
+    writeFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '03_ARCHITECTURE', 'architecture.md'),
+      archDocWithEvidence(`## 证据升级与检索记录\n| pystray SNI 真实注册 | [实证]（Spike Q1） | file://${fake} | 2026-09-30 |\n`))
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('已写 file:// 引用但引用无效')
+    expect(error).toContain('路径不存在')
+    expect(error).toContain('pomodoro-spike-evidence') // 失效引用的具体路径在拒因里
+    expect(error).toContain('pystray SNI 真实注册')   // 条目标识在拒因里
+    expect(error).toContain('先用 Read/ls 确认文件存在再引用') // 可操作指引
+  })
+
+  test('修复A：引用存在但在工程目录之外 → 拒因提示「授权目录之外」（非「不存在」）', () => {
+    const outside = resolve(tmpdir(), 'nanju-outside-evidence-test.md')
+    writeFileSync(outside, 'outside')
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: '' })
+    writeFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '03_ARCHITECTURE', 'architecture.md'),
+      archDocWithEvidence(`## 证据升级与检索记录\n- 外部文件引用：[实证] file://${outside} 2026-09-30\n`))
+    setEvidenceGate(ws, true)
+    const error = verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    expect(error).toContain('工程/授权目录之外')
+    rmSync(outside, { force: true })
+  })
+  test('Given 新项目 + 纯申报（未触发检索条件/已检索无结论）When 推进 Then 放行（形态③自我申报不做事前拦截）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'iterative',
+      html: archDocWithEvidence('## 证据升级与检索记录\n本轮无证据升级；未触发检索条件。\n- X11 注入边界：已检索无结论（关键词：XkbSetMap CJK，2026-09-18），保持 [推断]。\n'),
+    })
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('Given 存量项目（无 archEvidenceGate 字段）文档缺节 When 推进 Then 豁免放行（v0.17.127 前创建豁免）', () => {
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: archDocWithEvidence('') })
+    setEvidenceGate(ws, undefined) // 旧版本创建：无标记字段
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  test('Given 正文含 [实证] 引用（模版坑库既有条目）但节内无条目 When 推进 Then 不误拦（只查证据记录节内条目）', () => {
+    // 正文引用放在证据节【之前】（另一节的正文）——门禁只扫「## 证据升级与检索记录」节体
+    const doc = '# 架构文档\n\n## 技术选型\n\n> 引用坑库既有条目：通知守护进程静默失败 [实证]（见模版 §7，非本轮新增）\n\nprojectCategory: web-fullstack\n\n## 环境配置\n\n| 组件 | 版本 | 用途 | 探测结果 | 备注 |\n| --- | --- | --- | --- | --- |\n| node | 20 | 运行时 | 就绪 | - |\n\nprojectEnv: ready\n' + testArchitectureDoc + '\n## 证据升级与检索记录\n本轮无证据升级；未触发检索条件。\n'
+    const ws = setupFixture({ stage: 'architecture', mode: 'iterative', html: doc })
+    setEvidenceGate(ws, true)
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+  })
+
+  // validateEvidenceRecordSection 纯函数边界
+  test('纯函数：### 级节头与后缀括号注释容忍；节体到下一节头截断（下一节的实证条目不计入）', () => {
+    const doc = [
+      '# 架构',
+      '### 证据升级与检索记录（本轮）',
+      '- 无升级条目',
+      '## 交付与运行',
+      '- 附录引用 [实证] 无 URL（属其他节，不计入本节检查）',
+    ].join('\n')
+    expect(validateEvidenceRecordSection(doc)).toBeNull()
+  })
+
+  test('纯函数：节头匹配为「证据升级与检索记录」前缀形态，不误配相近词', () => {
+    expect(validateEvidenceRecordSection('# 架构\n\n## 环境配置\n普通内容')).toContain('缺少「## 证据升级与检索记录」节')
+    expect(validateEvidenceRecordSection('# 架构\n\n## 证据升级与检索记录汇总\n普通内容')).toBeNull() // 前缀扩展节头容忍
+  })
+})
+
+// ═══════════════ L3-7d（2026-09-18）：Spike 埋点接线（verifyPhaseOutput architecture 挂点）════════════════
+
+describe('L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻断）', () => {
+  const { resetSpikeTelemetryState } = require('./nanju-spike-telemetry') as typeof import('./nanju-spike-telemetry')
+
+  /** 合法 v2 契约（含 spikes 登记与 envProbe）；architecture 分支只 parse 不做产物存在性检查 */
+  const spikeContract = {
+    schemaVersion: 2,
+    target: { platform: 'Linux', kind: 'desktop', entry: 'bin/tool' },
+    artifacts: ['bin/tool'],
+    build: '无需构建，脚手架产物', run: '终端运行 bin/tool',
+    tests: [{ id: 'acc-1', layer: 'acceptance', adapter: 'cli-driver', target: 'bin/tool', command: '驱动验收', covers: ['US-01'], requiresReal: true }],
+    spikes: [{ slug: 'SPIKE-001-ime-injection', verdict: 'confirmed', decided_by: 'architect-a', ts: '2026-09-18' }],
+    envProbe: { generatedAt: '2026-09-18' },
+  }
+  const archDocWithPending = (decision: string): string =>
+    `# 架构文档（L3-7d Spike 埋点接线用例）\n\n## 技术选型\n\n- 输入注入方案：${decision}\n\n本节内容用于撑过产出文件最低大小检查，不代表真实架构文档内容。\n\n${testArchitectureDoc}`
+
+  beforeEach(() => { resetSpikeTelemetryState() })
+  afterEach(() => { resetSpikeTelemetryState() })
+
+  test('文档含 PENDING 标记 + 契约含 spikes 登记 → 门禁放行且双事件落盘（created=文档侧 / verdict=登记值）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'quick',
+      html: archDocWithPending('PENDING(SPIKE-001-ime-injection)'),
+      files: { 'engineering.json': JSON.stringify(spikeContract) },
+    })
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+    const spikeEvents = readTelemetryEvents().filter((e) => e.eventType.startsWith('spike.'))
+    expect(spikeEvents.map((e) => e.eventType).sort()).toEqual(['spike.created', 'spike.verdict'])
+    const created = spikeEvents.find((e) => e.eventType === 'spike.created')
+    const verdict = spikeEvents.find((e) => e.eventType === 'spike.verdict')
+    expect(created?.payload).toMatchObject({ slug: 'SPIKE-001-ime-injection', source: 'pending-mark' })
+    expect(verdict?.payload).toMatchObject({ slug: 'SPIKE-001-ime-injection', verdict: 'confirmed', source: 'contract-registration' })
+  })
+
+  test('同一文档重复推进不重复埋；PENDING 替换为结论后埋 verdict（resolved + pending-removed）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'quick',
+      html: archDocWithPending('PENDING(SPIKE-001-ime-injection)'),
+      files: { 'engineering.json': JSON.stringify(spikeContract) },
+    })
+    verifyPhaseOutput(ws, PROJECT_ID, 'architecture')
+    verifyPhaseOutput(ws, PROJECT_ID, 'architecture') // 快照无变化：不重复埋
+    expect(readTelemetryEvents().filter((e) => e.eventType.startsWith('spike.'))).toHaveLength(2)
+    // 文档更新：PENDING 替换为结论引用（契约不变）
+    writeFileSync(join(fixtureRoot, `project-${PROJECT_ID}`, '03_ARCHITECTURE', 'architecture.md'), archDocWithPending('SPIKE-001 结论——注入生效（结论引用）'))
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
+    const resolved = readTelemetryEvents().filter((e) => e.eventType === 'spike.verdict')
+    expect(resolved).toHaveLength(2) // contract-registration + pending-removed
+    expect(resolved[1]?.payload).toMatchObject({ slug: 'SPIKE-001-ime-injection', verdict: 'resolved', source: 'pending-removed' })
+  })
+
+  test('埋点写盘失败不阻断门禁（_telemetry 被同名文件占据 → 门禁仍放行）', () => {
+    const ws = setupFixture({
+      stage: 'architecture', mode: 'quick',
+      html: archDocWithPending('PENDING(SPIKE-001-ime-injection)'),
+      files: { 'engineering.json': JSON.stringify(spikeContract) },
+    })
+    // 占位文件使 mkdirSync/appendFileSync 失败：recordTelemetry 内部 try-catch 只告警，门禁不受影响
+    writeFileSync(join(fixtureRoot, '_telemetry'), 'not-a-directory')
+    expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
   })
 })

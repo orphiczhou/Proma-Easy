@@ -1,4 +1,5 @@
 import type { ProviderType } from './channel'
+import type { NanjuDelegationSlot } from './nanju'
 
 /**
  * Agent 相关类型定义
@@ -800,6 +801,12 @@ export interface AgentSessionMeta {
   delegationDepth?: number
   /** 委派目标摘要，便于 UI 展示和追溯 */
   delegationGoal?: string
+  /**
+   * W-B B2：委派槽位（内部 producer 写入的权威身份；非工具公开入参）。
+   * 由 nanju-router-prompt.resolvePhaseDelegationSlots 产出、startDelegation 写入，
+   * gate 据此判定 author/ac-* /visual-validator 而不再依赖 title 文本猜测。
+   */
+  delegationSlot?: NanjuDelegationSlot
   /**
    * v2.4 自动补完需求（D7 §4）：该会话是 nanju_clarify_proxy 创建的代理子会话。
    * 仅 inline 代理委派写入（最小集，不写 sourceDelegationId）；路由门禁据此走

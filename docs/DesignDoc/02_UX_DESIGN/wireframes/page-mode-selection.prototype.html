@@ -1,0 +1,217 @@
+<!-- DOC-2.3 | 模式选择页 | v0.2 | 2026-06-05 | 变更: 对话框→inline选中态, 标签对齐sitemap, 补充CSS Token, focus-visible, 零术语, 引导文案 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>选择项目模式 - 向导Agent</title>
+<style>
+:root{
+  --color-primary:#4F46E5;--color-primary-hover:#4338CA;--color-primary-subtle:rgba(79,70,229,0.06);--color-primary-subtle-active:rgba(79,70,229,0.12);
+  --color-success:#059669;--color-success-bg:#ECFDF5;
+  --color-warning:#D97706;--color-warning-bg:#FEF3C7;
+  --color-error-amber:#D97706;--color-error-amber-bg:#FEF3C7;
+  --color-bg:#1E1E2E;--color-surface:#FFFFFF;--color-overlay:rgba(0,0,0,0.55);
+  --color-text:#111827;--color-text-secondary:#6B7280;--color-text-on-dark-heading:#FFFFFF;--color-text-on-dark:rgba(255,255,255,0.88);--color-text-on-dark-subtle:rgba(255,255,255,0.55);--color-text-on-dark-muted:rgba(255,255,255,0.40);
+  --color-border:#E5E7EB;--color-border-light:rgba(255,255,255,0.25);--color-border-light-hover:rgba(255,255,255,0.55);
+  --radius-sm:6px;--radius-md:8px;--radius-lg:12px;
+  --shadow-card:0 4px 20px rgba(0,0,0,0.08);--shadow-card-hover:0 12px 36px rgba(0,0,0,0.18);--shadow-dialog:0 24px 64px rgba(0,0,0,0.35);--shadow-btn-primary:0 4px 14px rgba(79,70,229,0.35);
+  --padding-page:40px 24px;--padding-card:36px 32px 32px;--padding-dialog:36px 40px 32px;--padding-btn:10px 32px;--padding-badge:3px 12px;
+  --margin-header-bottom:48px;--margin-card-title-bottom:10px;--margin-card-desc-bottom:16px;--margin-guidance-top:44px;--margin-confirm-msg-bottom:28px;
+  --gap-cards:28px;--gap-btn-group:14px;
+  --width-card:380px;--width-dialog:460px;
+  --size-help-btn:38px;
+  --font-family-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif;
+  --font-size-hero:36px;--font-size-card-title:22px;--font-size-subtitle:15px;--font-size-body:16px;--font-size-caption:14px;--font-size-small:13.5px;--font-size-badge:12px;
+  --font-weight-bold:700;--font-weight-semibold:600;--font-weight-regular:400;
+  --letter-spacing-title:2px;
+  --duration-fast:150ms;--duration-normal:180ms;--duration-slow:200ms;--duration-overlay:250ms;
+  --ease-default:ease;--ease-bounce:cubic-bezier(0.34,1.56,0.64,1);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--font-family-sans);background:var(--color-bg);color:var(--color-text-on-dark);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:var(--padding-page)}
+.container{max-width:900px;width:100%;text-align:center}
+.page-title{font-size:var(--font-size-hero);font-weight:var(--font-weight-bold);color:var(--color-text-on-dark-heading);margin-bottom:8px;letter-spacing:var(--letter-spacing-title)}
+.page-subtitle{font-size:var(--font-size-subtitle);color:var(--color-text-on-dark-subtle);margin-bottom:var(--margin-header-bottom);line-height:1.6}
+.cards-row{display:flex;gap:var(--gap-cards);justify-content:center;margin-bottom:32px}
+.card{flex:1;max-width:var(--width-card);background:var(--color-surface);border:2px solid transparent;border-radius:var(--radius-lg);padding:var(--padding-card);text-align:left;cursor:pointer;transition:border-color var(--duration-slow) var(--ease-default),box-shadow var(--duration-slow) var(--ease-default),transform var(--duration-slow) var(--ease-default);position:relative;color:var(--color-text)}
+.card:hover{border-color:var(--color-primary);transform:translateY(-5px);box-shadow:var(--shadow-card-hover)}
+.card:active{transform:scale(.97);transition:transform var(--duration-fast) var(--ease-default)}
+.card:active:hover{transform:scale(1);transition:transform var(--duration-fast) var(--ease-bounce)}
+.card-badge{position:absolute;top:-10px;right:20px;background:var(--color-primary);color:#fff;font-size:var(--font-size-badge);font-weight:var(--font-weight-semibold);padding:var(--padding-badge);border-radius:var(--radius-lg);box-shadow:0 2px 8px rgba(79,70,229,0.35);letter-spacing:0.5px}
+.card-icon{width:44px;height:44px;border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;margin-bottom:var(--margin-card-title-bottom)}
+.card-icon.quick{background:var(--color-primary-subtle);color:var(--color-primary)}
+.card-icon.long{background:var(--color-success-bg);color:var(--color-success)}
+.card-title{font-size:var(--font-size-card-title);font-weight:var(--font-weight-semibold);margin-bottom:var(--margin-card-title-bottom)}
+.card-desc{font-size:var(--font-size-small);color:var(--color-text-secondary);line-height:1.5;margin-bottom:var(--margin-card-desc-bottom)}
+.card-tags{display:flex;flex-wrap:wrap;gap:8px}
+.card-tag{font-size:var(--font-size-badge);padding:4px 12px;border-radius:var(--radius-lg);background:var(--color-primary-subtle);color:var(--color-text-secondary);border:1px solid var(--color-border);transition:all var(--duration-slow) var(--ease-default)}
+.card:hover .card-tag{border-color:#C7D2FE;background:var(--color-primary-subtle);color:var(--color-primary)}
+.card-examples{font-size:var(--font-size-caption);color:var(--color-text-secondary);margin-top:var(--margin-card-desc-bottom)}
+/* 推断：版本号 */
+.version-tag{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--color-text-on-dark-muted)}
+/* 推断：帮助按钮 */
+.help-btn{position:fixed;top:20px;right:24px;width:var(--size-help-btn);height:var(--size-help-btn);border-radius:50%;border:1.5px solid var(--color-border-light);background:transparent;color:var(--color-text-on-dark-subtle);font-size:var(--font-size-subtitle);font-weight:var(--font-weight-semibold);font-family:"Times New Roman",serif;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all var(--duration-slow) var(--ease-default);z-index:50}
+.help-btn:hover{border-color:var(--color-border-light-hover);color:var(--color-text-on-dark);box-shadow:0 0 0 3px rgba(255,255,255,0.12)}
+/* 卡片选中态 */
+.card.selected{border:2px solid var(--color-primary);background:rgba(79,70,229,0.05);box-shadow:0 4px 12px rgba(79,70,229,0.15)}
+.card.selected .card-tag{border-color:#C7D2FE;background:var(--color-primary-subtle);color:var(--color-primary)}
+.card.selected .card-icon.quick{background:var(--color-primary);color:#fff}
+.card.selected .card-icon.long{background:var(--color-success);color:#fff}
+/* 键盘聚焦 */
+.card:focus-visible,.btn:focus-visible,.btn-text:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+/* 引导提示 */
+.guidance-text{font-size:var(--font-size-caption);color:var(--color-text-on-dark-muted);margin-top:-40px;margin-bottom:var(--margin-header-bottom)}
+/* 内联确认区 */
+.inline-confirm{display:none;flex-direction:column;align-items:center;gap:12px;margin-top:8px;padding:16px 24px;background:rgba(255,255,255,0.06);border-radius:var(--radius-md);animation:fadeIn var(--duration-normal) var(--ease-default)}
+.inline-confirm.active{display:flex}
+.inline-confirm-text{font-size:var(--font-size-subtitle);color:var(--color-text-on-dark)}
+.inline-confirm-actions{display:flex;gap:var(--gap-btn-group);align-items:center}
+.btn-text{background:transparent;border:none;color:var(--color-text-on-dark-subtle);font-size:var(--font-size-caption);cursor:pointer;text-decoration:underline;text-underline-offset:3px;padding:6px 12px;border-radius:var(--radius-sm);transition:all var(--duration-normal) var(--ease-default)}
+.btn-text:hover{color:var(--color-text-on-dark);background:rgba(255,255,255,0.08)}
+.btn{padding:var(--padding-btn);border-radius:var(--radius-sm);font-size:var(--font-size-subtitle);font-weight:var(--font-weight-semibold);border:none;cursor:pointer;transition:all var(--duration-normal) var(--ease-default)}
+.btn-primary{background:var(--color-primary);color:#fff}
+.btn-primary:hover{background:var(--color-primary-hover);box-shadow:var(--shadow-btn-primary)}
+.btn-primary:active{transform:scale(.97)}
+.btn-secondary{background:#F3F4F6;color:var(--color-text)}
+.btn-secondary:hover{background:#E5E7EB}
+.btn-secondary:active{transform:scale(.97)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+/* 通知Toast */
+.toast{position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:12px 20px;box-shadow:0 4px 16px rgba(0,0,0,0.12);font-size:var(--font-size-caption);color:var(--color-text);z-index:300;animation:slideUp var(--duration-fast) var(--ease-bounce)}
+@keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(16px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+@media(max-width:860px){
+  :root{--font-size-hero:28px;--padding-card:28px 24px 24px;--margin-header-bottom:32px;--gap-cards:20px;--width-card:420px}
+  .card{max-width:min(420px,85vw)}
+}
+@media(max-width:640px){
+  .cards-row{flex-direction:column;align-items:center}
+  .card{max-width:100%}
+  :root{--font-size-hero:22px;--font-size-card-title:19px}
+}
+</style>
+</head>
+<body>
+
+<!-- 推断：帮助按钮 -->
+<button class="help-btn" title="使用说明" onclick="toggleHelp()">?</button>
+
+<div class="container">
+  <h1 class="page-title">你想做一个什么样的项目？</h1>
+  <p class="page-subtitle">不用担心技术细节，选一个方向，剩下的交给我</p>
+  <p class="guidance-text">点击任意卡片开始</p>
+
+  <div class="cards-row">
+    <!-- 快消型卡片 -->
+    <div class="card" id="cardQuick" tabindex="0" data-ai-id="card-mode-quick" onclick="selectMode('quick')">
+      <div class="card-icon quick">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <h2 class="card-title" data-ai-id="card-title-quick">快速做一个工具</h2>
+      <p class="card-desc">适合试试想法、做个小工具、验证一个点子<br>我会快速引导你理清需求，做出能用的成品</p>
+      <div class="card-tags" data-ai-id="card-tags-quick">
+        <span class="card-tag">读书笔记</span>
+        <span class="card-tag">订餐统计</span>
+        <span class="card-tag">个人记账</span>
+      </div>
+      <p class="card-examples">完成后可以升级为长期项目继续完善</p>
+    </div>
+
+    <!-- 长期迭代型卡片 -->
+    <div class="card" id="cardLong" tabindex="0" data-ai-id="card-mode-long" onclick="selectMode('long')">
+      <div class="card-icon long">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <h2 class="card-title" data-ai-id="card-title-long">做一个长期维护的项目</h2>
+      <p class="card-desc">适合想持续更新、不断完善的项目<br>我们会做更充分的准备，打好扎实基础</p>
+      <div class="card-tags" data-ai-id="card-tags-long">
+        <span class="card-tag">分享工具</span>
+        <span class="card-tag">团队协作平台</span>
+        <span class="card-tag">社区网站</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 内联确认区（取代对话框） -->
+<div class="inline-confirm" id="inlineConfirm" data-ai-id="inline-confirm-mode">
+  <p class="inline-confirm-text" id="confirmText"></p>
+  <div class="inline-confirm-actions">
+    <button class="btn btn-primary" id="btnConfirm" data-ai-id="btn-confirm-mode">好的，开始吧</button>
+    <button class="btn-text" id="btnReSelect" data-ai-id="btn-reselect-mode">重新选择</button>
+  </div>
+</div>
+
+<div class="version-tag">原型 v0.2 · 模式选择页 · inline选中态 · design-system v0.2 aligned</div>
+
+<script>
+(function(){
+  var modeData = {
+    quick: { title: '快速做一个工具', icon: 'quick' },
+    long:  { title: '做一个长期维护的项目', icon: 'long' }
+  };
+
+  var selectedMode = null;
+  var cardQuick = document.getElementById('cardQuick');
+  var cardLong  = document.getElementById('cardLong');
+  var inlineEl  = document.getElementById('inlineConfirm');
+  var confirmText = document.getElementById('confirmText');
+
+  function deselectAll() {
+    cardQuick.classList.remove('selected');
+    cardLong.classList.remove('selected');
+    inlineEl.classList.remove('active');
+    selectedMode = null;
+  }
+
+  window.selectMode = function(mode) {
+    if (selectedMode === mode) return; // already selected
+    deselectAll();
+    selectedMode = mode;
+    var card = mode === 'quick' ? cardQuick : cardLong;
+    card.classList.add('selected');
+    card.focus();
+    var d = modeData[mode];
+    confirmText.textContent = '已选择「' + d.title + '」。确定要进入吗？';
+    inlineEl.classList.add('active');
+  };
+
+  document.getElementById('btnConfirm').onclick = function() {
+    if (!selectedMode) return;
+    var title = modeData[selectedMode].title;
+    showToast('正在进入「' + title + '」工作区...');
+    setTimeout(function() {
+      deselectAll();
+      showToast('模拟跳转：已进入「' + title + '」工作区（此功能将在后续版本实现）');
+    }, 1200);
+  };
+
+  document.getElementById('btnReSelect').onclick = function() {
+    deselectAll();
+  };
+
+  function showToast(msg) {
+    var existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+    var el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function() { el.remove(); }, 3500);
+  }
+
+  /* 帮助按钮 */
+  window.toggleHelp = function() {
+    showToast('这是模式选择页。选"快速做一个工具"如果你想快速验证想法；选"做一个长期维护的项目"如果你想持续打磨一个项目。');
+  };
+
+  /* 键盘快捷反馈：Escape 取消选择 */
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && selectedMode) deselectAll();
+  });
+
+  console.log('[wireframe] mode-selection v0.2 | inline选中态 | design-system v0.2 aligned');
+})();
+</script>
+</body>
+</html>

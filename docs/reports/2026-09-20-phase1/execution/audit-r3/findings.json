@@ -1,0 +1,83 @@
+{
+  "audit": "audit-r3-delivery-integrity",
+  "baseline": {
+    "head": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+    "branch": "p1-quick-engineering",
+    "auditedAt": "2026-09-23T21:14-21:30 GMT+8",
+    "electron": "0.17.132",
+    "shared": "0.1.63",
+    "targets": [
+      "apps/electron/src/main/lib/nanju-delivery-view.ts (untracked, mtime 21:19:10)",
+      "packages/shared/src/types/nanju-delivery.ts (untracked, mtime 21:08:45)",
+      "apps/electron/src/renderer/components/nanju/delivery/DeliveryCard.tsx (untracked, mtime 21:08:53)"
+    ],
+    "note": "审计窗口内 nanju-delivery-view.ts 与其测试于 21:19:10/21:19:13 被父会话/并行 worker 追加 lstatSync 加固（symlink index.json + >1MB 拒绝）。本报告全部结论基于 21:19 后稳定态复验（41/41 反例通过），并附 mtime 证据。"
+  },
+  "method": "只读源码审查 + 隔离 HOME 子进程反例（41 项，/dev/shm 夹具，执行后清理）+ /dev/shm 前缀边界实测；未委派/未提交/未部署/未启动 release-dev/未修改产品代码",
+  "counts": { "red": 0, "yellow": 3, "green": 1 },
+  "findings": [
+    {
+      "id": "D-1",
+      "severity": "yellow",
+      "status": "still-open",
+      "title": "stale 覆盖后 evidence[].verdict 与顶层 verdict 不一致，篡改报告信号被 stale 遮蔽",
+      "file": "apps/electron/src/main/lib/nanju-delivery-view.ts",
+      "line": "339-365 (buildDeliveryViewModel) / 281 (buildEvidence)",
+      "quote": "verdict = 'stale'",
+      "argument": "mapReportVerdict 先跑（计数不自洽→'fail'），随后 stale 检测在指纹不符时把顶层 verdict 覆写为 'stale'，但 evidence 数组在 stale 检测之前已由 buildEvidence 生成（内部再次调用 mapReportVerdict，不知 stale）。故篡改报告计数 + 改产物时，顶层 badge='已过期'(stale)、evidence[0].verdict='验收未通过'(fail)。两者均非 pass（不误判通过），但顶层 stale 完全遮盖了『计数不自洽=报告被篡改』的完整性告警（该告警只在 evidence[0].warnings 里，用户默认折叠态看不到）。",
+      "counterexample": "probe b3：报告 passed=1,skipped=1（计数不自洽）+ 入口已改（指纹不符）→ vm.verdict='stale'，vm.evidence[0].verdict='fail'。",
+      "recommendation": "stale 判定后同步覆写 evidence[].verdict（或让 buildEvidence 接受外部 verdict），并将 integrity 告警并入 staleMessage，确保用户能看到『报告被篡改』而非仅『已过期』。"
+    },
+    {
+      "id": "D-2",
+      "severity": "yellow",
+      "status": "still-open",
+      "title": "hasHistory（报告存在）与 history（evidence 目录）语义分裂，无 report.json 但有证据目录时 UI 自相矛盾",
+      "file": "apps/electron/src/main/lib/nanju-delivery-view.ts / apps/electron/src/renderer/components/nanju/delivery/DeliveryCard.tsx",
+      "line": "340/374 (view) / 257 vs 316 (UI)",
+      "quote": "hasHistory = true  // 仅当 report 存在",
+      "argument": "hasHistory 由 report.json 存在决定，history 由 06_TESTS/evidence 目录决定，两者来源不同。当 evidence 目录存在（driver-execution 归档）而 report.json 缺失/被删（例如 GWT 报告尚未生成或手动清理）时，verdict='not-tested'、hasHistory=false、history 非空。UI 在展开态同时渲染『暂无测试运行记录』（hasHistory=false 分支）与『历史验收记录（最近 N 次）』（history 非空分支），互相矛盾。",
+      "counterexample": "隔离 HOME 夹具：仅写 evidence/run-x/index.json 不写 report.json → buildDeliveryViewModel 返回 {verdict:'not-tested', hasHistory:false, history:[{runId:'run-x',...}]}。",
+      "recommendation": "让 hasHistory 与 history 非空对齐（hasHistory = report 存在 || history 非空），或 UI 改为按 history 非空判断是否显示历史区，消除『暂无记录 + 有历史』并存。"
+    },
+    {
+      "id": "D-3",
+      "severity": "yellow",
+      "status": "still-open",
+      "title": "resolveEntryAbsPath 前缀边界缺口：startsWith 未加路径分隔符，兄弟项目目录名可逃逸",
+      "file": "apps/electron/src/main/lib/nanju-delivery-view.ts",
+      "line": "176-184",
+      "quote": "if (!resolved.startsWith(resolve(projectDir))) return null",
+      "argument": "realpathSync 已解析 symlink/../，但二次防御用 startsWith(resolve(projectDir)) 未加尾部分隔符。projectDir 形如 .../workspace-files/project-<id>，构造 report.entry='../project-<id>-evil/08_APP/index.html' 可解析到兄弟目录 .../project-<id>-evil，其字符串以 project-<id> 为前缀，通过校验返回非 null。属本文件既有代码（非本轮增量清单），且需篡改 report.entry（GWT 正常写的是项目内相对路径，从不含 ../）、仅同 workspace 项目间越界，不可逃到任意绝对路径。",
+      "counterexample": "/dev/shm 前缀实测：project-<id> 与 project-<id>-evil 并存，entry='../project-<id>-evil/08_APP/index.html' → resolved=.../project-<id>-evil/...，is_null=false。",
+      "recommendation": "改为 `resolved === resolve(projectDir) || resolved.startsWith(resolve(projectDir) + sep)`（sep=path.sep），消除前缀歧义。"
+    },
+    {
+      "id": "D-4",
+      "severity": "green",
+      "status": "still-open",
+      "title": "shared GwtReportJson 为手工镜像子集，与 gwt-runner 全量接口存在字段漂移风险",
+      "file": "packages/shared/src/types/nanju-delivery.ts",
+      "line": "34-72 (GwtReportJson)",
+      "quote": "字段来源：全部从 nanju-gwt-runner.ts GwtReportJson 复制",
+      "argument": "shared 侧 GwtReportJson 只镜像了 generatedAt/verdict/runId/entryFingerprint/entry/scenariosTotal/passed/failed/skipped/coveredUs/uncoveredUs/retryCount/errorReason/warnings/scenarios，未含 gwt-runner 全量接口的 engineeringEvidence/blockedReason/retryPending/executionContext/engineeringSuite/coverageUnverified/failureKind/prdUserStoriesMissing/errorCount 等。delivery-view 只读子集、validateReportSchema 只校验子集，当前无现实漂移；但若 gwt-runner 未来改字段名（如 retryCount 更名），delivery-view 会误把合法报告降级为 not-tested。属手工镜像的固有维护风险，非当前缺陷。",
+      "counterexample": null,
+      "recommendation": "从 gwt-runner 的类型定义 import 复用（而非手抄），或加一条类型级 `satisfies`/字段并集断言防漂移。"
+    }
+  ],
+  "verified_positive": [
+    "mapReportVerdict 计数不变量挡住全部 pass 伪造形态（passed=0/空跑、passed>scenariosTotal、负数、NaN、skipped>0、failed>0、failed<0），全部判 fail，不显示『验收通过』（a1-a8）。",
+    "stale 优先级：篡改计数+指纹一致→fail（integrity 拦截，b2）；篡改计数+指纹不符→stale（b3）；攻击者重算指纹→pass（sha256 信任模型固有边界，代码注释已声明，非缺陷，b4）。",
+    "readDeliveryHistory 对 tests[] 含 null/非对象/未知 status('skip'/'skipped'/'unknown') 均不误判 pass，落入 not-tested（c1-c3b）；generatedAt 非法不影响 conclusion（纯由 status 计数决定），fallback 到 tests[0].generatedAt（c4）。",
+    "runId 白名单：'a..b'、'.hidden'、超长名(140) 均被拒，'valid-1' 被收，'..evil' 被拒（d1-d6）。",
+    "安全：symlink 目录逃逸被 dirent.isDirectory() 排除（对 symlink 返回 false，sec1/sec2）；symlink index.json 被 lstatSync+isSymbolicLink 拒（sec3）；>1MB index.json 被 size 上限拒（sec4）。",
+    "回归面：无 evidence 目录→history=[] 不抛错（reg1）；坏索引→跳过不抛错（reg2）；旧报告缺 retryCount→schema 降级 not-tested 不崩（reg3）；history 为 DeliveryViewModel 必填字段但仅 buildDeliveryViewModel 构造、渲染端用 history??[] 兜底，无其他消费者破坏。",
+    "buildDeliveryLaunchInstructions 六品类分支均为描述性文案（含『产品只提供入口与说明，不代执行命令』），无 shell/node/bun 执行指令。"
+  ],
+  "not_verified": [
+    "GUI 视觉：DeliveryCard 历史列表渲染、VERDICT_COLOR/LABEL/ICON 实际显示效果未做视觉截图验证。",
+    "真实工程数据：未用真实项目 evidence 目录（含 driver-execution 真实 status 分布）验证，仅用合成夹具。",
+    "IPC/preload 端到端：nanju:get-delivery-view 的 handler 接线与 window.electronAPI.nanjuGetDeliveryView 类型未在运行中触发验证（仅静态核对）。",
+    "打包产物：未 build/pack，未验证 electron-builder 产物内共享类型/模块解析。"
+  ]
+}
