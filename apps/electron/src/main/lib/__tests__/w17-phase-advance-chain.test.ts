@@ -753,11 +753,16 @@ describe('v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + reg
   })
 
   test('三个工具/桥接注入入口显式 humanOrigin:false（R4-01 攻击面；缺省即 false 防回归）', () => {
+    // M1-3 抽取后（蓝图 proma_agent_next_steps_guide1 §5.1）：入口层不再各自实现业务，
+    // humanOrigin:false 集中在共享层 session-tool-handlers.ts；断言两个入口都必须经它注入，
+    // 防止新增入口绕过共享层重新引入缺省 humanOrigin 的注入路径。
     const sessionTools = readFileSync(new URL('../agent-session-tools.ts', import.meta.url), 'utf-8')
     const mcpBridge = readFileSync(new URL('../agent-mcp-bridge.ts', import.meta.url), 'utf-8')
+    const sessionHandlers = readFileSync(new URL('../session-tool-handlers.ts', import.meta.url), 'utf-8')
     const nanjuOrch = readFileSync(new URL('../nanju-orchestrator.ts', import.meta.url), 'utf-8')
-    expect(sessionTools).toContain('humanOrigin: false')
-    expect(mcpBridge).toContain('humanOrigin: false')
+    expect(sessionHandlers).toContain('humanOrigin: false')
+    expect(sessionTools).toContain("from './session-tool-handlers'")
+    expect(mcpBridge).toContain("from './session-tool-handlers'")
     expect(nanjuOrch).toContain('humanOrigin: false')
   })
 
