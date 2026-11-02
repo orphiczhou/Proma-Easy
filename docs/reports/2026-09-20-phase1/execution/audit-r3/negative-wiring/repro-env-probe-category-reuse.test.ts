@@ -19,7 +19,12 @@ const LIB = join(REPO_ROOT, 'apps/electron/src/main/lib')
 let fixtureRoot = ''
 const actualConfigPaths = await import(join(LIB, 'config-paths.ts'))
 // mock 与 nanju-env-probe.ts 内部 import './config-paths' 解析到同一模块文件
-mock(String(join(LIB, 'config-paths.ts')), () => ({
+// 2026-11-03 NEXT-05 修正：原写作 `mock(path, factory)`，但 Bun 的模块 mock API 是
+// `mock.module(path, factory)`；`mock(string, fn)` 只是「创建一个 mock 函数」，模块 mock 根本没生效，
+// 导致：① 夹具指向 tmpdir 失效 → 探测写到真实 `~/.proma/agent-workspaces/test-ws`；
+// ② 读不到 `00_ENGINEERING_TEMPLATE/check_env.sh` → first.ok=false 的假红。
+// 改回 `mock.module` 即与本文件头部声明的「mock.module(config-paths) 指向 tmpdir」一致，不动任何断言。
+mock.module(String(join(LIB, 'config-paths.ts')), () => ({
   ...actualConfigPaths,
   getWorkspaceFilesDir: () => fixtureRoot,
   getAgentWorkspacePath: () => fixtureRoot,

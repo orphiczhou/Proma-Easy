@@ -3,16 +3,16 @@
  *
  * 被测：nanju-project-snapshots.ts rollbackProjectSnapshot。
  *
- * 反例命题：`complete = Boolean(fileRestore?.ok && fileRestore.complete && state)` 只对
- *           `state`（target.recoveryState）做 truthy 判定，未校验 `currentStage`/`status`
- *           字段真实存在。磁盘上 `_snapshots.json` 若被部分损坏为 `recoveryState: {}`
- *           （或 currentStage 缺失/非法），则：
- *           - `state` 为 {}（truthy）→ complete 可为 true → status='restored'，文案声称
- *             「已恢复会话、工程文件与阶段」；
- *           - 但 `restoredStage = state?.currentStage ?? project.currentStage` 因 currentStage
- *             缺失退化为当前阶段，**阶段实际未回退**，甚至写入非法 stage 串。
+ * 历史（2026-09-20 审计）：`complete` 只对 recoveryState 做 truthy 判定，磁盘上
+ * `recoveryState: {}`（或 currentStage 缺失/非法）会被当作合法恢复 → status='restored'，
+ * 文案声称「已恢复…阶段」，但阶段实际未回退，甚至写入非法 stage 串。
  *
- * 只读审计：不改产品代码；本测试仅固定当前行为作为证据。
+ * 2026-11-03 NEXT-05 复核：该缺陷已修复——实现新增 validRecoveryState 校验
+ * （currentStage 必须在合法阶段枚举内且 status 存在），不合法时 safeState=null →
+ * 返回 status='partial'，文案明确「未恢复阶段」，且不写入非法 stage。
+ * 本文件因此从「缺陷固定（红）」转为「修复回归守卫（绿）」：断言修复后的契约，
+ * 一旦有人回退成 truthy 判定，这些用例会立刻变红。原始缺陷证据见 git 历史 4e4f4630。
+ *
  * 运行：bun test <本文件>。mock 全部用绝对路径，落盘仅在 mkdtempSync 临时目录。
  */
 import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test'
@@ -72,13 +72,15 @@ describe('target.recoveryState 形状损坏', () => {
 
     const result = await gw.rollbackProjectSnapshot(WORKSPACE, PROJECT, cp.snapshot.snapshotId, idle)
 
-    expect(result.status).toBe('restored')
-    expect(result.message).toContain('已恢复会话、工程文件与阶段')
+    // 修复后契约：不合法 recoveryState → 不允许声称「已恢复阶段」，降级为 partial 并明示未恢复阶段
+    expect(result.status).toBe('partial')
+    expect(result.message).toContain('未恢复阶段')
+    expect(result.message).not.toContain('已恢复会话、工程文件与阶段')
     const currentStage = projectStore.getNanjuProject(WORKSPACE, PROJECT)?.currentStage
-    expect(currentStage).toBe('testing')   // 正确应为 'coding'，当前因 recoveryState 缺失退化
+    expect(currentStage).toBe('testing') // 未回退（也不得伪造回退）
   })
 
-  test('recoveryState.currentStage 为非法串：直接写入非法 currentStage 且仍报 restored', async () => {
+  test('recoveryState.currentStage 为非法串：不得写入非法 currentStage，降级 partial', async () => {
     const cp = await gw.createProjectCheckpoint(WORKSPACE, PROJECT, 'sess-current', '代码初版', 'confirm')
     projectStore.updateNanjuProject(WORKSPACE, PROJECT, { currentStage: 'testing' })
     const snapPath = join(workspaceDir, `project-${PROJECT}`, '_snapshots.json')
@@ -88,8 +90,9 @@ describe('target.recoveryState 形状损坏', () => {
     writeJsonFileAtomic(snapPath, snaps)
 
     const result = await gw.rollbackProjectSnapshot(WORKSPACE, PROJECT, cp.snapshot.snapshotId, idle)
-    expect(result.status).toBe('restored')
-    expect(projectStore.getNanjuProject(WORKSPACE, PROJECT)?.currentStage).toBe('garbage-stage')
+    expect(result.status).toBe('partial')
+    // 非法 stage 不得被写进项目索引（修复前会落成 'garbage-stage'）
+    expect(projectStore.getNanjuProject(WORKSPACE, PROJECT)?.currentStage).toBe('testing')
   })
 
   test('对照：recoveryState 完整时阶段正确回退（正常路径）', async () => {

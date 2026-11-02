@@ -15,6 +15,10 @@ import {
 } from './nanju-delegation-watch'
 import { NANJU_GUARDS, type NanjuGuardStage } from './nanju-project'
 import type { AgentEventBus } from './agent-event-bus'
+import { useIsolatedPromaConfigDir } from './__tests__/test-home-fixture'
+
+// NEXT-05 Batch B：观察哨会按工作区 id 解析配置目录（埋点/日志），不隔离会写脏真实 `~/.proma`。
+useIsolatedPromaConfigDir()
 
 // —— AC Z-4（v0.17.65）真实链路测试：停止委派时清理未决 blockedEvents ——
 // mock 掉会话/运行器/模型选择依赖后加载真实 agent-collaboration-tools，走 delegate_agent →

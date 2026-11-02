@@ -16,7 +16,9 @@
     "dist:mac": "bun run --filter='@proma/electron' dist:mac",
     "build": "bun run --filter='*' build",
     "typecheck": "bun run --filter='*' typecheck",
-    "test": "bun test"
+    "test": "bun test --isolate apps packages",
+    "test:all": "bun test --isolate",
+    "test:evidence": "bun test --isolate docs"
   },
   "devDependencies": {
     "@types/bun": "latest",

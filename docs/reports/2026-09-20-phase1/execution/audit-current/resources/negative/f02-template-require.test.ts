@@ -4,21 +4,15 @@
  * 复跑：bun test docs/reports/2026-09-20-phase1/execution/audit-current/resources/negative/f02-template-require.test.ts
  * 落盘仅在 /tmp 自动清理临时目录。
  *
- * 期望：
- *   - 静态 ESM import 解析成功（不依赖 require）
- *   - require() 调用在纯 ESM runtime 下抛 ReferenceError
- *   - syncProjectEnvStateFromArchitectureDoc 函数体内存在 8 处 require（grep 验证）
- *
- * 反例论证：
- *   apps/electron/package.json 声明 "type": "module"。ESM 模块顶层不能用 require()。
- *   当前实现把 require 放在函数体内（try/catch 包裹）：
+ * 历史（2026-09-20 审计）：apps/electron 声明 "type": "module"，而该函数体内曾有 7 处
  *     const { readFileSync, existsSync } = require('node:fs') as typeof import('node:fs')
- *   在标准 Node.js ESM runtime 抛 `ReferenceError: require is not defined`；
- *   在 Bun runtime / esbuild transform 后能运行——意味着「Bun 能跑 ≠ 打包后能跑」。
+ * Bun/esbuild 下能跑、严格 Node ESM runtime 下抛 `ReferenceError: require is not defined`
+ * ——即「Bun 能跑 ≠ 发布 ESM 包能跑」。
  *
- * 修复方向：
- *   - 顶部正常 import；删 try/catch + 8 处 require；
- *   - 函数不应自己 require 同模块依赖。
+ * 2026-11-03 NEXT-05 复核：缺陷已修复——该模块现在 require() 调用数为 0（全部改为顶部 import）。
+ * 本文件由「缺陷固定（红）」转为「ESM 纯净回归守卫（绿）」：一旦有人回注 require() 立即变红。
+ * 注：原「在严格 ESM 作用域实测抛错」一项已删除——Bun 运行时全局存在 require，
+ * 无法在 bun test 内构造该反例；该断言改为等价的静态约束（源码内禁止 require）。
  */
 
 import { describe, test, expect } from 'bun:test'
@@ -36,37 +30,23 @@ function afterEachClean(): void {
   // 套件级别清理在最后一个 test 完成后执行
 }
 
-describe('F-02：ESM 模块禁用 require() 的反例论证', () => {
-  test('Given apps/electron "type":"module" When 读 require() THEN 应当被 fail-fast', () => {
+describe('F-02：ESM 模块禁用 require() 的回归守卫', () => {
+  test('Given apps/electron "type":"module" When 扫描源码 THEN 不得出现 require()', () => {
     // 1. 静态 type 校验：确认模块是 ESM
     const pkg = JSON.parse(readFileSync(PACKAGE_JSON, 'utf-8')) as { type?: string }
     expect(pkg.type).toBe('module')
 
-    // 2. 源码静态扫描：定位 require() 调用
+    // 2. 源码静态扫描：ESM 模块不得残留 require() 调用（修复后为 0）
     const src = readFileSync(TEMPLATE_TS, 'utf-8')
     const requireCalls = [...src.matchAll(/require\(\s*['"][^'"]+['"]\s*\)/g)]
-    expect(requireCalls.length).toBeGreaterThanOrEqual(7) // 实际 7 处（787-834）
+    expect(requireCalls).toHaveLength(0)
 
-    // 3. 重点定位 syncProjectEnvStateFromArchitectureDoc 函数体内的 require
+    // 3. 重点定位 syncProjectEnvStateFromArchitectureDoc 函数体内的 require（必须为 0）
     const funcMatch = src.match(/export function syncProjectEnvStateFromArchitectureDoc[\s\S]*?\n\}\s*\n/)
     expect(funcMatch).not.toBeNull()
     const funcBody = funcMatch![0]
     const funcRequires = [...funcBody.matchAll(/require\(\s*['"][^'"]+['"]\s*\)/g)]
-    expect(funcRequires.length).toBe(7)
-
-    // 4. 实测：纯 ESM runtime 下 require() 抛 ReferenceError
-    // （Bun runtime 下 require 仍能工作——但严格 ESM scope（动态 Function 构造）拒绝 require）
-    expect(() => {
-      // 故意在严格 ESM 上下文尝试 require：eval 包裹成动态执行
-      // Bun 测试运行时仍能解析 require，但严格 ESM scope（new Function）下 require 不存在
-      // —— 证明「Bun 能跑 ≠ 任何 ESM runtime 能跑」。
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-eval
-      const dynRequire = new Function('m', 'return require(m)')
-      const probe = dynRequire('node:fs') as { readFileSync?: unknown }
-      if (typeof probe.readFileSync !== 'function') {
-        throw new Error('probe requires did not return a fs module')
-      }
-    }).toThrow(/require is not defined/)
+    expect(funcRequires).toHaveLength(0)
   })
 
   test('Given require() 应当被迁出 ESM 模块 When 改用顶部 import THEN 类型签名一致', async () => {
@@ -76,7 +56,7 @@ describe('F-02：ESM 模块禁用 require() 的反例论证', () => {
     expect(mod).toBeDefined()
   })
 
-  test('Sanity: require() 集中在 syncProjectEnvStateFromArchitectureDoc，不应散落到其他函数', () => {
+  test('Sanity: require() 已全部迁出（旧实现集中在 syncProjectEnvStateFromArchitectureDoc）', () => {
     const src = readFileSync(TEMPLATE_TS, 'utf-8')
     // 列出 require 所在行号
     const lines = src.split('\n')
@@ -84,10 +64,7 @@ describe('F-02：ESM 模块禁用 require() 的反例论证', () => {
     for (let i = 0; i < lines.length; i++) {
       if (/require\(/.test(lines[i]!)) requireLines.push(i + 1)
     }
-    expect(requireLines.length).toBeGreaterThanOrEqual(7)
-    // 全部应在 syncProjectEnvStateFromArchitectureDoc 函数内（行号 787-834）
-    const allInFunc = requireLines.every((l) => l >= 785 && l <= 840)
-    expect(allInFunc).toBe(true)
+    expect(requireLines).toHaveLength(0)
   })
 })
 

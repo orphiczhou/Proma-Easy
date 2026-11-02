@@ -22,6 +22,10 @@ import {
   type GwtReportJson,
   DELIVERY_TARGET_KINDS,
 } from '@proma/shared'
+import { useIsolatedPromaConfigDir } from './__tests__/test-home-fixture'
+
+// NEXT-05 Batch B：交付视图会按工作区解析配置目录/项目根，不隔离会读写真实 `~/.proma`。
+useIsolatedPromaConfigDir()
 
 // ===== 测试夹具 =====
 

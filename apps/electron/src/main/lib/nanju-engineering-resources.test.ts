@@ -43,6 +43,21 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../
 /** 真实资源目录绝对路径（用于仓库默认 fixture 的"可用资源"类用例） */
 const REAL_TEMPLATES_DIR = join(REPO_ROOT, 'apps', 'electron', 'resources', 'nanju-engineering-templates')
 
+/**
+ * 真实资源仓声明在 manifest.json 的 bundleVersion。
+ *
+ * 不再硬编码（2026-11-03 NEXT-05 Batch C）：模板指纹同步提交
+ * 0808a7a6 已把 bundleVersion 2.5.0 → 2.5.1，硬编码断言把"资源版本升级"误判为缺陷。
+ * 这里改为从磁盘 manifest 取期望值，断言的是真正的不变量
+ * ——「verify 回报的 bundleVersion 必须等于 manifest 声明值」，
+ * 而不是把某个历史版本号钉死（钉死会让每次模板指纹刷新都红）。
+ */
+const REAL_DECLARED_BUNDLE_VERSION = (
+  JSON.parse(readFileSync(join(REAL_TEMPLATES_DIR, MANIFEST_FILENAME), 'utf-8')) as {
+    bundleVersion: string
+  }
+).bundleVersion
+
 let fixtureRoot = ''
 let templatesBase = ''
 
@@ -597,7 +612,7 @@ describe('loadEngineeringResources（仓库真实 fixture）', () => {
       expect(r.baseDir).toBe(REAL_TEMPLATES_DIR)
       expect(r.manifest).not.toBeNull()
       expect(r.verify.ok).toBe(true)
-      expect(r.verify.bundleVersion).toBe('2.5.0')
+      expect(r.verify.bundleVersion).toBe(REAL_DECLARED_BUNDLE_VERSION)
       expect(r.verify.requiredCount).toBe(MIN_REQUIRED_ENTRIES)
       expect(r.requiredPaths).toHaveLength(MIN_REQUIRED_ENTRIES)
       expect(r.entries.find((e) => e.path === 'desktop-app.md')).toBeDefined()
@@ -628,7 +643,9 @@ describe('verifyEngineeringResourcesAt', () => {
       process.chdir(REPO_ROOT)
       const r = verifyEngineeringResourcesAt()
       expect(r.ok).toBe(true)
-      expect(r.bundleVersion).toBe('2.5.0')
+      expect(r.bundleVersion).toBe(REAL_DECLARED_BUNDLE_VERSION)
+      // 同时守住语义下限：真实资源版本必须仍处于 2.5.x 主线（防 manifest 被写成空串/乱码后假通过）
+      expect(r.bundleVersion).toMatch(/^2\.5\.\d+$/)
     } finally {
       try { process.chdir(cwdBefore) } catch { /* 恢复失败容忍 */ }
     }

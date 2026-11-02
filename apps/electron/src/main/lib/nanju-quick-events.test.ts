@@ -21,6 +21,11 @@ import {
   emitQuickEvent,
 } from './nanju-quick-events'
 import type { TelemetryEventType } from './nanju-telemetry'
+import { useIsolatedPromaConfigDir } from './__tests__/test-home-fixture'
+
+// NEXT-05 Batch B：埋点文件默认落在 `~/.proma/agent-workspaces/<wsId>/workspace-files/_telemetry/`，
+// 不隔离 HOME 会写脏用户真实配置目录。本夹具把 homedir() 重定向到临时目录，每个用例前清空配置。
+useIsolatedPromaConfigDir()
 
 describe('W24-EF F2：PRD §12.4 事件表 14 条', () => {
   test('14 条全部存在且 index 1..14 单调（无缺漏无重复）', () => {

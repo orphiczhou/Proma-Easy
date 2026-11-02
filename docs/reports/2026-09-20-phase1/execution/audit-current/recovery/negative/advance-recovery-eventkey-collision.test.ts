@@ -68,9 +68,11 @@ describe('指纹失败（eventKey=undefined）下的幂等键碰撞', () => {
     recovery.persistAdvanceCorrection(ws, id, { kind: 'gate-deny', target: 'prototype', expected: 'prototype', count: 2, message: '第二次全新拒因', checks: [] })
     const second = store.getProjectPendingAdvanceCorrection(ws, id)!
 
-    // 缺陷证据：两次不同事件因 undefined===undefined 被当作同事件，新拒因继承 'cancelled'
-    expect(second.executionState).toBe('cancelled')
-    expect(recovery.buildPendingAdvanceRecoveryPrompt(ws, id)).toBeNull()
+    // 2026-11-03 NEXT-05 复核：缺陷已修复——指纹缺失（eventKey=undefined）时，取消后的
+    // **新拒因**不再因 undefined===undefined 被当作同事件继承 'cancelled'，而是恢复 blocked
+    // 且能重新面向用户。本用例由「缺陷固定」转为「修复回归守卫」。
+    expect(second.executionState).toBe('blocked')
+    expect(recovery.buildPendingAdvanceRecoveryPrompt(ws, id)).not.toBeNull()
     expect(recovery.claimAdvanceCorrectionContinuation(ws, id)).toBe(false)
   })
 
