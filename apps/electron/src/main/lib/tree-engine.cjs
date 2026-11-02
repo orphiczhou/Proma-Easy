@@ -2602,6 +2602,69 @@ async function cmdNudgeReset(args) {
   return result;
 }
 
+// ============================================================
+// 工具: Communication（v0.17.133，蓝图 proma_agent_next_steps_guide1 §4.1/§4.2）
+// ============================================================
+// 跨会话通信日志：记录 caller→target 的调度活动并刷新 target last_event_ts。
+// 与 event 流解耦——event 是治理语义（done/blocked/audit...），communication 是
+// 指挥官调度可观测性（send_message 后的留痕），供心跳巡检与审计取证。
+
+async function cmdCommunicationLog(args, callerSessionId) {
+  const { positional, opts } = parseArgs(args);
+  const tree_id = positional[0];
+  assertTreeExists(tree_id);
+  if (!opts.to) throw new TreeStateError(E_SCHEMA_INVALID, '--to <leaf_id> is required');
+
+  const ts = nowIso();
+  let entry = null;
+  await withLock(tree_id, () => {
+    const state = readState(tree_id);
+    const target = state.leaves[opts.to];
+    if (!target) {
+      throw new TreeStateError(E_LEAF_NOT_FOUND, `target leaf "${opts.to}" not found`);
+    }
+    if (!Array.isArray(state.communication_log)) state.communication_log = [];
+    entry = {
+      ts,
+      from_leaf: opts.from || null,
+      caller_session_id: callerSessionId || null,
+      to_leaf: opts.to,
+      target_session_id: target.session_id || null,
+      summary: opts.summary || '',
+    };
+    state.communication_log.push(entry);
+    target.last_event_ts = ts;
+    writeState(tree_id, state);
+  });
+  return { logged: entry };
+}
+
+async function cmdCommunicationList(args) {
+  const { positional, opts } = parseArgs(args);
+  const tree_id = positional[0];
+  assertTreeExists(tree_id);
+  const state = readState(tree_id);
+  let logs = Array.isArray(state.communication_log) ? state.communication_log : [];
+  if (opts.leaf) {
+    logs = logs.filter((item) => item.to_leaf === opts.leaf || item.from_leaf === opts.leaf);
+  }
+  const limit = opts.n ? Math.max(1, parseInt(opts.n, 10) || 50) : 50;
+  return { count: logs.length, logs: logs.slice(-limit) };
+}
+
+async function dispatchCommunication(args, callerSessionId) {
+  if (args.length === 0) {
+    throw new TreeStateError(E_SCHEMA_INVALID, 'communication requires a subcommand: log | list');
+  }
+  const [sub, ...rest] = args;
+  switch (sub) {
+    case 'log': return await cmdCommunicationLog(rest, callerSessionId);
+    case 'list': return await cmdCommunicationList(rest);
+    default:
+      throw new TreeStateError(E_UNKNOWN, `unknown communication subcommand "${sub}". Available: log | list`);
+  }
+}
+
 async function dispatchAudit(args, callerSessionId) {
   if (args.length === 0) {
     throw new TreeStateError(E_SCHEMA_INVALID, 'audit requires a subcommand: gate | append');
@@ -3386,6 +3449,10 @@ async function dispatch(cmd, args, callerSessionId) {
     case 'segment':
       return await dispatchSegment(args);
 
+    // Communication（v0.17.133）— 跨会话通信日志（caller→target 留痕 + 刷新 target last_event_ts）
+    case 'communication':
+      return await dispatchCommunication(args, callerSessionId);
+
     // TAO (v0.2.2) — 天道审计门 + 鞭策
     // V10-self-audit-forbidden-v2: dispatchAudit 透传 callerSessionId 给 cmdAuditGate（其他子命令忽略）
     case 'audit':
@@ -3402,7 +3469,7 @@ async function dispatch(cmd, args, callerSessionId) {
       return cmdHelp(args);
 
     default:
-      throw new TreeStateError(E_UNKNOWN, `unknown command "${cmd}". Available: init, backup, restore, validate, migrate, leaf, milestone, event, drift, heartbeat, segment, audit, nudge, tree, help. Call mcp__tree__tree_help('full_guide') for usage.`);
+      throw new TreeStateError(E_UNKNOWN, `unknown command "${cmd}". Available: init, backup, restore, validate, migrate, leaf, milestone, event, drift, heartbeat, segment, communication, audit, nudge, tree, help. Call mcp__tree__tree_help('full_guide') for usage.`);
   }
 }
 
