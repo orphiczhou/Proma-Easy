@@ -79,6 +79,10 @@ export type TelemetryEventType =
   // 内部，文档/契约均无创建时间戳可比对）——仅登记枚举不接假触发点，真实触发依赖
   // 未来 Spike 子会话自报通道或登记字段扩展（见 nanju-spike-telemetry.ts 头注）。
   | 'spike.created' | 'spike.verdict' | 'spike.timebox_hit'
+  // NEXT-02（R3 返工，2026-11-03）：向导 coding 树自动装配事实（成功/失败/幂等三态，
+  // payload.kind='coding-tree-bootstrap' 区分）——取代此前复用 'coding.executed' 的临时方案，
+  // 避免与阶段推进发射点的漏斗语义混淆。
+  | 'tree.bootstrap'
 
 export interface TelemetryEvent {
   eventId: string

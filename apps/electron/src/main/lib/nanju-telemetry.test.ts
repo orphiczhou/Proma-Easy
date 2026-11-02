@@ -11,6 +11,10 @@
 import { describe, expect, test } from 'bun:test'
 
 import { readTelemetry, type TelemetryEventType } from './nanju-telemetry'
+import { useIsolatedPromaConfigDir } from './__tests__/test-home-fixture'
+
+// NEXT-05 Batch B：readTelemetry 会按工作区解析配置目录，不隔离会读写真实 `~/.proma`。
+useIsolatedPromaConfigDir()
 
 describe('W24-EF F2：nanju-telemetry union 追加回归', () => {
   test('既有 union 成员字符串仍可赋值（不改既有成员，编译期锁定）', () => {
@@ -74,5 +78,13 @@ describe('L3-7d：Spike 三埋点枚举在场（spike.created / spike.verdict / 
     // 类型标注为 TelemetryEventType[]：任一成员被从 union 移除会在此编译失败——即枚举在场被编译期锁定
     const spikeEvents: TelemetryEventType[] = ['spike.created', 'spike.verdict', 'spike.timebox_hit']
     expect(spikeEvents).toEqual(['spike.created', 'spike.verdict', 'spike.timebox_hit'])
+  })
+})
+
+// ===== NEXT-02（R3 返工，2026-11-03）：coding 树 bootstrap 埋点 union 追加 =====
+describe('NEXT-02：tree.bootstrap 枚举在场（向导 coding 树自动装配事实，取代复用 coding.executed）', () => {
+  test("'tree.bootstrap' 为合法 TelemetryEventType（编译期锁定，防回退到复用 coding.executed 的混淆方案）", () => {
+    const treeEvents: TelemetryEventType[] = ['tree.bootstrap']
+    expect(treeEvents).toEqual(['tree.bootstrap'])
   })
 })

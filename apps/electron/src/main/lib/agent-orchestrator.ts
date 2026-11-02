@@ -1137,6 +1137,44 @@ export class AgentOrchestrator {
           } catch (challengeErr) {
             console.warn('[南大路由] 交付挑战登记失败（不阻断验收注入）:', challengeErr instanceof Error ? challengeErr.message : String(challengeErr))
           }
+          // NEXT-01（P1-3）：双阶段见证时钟——GWT 通过即刻锚定（execution_active），随即在
+          // 注入交付确认询问前冻结（awaiting_human_confirm，24h 租约）。人类阅读报告的耗时
+          // 不再挤占机器新鲜度窗口；期间产物被篡改则交付门第一优先级拦截（指纹不匹配）。
+          // 冻结失败不阻断验收注入（交付门退回 15 分钟机器窗口语义，安全降级）。
+          // A-4：按工程契约存在性门控——快消型项目（无 engineering.json）不适用本链路，
+          // 避免每轮 pass 误报「接线异常」。
+          try {
+            const { beginWitnessClockForDelivery, freezeWitnessClockForDelivery } =
+              require('./nanju-engineering-real-gate') as typeof import('./nanju-engineering-real-gate')
+            const { ENGINEERING_CONTRACT_PATH, parseEngineeringContract } =
+              require('./nanju-engineering-contract') as typeof import('./nanju-engineering-contract')
+            const { getNanjuProjectDir } = require('./nanju-project') as typeof import('./nanju-project')
+            const witnessProjectDir = getNanjuProjectDir(workspaceSlug, projectId)
+            if (existsSync(join(witnessProjectDir, ENGINEERING_CONTRACT_PATH))) {
+              const witnessContract = parseEngineeringContract(
+                readFileSync(join(witnessProjectDir, ENGINEERING_CONTRACT_PATH), 'utf-8'),
+              ).contract
+              const realTests = (witnessContract?.tests ?? [])
+                .filter((t) => t.requiresReal)
+                .map((t) => ({ testId: t.id, target: t.target, covers: [...t.covers] }))
+              if (realTests.length > 0) {
+                const clockScope = { workspaceSlug, projectId, sessionId, projectDir: witnessProjectDir }
+                const begun = beginWitnessClockForDelivery(clockScope, realTests)
+                if (begun.ok) {
+                  const frozen = freezeWitnessClockForDelivery(clockScope)
+                  if (frozen.ok) {
+                    console.log('[南大路由] 见证时钟已冻结（awaiting_human_confirm，24h 租约，指纹已锁定）')
+                  } else {
+                    // A-4：失败原因已写入时钟记录，交付门拒绝时会带进 message（可观测），此处留日志
+                    console.warn(`[南大路由] 见证时钟冻结失败（${frozen.reason}，交付门将按 15 分钟机器窗口判定）`)
+                  }
+                }
+                // begun 失败（no-witness-record）＝真实观察器未接且无登记：不适用双阶段时钟，保持原语义
+              }
+            }
+          } catch (clockErr) {
+            console.warn('[南大路由] 见证时钟接线异常（不阻断验收注入）:', clockErr instanceof Error ? clockErr.message : String(clockErr))
+          }
           console.log(`[南大路由] ✅ GWT 验收通过，进入交付验收（等待用户确认交付）: ${projectName}`)
           // v2.4 I2：交付验收续接指令含「满意交付 → PHASE_ADVANCE: delivered」——防御性登记
           //（isDeliverFromTesting 特判为主路径，双事实门禁仍是主承重）
@@ -3481,10 +3519,43 @@ export class AgentOrchestrator {
               // runRegisteredHeadlessAgent 自动注册 wc 并发 external_run_started
               // （renderer activateExternalAgentRun 原生支持，不抢前台焦点），
               // 结束时正常发 STREAM_COMPLETE 并驱动队列协调器。
-              runRegisteredHeadlessAgent(
+              //
+              // NEXT-02（蓝图 §三）：推进到 coding 时自动装配 mcp__tree__* 指挥官树，
+              // 并把 commanderBootstrapPrompt 附加到续接消息（含 milestone_add/5 件套/
+              // audit_gate 标准动作指引）。bootstrap 失败安全降级为普通会话续接，
+              // 绝不阻断 coding 阶段推进（console.warn + telemetry 双通道记录）。
+              void (async (): Promise<void> => {
+                let bootstrapPrompt = ''
+                if (advanceStage === 'coding' && workspaceSlug) {
+                  try {
+                    const { bootstrapCodingTreeForProject, recordBootstrapDegradation } =
+                      require('./nanju-coding-tree-bridge') as typeof import('./nanju-coding-tree-bridge')
+                    const { listNanjuProjects } = require('./nanju-project') as typeof import('./nanju-project')
+                    const project = listNanjuProjects(workspaceSlug).find((p: { sessionId?: string }) => p.sessionId === sessionId)
+                    if (project) {
+                      // 绿-4：root/C 叶元信息尽力填调度员会话的真实渠道/模型（续接上下文可得）
+                      const result = await bootstrapCodingTreeForProject({
+                        workspaceSlug, workspaceId, project, commanderSessionId: sessionId,
+                        commanderChannelId: channelId, commanderModelId: modelId,
+                      })
+                      if (result.ok) {
+                        console.log(`[南大路由] 🌳 coding 指挥官树已就绪: treeId=${result.treeId}${result.idempotent === true ? '（幂等续用）' : ''}（worker=${result.workerSessionId.slice(0, 8)}…, auditor=${result.auditorSessionId.slice(0, 8)}…）`)
+                        bootstrapPrompt = result.commanderBootstrapPrompt
+                      } else {
+                        recordBootstrapDegradation(workspaceSlug, project.projectId, result.treeId, result.error ?? 'unknown')
+                      }
+                    }
+                    // 项目已删除等场景（project 未找到）：静默跳过，不视为失败
+                  } catch (err) {
+                    console.warn('[南大路由] coding 树 bootstrap 接线异常（不阻断续接）:', err instanceof Error ? err.message : String(err))
+                  }
+                }
+                await runRegisteredHeadlessAgent(
                 {
                   sessionId,
-                  userMessage: '请继续下一阶段的工作。',
+                  userMessage: bootstrapPrompt !== ''
+                    ? `请继续下一阶段的工作。\n\n${bootstrapPrompt}`
+                    : '请继续下一阶段的工作。',
                   systemInitiated: true, // W17-AC-M2：系统续接不进用户意图检测
                   channelId,
                   modelId,
@@ -3506,6 +3577,7 @@ export class AgentOrchestrator {
               ).catch((e: unknown) => {
                 console.warn(`[南大路由] 自动续接失败:`, e instanceof Error ? e.message : String(e))
               })
+              })()
             }, 1500)
             return
           }
