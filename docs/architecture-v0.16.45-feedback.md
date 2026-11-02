@@ -83,7 +83,7 @@ Ran 4 tests across 1 file. [99.00ms]
 
 1. **HTTP Bridge 鉴权（DEFERRED，用户 2026-11-02 裁决）**：`agent-mcp-bridge.ts` 仍为 `Access-Control-Allow-Origin: '*'` 且无 token 校验（bridge RPC 对本机进程与同网浏览器无鉴权开放）。修复建议已记台账 §10；实施时建议与 `session-tool-handlers` 回归同批。
 2. **全量 bun test 基线红**：119 fail / 21 errors 为基线既有（stash 对照证实），集中于渠道运行时认证解析、密文形态、快照恢复等环境相关用例；建议单列一批「测试基线治理」，不与本蓝图混批。
-3. **GitHub 推送**：本轮 5 个 commit（`4a783d90` / `502be313` / `99ed2a8f` / `c0a6b082` / 本文档）在本地 `p1-quick-engineering`；push 受网络不可达限制（`git ls-remote` 20s 无响应），恢复后执行 `git push easy p1-quick-engineering`。
+3. **GitHub 推送（已完成）**：2026-11-02 23:55 `git push easy p1-quick-engineering` 成功（`df23df7d..ca529317`，含历史 20 个待推 commit 与本轮 5 个 commit）；远端经 fetch 核验与本地一致。推送遇历史已知 GnuTLS(-110) 间歇失败，仓库既有 `http.sslVersion tlsv1.2` 配置下重试即过。
 4. **蓝图第七章模板的适配说明**：本文档目标版本字段保留蓝图原值、同时标注实际核验基线 v0.17.132；完成矩阵的「执行模型」列对历史实现项如实标注「历史版本已实现」，不冒认为本轮执行。
 
 ### 3.3 需要下一轮架构指导聚焦的模块
