@@ -23,6 +23,7 @@ import { AgentHeader } from './AgentHeader'
 import { AgentMessageQueue } from './AgentMessageQueue'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { PermissionBanner } from './PermissionBanner'
+import { CrossSessionApprovalBanner } from './CrossSessionApprovalBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
@@ -3127,6 +3128,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           onAgentHistoryQuoteClick={handleAgentHistoryQuoteClick}
           historyQuoteNavigation={historyQuoteNavigation}
         />
+
+        {/* 跨会话待审批全局聚合横幅（NEXT-03 / P1-2）：后台会话阻塞时常驻可见 */}
+        <CrossSessionApprovalBanner />
 
         {/* 权限请求横幅 */}
         <PermissionBanner sessionId={sessionId} />

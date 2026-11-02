@@ -38,6 +38,14 @@ import { join } from 'node:path'
 
 import { captureEngineeringEvidence, ENGINEERING_CONTRACT_PATH } from './nanju-engineering-contract'
 import {
+  HUMAN_HOLD_LEASE_MS,
+  MACHINE_WITNESS_TTL_MS,
+  computeProjectArtifactDigest,
+  freezeWitnessForHumanConfirmation,
+  verifyWitnessFreshness,
+} from './nanju-engineering-witness-clock'
+import type { WitnessClockRecord } from './nanju-engineering-witness-clock'
+import {
   ENGINEERING_REAL_BOUNDARY_CODES,
   consumeEngineeringRealEvidence,
   createEngineeringRealEvidenceRegistry,
@@ -66,12 +74,21 @@ import type {
 
 /** 单轮观察时长上限：真实观察（热键/录音/输入）不可能长于 5 分钟。 */
 export const ENGINEERING_REAL_MAX_OBSERVATION_MS = 5 * 60_000
-/** 观察完成后的新鲜度上限：观察与交付之间不得超过 10 分钟（REAL-impl §6.10）。 */
-export const ENGINEERING_REAL_MAX_EVIDENCE_AGE_MS = 10 * 60_000
+/**
+ * 观察完成后的新鲜度上限（机器窗口）。
+ * NEXT-01（P1-3）：由 10 分钟放宽至 **15 分钟**（= MACHINE_WITNESS_TTL_MS，双阶段见证时钟
+ * 的 execution_active 阶段窗口）。人类挂起期不再挤占此窗口——交付确认询问发起时经
+ * `freezeWitnessClockForDelivery` 冻结，适用 24 小时租约（HUMAN_HOLD_LEASE_MS）。
+ */
+export const ENGINEERING_REAL_MAX_EVIDENCE_AGE_MS = MACHINE_WITNESS_TTL_MS
 /** 调用方时钟与宿主时钟允许偏差（INV-C1 检出阈值）。 */
 export const ENGINEERING_REAL_CLOCK_SKEW_TOLERANCE_MS = 2_000
-/** 保留窗口 ≥ 新鲜度窗口 + 交付时延（提前清理会表现为 requires-real-unattested，语义不同）。 */
-const REGISTRY_RETENTION_MS = ENGINEERING_REAL_MAX_EVIDENCE_AGE_MS + 5 * 60_000
+/**
+ * 保留窗口 ≥ 新鲜度窗口 + 交付时延（提前清理会表现为 requires-real-unattested，语义不同）。
+ * NEXT-01：见证冻结后人类挂起期最长 24h，登记记录/收据必须活过整个租约期，
+ * 否则冻结语义失效（记录被回收 → 门禁退化为 unattested 拒绝，人类确认反而被惩罚）。
+ */
+const REGISTRY_RETENTION_MS = MACHINE_WITNESS_TTL_MS + HUMAN_HOLD_LEASE_MS + 5 * 60_000
 
 /* ------------------------------------------------------------------ */
 /* registry（进程内每项目单例）+ 单一时钟实例                              */
@@ -98,9 +115,23 @@ function registryFor(projectId: string): EngineeringRealEvidenceRegistry {
       observer: { observerId: 'host-observer-main', observerVersion: '0.17.124' },
       clock: engineeringRealClock,
       limits: {
+        // A-1（审查 REQUIRED）：保留窗放大到租约级（≈24h20m）后，容量上限必须同步提升，
+        // 否则长会话 24h 内 70+ 次登记即耗尽票据/条目容量，fail-closed 拒绝一切真实登记。
+        maxEntries: 256,
+        maxTickets: 256,
+        maxWitnessReceipts: 256,
+        // ack 收据与 entry 同为租约级保留（每轮见证签 1 张、按年龄回收），同类容量失配一并提升
+        maxBoundaryAckReceipts: 256,
+        maxConsumedRunIds: 512,
+        // entry 必须活过整个人类挂起租约期（冻结语义的前提）。
         entryRetentionMonotonicMs: REGISTRY_RETENTION_MS,
+        // 票据是一次性消费凭证（登记即 used）：不需要活过租约，回归短窗尽快回收容量。
+        ticketRetentionMonotonicMs: MACHINE_WITNESS_TTL_MS + 5 * 60_000,
+        // ack 收据必须活过租约期（人类挂起后确认交付时仍需读它）；协议接口中
+        // witness 收据与 ack 收据共用 receiptRetention（不可拆分），取租约级保留。
         receiptRetentionMonotonicMs: REGISTRY_RETENTION_MS,
-        ticketRetentionMonotonicMs: REGISTRY_RETENTION_MS,
+        // 墓碑防线与 entry 同窗：不早于 entry 消失出现断层（重放保护连续）。
+        consumedRetentionMonotonicMs: REGISTRY_RETENTION_MS,
       },
     })
     registries.set(projectId, item)
@@ -124,6 +155,10 @@ export function cleanupEngineeringRealEvidence(sessionId: string): void {
     for (const key of [...boundaryAckByScope.keys()]) {
       if (key.endsWith(`::${sessionId}`)) boundaryAckByScope.delete(key)
     }
+    // NEXT-01：见证时钟随会话清理（停止后的会话不得用旧冻结租约交付）
+    for (const key of [...witnessClockByScope.keys()]) {
+      if (key.endsWith(`::${sessionId}`)) witnessClockByScope.delete(key)
+    }
   } catch { /* 清理失败不影响会话停止 */ }
 }
 
@@ -141,6 +176,7 @@ export function __resetEngineeringRealGateForTests(): void {
   registries.clear()
   boundaryAckByScope.clear()
   observationPointsByTestId.clear()
+  witnessClockByScope.clear()
 }
 
 /** 仅供测试/审计：读取某 testId 当前声明的观察点（不改变 registry 状态）。 */
@@ -205,6 +241,119 @@ export function currentBoundaryAckReceipt(projectId: string, sessionId: string):
 }
 
 /* ------------------------------------------------------------------ */
+/* NEXT-01（P1-3）：双阶段见证时钟（进程内 per project+session）              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 见证时钟状态表（与 registry 同生命周期：进程内、不经 IPC、不外泄）。
+ * 键为 `projectId::sessionId`；交付成功消费后清除，会话停止时随 cleanup 清除。
+ */
+const witnessClockByScope = new Map<string, WitnessClockRecord>()
+
+/** 仅测试/审计：读取某 scope 当前的见证时钟状态（不改变状态）。 */
+export function peekWitnessClockForTests(projectId: string, sessionId: string): WitnessClockRecord | undefined {
+  return witnessClockByScope.get(scopeKey(projectId, sessionId))
+}
+
+/**
+ * GWT 验收通过时刻锚定见证时钟（阶段一 execution_active 起点）。
+ *
+ * 调用点：`agent-orchestrator` 的 GWT `outcome.verdict === 'pass'` 分支（登记交付挑战
+ * 的同一处）。锚点 `witnessedAt` = 当前时刻（GWT 刚全 pass = 机器刚背书过产物现状），
+ * `artifactDigest` = 当前项目产物指纹；随后紧接 `freezeWitnessClockForDelivery` 冻结。
+ *
+ * 返回 `ok:false`（reason='no-witness-record'）表示该项不适用双阶段时钟（真实观察器
+ * 链路未接入且无任何 requiresReal 登记记录）——此时交付门维持纯机器窗口语义。
+ */
+export function beginWitnessClockForDelivery(
+  scope: EngineeringRealEvidenceScope,
+  tests: readonly EngineeringRealEvidenceTestTarget[],
+): { ok: boolean; reason?: string } {
+  let hasWitnessRecord = false
+  try {
+    const reg = registryFor(scope.projectId)
+    for (const test of tests) {
+      if (reg.peek(test.testId)) { hasWitnessRecord = true; break }
+    }
+  } catch { /* registry 不可读 → 按不适用处理（交付门退回机器窗口，宁严不宽） */ }
+  if (!hasWitnessRecord) return { ok: false, reason: 'no-witness-record' }
+  witnessClockByScope.set(scopeKey(scope.projectId, scope.sessionId), {
+    projectId: scope.projectId,
+    sessionId: scope.sessionId,
+    witnessedAt: engineeringRealClock.epochNow(),
+    artifactDigest: computeProjectArtifactDigest(scope.projectDir),
+    clockPhase: 'execution_active',
+  })
+  return { ok: true }
+}
+
+/**
+ * 发起交付确认询问时冻结见证时钟（阶段二 awaiting_human_confirm，24h 租约）。
+ *
+ * 内部走纯函数 `freezeWitnessForHumanConfirmation`：指纹不一致 / 超 15 分钟机器窗口
+ * 均拒绝（交付门退回机器窗口语义，即 15 分钟后过期 → 提示重跑）；成功则写回冻结态。
+ */
+export function freezeWitnessClockForDelivery(
+  scope: EngineeringRealEvidenceScope,
+): { ok: boolean; reason?: string } {
+  const key = scopeKey(scope.projectId, scope.sessionId)
+  const record = witnessClockByScope.get(key)
+  if (!record) return { ok: false, reason: 'no-witness-clock' }
+  const result = freezeWitnessForHumanConfirmation(record, scope.projectDir, engineeringRealClock.epochNow())
+  if (!result.ok || !result.updated) {
+    // A-4：冻结失败不止于日志——把原因写回时钟记录（保持 execution_active 机器窗语义），
+    // 交付门拒绝时由 resolveWitnessClockGate 带进 message，用户/Agent 可观测。
+    witnessClockByScope.set(key, { ...record, freezeFailedReason: result.reason ?? 'E_WITNESS_FREEZE_FAILED' })
+    return { ok: false, reason: result.reason ?? 'E_WITNESS_FREEZE_FAILED' }
+  }
+  witnessClockByScope.set(key, result.updated)
+  return { ok: true }
+}
+
+/** 见证时钟对交付门的语义映射：拦截拒绝（E_WITNESS_* → 协议层既有 reason）与窗口放大。 */
+interface WitnessClockGateResolution {
+  rejection: EngineeringRealGateRejection | null
+  /** 冻结租约有效时传给协议层的等效 maxEvidenceAgeMs（覆盖「登记→冻结点 + 24h」）。 */
+  effectiveMaxEvidenceAgeMs?: number
+}
+
+/**
+ * 交付门前的见证时钟判定：
+ * 1. 无时钟记录（未锚定/旧路径）→ 不拦截，窗口维持 ENGINEERING_REAL_MAX_EVIDENCE_AGE_MS；
+ * 2. 有记录 → verifyWitnessFreshness（指纹篡改第一优先级）；无效时映射为协议层既有
+ *    reason（协议文件冻结不能新增枚举，E_WITNESS_* 码保留在 message 前缀，可辨识）；
+ * 3. 冻结有效 → 放大窗口 = (冻结点-锚定点) + 24h + 时钟偏差容忍（协议层单调钟 age 从
+ *    登记时刻起算，需覆盖到租约期末；精确 24h 租约判定由本层 verifyWitnessFreshness
+ *    用 epoch 时钟独立承担，协议层只负责「不误拦」）。
+ */
+function resolveWitnessClockGate(scope: EngineeringRealEvidenceScope): WitnessClockGateResolution {
+  const record = witnessClockByScope.get(scopeKey(scope.projectId, scope.sessionId))
+  if (!record) return { rejection: null }
+  const verdict = verifyWitnessFreshness(record, scope.projectDir, engineeringRealClock.epochNow())
+  if (!verdict.valid) {
+    // E_WITNESS_DIGEST_MISMATCH → real-evidence-tampered；其余（租约/机器窗超时）→ real-evidence-expired
+    const reason: EngineeringRealGateRejection['reason'] = verdict.code === 'E_WITNESS_DIGEST_MISMATCH'
+      ? 'real-evidence-tampered'
+      : 'real-evidence-expired'
+    // A-4：带出冻结失败原因（若有），补齐「为何未进入 24h 租约」的观测链路
+    const freezeNote = record.freezeFailedReason ? `（发起交付询问时见证时钟冻结失败：${record.freezeFailedReason}）` : ''
+    return { rejection: { reason, testId: null, message: (verdict.message ?? '见证时钟校验失败') + freezeNote } }
+  }
+  if (record.clockPhase === 'awaiting_human_confirm' && typeof record.holdStartedAt === 'number') {
+    // A-2（审查建议）：补 MACHINE_WITNESS_TTL_MS 安全垫。依据：协议层单调钟 age 锚定
+    // registeredAtMonotonic（人证登记时刻），构造上界早于 witnessedAt（GWT 通过锚定时刻）
+    // 最多 15 分钟（execution_active 窗口长度）——不垫会被误拦 0~15 分钟。
+    // 精确 24h 租约判定仍由本层 verifyWitnessFreshness 用 epoch 时钟独立承担，
+    // 协议层只负责「不误拦」，多放的部分不会突破租约。
+    return {
+      rejection: null,
+      effectiveMaxEvidenceAgeMs: (record.holdStartedAt - record.witnessedAt) + HUMAN_HOLD_LEASE_MS + MACHINE_WITNESS_TTL_MS + ENGINEERING_REAL_CLOCK_SKEW_TOLERANCE_MS,
+    }
+  }
+  return { rejection: null }
+}
+
+/* ------------------------------------------------------------------ */
 /* 门禁入参组装                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -260,7 +409,7 @@ export function resolveEngineeringDeviceBinding(detail: Partial<EngineeringDevic
 function buildGateInput(
   scope: EngineeringRealEvidenceScope,
   tests: readonly EngineeringRealEvidenceTestTarget[],
-  options: { withAck: boolean },
+  options: { withAck: boolean; maxEvidenceAgeMs?: number },
 ): EngineeringRealEvidenceGateInput | null {
   try {
     const evidence = captureEngineeringEvidence(scope.projectDir).evidence
@@ -286,7 +435,8 @@ function buildGateInput(
       tests: targets,
       ...(ack ? { ackReceipt: ack } : {}),
       maxObservationMs: ENGINEERING_REAL_MAX_OBSERVATION_MS,
-      maxEvidenceAgeMs: ENGINEERING_REAL_MAX_EVIDENCE_AGE_MS,
+      // NEXT-01：缺省 15 分钟机器窗口；见证冻结租约有效时由调用方传入放大窗口
+      maxEvidenceAgeMs: options.maxEvidenceAgeMs ?? ENGINEERING_REAL_MAX_EVIDENCE_AGE_MS,
       clockSkewToleranceMs: ENGINEERING_REAL_CLOCK_SKEW_TOLERANCE_MS,
     }
   } catch {
@@ -460,7 +610,10 @@ export function checkDeliveryRealEvidence(
 ): EngineeringDeliveryRealEvidenceResult {
   const boundaryCodes = resolveCoverageBoundaryCodes(scope, tests)
   if (tests.length === 0) return { rejection: null, boundaryCodes }
-  const input = buildGateInput(scope, tests, { withAck: true })
+  // NEXT-01：见证时钟先行拦截（指纹篡改第一优先级），冻结租约有效时放大机器窗口
+  const clockGate = resolveWitnessClockGate(scope)
+  if (clockGate.rejection) return { rejection: clockGate.rejection, boundaryCodes }
+  const input = buildGateInput(scope, tests, { withAck: true, ...(clockGate.effectiveMaxEvidenceAgeMs !== undefined ? { maxEvidenceAgeMs: clockGate.effectiveMaxEvidenceAgeMs } : {}) })
   if (!input) {
     return {
       rejection: { reason: 'requires-real-unattested', testId: null, message: '工程证据或契约不可读，无法判定真实能力证据（不放行）' },
@@ -480,7 +633,10 @@ export function commitDeliveryRealEvidence(
 ): EngineeringDeliveryRealEvidenceResult {
   const boundaryCodes = resolveCoverageBoundaryCodes(scope, tests)
   if (tests.length === 0) return { rejection: null, boundaryCodes }
-  const input = buildGateInput(scope, tests, { withAck: true })
+  // NEXT-01：见证时钟先行拦截（指纹篡改第一优先级），冻结租约有效时放大机器窗口
+  const clockGate = resolveWitnessClockGate(scope)
+  if (clockGate.rejection) return { rejection: clockGate.rejection, boundaryCodes }
+  const input = buildGateInput(scope, tests, { withAck: true, ...(clockGate.effectiveMaxEvidenceAgeMs !== undefined ? { maxEvidenceAgeMs: clockGate.effectiveMaxEvidenceAgeMs } : {}) })
   if (!input) {
     return {
       rejection: { reason: 'requires-real-unattested', testId: null, message: '工程证据或契约不可读，无法判定真实能力证据（不放行）' },
@@ -490,7 +646,10 @@ export function commitDeliveryRealEvidence(
   // 以下保持同步、无中间 await（原子性：validate 与 consume 之间不得插入写盘/发事件）
   const rejection = validateEngineeringRealEvidence(input)
   if (rejection) return { rejection, boundaryCodes }
-  return { rejection: consumeEngineeringRealEvidence(input), boundaryCodes }
+  const consumeRejection = consumeEngineeringRealEvidence(input)
+  // NEXT-01：交付消费成功（无拒绝）即终结本轮见证时钟（后续同 scope 交付按全新链路重新锚定）
+  if (!consumeRejection) witnessClockByScope.delete(scopeKey(scope.projectId, scope.sessionId))
+  return { rejection: consumeRejection, boundaryCodes }
 }
 
 /* ------------------------------------------------------------------ */
@@ -543,7 +702,17 @@ export async function registerSessionHumanWitnessEvidence(
   // 单轮观察窗口 5 分钟（ENGINEERING_REAL_MAX_OBSERVATION_MS）：Ask 等待计入观察时长。
   const startedAt = engineeringRealClock.epochNow()
   const decision = await ask(message)
-  const finishedAt = Math.max(engineeringRealClock.epochNow(), startedAt + 1) // 观察时长必须为正（同步应答时同毫秒保底 +1ms）
+  // 观察时长必须为正；但不能用 startedAt+1 伪造——同步应答时若后续校验落在同一毫秒，
+  // 「完成时间晚于当前墙钟」会被协议层 fail-closed（组合测试预热后偶发，NEXT-01 实测复现）。
+  // 改为真实跨毫秒等待；带上界（250×2ms）防墙钟回拨/停滞时的无界自旋，超限 fail-closed。
+  let finishedAt = engineeringRealClock.epochNow()
+  for (let attempt = 0; finishedAt <= startedAt && attempt < 250; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    finishedAt = engineeringRealClock.epochNow()
+  }
+  if (finishedAt <= startedAt) {
+    return { ok: false, message: '宿主墙钟回拨或停滞，无法确定观察窗口（fail-closed，拒绝登记本轮见证）', boundaryCodes }
+  }
   if (!decision || decision.allowed !== true || !decision.requestId) {
     return { ok: false, message: '用户未确认见证，工程保持 blocked', boundaryCodes }
   }

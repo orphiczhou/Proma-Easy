@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { PermissionRequest } from '@proma/shared'
+import type { AgentSessionMeta, PermissionRequest } from '@proma/shared'
 import { createStore } from 'jotai/vanilla'
 import {
   agentSessionInputStreamStateAtomFamily,
@@ -8,7 +8,14 @@ import {
   agentSessionIndicatorMapAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
+  allPendingExitPlanRequestsAtom,
+  agentSessionsAtom,
+  currentAgentSessionIdAtom,
   unviewedCompletedSessionIdsAtom,
+  crossSessionPendingApprovalsAtom,
+  aggregateCrossSessionPendingApprovals,
+  canInlineRespondCrossSession,
+  type CrossSessionPendingApproval,
   applyAgentEvent,
   clearAgentStreamError,
   isRetryEventForCurrentStream,
@@ -438,5 +445,284 @@ describe('侧栏会话指示：跨 turn 的后台批准不能因流结束而消�
     store.set(agentStreamingStatesAtom, new Map([['idle-session', { ...createStreamState(), running: false }]]))
 
     expect(store.get(agentSessionIndicatorMapAtom).has('idle-session')).toBe(false)
+  })
+})
+
+// ===== 跨会话待审批聚合（NEXT-03 / P1-2）=====
+
+/** 最小可用的会话元数据（聚合只读 id/title，其余为类型必填字段） */
+function sessionMeta(id: string, title: string): AgentSessionMeta {
+  return { id, title, createdAt: 0, updatedAt: 0 }
+}
+
+describe('跨会话待审批聚合：纯函数 aggregateCrossSessionPendingApprovals', () => {
+  test('given 仅当前会话有待决请求 when 聚合 then 返回空（当前会话由内联横幅处理）', () => {
+    const result = aggregateCrossSessionPendingApprovals(
+      'current-session',
+      [sessionMeta('current-session', '当前会话')],
+      new Map([['current-session', [pendingPermission('current-session', 'perm-1')]]]),
+      new Map(),
+      new Map(),
+    )
+
+    expect(result).toEqual([])
+  })
+
+  test('given 后台会话有待决权限请求 when 聚合 then 产出 permission 条目并关联会话标题与审批上下文（B-1 安全基线）', () => {
+    const request: PermissionRequest = {
+      ...pendingPermission('worker-session', 'perm-2'),
+      sdkDisplayName: 'Write',
+      sdkTitle: 'Write to /tmp/fixture.ts',
+      command: 'rm -rf /tmp/fixture',
+      dangerLevel: 'dangerous',
+    }
+    const result = aggregateCrossSessionPendingApprovals(
+      'current-session',
+      [sessionMeta('worker-session', '树 Worker：实现模块')],
+      new Map([['worker-session', [request, pendingPermission('worker-session', 'perm-3')]]]),
+      new Map(),
+      new Map(),
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      kind: 'permission',
+      sessionId: 'worker-session',
+      sessionTitle: '树 Worker：实现模块',
+      requestId: 'perm-2',
+      toolName: 'Bash',
+      sdkDisplayName: 'Write',
+      sdkTitle: 'Write to /tmp/fixture.ts',
+      command: 'rm -rf /tmp/fixture',
+      dangerLevel: 'dangerous',
+      pendingCount: 2,
+    })
+  })
+
+  test('given 后台会话有 AskUser 请求 when 聚合 then 产出 askUser 条目（无工具字段）', () => {
+    const result = aggregateCrossSessionPendingApprovals(
+      'current-session',
+      [sessionMeta('worker-session', '审计会话')],
+      new Map(),
+      new Map([['worker-session', [{ requestId: 'ask-1', sessionId: 'worker-session', questions: [], toolInput: {} }]]]),
+      new Map(),
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      kind: 'askUser',
+      sessionId: 'worker-session',
+      sessionTitle: '审计会话',
+      requestId: 'ask-1',
+      pendingCount: 1,
+    })
+    expect(result[0]!.toolName).toBeUndefined()
+  })
+
+  test('given 后台会话有 ExitPlanMode 请求 when 聚合 then 产出 exitPlanMode 条目（B-3）', () => {
+    const result = aggregateCrossSessionPendingApprovals(
+      'current-session',
+      [sessionMeta('plan-session', '计划会话')],
+      new Map(),
+      new Map(),
+      new Map([['plan-session', [{ requestId: 'exit-1', sessionId: 'plan-session', toolInput: {}, allowedPrompts: [] }]]]),
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      kind: 'exitPlanMode',
+      sessionId: 'plan-session',
+      sessionTitle: '计划会话',
+      requestId: 'exit-1',
+      pendingCount: 1,
+    })
+    expect(canInlineRespondCrossSession(result[0]!)).toBe(false)
+  })
+
+  test('given 后台同时存在权限、AskUser 与 ExitPlanMode 阻塞 when 聚合 then permission > askUser > exitPlanMode（可内联操作优先展示）', () => {
+    const result = aggregateCrossSessionPendingApprovals(
+      'current-session',
+      [sessionMeta('ask-session', '问答会话'), sessionMeta('perm-session', '权限会话'), sessionMeta('plan-session', '计划会话')],
+      new Map([['perm-session', [pendingPermission('perm-session', 'perm-4')]]]),
+      new Map([['ask-session', [{ requestId: 'ask-2', sessionId: 'ask-session', questions: [], toolInput: {} }]]]),
+      new Map([['plan-session', [{ requestId: 'exit-2', sessionId: 'plan-session', toolInput: {}, allowedPrompts: [] }]]]),
+    )
+
+    expect(result.map((a) => a.kind)).toEqual(['permission', 'askUser', 'exitPlanMode'])
+  })
+
+  test('given 会话列表缺失后台会话元数据 when 聚合 then 标题回退 sessionId 前 8 位（冷启动不崩溃）', () => {
+    const result = aggregateCrossSessionPendingApprovals(
+      'current-session',
+      [],
+      new Map([['long-session-id-1234567890', [pendingPermission('long-session-id-1234567890', 'perm-5')]]]),
+      new Map(),
+      new Map(),
+    )
+
+    expect(result[0]!.sessionTitle).toBe('long-ses')
+  })
+
+  test('given 队列为空数组 when 聚合 then 不产出条目', () => {
+    const result = aggregateCrossSessionPendingApprovals(
+      'current-session',
+      [],
+      new Map([['worker-session', []]]),
+      new Map([['worker-session', []]]),
+      new Map([['worker-session', []]]),
+    )
+
+    expect(result).toEqual([])
+  })
+
+  test('given currentSessionId 为 null（无激活会话） when 聚合 then 所有待决请求都视为后台阻塞', () => {
+    const result = aggregateCrossSessionPendingApprovals(
+      null,
+      [sessionMeta('any-session', '任意会话')],
+      new Map([['any-session', [pendingPermission('any-session', 'perm-6')]]]),
+      new Map(),
+      new Map(),
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]!.sessionId).toBe('any-session')
+  })
+})
+
+describe('跨会话内联放行门槛 canInlineRespondCrossSession（B-1 安全基线）', () => {
+  test('given 非危险权限请求 when 判定 then 允许内联允许/拒绝', () => {
+    const approval: CrossSessionPendingApproval = {
+      kind: 'permission',
+      sessionId: 'worker-session',
+      sessionTitle: 'Worker',
+      requestId: 'perm-safe',
+      toolName: 'Bash',
+      dangerLevel: 'normal',
+      pendingCount: 1,
+    }
+
+    expect(canInlineRespondCrossSession(approval)).toBe(true)
+  })
+
+  test('given 危险权限请求 when 判定 then 禁止内联放行（dangerous 必须跳回原会话知情处理）', () => {
+    const approval: CrossSessionPendingApproval = {
+      kind: 'permission',
+      sessionId: 'worker-session',
+      sessionTitle: 'Worker',
+      requestId: 'perm-danger',
+      toolName: 'Bash',
+      dangerLevel: 'dangerous',
+      pendingCount: 1,
+    }
+
+    expect(canInlineRespondCrossSession(approval)).toBe(false)
+  })
+
+  test('given askUser 或 exitPlanMode 条目 when 判定 then 均不允许内联作答', () => {
+    expect(canInlineRespondCrossSession({
+      kind: 'askUser', sessionId: 's', sessionTitle: 's', requestId: 'ask-1', pendingCount: 1,
+    } satisfies CrossSessionPendingApproval)).toBe(false)
+    expect(canInlineRespondCrossSession({
+      kind: 'exitPlanMode', sessionId: 's', sessionTitle: 's', requestId: 'exit-1', pendingCount: 1,
+    } satisfies CrossSessionPendingApproval)).toBe(false)
+  })
+
+  test('given 权限请求缺 dangerLevel（字段缺失的防御路径） when 判定 then 不视为危险，允许内联（与 PermissionBanner 默认一致）', () => {
+    expect(canInlineRespondCrossSession({
+      kind: 'permission', sessionId: 's', sessionTitle: 's', requestId: 'perm-x', pendingCount: 1,
+    } satisfies CrossSessionPendingApproval)).toBe(true)
+  })
+})
+
+describe('跨会话待审批聚合原子 crossSessionPendingApprovalsAtom', () => {
+  test('given 后台会话权限入队且当前会话激活 when 读取原子 then 仅返回后台会话条目', () => {
+    const store = createStore()
+    store.set(currentAgentSessionIdAtom, 'current-session')
+    store.set(agentSessionsAtom, [
+      sessionMeta('current-session', '主会话'),
+      sessionMeta('worker-session', '树 Worker'),
+    ])
+    store.set(allPendingPermissionRequestsAtom, new Map([
+      ['current-session', [pendingPermission('current-session', 'perm-cur')]],
+      ['worker-session', [pendingPermission('worker-session', 'perm-bg')]],
+    ]))
+
+    const approvals = store.get(crossSessionPendingApprovalsAtom)
+    expect(approvals).toHaveLength(1)
+    expect(approvals[0]).toMatchObject({ sessionId: 'worker-session', requestId: 'perm-bg', sessionTitle: '树 Worker' })
+  })
+
+  test('given 切换激活会话 when 重新读取原子 then 聚合结果随新当前会话重新排除（常驻可见性核心）', () => {
+    const store = createStore()
+    store.set(agentSessionsAtom, [sessionMeta('session-a', '会话 A'), sessionMeta('session-b', '会话 B')])
+    store.set(allPendingPermissionRequestsAtom, new Map([
+      ['session-a', [pendingPermission('session-a', 'perm-a')]],
+      ['session-b', [pendingPermission('session-b', 'perm-b')]],
+    ]))
+
+    store.set(currentAgentSessionIdAtom, 'session-a')
+    expect(store.get(crossSessionPendingApprovalsAtom)[0]!.sessionId).toBe('session-b')
+
+    // 用户跳转到 B 处理后，A 变为后台阻塞，横幅继续提示
+    store.set(currentAgentSessionIdAtom, 'session-b')
+    expect(store.get(crossSessionPendingApprovalsAtom)[0]!.sessionId).toBe('session-a')
+  })
+
+  test('given 后台会话 ExitPlanMode 入队 when 读取原子 then 产出 exitPlanMode 条目（依赖接线验证）', () => {
+    const store = createStore()
+    store.set(currentAgentSessionIdAtom, 'current-session')
+    store.set(agentSessionsAtom, [sessionMeta('plan-session', '后台计划会话')])
+    store.set(allPendingExitPlanRequestsAtom, new Map([
+      ['plan-session', [{ requestId: 'exit-1', sessionId: 'plan-session', toolInput: {}, allowedPrompts: [] }]],
+    ]))
+
+    const approvals = store.get(crossSessionPendingApprovalsAtom)
+    expect(approvals).toHaveLength(1)
+    expect(approvals[0]).toMatchObject({ kind: 'exitPlanMode', sessionId: 'plan-session', sessionTitle: '后台计划会话' })
+  })
+
+  test('given 无关会话列表更新（agentSessionsAtom 换引用但聚合内容不变） when 再次读取 then 返回相同引用（B-6）', () => {
+    const store = createStore()
+    store.set(currentAgentSessionIdAtom, 'current-session')
+    store.set(agentSessionsAtom, [sessionMeta('worker-session', '树 Worker')])
+    store.set(allPendingPermissionRequestsAtom, new Map([
+      ['worker-session', [pendingPermission('worker-session', 'perm-stable')]],
+    ]))
+    const first = store.get(crossSessionPendingApprovalsAtom)
+
+    // 无关更新：向会话列表追加一个无阻塞的会话（换引用，但聚合输入内容不变）
+    store.set(agentSessionsAtom, [sessionMeta('worker-session', '树 Worker'), sessionMeta('idle-session', '空闲会话')])
+    const second = store.get(crossSessionPendingApprovalsAtom)
+
+    expect(second).toBe(first)
+  })
+
+  test('given 阻塞会话标题变化 when 再次读取 then 返回新引用且标题更新（B-6）', () => {
+    const store = createStore()
+    store.set(currentAgentSessionIdAtom, 'current-session')
+    store.set(agentSessionsAtom, [sessionMeta('worker-session', '旧标题')])
+    store.set(allPendingPermissionRequestsAtom, new Map([
+      ['worker-session', [pendingPermission('worker-session', 'perm-rename')]],
+    ]))
+    const first = store.get(crossSessionPendingApprovalsAtom)
+
+    store.set(agentSessionsAtom, [sessionMeta('worker-session', '新标题')])
+    const second = store.get(crossSessionPendingApprovalsAtom)
+
+    expect(second).not.toBe(first)
+    expect(second[0]!.sessionTitle).toBe('新标题')
+  })
+
+  test('given 后台请求被响应出队 when 读取原子 then 聚合条目消失', () => {
+    const store = createStore()
+    store.set(currentAgentSessionIdAtom, 'current-session')
+    store.set(allPendingPermissionRequestsAtom, new Map([
+      ['worker-session', [pendingPermission('worker-session', 'perm-done')]],
+    ]))
+    expect(store.get(crossSessionPendingApprovalsAtom)).toHaveLength(1)
+
+    // 内联批准后的乐观出队（与 CrossSessionApprovalBanner.respond 行为一致）
+    store.set(allPendingPermissionRequestsAtom, new Map())
+    expect(store.get(crossSessionPendingApprovalsAtom)).toHaveLength(0)
   })
 })

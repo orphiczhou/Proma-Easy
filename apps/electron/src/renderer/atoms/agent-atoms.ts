@@ -8,7 +8,7 @@
 import { atom } from 'jotai'
 import type { Getter } from 'jotai'
 import { atomFamily, atomWithStorage, selectAtom } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@proma/shared'
+import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, PromaPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, DangerLevel, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@proma/shared'
 import { PROMA_DEFAULT_PERMISSION_MODE } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
@@ -708,6 +708,160 @@ export const pendingAskUserRequestsAtom = atom(
 
 /** 待处理的 ExitPlanMode 请求 Map — 以 sessionId 为 key */
 export const allPendingExitPlanRequestsAtom = atom<Map<string, readonly ExitPlanModeRequest[]>>(new Map())
+
+// ===== 跨会话待审批聚合（NEXT-03 / P1-2）=====
+// 痛点：PermissionBanner / AskUserBanner 只渲染当前激活会话的队列，后台子会话（树 Worker、
+// 委派会话）阻塞时用户停留主会话 Tab 完全无感知（实测后台停滞 17 分钟零提示）。
+// 本区块把「所有非当前会话」的待决权限 / AskUser 请求聚合成只读列表，供全局横幅消费。
+
+/** 跨会话待审批条目类型 */
+export type CrossSessionPendingKind = 'permission' | 'askUser' | 'exitPlanMode'
+
+/** 后台会话（非当前激活会话）阻塞摘要条目 — 每个会话的每种队列产出一条 */
+export interface CrossSessionPendingApproval {
+  /** 阻塞类型：permission 可内联批准/拒绝；askUser / exitPlanMode 只能跳转会话处理 */
+  kind: CrossSessionPendingKind
+  /** 发生阻塞的后台会话 ID */
+  sessionId: string
+  /** 会话标题（列表中找不到时回退 sessionId 前 8 位） */
+  sessionTitle: string
+  /** 该队列中最早的请求 ID（横幅只展示队首，可内联操作） */
+  requestId: string
+  /** 工具原始名（permission 专用；展示层负责 mcp__server__tool 格式化） */
+  toolName?: string
+  /** SDK 提供的工具显示名（优先于 toolName 展示） */
+  sdkDisplayName?: string
+  /** SDK 提供的操作标题，如 "Write to /path/to/file.ts"（permission 专用） */
+  sdkTitle?: string
+  /** 具体命令（Bash 类工具，permission 专用）；跨会话盲批安全基线：横幅必须可见命令内容 */
+  command?: string
+  /** 危险等级（permission 专用）；dangerous 时禁止跨会话内联放行，强制跳回原会话知情处理 */
+  dangerLevel?: DangerLevel
+  /** 该会话该队列累计待处理数 */
+  pendingCount: number
+}
+
+/** 空结果常量 — 避免无阻塞时每次派生都产生新数组引发下游 re-render */
+const EMPTY_CROSS_SESSION_APPROVALS: readonly CrossSessionPendingApproval[] = []
+
+/** 按会话列表构建标题索引；找不到的会话回退 sessionId 前 8 位 */
+function buildSessionTitleMap(sessions: readonly AgentSessionMeta[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const s of sessions) map.set(s.id, s.title)
+  return map
+}
+
+/** 标题兜底：列表缺失（如冷启动未同步）时截取 sessionId 前 8 位 */
+function resolveSessionTitle(sessionId: string, titles: ReadonlyMap<string, string>): string {
+  return titles.get(sessionId) ?? sessionId.slice(0, 8)
+}
+
+/**
+ * 聚合所有「非当前会话」的待决权限、AskUser 与 ExitPlanMode 请求（纯函数，便于 BDD 单测）。
+ * 排序：permission 条目在前（可内联操作优先展示），askUser 次之，exitPlanMode 最后；
+ * 同类内按入队顺序（Map 迭代序 = 首次入队序，队列内取队首 FIFO）。
+ */
+export function aggregateCrossSessionPendingApprovals(
+  currentSessionId: string | null,
+  sessions: readonly AgentSessionMeta[],
+  permissionMap: ReadonlyMap<string, readonly PermissionRequest[]>,
+  askUserMap: ReadonlyMap<string, readonly AskUserRequest[]>,
+  exitPlanMap: ReadonlyMap<string, readonly ExitPlanModeRequest[]>,
+): readonly CrossSessionPendingApproval[] {
+  const titles = buildSessionTitleMap(sessions)
+  const permissions: CrossSessionPendingApproval[] = []
+  const askUsers: CrossSessionPendingApproval[] = []
+  const exitPlans: CrossSessionPendingApproval[] = []
+
+  for (const [sid, requests] of permissionMap.entries()) {
+    if (sid === currentSessionId || requests.length === 0) continue
+    const first = requests[0]
+    if (!first) continue
+    permissions.push({
+      kind: 'permission',
+      sessionId: sid,
+      sessionTitle: resolveSessionTitle(sid, titles),
+      requestId: first.requestId,
+      toolName: first.toolName,
+      sdkDisplayName: first.sdkDisplayName,
+      sdkTitle: first.sdkTitle,
+      command: first.command,
+      dangerLevel: first.dangerLevel,
+      pendingCount: requests.length,
+    })
+  }
+
+  for (const [sid, requests] of askUserMap.entries()) {
+    if (sid === currentSessionId || requests.length === 0) continue
+    const first = requests[0]
+    if (!first) continue
+    askUsers.push({
+      kind: 'askUser',
+      sessionId: sid,
+      sessionTitle: resolveSessionTitle(sid, titles),
+      requestId: first.requestId,
+      pendingCount: requests.length,
+    })
+  }
+
+  for (const [sid, requests] of exitPlanMap.entries()) {
+    if (sid === currentSessionId || requests.length === 0) continue
+    const first = requests[0]
+    if (!first) continue
+    exitPlans.push({
+      kind: 'exitPlanMode',
+      sessionId: sid,
+      sessionTitle: resolveSessionTitle(sid, titles),
+      requestId: first.requestId,
+      pendingCount: requests.length,
+    })
+  }
+
+  if (permissions.length === 0 && askUsers.length === 0 && exitPlans.length === 0) {
+    return EMPTY_CROSS_SESSION_APPROVALS
+  }
+  return [...permissions, ...askUsers, ...exitPlans]
+}
+
+/**
+ * 跨会话内联放行门槛（安全基线）：仅非危险权限请求允许在横幅内联允许/拒绝；
+ * dangerous 必须跳回原会话展示完整命令上下文后知情处理，askUser/exitPlanMode 无法内联作答。
+ */
+export function canInlineRespondCrossSession(approval: CrossSessionPendingApproval): boolean {
+  return approval.kind === 'permission' && approval.dangerLevel !== 'dangerous'
+}
+
+/** 聚合结果引用稳定化（仿 getStableIndicatorMap：签名不变则复用旧引用） */
+let lastCrossSessionSignature = ''
+let lastCrossSessionApprovals: readonly CrossSessionPendingApproval[] = EMPTY_CROSS_SESSION_APPROVALS
+
+function stableCrossSessionApprovals(
+  approvals: readonly CrossSessionPendingApproval[],
+): readonly CrossSessionPendingApproval[] {
+  const signature = approvals
+    .map((a) => `${a.kind}:${a.sessionId}:${a.requestId}:${a.sessionTitle}:${a.pendingCount}:${a.toolName ?? ''}:${a.sdkTitle ?? ''}:${a.command ?? ''}:${a.dangerLevel ?? ''}`)
+    .join('|')
+  if (signature === lastCrossSessionSignature) return lastCrossSessionApprovals
+  lastCrossSessionSignature = signature
+  lastCrossSessionApprovals = approvals
+  return approvals
+}
+
+/**
+ * 跨会话待审批聚合原子（只读派生）——全局横幅 CrossSessionApprovalBanner 的唯一数据源。
+ * 引用已稳定化：无关会话更新（如后台 token 流）不会触发横幅 re-render。
+ */
+export const crossSessionPendingApprovalsAtom = atom((get) =>
+  stableCrossSessionApprovals(
+    aggregateCrossSessionPendingApprovals(
+      get(currentAgentSessionIdAtom),
+      get(agentSessionsAtom),
+      get(allPendingPermissionRequestsAtom),
+      get(allPendingAskUserRequestsAtom),
+      get(allPendingExitPlanRequestsAtom),
+    ),
+  ),
+)
 
 /** 当前处于 Plan 模式的会话 ID 集合 */
 export const agentPlanModeSessionsAtom = atom<Set<string>>(new Set<string>())

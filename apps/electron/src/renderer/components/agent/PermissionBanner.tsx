@@ -22,8 +22,8 @@ const DANGER_ICON_STYLES: Record<DangerLevel, string> = {
   dangerous: 'text-amber-500',
 }
 
-/** 解析工具显示名称（MCP 工具显示 server / tool） */
-function formatToolName(toolName: string): string {
+/** 解析工具显示名称（MCP 工具显示 server / tool）；跨会话横幅复用 */
+export function formatToolName(toolName: string): string {
   const parts = toolName.split('__')
   if (parts[0] === 'mcp' && parts.length >= 3) {
     return `${parts[1]} / ${parts.slice(2).join('__')}`
