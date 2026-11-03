@@ -1,5 +1,16 @@
 # 恢复工作状态提示词 · PromaEasy Phase 1 硬化 + E2E 真流程
 
+> **⚡ 2026-11-04 05:40 追加（E2E 二轮结果，覆盖下方 E2E 相关结论）**
+> HEAD `68940011`，版本 **v0.17.138**（dev 实例已部署重启）。
+> F-1 已解决（override 层三阶段缺 acDefender 的配置错配，非代码）；
+> **NEXT-02 真流程 PASS**（treeId nj40b80：四叶结构/added_by/注册表 treeId/telemetry/异构模型全部符合，
+> 且树内真实跑完 A 编码→B 审计 101 AC→修复轮→M1/M2 audit_pass）；
+> **NEXT-03 askUser 形态 PASS**（跨 Tab 横幅可见 + 跳转可用）；NEXT-04/NEXT-05 复验不回归。
+> **NEXT-01 未达前置（BLOCKED）**：testing 触发 GWT 后 `06_TESTS/report.json` 未产出（新缺陷 F-10），交付挑战未注入。
+> 本轮修复 F-5（tree 工具面未放行）/F-6（树会话被未绑定写保护拦）/F-8（确认 header 含 \r 导致授权死循环），
+> 均带单测 + `bun run test` 2846 pass + 部署复验。待办新增：F-7（树事件无唤醒）、F-9（L3 嵌套会话写保护）、F-10（GWT 静默无报告）。
+> 权威：`docs/reports/2026-11-03-phase2-deploy-e2e/E2E二轮验证报告-20261104.md`。
+>
 > **⚡ 2026-11-04 00:10 追加（Phase2 部署+E2E 状态更新，读完全文后以本节覆盖冲突项；专项交接见 docs/reports/2026-11-03-phase2-deploy-e2e/HANDOFF-E2E-20261104.md）**
 > HEAD `61c76b50`（v0.17.135 已部署 dev 实例 PID 963331 并推送）。**E2E 冒烟通过（NEXT-04 鉴权五路/健康矩阵/UI）但核心真流程验证未完成**：NEXT-02 自动建树与 NEXT-01 冻结实证被既有 AC 同族护栏拦截（F-1：个人记账工具 light 预设 defender=glm 系同族被拒，属护栏正确行为非回归）。新会话的任务：按 HANDOFF 文档先解决 F-1 再跑真流程验证，当前 E2E 判定为未成功。其他已验证：部署 SOP 坑 D-1 已解决（asar pack 必须 --unpack-dir 保留原生模块）、忙碌保护/路由门禁运行时正常、NEXT-03 组件在 bundle。
 >
