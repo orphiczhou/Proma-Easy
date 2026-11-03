@@ -61,6 +61,34 @@ const ACTIVE_PHASE_TOOLS = new Set([
   'BrowserPreviewOpen', 'BrowserObserve', 'BrowserScreenshot', 'BrowserListTabs', 'BrowserNewTab',
 ])
 
+/**
+ * NEXT-02 F-5（v0.17.136）：coding 自动建树后的树编排工具面。
+ *
+ * `bootstrapCodingTreeForProject` 在 architecture→coding 推进点自动装配 V10 任务树，并把
+ * commanderBootstrapPrompt 附加到续接消息——提示词明确要求 root 指挥官调用
+ * `mcp__tree__tree_milestone_add` / `tree_event_append` / `tree_audit_gate` /
+ * `tree_log_communication` 以及 `mcp__session__send_message` 下发 5 件套契约。
+ * 但这些工具名不在 ACTIVE_PHASE_TOOLS 内 → 全部被本门禁拒绝（E2E 二轮实测：
+ * `[南大路由门禁] 拒绝工具 mcp__tree__tree_leaf_list_active`），树建好却无法驱动，
+ * NEXT-02 运行时闭环断裂。
+ *
+ * 放行范围最小化：仅 coding / testing（建树发生在 coding 推进点，testing 阶段仍需树收口）。
+ * 其余阶段一律不放行；tree_* 走前缀匹配（tree 工具族演进时无需同步白名单）。
+ */
+const TREE_ORCHESTRATION_STAGES = new Set<PhaseId>(['coding', 'testing'])
+const TREE_ORCHESTRATION_SESSION_TOOLS = new Set([
+  'mcp__session__send_message',
+  'mcp__session__list_messages',
+  'mcp__session__get_session_info',
+  'mcp__session__get_my_session_id',
+])
+
+/** 该阶段是否放行树编排工具（tree 族 + 会话消息通道） */
+function isTreeOrchestrationToolAllowed(stage: PhaseId, toolName: string): boolean {
+  if (!TREE_ORCHESTRATION_STAGES.has(stage)) return false
+  return toolName.startsWith('mcp__tree__') || TREE_ORCHESTRATION_SESSION_TOOLS.has(toolName)
+}
+
 const PHASE_TOOL_WHITELIST: Record<PhaseId, Set<string>> = {
   requirements: new Set(ACTIVE_PHASE_TOOLS),
   prototype: new Set(ACTIVE_PHASE_TOOLS),
@@ -156,8 +184,13 @@ function isPhaseClosureConfirmHeader(
   stage: ProjectStage,
   header: string,
 ): boolean {
-  if (!header.startsWith('确认')) return false
-  const suffix = header.startsWith('确认·') ? header.slice('确认·'.length) : header.slice('确认'.length)
+  // F-8（v0.17.138）：控制字符容错——E2E 二轮实测 root 产出的 header 为 `确认\r·预览确认`
+  // （\r 夹在「确认」与「·」之间）；原 startsWith('确认·') 判定失败 → 收口问句不登记
+  // → 横幅答案永不授权 → 推进门连续拒绝（死循环）。LLM 输出 JSON 字符串时常夹带
+  // \r/\n/\t，此类噪声不应改变 header 语义。归一化后再走白名单/title 匹配。
+  const normalized = header.replace(/[\r\n\t]+/g, '').trim()
+  if (!normalized.startsWith('确认')) return false
+  const suffix = normalized.startsWith('确认·') ? normalized.slice('确认·'.length) : normalized.slice('确认'.length)
   if (suffix === '') return false
   if (CONFIRM_ASK_CLOSURE_SUFFIXES.has(suffix)) return true
   try {
@@ -335,6 +368,8 @@ export function checkNanjuRouterGate(
 
   // 活跃阶段
   const whitelist = PHASE_TOOL_WHITELIST[stage] ?? PHASE_TOOL_WHITELIST.delivered
+  // NEXT-02 F-5：coding/testing 放行树编排工具（tree 族 + 会话消息通道）
+  if (isTreeOrchestrationToolAllowed(stage, toolName)) return null
   if (whitelist.has(toolName)) {
     // v2.4（D7 §3）：AskUserQuestion 路由（auto 开启时按 header 前缀放行/拒绝+教育；
     // 交付挑战机器豁免；auto 关闭全放行）+ 放行侧登记 activeConfirmAsk（确认 header 类）。
@@ -488,6 +523,31 @@ function isDelegationChildSession(sessionId: string): boolean {
   }
 }
 
+/**
+ * F-6（v0.17.137）：会话是否为指定工程的树节点会话（NEXT-02 自动建树的 root/C/A/B 叶）。
+ *
+ * 判据：工程 `treeId` 对应的 `trees/<treeId>/tree-state.json` 中任一叶的 `session_id` 等于该会话。
+ * 树节点会话由树桥直接建会话（非协作委派），没有 sourceDelegationId，原未绑定写保护会把
+ * A-worker 的写代码/Bash 当作「未绑定会话直写」拒绝——NEXT-02 树形编码闭环因此在运行时断裂。
+ * 读取失败一律返回 false（fail-closed：宁可拒写，不可误放行）。
+ */
+function isTreeMemberSession(workspaceSlug: string, project: NanjuProject, sessionId: string): boolean {
+  if (!project.treeId) return false
+  try {
+    const fs = require('node:fs') as typeof import('node:fs')
+    const path = require('node:path') as typeof import('node:path')
+    const statePath = path.join(
+      getWorkspaceFilesDir(workspaceSlug), '.context', 'trees', project.treeId, 'tree-state.json',
+    )
+    const raw = fs.readFileSync(statePath, 'utf-8')
+    const state = JSON.parse(raw) as { leaves?: Record<string, { session_id?: string }> }
+    const leaves = state.leaves ?? {}
+    return Object.values(leaves).some((leaf) => leaf?.session_id === sessionId)
+  } catch {
+    return false
+  }
+}
+
 /** Bash 命令中项目目录提及的尾随路径片段（到空白/引号/管道/分号为止），用于 08_APP 豁免判定 */
 function bashMentionTail(command: string, from: number): string {
   return command.slice(from).match(/^[^\s'"`|;&<>()]*/)?.[0] ?? ''
@@ -633,6 +693,13 @@ function checkUnboundSessionWriteGuard(
     ? (typeof input.command === 'string' && input.command.trim() !== '' ? findUnboundBashHit(workspaceSlug, projects, input.command) : null)
     : findUnboundWriteHit(workspaceSlug, projects, input)
   if (!hit) return null
+
+  // F-6（v0.17.137）：树节点会话（NEXT-02 自动建树的 root/C/A/B 叶）不是协作委派子会话，
+  // 无 sourceDelegationId 标记 → 原逻辑按「未绑定会话」拒绝其写入，A-worker 无法写代码，
+  // NEXT-02 树形编码闭环在运行时断裂（E2E 二轮实测：worker Bash 被「南大向导写保护」拒）。
+  // 豁免口径：会话登记在该工程 treeId 对应的 tree-state.json 叶中时，仅放行命中工程自身目录的写入/命令；
+  // 写其他工程目录仍按原逻辑拒绝（最小授权面）。
+  if (hit.project && isTreeMemberSession(workspaceSlug, hit.project, sessionId)) return null
 
   recordTelemetry(
     workspaceSlug,

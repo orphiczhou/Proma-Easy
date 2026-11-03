@@ -840,8 +840,12 @@ function confirmKeywordHit(text: string, keywords: readonly string[]): string | 
 
 /** 用户文本是否为确认推进语义（纯函数）：反义词优先排除，再匹配确认词 */
 export function isConfirmAdvanceText(text: string): boolean {
-  if (confirmKeywordHit(text, CONFIRM_REJECT_KEYWORDS) !== undefined) return false
-  return confirmKeywordHit(text, CONFIRM_ADVANCE_KEYWORDS) !== undefined
+  // F-8（v0.17.138）：横幅答案常夹带 \r（实测「确认无误\r，开始自动测试」），
+  // 直接参与关键词匹配虽不破坏中文 includes，但会干扰英文词边界与反义/确认的判定一致性；
+  // 统一去控制字符后再判定。
+  const normalized = text.replace(/[\r\n\t]+/g, '')
+  if (confirmKeywordHit(normalized, CONFIRM_REJECT_KEYWORDS) !== undefined) return false
+  return confirmKeywordHit(normalized, CONFIRM_ADVANCE_KEYWORDS) !== undefined
 }
 
 /** 用户文本是否为明确反悔语义（纯函数，调用方据此清除待推进状态） */

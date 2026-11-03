@@ -17,7 +17,7 @@ mock.module('./config-paths', () => ({
   getAgentWorkspacePath: () => fixtureRoot,
 }))
 
-const { createNanjuProject, readProjectInfo, listNanjuProjects } = await import('./nanju-project')
+const { createNanjuProject, readProjectInfo, listNanjuProjects, isConfirmAdvanceText, isConfirmRejectText } = await import('./nanju-project')
 
 function makeFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'nanju-project-l24-'))
@@ -61,5 +61,16 @@ describe('L2-4：archEvidenceGate 新项目标记（凭证门禁存量兼容）'
     const info = readProjectInfo('ws', 'legacy')
     expect(info).not.toBeNull()
     expect((info as { archEvidenceGate?: boolean }).archEvidenceGate).toBeUndefined()
+  })
+})
+
+describe('F-8：确认词匹配的控制字符容错（v0.17.138）', () => {
+  test('「确认无误\\r，开始自动测试」仍判为确认推进（横幅答案常夹 \\r）', () => {
+    expect(isConfirmAdvanceText('确认无误\r，开始自动测试')).toBe(true)
+  })
+
+  test('反义词优先不被控制字符绕过：「暂缓\\r推进」判为反悔', () => {
+    expect(isConfirmAdvanceText('暂缓\r推进')).toBe(false)
+    expect(isConfirmRejectText('暂缓\r推进')).toBe(true)
   })
 })

@@ -1304,3 +1304,139 @@ describe('L3-7d：architecture 门禁挂点派生 Spike 埋点（纯观察不阻
     expect(verifyPhaseOutput(ws, PROJECT_ID, 'architecture')).toBeNull()
   })
 })
+
+describe('NEXT-02 F-5：coding 阶段树编排工具面（E2E 二轮实测修复）', () => {
+  test('coding 阶段放行 mcp__tree__*（bootstrap 提示词要求 root 指挥官操作树）', () => {
+    setupFixture({ stage: 'coding', html: htmlDoc('<p>x</p>') })
+    for (const tool of [
+      'mcp__tree__tree_milestone_add',
+      'mcp__tree__tree_event_append',
+      'mcp__tree__tree_audit_gate',
+      'mcp__tree__tree_leaf_list_active',
+      'mcp__tree__tree_log_communication',
+      'mcp__tree__tree_help',
+    ]) {
+      expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', tool, {})).toBeNull()
+    }
+  })
+
+  test('coding 阶段放行会话消息通道（向 worker/auditor 下发契约与读回报）', () => {
+    setupFixture({ stage: 'coding', html: htmlDoc('<p>x</p>') })
+    for (const tool of ['mcp__session__send_message', 'mcp__session__list_messages', 'mcp__session__get_session_info']) {
+      expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', tool, {})).toBeNull()
+    }
+  })
+
+  test('testing 阶段同样放行树编排工具（树收口跨到验收阶段）', () => {
+    setupFixture({ stage: 'testing', html: 'Feature: x\nScenario: y', files: {} })
+    expect(checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'mcp__tree__tree_audit_gate', {})).toBeNull()
+  })
+
+  test('prototype 阶段不放行树编排工具（最小放行面）', () => {
+    setupFixture({ stage: 'prototype', html: htmlDoc('<p>x</p>') })
+    const tree = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'mcp__tree__tree_leaf_list_active', {})
+    expect(tree?.behavior).toBe('deny')
+    const msg = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'mcp__session__send_message', {})
+    expect(msg?.behavior).toBe('deny')
+  })
+
+  test('放行树工具不改变写类拦截：coding 阶段调度员 Write 仍 deny', () => {
+    setupFixture({ stage: 'coding', html: htmlDoc('<p>x</p>') })
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'Write', { file_path: '08_APP/x.html', content: 'x' })
+    expect(result?.behavior).toBe('deny')
+  })
+})
+
+describe('NEXT-02 F-6：树节点会话写保护豁免（E2E 二轮实测修复）', () => {
+  const TREE_ID = 'njtest'
+  const TREE_WORKER = 'tree-worker-1'
+  const TREE_AUDITOR = 'tree-auditor-1'
+
+  function setupTreeFixture(): void {
+    const dir = mkdtempSync(join(tmpdir(), 'nanju-tree-guard-'))
+    fixtureRoot = dir
+    mkdirSync(join(dir, '_telemetry'), { recursive: true })
+    const now = new Date().toISOString()
+    writeFileSync(join(dir, '_nanju-projects.json'), JSON.stringify([
+      { projectId: 'p1', name: '树项目', mode: 'quick', status: 'active', currentStage: 'coding', createdAt: now, updatedAt: now, sessionId: 'session-dispatcher', workspaceSlug: WORKSPACE_SLUG, treeId: TREE_ID },
+      { projectId: 'p2', name: '别的项目', mode: 'quick', status: 'active', currentStage: 'coding', createdAt: now, updatedAt: now, sessionId: 'session-other', workspaceSlug: WORKSPACE_SLUG },
+    ]))
+    mkdirSync(join(dir, '.context', 'trees', TREE_ID), { recursive: true })
+    writeFileSync(join(dir, '.context', 'trees', TREE_ID, 'tree-state.json'), JSON.stringify({
+      tree_id: TREE_ID,
+      leaves: {
+        [`${TREE_ID}-A-worker`]: { session_id: TREE_WORKER, role: 'worker' },
+        [`${TREE_ID}-B-worker`]: { session_id: TREE_AUDITOR, role: 'worker' },
+      },
+    }))
+  }
+
+  test('树 worker 写自身工程目录 → 放行（不再被未绑定写保护拦）', () => {
+    setupTreeFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, TREE_WORKER, 'Write', {
+      file_path: join(fixtureRoot, 'project-p1', '08_APP', 'app.py'), content: 'print(1)',
+    })
+    expect(result).toBeNull()
+    expect(readTelemetryEvents()).toHaveLength(0)
+  })
+
+  test('树 worker Bash 在自身工程目录执行 → 放行', () => {
+    setupTreeFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, TREE_WORKER, 'Bash', {
+      command: `cd ${join(fixtureRoot, 'project-p1')} && python3 -m py_compile 08_APP/app.py`,
+    })
+    expect(result).toBeNull()
+    expect(readTelemetryEvents()).toHaveLength(0)
+  })
+
+  test('树 worker 写别的工程目录 → 仍 deny（最小授权面）', () => {
+    setupTreeFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, TREE_WORKER, 'Write', {
+      file_path: join(fixtureRoot, 'project-p2', '08_APP', 'x.py'), content: 'x',
+    })
+    expect(result?.behavior).toBe('deny')
+    expect(readTelemetryEvents().filter((e) => e.eventType === 'router.gate.unbound-write-deny')).toHaveLength(1)
+  })
+
+  test('非树会话写该工程 → 仍 deny（豁免只认树内登记 session）', () => {
+    setupTreeFixture()
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'random-session', 'Write', {
+      file_path: join(fixtureRoot, 'project-p1', '08_APP', 'app.py'), content: 'x',
+    })
+    expect(result?.behavior).toBe('deny')
+  })
+})
+
+describe('F-8：收口问句 header 控制字符容错（E2E 二轮实测修复）', () => {
+  test('header 含 \\r（确认\\r·预览确认）仍登记 activeConfirmAsk', async () => {
+    setupFixture({ stage: 'coding', html: htmlDoc('<p>x</p>') })
+    const { getActiveConfirmAsk, clearActiveConfirmAsk } = await import('./nanju-project')
+    clearActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
+    const result = checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '是否确认预览？', header: '确认\r·预览确认', multiSelect: false, options: [{ label: '确认无误\r，开始自动测试' }] }],
+    })
+    expect(result).toBeNull()
+    const ask = getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
+    expect(ask?.expectedTarget).toBe('testing')
+  })
+
+  test('header 含 \\r\\n\\t 混合仍登记', async () => {
+    setupFixture({ stage: 'coding', html: htmlDoc('<p>x</p>') })
+    const { getActiveConfirmAsk, clearActiveConfirmAsk } = await import('./nanju-project')
+    clearActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
+    checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '是否确认预览？', header: '确认\r\n\t·预览确认' }],
+    })
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)?.expectedTarget).toBe('testing')
+  })
+
+  test('非收口 header（确认·安装缺失组件）不登记（白名单语义不被 \\r 绕过）', async () => {
+    setupFixture({ stage: 'coding', html: htmlDoc('<p>x</p>') })
+    const { getActiveConfirmAsk, clearActiveConfirmAsk } = await import('./nanju-project')
+    clearActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)
+    checkNanjuRouterGate(WORKSPACE_SLUG, 'session-1', 'AskUserQuestion', {
+      questions: [{ question: '是否安装？', header: '确认\r·安装缺失组件' }],
+    })
+    expect(getActiveConfirmAsk(WORKSPACE_SLUG, PROJECT_ID)).toBeNull()
+  })
+})
