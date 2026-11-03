@@ -28,15 +28,20 @@
  *   （「生成应用代码」仍拦，「不能只看代码推断」审查语境放行）；
  * - stage-deny 埋点补 matchContext（命中字段/前后 20 字符/是否在路径内）。
  *
- * 匹配文本：delegate_agent 的 title + task 字段（参数结构调研结论：任务字段名是
- * task 而非 prompt；role 是 explore/research/implement/review/custom 枚举，语义过泛，
- * 不纳入匹配文本）。中文词用 includes，英文词用 \b 词边界（防 'ac' 误命中
- * 'trace'/'space'、'test' 误命中 'latest'）。
+ * 匹配文本：delegate_agent 的 task + expectedOutput 字段（任务字段名是 task 而非
+ * prompt；role 是 explore/research/implement/review/custom 枚举，语义过泛，不纳入匹配文本）。
+ * Task 8（2026-09-20）标题降权：标题仅作描述，不与实际任务同权重——拒绝面（他阶段词/
+ * 强动词/R2）只由 task/expectedOutput 判定，title 不制造拒绝也不为工作文本的拒绝豁免；
+ * 放行面（本阶段词/AC 词）保留 title 参与既有宽匹配。
+ * 中文词用 includes（Task 8 起在 CJK 间空白归一后的文本上匹配——插空格/换行拆词
+ * 不能改变授权结果），英文词用 \b 词边界（防 'ac' 误命中 'trace'/'space'、'test'
+ * 误命中 'latest'）。
  */
 
 import type { NanjuGuardStage } from './nanju-project'
 import type { ProjectMode } from './nanju-project'
 import { AC_PRESETS, channelFamily, getPhaseNode, resolveACActors, type ACActorConfig } from './nanju-router'
+import { isNanjuDelegationSlot } from '@proma/shared'
 
 // ===== 层一：阶段角色词表 =====
 
@@ -59,11 +64,18 @@ import { AC_PRESETS, channelFamily, getPhaseNode, resolveACActors, type ACActorC
  *   英文全栈角色声明由强动词 develop/build 兑底，中文由 全栈/开发/实现 覆盖。
  * - testing 裸「验收」换精确复合词——「验收标准（AC）清单」是每个委派的标准 AC
  *   引用语（实测 deny#4/#5 另一命中源）；项目名含「验收」碰撞已由路径豁免解决。
+ * - Task 8（2026-09-20）：architecture 去裸「技术」——「技术栈」是需求调研/架构
+ *   正文的高频合法词（事件 SD-1 实测在 requirements 阶段被误拦）；architecture
+ *   角色识别由 架构/architect/环境配置 承接，产出词「技术选型」保留，本阶段匹配不削弱。
+ * - 2c（2026-10-01，E2E 番茄工程 deny#15）：requirements 去裸英文词 'requirements'——
+ *   `requirements.txt` 是 Python 标配依赖清单文件名（任务书列产出物即命中：
+ *   「requirements.txt、setup.sh、README」），高频合法引用；requirements 阶段自身
+ *   匹配由 需求调研/需求收集/analyst 等复合词承接，角色声明能力不削弱。
  */
 export const STAGE_ROLE_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
-  requirements: ['需求调研', '需求收集', '收集需求', '需求梳理', '需求评审', 'analyst', 'requirements'],
+  requirements: ['需求调研', '需求收集', '收集需求', '需求梳理', '需求评审', 'analyst'],
   prototype: ['UX', '原型', 'prototype', '视觉', '界面'],
-  architecture: ['架构', 'architect', '环境配置', '技术'],
+  architecture: ['架构', 'architect', '环境配置', '技术选型'],
   planning: ['规划', '工程计划', '计划', 'plan', '项目经理', '排期', '里程碑', '项目管理'],
   coding: ['全栈', '开发', 'coding', '实现'],
   testing: ['测试', 'test', 'GWT', 'QA', '验收测试', '验收用例', '验收场景', '执行验收', '跑验收', 'UAT', 'testing'],
@@ -75,6 +87,45 @@ export const STAGE_ROLE_KEYWORDS: Record<NanjuGuardStage, readonly string[]> = {
  * 键序同源（requirements→prototype→architecture→planning→coding→testing）。
  */
 export const STAGE_ORDER: readonly NanjuGuardStage[] = Object.keys(STAGE_ROLE_KEYWORDS) as NanjuGuardStage[]
+
+/**
+ * 显式角色标记 → 阶段固定映射（2a 豁免，2026-09-28 用户裁决）：
+ * router-prompt 委派任务模板携带 `phase.role: <role>` 显式标记（唯一权威信号，
+ * 见 nanju-clarify-proxy-tool.PHASE_ROLE_CATEGORY_MAP 同源角色集）。调度员按阶段指令
+ * 委派本阶段角色时，任务文本必然携带与 currentStage 匹配的标记——该标记是系统注入
+ * 的结构性信号，词表 ② 他阶段角色词扫描的「正常引用误拦」（E2E 实测 14/14：testing 委派
+ * 里「托盘菜单视觉」命中 prototype 词表、「按架构测试规范」命中 architecture 词表）
+ * 对此类委派不应生效。未知角色 fail-closed（不豁免，走原判定流）。
+ */
+export const PHASE_ROLE_STAGE_MAP: Readonly<Record<string, NanjuGuardStage>> = Object.freeze({
+  // router-prompt 模板长名（系统注入原样）
+  'requirement-analyst': 'requirements',
+  'ux-advisor': 'prototype',
+  architect: 'architecture',
+  'engineering-manager': 'planning',
+  'fullstack-developer': 'coding',
+  'test-engineer': 'testing',
+  // L1 改写常见缩写（E2E 实测：testing 委派 taskPreview「phase.role: tester」、
+  // coding 委派 DELIVERY「phase.role: developer」——L1 自由文本不保证长名原样）
+  analyst: 'requirements',
+  advisor: 'prototype',
+  developer: 'coding',
+  tester: 'testing',
+  manager: 'planning',
+})
+
+/** 从工作文本提取显式 phase.role 标记（仅 workText，Task 8 标题降权原则：标题声明
+ * 不制造拒绝也不提供豁免）。返回去重后的 role 列表。
+ * 不锚定行首：E2E 实测 L1 复写后标记常在括号内联（「你是测试工程师（phase.role:
+ * tester）」）而非模板的独立行形态；英文 token `phase.role:` 后强制英文角色词，
+ * 自然语句不会误命中。 */
+function extractPhaseRoleMarkers(workText: string): string[] {
+  const roles = new Set<string>()
+  for (const match of workText.matchAll(/(?:phase\.role|阶段角色)[ \t]*[:：][ \t]*([a-zA-Z][a-zA-Z-]*)/g)) {
+    roles.add((match[1] ?? '').toLowerCase())
+  }
+  return [...roles]
+}
 
 /**
  * 全阶段通用的 AC 攻防类词。W18（v0.17.81）起拆分：
@@ -203,7 +254,7 @@ function keywordMatcher(keyword: string): (text: string) => boolean {
 }
 
 /** 在文本中查找首个命中的关键词，返回该词（未命中返回 undefined） */
-function findKeyword(text: string, keywords: readonly string[]): string | undefined {
+export function findKeyword(text: string, keywords: readonly string[]): string | undefined {
   for (const kw of keywords) {
     if (keywordMatcher(kw)(text)) return kw
   }
@@ -289,6 +340,58 @@ function keywordIndices(text: string, keyword: string): number[] {
   return out
 }
 
+// ===== Task 8（2026-09-20，Phase1 加固）：引用语境豁免 + 标题降权 + 分词硬ening =====
+
+/**
+ * 上游产物引用标记词（Task 8，样本：19 条 stage-deny 事件中 SD-4/SD-5——
+ * 「根据 PRD 和原型，产出精简架构文档」「根据 PRD 与既有 UX 产出…」被 prototype
+ * ROLE 词误拦）。ROLE 词命中位置紧邻其前出现标记词时，该次出现按「引用既有产物」
+ * 处理，不构成他阶段施工意图（出现级判定：同一词的另一次非引用出现仍计违规）。
+ *
+ * 反暗语边界：标记词全为双字词、要求紧邻（仅允许短无标点夹层 + 和/与/及/或、连接符），
+ * 不收录单字标记（按/依/原）与长夹层窗口——「根据X和开发」式构造无法豁免真产出意图，
+ * 拒绝文案（router-gate 侧）也不提示本表存在，不教模型用措辞规避。
+ */
+export const REFERENCE_MARKERS: readonly string[] = [
+  '根据', '依据', '基于', '对照', '比照', '参考', '参照', '引用', '按照', '依循', '遵循', '沿用',
+  '来自', '出自', '既有', '前序', '上游',
+]
+
+/** 标记词→命中词之间允许的形态：直接紧邻（余空白），或 ≤6 字符无句读夹层 + 和/与/及/或、连接符 */
+const REFERENCE_BEFORE_RE = new RegExp(
+  `(?:${REFERENCE_MARKERS.join('|')})[^，。；！？\\n]{0,6}[和与及或、][\\s]*$`
+  + `|(?:${REFERENCE_MARKERS.join('|')})[\\s]*$`,
+)
+
+/** 某次关键词出现是否为引用语境（pos 为该词起始下标） */
+export function isReferenceOccurrence(text: string, pos: number): boolean {
+  return pos > 0 && REFERENCE_BEFORE_RE.test(text.slice(0, pos))
+}
+
+/**
+ * 出现级关键词判定：关键词存在任一「非引用」出现即返回该词；全部出现都是引用语境
+ * （根据/基于/对照/既有…紧邻其前）→ 不计违规，继续扫下一个词。
+ */
+export function findKeywordExcludingReferences(text: string, keywords: readonly string[]): string | undefined {
+  for (const kw of keywords) {
+    const positions = keywordIndices(text, kw)
+    if (positions.some((pos) => !isReferenceOccurrence(text, pos))) return kw
+  }
+  return undefined
+}
+
+/** CJK 字符间的空白字符集（含全角空格/换行——拆词规避同权处理） */
+const CJK_GAP_WS_RE = /([\u3400-\u9fff])[ \t\u00a0\u3000\r\n\u200b-\u200f\u2060\ufeff]+(?=[\u3400-\u9fff])/g
+
+/**
+ * CJK 间空白归一（Task 8）：删去相邻中文之间的空格/换行/制表符，使「开 发」「编\n写」
+ * 与连续词同判（插空格/换行分词不能改变授权结果——含 deny 侧漏放与豁免侧构造两向）。
+ * ASCII 词与词边界正则不受影响（仅删 CJK 相邻空白）。
+ */
+export function compactCjkWhitespace(text: string): string {
+  return text.replace(CJK_GAP_WS_RE, '$1')
+}
+
 /** W19-C：OUTPUT 词邻近语境窗口（字符数）——OUTPUT 词与强动词距离在窗口内才判产出意图 */
 export const OUTPUT_VERB_PROXIMITY = 20
 
@@ -301,13 +404,22 @@ export interface KeywordHitContext {
   inPath: boolean
 }
 
-/** 在原文中定位关键词首处命中并给出归因上下文（找不到返回 undefined） */
+/** 空白容忍版引用标记正则（仅归因用：在原文字段上定位，CXXX 间空白未归一时仍同语义判定） */
+const REFERENCE_BEFORE_TOLERANT_RE = new RegExp(
+  `(?:${REFERENCE_MARKERS.join('|')})[\\s]*[^，。；！？\\n]{0,6}[和与及或、][\\s]*$`
+  + `|(?:${REFERENCE_MARKERS.join('|')})[\\s]*$`,
+)
+
+/** 在原文中定位关键词首处命中并给出归因上下文（找不到返回 undefined；
+ *  Task 8：引用语境出现不计入首处命中——归因与拒绝面同口径，被豁免的出现不作为拒绝证据报告） */
 export function describeKeywordHit(source: DelegationMatchSource, keyword: string): KeywordHitContext | undefined {
   if (!keyword) return undefined
   for (const field of ['title', 'task', 'expectedOutput'] as const) {
     const raw = source[field]
     if (!raw) continue
     for (const pos of keywordIndices(raw, keyword)) {
+      // 引用语境判定与匹配面同语义：紧邻标记（空白容忍）的出现不计为拒绝证据
+      if (pos > 0 && REFERENCE_BEFORE_TOLERANT_RE.test(raw.slice(0, pos))) continue
       let inPath = false
       for (const match of raw.matchAll(PATH_RUN_RE)) {
         const start = match.index ?? 0
@@ -340,10 +452,21 @@ export interface DelegationMatchSource {
   modelId?: string
 }
 
-/** 匹配文本拼接（单一真源：checkDelegationAgainstStage / matchACKeyword / detectACRole 共用；R2 后含 expectedOutput；
- *  W19-C：拼接后剥离路径 token——项目名/用户名出现在路径内不再命中任何词表） */
+/**
+ * 匹配文本拼接（单一真源：checkDelegationAgainstStage / matchACKeyword / detectACRole 共用；R2 后含 expectedOutput）。
+ * W19-C：拼接后剥离路径 token——项目名/用户名出现在路径内不再命中任何词表。
+ * Task 8：再作 CJK 间空白归一——插空格/换行拆词与连续词同判（授权结果不因分词改变）。
+ */
 function buildMatchText(source: DelegationMatchSource): string {
-  return stripPathTokens(`${source.title ?? ''}\n${source.task ?? ''}\n${source.expectedOutput ?? ''}`)
+  return compactCjkWhitespace(stripPathTokens(`${source.title ?? ''}\n${source.task ?? ''}\n${source.expectedOutput ?? ''}`))
+}
+
+/**
+ * 工作文本（Task 8 标题降权）：task + expectedOutput——拒绝面判定源。
+ * title 不参与：标题仅作描述，不制造拒绝（也不为工作文本的拒绝提供豁免）。
+ */
+function buildWorkMatchText(source: DelegationMatchSource): string {
+  return compactCjkWhitespace(stripPathTokens(`${source.task ?? ''}\n${source.expectedOutput ?? ''}`))
 }
 
 /** 匹配结果分类 */
@@ -374,6 +497,9 @@ export interface DelegationCheckResult {
   denialKind?: 'other-stage' | 'strong-verb' | 'minimax-repair-misuse'
   /** W10：strong-verb 拒绝时命中的动作动词（= violatedKeyword 的语义别名，便于调用方取用） */
   matchedVerb?: string
+  /** 2a（2026-09-28 用户裁决）：显式 phase.role 标记与 currentStage 匹配 → 豁免他阶段
+   * 角色词扫描后放行/走后续判定。true 时调用方记 delegate.guard.role-exempt 观测事件。 */
+  roleExempt?: boolean
 }
 
 /**
@@ -390,6 +516,12 @@ export interface DelegationCheckResult {
  * 1.5. W22 M#9/R2 修复路由守卫：testing 阶段 ∧ 显式 minimax 家族端点 ∧ coding
  *    阶段词 → 拒绝（denialKind='minimax-repair-misuse'；详见函数内注释与
  *    R2_CODING_STAGE_KEYWORDS / MINIMAX_REPAIR_GUIDANCE）。
+ * 1.9. 2a 豁免（2026-09-28 用户裁决）：workText 携带唯一 phase.role 标记且映射
+ *    = currentStage → 跳过 ②与 2.5（他阶段角色词/下游产出词扫描），继续 ③④⑤。
+ *    解决调度员按阶段指令正常委派本阶段角色时，任务正文引用他阶段词被 ② 误拦
+ *    （E2E 实测 14/14：testing 委派「托盘菜单视觉」命中 prototype、「按架构测试
+ *    规范」命中 architecture）。伪标记不绕过 ④ 强动词兑底；多标记/未知角色/
+ *    不匹配 fail-closed 不豁免。详见 PHASE_ROLE_STAGE_MAP 注释。
  * 2. 他阶段角色词扫描（无条件、先于本阶段词）→ 拒绝（other-stage；产出物词仍不参与
  *    他阶段扫描——跨阶段动作对象误拦风险，见 STAGE_OUTPUT_KEYWORDS 注释）。
  * 2.5. W18.1（A3 闭合）：强动作动词在场 且 下游阶段（阶段序严格晚于当前，见
@@ -413,10 +545,14 @@ export function checkDelegationAgainstStage(
     // 空文本（参数缺 title/task）：交给既有 validateToolInput 必填校验，此处放行
     return { allowed: true, matchKind: 'unmatched' }
   }
+  // Task 8（标题降权）：拒绝面统一用工作文本（task/expectedOutput）判定——
+  // 标题单独命中他阶段词/强动词不构成拒绝，也不为工作文本的拒绝提供豁免。
+  const workText = buildWorkMatchText(source)
 
   // 1. AC 审计意图：审计动词命中且无强动词 → 只读审计放行（ac）；强动词在场则不裁决
-  const acHit = findKeyword(text, AC_AUDIT_VERBS)
-  if (acHit !== undefined && findKeyword(text, STRONG_ACTION_VERBS) === undefined) {
+  //    （Task 8：以工作文本判定——标题声明审计不能掩护 task 内的真实产出动作）
+  const acHit = findKeyword(workText, AC_AUDIT_VERBS)
+  if (acHit !== undefined && findKeyword(workText, STRONG_ACTION_VERBS) === undefined) {
     return { allowed: true, matchKind: 'ac', matchedKeyword: acHit }
   }
 
@@ -431,7 +567,7 @@ export function checkDelegationAgainstStage(
   //     边界：continue_delegation 不经本守卫（工具入参只有 delegationId+message，不携
   //     委派文本/渠道），对已存在 minimax 委派的续派拦截需另走渠道反查（见 W22 报告）。
   if (stage === 'testing' && isMinimaxEndpoint(source.channelId, source.modelId)) {
-    const codingWordHit = findKeyword(text, R2_CODING_STAGE_KEYWORDS)
+    const codingWordHit = findKeyword(workText, R2_CODING_STAGE_KEYWORDS)
     if (codingWordHit !== undefined) {
       return {
         allowed: false,
@@ -443,25 +579,48 @@ export function checkDelegationAgainstStage(
     }
   }
 
+  // 1.9. 2a 豁免（2026-09-28 用户裁决）：显式 phase.role 标记与 currentStage 匹配 →
+  //     跳过 ② 他阶段角色词扫描与 2.5 下游产出词扫描，继续 ③④⑤。
+  //     - 合法委派：router-prompt 模板在 task 正文携带 `phase.role: <role>`（与阶段匹配），
+  //       其文本中的他阶段词均为正常引用（「按架构测试规范」「托盘菜单视觉」E2E 实测
+  //       14/14 误拦样本）——豁免后正常在 ③ 本阶段词放行。
+  //     - 伪标记委派：豁免只跳过 ②2.5，④ 强动词兑底仍在——「phase.role: tester」但实际
+  //       干 coding 产出动作（无 testing 本阶段词）仍拒（strong-verb）；无强动词的伪标记
+  //       走 unmatched 放行 + role-exempt 遥测观测（现状本无防伪装能力，不更差）。
+  //     - 多标记歧义 / 未知角色 / 角色不匹配 → 不豁免（fail-closed，原判定流不变）。
+  //     - 仅认 workText（task+expectedOutput）内的标记：Task 8 标题降权原则——标题声明
+  //       不制造拒绝也不提供豁免。
+  const phaseRoles = extractPhaseRoleMarkers(workText)
+  const roleExempt = phaseRoles.length === 1 && PHASE_ROLE_STAGE_MAP[phaseRoles[0] ?? ''] === stage
+
   // 2. 其他阶段专属词（仅扫角色词表——产出物词不参与他阶段扫描，见 STAGE_OUTPUT_KEYWORDS 注释）
-  for (const otherStage of Object.keys(STAGE_ROLE_KEYWORDS) as NanjuGuardStage[]) {
-    if (otherStage === stage) continue
-    const hit = findKeyword(text, STAGE_ROLE_KEYWORDS[otherStage])
-    if (hit !== undefined) {
-      return { allowed: false, matchKind: 'unmatched', violatedKeyword: hit, violatedStage: otherStage, denialKind: 'other-stage' }
+  //    Task 8：出现级引用豁免——同一词的全部出现都处于「根据/基于/对照/既有…」紧邻语境时
+  //    按「引用既有产物」放行（SD-4/SD-5 实测误拦类）；存在任一非引用出现仍拒绝。
+  if (!roleExempt) {
+    for (const otherStage of Object.keys(STAGE_ROLE_KEYWORDS) as NanjuGuardStage[]) {
+      if (otherStage === stage) continue
+      const hit = findKeywordExcludingReferences(workText, STAGE_ROLE_KEYWORDS[otherStage])
+      if (hit !== undefined) {
+        return { allowed: false, matchKind: 'unmatched', violatedKeyword: hit, violatedStage: otherStage, denialKind: 'other-stage' }
+      }
     }
   }
 
   // 2.5. W18.1（A3 闭合）+ W19-C 邻近语境：强动词在场 + 下游 OUTPUT 词且两者距离在
-  //     邻近窗口内 → 拒绝（产出意图）；远距离共现（审查/引用语境）不拦
-  if (findKeyword(text, STRONG_ACTION_VERBS) !== undefined) {
-    const verbPositions = STRONG_ACTION_VERBS.flatMap((v) => keywordIndices(text, v))
+  //     邻近窗口内 → 拒绝（产出意图）；远距离共现（审查/引用语境）不拦。
+  //     Task 8：以下游 OUTPUT 词的工作文本出现为基准逐次判定——引用语境（根据/既有…
+  //     紧邻）的出现不计产出意图，非引用出现与任一强动词在窗口内仍拒。
+  if (!roleExempt && findKeyword(workText, STRONG_ACTION_VERBS) !== undefined) {
+    const verbPositions = STRONG_ACTION_VERBS.flatMap((v) => keywordIndices(workText, v))
     const stageIdx = STAGE_ORDER.indexOf(stage)
     for (const downstreamStage of STAGE_ORDER) {
       if (STAGE_ORDER.indexOf(downstreamStage) <= stageIdx) continue
       let outputHit: string | undefined
       for (const kw of STAGE_OUTPUT_KEYWORDS[downstreamStage]) {
-        if (keywordIndices(text, kw).some((pos) => verbPositions.some((v) => Math.abs(pos - v) <= OUTPUT_VERB_PROXIMITY))) {
+        const isOutputIntent = keywordIndices(workText, kw).some((pos) =>
+          verbPositions.some((v) => Math.abs(pos - v) <= OUTPUT_VERB_PROXIMITY)
+          && !isReferenceOccurrence(workText, pos))
+        if (isOutputIntent) {
           outputHit = kw
           break
         }
@@ -473,22 +632,115 @@ export function checkDelegationAgainstStage(
   }
 
   // 3. 本阶段词（角色词 ∪ 产出物词：产出物词优先缓解强动词误拦——「编写 PRD」在
-  //    requirements 按本阶段词放行，而非掉入第 4 条强动词拒绝）
+  //    requirements 按本阶段词放行，而非掉入第 4 条强动词拒绝）。
+  //    Task 8：放行面保留 title 参与（标题声明本阶段角色/产物仍可支撑放行——
+  //    标题是描述，描述可以支撑放行，不能制造拒绝）
   const stageHit = findKeyword(text, [...STAGE_ROLE_KEYWORDS[stage], ...STAGE_OUTPUT_KEYWORDS[stage]])
   if (stageHit !== undefined) {
-    return { allowed: true, matchKind: 'stage', matchedKeyword: stageHit }
+    // 2a：roleExempt 委派携带标记供调用方观测（delegate.guard.role-exempt）
+    return { allowed: true, matchKind: 'stage', matchedKeyword: stageHit, ...(roleExempt ? { roleExempt: true } : {}) }
   }
 
-  // 4. 强动作动词 → 拒绝（产出类动作必须显式声明角色——W8 敞口兜底）
-  const verbHit = findKeyword(text, STRONG_ACTION_VERBS)
+  // 4. 强动作动词 → 拒绝（产出类动作必须显式声明角色——W8 敞口兜底；Task 8：工作文本判定）
+  const verbHit = findKeyword(workText, STRONG_ACTION_VERBS)
   if (verbHit !== undefined) {
     return { allowed: false, matchKind: 'unmatched', violatedKeyword: verbHit, denialKind: 'strong-verb', matchedVerb: verbHit }
   }
-  // 5. 无强动词（辅助类）→ 放行（现状不变）
-  return { allowed: true, matchKind: 'unmatched' }
+  // 5. 无强动词（辅助类）→ 放行（现状不变；2a：roleExempt 委派落入此分支时携带标记）
+  return { allowed: true, matchKind: 'unmatched', ...(roleExempt ? { roleExempt: true } : {}) }
 }
 
 // ===== 层二：AC 攻/防识别与模型覆写 =====
+
+/**
+ * W24-8：各阶段**作者委派标题标记**（仅层二 AC 覆写的豁免判定用，不参与层一匹配）。
+ * L1 作者委派标题约定「{角色}：{项目} …」（router-prompt 模板）；AC 委派标题
+ * （攻击者/防御者/审计/复审）不含这些标记 → 不豁免 → 照常程序化覆写。
+ *
+ * W-B B2：从 router-gate.ts 迁移至此（detectDelegationSlot 复用；原调用点改为 import）。
+ * 每次迁移后必须确认调用方已 import，不得只删常量不补导入（否则运行期 ReferenceError）。
+ */
+export const STAGE_AUTHOR_TITLE_MARKERS: Record<string, readonly string[]> = {
+  requirements: ['需求分析师', '需求分析', 'analyst', 'requirement-analyst'],
+  prototype: ['UX 顾问', 'UX顾问', 'ux-advisor', '原型设计'],
+  architecture: ['架构师', 'architect', '环境探测'],
+  planning: ['工程经理', '项目经理', 'engineering-manager'],
+  coding: ['全栈开发', '开发工程师', 'fullstack-developer'],
+  testing: ['测试工程师', 'test-engineer', 'GWT'],
+}
+
+/**
+ * W-B B2：视觉验证者 title 标记表（独立作者/AC 槽位）。
+ *
+ * 设计：gate 端须区分 “视觉验证者”（prototype 阶段独立裁决）与 “作者委派”
+ * （标题含阶段作者标记）。本表仅供 detectDelegationSlot 识别 visual-validator
+ * 槽位使用，不参与层一/层二的阶段匹配（防与 prototype 阶段词重叠导致误拦）。
+ *
+ * 与 STAGE_AUTHOR_TITLE_MARKERS 的关键区别：
+ * - STAGE_AUTHOR_TITLE_MARKERS = 作者表 (L1 主委派，仅一阶段标记表，用于作者委派豁免)
+ * - VISUAL_VALIDATOR_TITLE_MARKERS = 视觉验证者表（独立槽位，仅 prototype 阶段可能命中）
+ *
+ * 中文 includes / 英文 \b 词边界，大小写不敏感（findKeyword 同型判定）。
+ */
+export const VISUAL_VALIDATOR_TITLE_MARKERS: readonly string[] = [
+  '独立视觉裁决', '独立视觉验证', '视觉验证者', '视觉裁决',
+  'visual judge', 'visual validator', 'visual review',
+]
+
+/**
+ * W-B B2：slot 分类（**legacy 低信任回退**）。
+ *
+ * 优先级：visual-validator > ac-attacker > ac-defender > author > general
+ * - title 命中视觉验证者标记表 → visual-validator（**必须先于 AC 判定**：中文标记
+ *   「视觉裁决」含 AC 防御词「裁决」，后置会被 AC 分支提前命中而永不生效）
+ * - 否则命中 AC 词 → ac-attacker/defender（仅在区分出攻防时；同词并存按攻方处理——与 detectACRole 同源）
+ * - 否则命中阶段作者标题表 → author
+ * - 其余 → general
+ *
+ * 信任边界（重要）：本函数仅从 title/task/expectedOutput 文本推断，属 **legacy 低信任**。
+ * slot 的权威来源是内部 producer（nanju-router-prompt.resolvePhaseDelegationSlots，
+ * config/schema 驱动），其输出经内部参数 DelegateAgentArgs.slot 写入 DelegationRecord
+ * 与 session meta。公开工具入口不暴露 slot，L1/L2 不能借文本伪造视觉槽位权威。
+ *
+ * gate 消费（nanju-router-gate.checkNanjuDelegateGuard）：
+ * - slot=visual-validator 的委派：与 producer 解析值比对（同端点/未配置一律拒绝）
+ * - slot=author 的委派：与 AC 攻防关键词交叠时不被劫持为 ac-actor（W24-8 既有逻辑保留）
+ *
+ * 语义：title 含多阶段标记时按优先级首次命中；未命中返回 'general'。
+ */
+export type DelegationSlot = 'author' | 'ac-attacker' | 'ac-defender' | 'visual-validator' | 'general'
+
+export function detectDelegationSlot(
+  source: DelegationMatchSource,
+  stage: NanjuGuardStage,
+): DelegationSlot {  // 1. 视觉验证者（独立于 author 与 AC）——仅在 title 含 VISUAL_VALIDATOR_TITLE_MARKERS
+  // 时命中。必须先于 AC 判定：「视觉裁决」含 AC 防御词「裁决」，后置会被误归为
+  // ac-defender（视觉槽位失效，与 B2 目标矛盾）。
+  if (typeof source.title === 'string') {
+    if (findKeyword(source.title, VISUAL_VALIDATOR_TITLE_MARKERS) !== undefined) return 'visual-validator'
+  }
+
+  // 2. AC 攻防识别（命中 AC 词且可区分攻/防 → ac-actor，以便层二覆写）
+  const acRole = detectACRole(source)
+  if (acRole === 'attacker') return 'ac-attacker'
+  if (acRole === 'defender') return 'ac-defender'
+
+  // 3. 阶段作者（既有 STAGE_AUTHOR_TITLE_MARKERS 检测——与 gate W24-8 作者豁免逻辑同源）
+  const authorMarkers = STAGE_AUTHOR_TITLE_MARKERS[stage] ?? []
+  if (typeof source.title === 'string' && findKeyword(source.title, authorMarkers) !== undefined) return 'author'
+
+  // 4. 兜底：通用委派（继承父会话渠道）
+  return 'general'
+}
+
+/**
+ * W-B B2：解析单个委派的**有效槽位**——内部 slot（传入的 args.slot）为权威，缺省/非法时
+ * 回退 legacy 文本推断结果（低信任）。gate 与委派记录共用此优先级，保证「公开工具无法
+ * 伪造 slot」：公开入口不暴露 slot，因此文本推断只是兼容回退。
+ */
+export function resolveDelegationSlot(trustedSlot: unknown, legacyTextSlot: DelegationSlot): DelegationSlot {
+  return isNanjuDelegationSlot(trustedSlot) ? trustedSlot : legacyTextSlot
+}
 
 /** AC 角色识别结果：attacker / defender / null（分不出攻防——如仅写「审计」，不覆写） */
 export function detectACRole(source: DelegationMatchSource): 'attacker' | 'defender' | null {
@@ -531,11 +783,14 @@ export function resolveACOverride(
 
 // ===== 层三：产出路径阶段约束注入 =====
 
-/** 各阶段允许写入的产出目录（软约束注入用；真正拦截靠层一，L2 违规写入检测留后续） */
+/** 各阶段允许写入的产出目录（软约束注入用；真正拦截靠层一，L2 违规写入检测留后续）。
+ *  P0-5（2026-09-18）：architecture 阶段增入 00_SPIKES——架构师按 T1-T3 判据派发的
+ *  Spike 实验子会话产物落位目录（写放行清单；目录已注册进脚手架 docDirs 与
+ *  router-gate 归因集，委派子会话豁免不受 unbound-write-deny 影响）。 */
 export const STAGE_WRITE_DIR: Record<NanjuGuardStage, string> = {
   requirements: '01_PRD',
   prototype: '02_UX_DESIGN',
-  architecture: '03_ARCHITECTURE',
+  architecture: '03_ARCHITECTURE（架构产出）与 00_SPIKES（Spike 实验产物，见任务书 Spike 条文）',
   planning: '05_PROJECT_PLAN',
   coding: '08_APP',
   testing: '06_TESTS',

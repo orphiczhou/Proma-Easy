@@ -1,0 +1,12 @@
+[配置] 配置目录: ~/.proma-dev/（开发模式）
+(pass) R4-a 篡改 pass+skipped>0 → verdict=fail
+(pass) R4-a 附带"计数不自洽"警告
+(pass) R4-b 篡改 pass+failed>0 → verdict=fail
+(pass) R5 自洽 pass+指纹一致 → verdict=pass 且无警告
+(pass) R6 产物改动 → stale
+(pass) R9 verdict=fail → fail
+(pass) R9 verdict=error → error
+(pass) R9 verdict=blocked → blocked
+(pass) R7 入口不存在+pass → stale
+
+9 pass / 0 fail

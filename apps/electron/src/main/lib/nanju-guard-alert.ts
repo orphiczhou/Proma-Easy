@@ -17,6 +17,15 @@ export interface NanjuGuardAlertEvent {
   projectId: string
   stage: string
   message: string
+  /**
+   * I-P7（B-e）：熔断上下文（可选，向后兼容）。
+   * 存在时渲染端按 US-U07 通俗口径重建文案（卡片侧单一真源）；缺省回退 `message` 原文。
+   */
+  mode?: 'quick' | 'iterative'
+  /** 同一阶段连续熔断次数（1 起） */
+  consecutiveCircuitCount?: number
+  /** 是否已成功回滚到健康快照（结构化回滚结果 ok=true） */
+  rolledBack?: boolean
 }
 
 /** 安抚文案（spec Flow 4 风格，逐字；按钮交互留 Sprint D L-2，本轮最小版无 [换个方案][先跳过]） */

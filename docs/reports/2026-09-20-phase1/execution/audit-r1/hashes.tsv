@@ -1,0 +1,44 @@
+# audit-r1 哈希与时间截面（审计开始 2026-09-20T14:07:46+08:00；代码共享可变，此表为审计时刻快照）
+# HEAD	34f72fbc8114608b998eaf4e1f5e1937f3deeb59
+# columns: sha256	mtime	bytes	git-status	path
+62b00d4951dd83c62ccd29af749043718aec5750e1ad1cd7889f38e09225188e	2026-09-20 13:48:27	135029	M	apps/electron/src/main/lib/nanju-gwt-runner.ts
+91d807d4ea4941e9a6fc790a2a632b9438c956352fefb7bef34cdc75270f98c7	2026-09-20 13:46:17	144367	M	apps/electron/src/main/lib/nanju-gwt-runner.test.ts
+14a34c9bc852c542a097dc76bfe18c3472a6c6855bd78e1b833ed5d5c871fdaf	2026-09-20 14:10:15	13815	M	apps/electron/src/main/lib/nanju-engineering-execution.ts
+a3e6881ebb7feb2d72abcb4c92478be30d8e353b54468e4c481a3bcad1ab59c3	2026-09-20 14:10:55	19567	??	apps/electron/src/main/lib/nanju-driver-blocked-protocol.test.ts
+1c39a1b8b6307a8b901bcee9661cb7cf9686bf20bca1e875f297caeb1e28d56f	2026-09-17 16:59:31	6829	clean	apps/electron/src/main/lib/nanju-engineering-suite.ts
+5791c1ca49dec32156c80a4cfc90ee3240ae84e30a2b926fef62399b86049405	2026-09-20 14:11:32	10349	M	apps/electron/src/main/lib/nanju-engineering-process-driver.ts
+d65748a344075c8274394019ed9ef0b3abcbe4f1fdfb6eca1c44f6a05d2d8f26	2026-09-20 13:50:14	19717	M	apps/electron/src/main/lib/nanju-driver-skeleton.test.ts
+5143e5ef4c8db61bb74422e551edbb873fb5683fbcdd8169b601bd737d90e63b	2026-09-14 23:31:28	10677	clean	apps/electron/src/main/lib/nanju-engineering-browser-driver.ts
+bec3c46d029b85511ba23e4906788eb11fe328e188319376a13764b559ce9939	2026-09-20 14:10:50	209664	M	apps/electron/src/main/lib/agent-orchestrator.ts
+fd672484eea62b18ad4b15eb3fbdcfa45c33e7ce5a88973851eea4fc28f12516	2026-09-18 21:59:46	8018	clean	apps/electron/src/main/lib/nanju-telemetry.ts
+176b69af71bb478c14c9de8e00d10bb38c8627ea5d226fefec151d15911d969e	2026-09-17 16:52:05	7436	clean	apps/electron/src/renderer/components/nanju/GwtProgressCard.tsx
+036b013c9f645c995fc12683b85f35ccb35e0445ea2597f0eacdd1c1690473fb	2026-09-14 23:25:43	9505	clean	apps/electron/src/renderer/components/nanju/quick-ux-model.ts
+451e47f047df0332f2a6646e7c54d3a40b4f96b8b5bc0fcdb6bc29b06685b8fb	2026-09-20 13:49:49	13886	M	apps/electron/resources/nanju-engineering-templates/driver-skeleton.py
+d1905c88f02b2796b765695e29b7137ba5cf77376e3af7f75361b0de7968f737	2026-09-20 13:49:56	14615	M	apps/electron/resources/nanju-engineering-templates/driver-skeleton.cjs
+# 审计临时副本（/dev/shm，易失）
+7698dd8bd6bbfcd15c14fd361610aa8a1c2cf51f2243aba40f3aea8b61104650  	/dev/shm/proma-p1-audit-r1/apps/electron/src/main/lib/audit-r1.negative.test.ts
+# 副本 overlay 文件清单：58 项（git ls-files -mo）
+e23180fda2b9d6d4873f9e6f2f38cbc5ce170f3f9ed911991c340caa5d0a0e36  apps/electron/src/main/lib/nanju-project-snapshots.ts
+4d600b0fdae68d1e9f99976ffcee051c9a29ea0d8531da6a9c57260d3e5a6138  apps/electron/src/main/lib/nanju-file-snapshot.ts
+ca5307509ee58c7536591e46b70152331967e81423045f824b97aa9fa45627f4  apps/electron/src/main/lib/nanju-snapshot.ts
+c988dec5c096c7ed4ff0ccffda2867feb91f3525450b09f65f761dc1afa50463  apps/electron/src/main/lib/nanju-engineering-template.ts
+bb56ac7d9feec3b5bf1f62cdfd673286ae3b55bf930ee163416aad7a3394c03c  apps/electron/src/main/lib/nanju-engineering-resources.ts
+c582f0a93cd0a42f64e4b4a1892d1217f63d09286911596cfce968922c76b9b3  apps/electron/resources/nanju-engineering-templates/manifest.json
+be22d78651c69582b63791cf64caea4a6da867529c1084d7536111cf029c305e  apps/electron/scripts/verify-engineering-resources.ts
+# security-audit snapshot: 2026-09-20T06:26:28Z HEAD=34f72fbc
+# security-audit-r1 追加强照（2026-09-20T06:40Z 审计读取时刻）
+e23180fda2b9d6d4873f9e6f2f38cbc5ce170f3f9ed911991c340caa5d0a0e36	2026-09-20 13:59:54	28980	M	apps/electron/src/main/lib/nanju-project-snapshots.ts
+4d600b0fdae68d1e9f99976ffcee051c9a29ea0d8531da6a9c57260d3e5a6138	2026-09-14 23:33:19	53305	clean	apps/electron/src/main/lib/nanju-file-snapshot.ts
+ca5307509ee58c7536591e46b70152331967e81423045f824b97aa9fa45627f4	2026-09-20 13:55:32	8316	M	apps/electron/src/main/lib/nanju-snapshot.ts
+c988dec5c096c7ed4ff0ccffda2867feb91f3525450b09f65f761dc1afa50463	2026-09-20 14:18:15	41803	M	apps/electron/src/main/lib/nanju-engineering-template.ts
+bb56ac7d9feec3b5bf1f62cdfd673286ae3b55bf930ee163416aad7a3394c03c	2026-09-20 14:18:15	35127	?	apps/electron/src/main/lib/nanju-engineering-resources.ts
+c582f0a93cd0a42f64e4b4a1892d1217f63d09286911596cfce968922c76b9b3	2026-09-20 14:21:56	6176	?	apps/electron/resources/nanju-engineering-templates/manifest.json
+be22d78651c69582b63791cf64caea4a6da867529c1084d7536111cf029c305e	2026-09-20 13:48:20	5755	?	apps/electron/scripts/verify-engineering-resources.ts
+# security-audit-r1 最终态强照（2026-09-20T07:05Z，父集成 14:28 批落定后复取；本报告判定基准）
+5596dcd47b1a6ce5401d55a57932458ece14483937f9dfe39c58bcbe6d2ae5ce	2026-09-20 14:28:29	29231	M	apps/electron/src/main/lib/nanju-project-snapshots.ts
+4b30c2dec727bf1ecd562d1ceccf06027c7335e29991e1293d979a4c758b892e	2026-09-20 14:28:29	54287	M	apps/electron/src/main/lib/nanju-file-snapshot.ts
+faa9332322d9a04bec98ed93076cac782bc21c207303330b63175e7a795e4647	2026-09-20 14:28:29	8616	M	apps/electron/src/main/lib/nanju-snapshot.ts
+c988dec5c096c7ed4ff0ccffda2867feb91f3525450b09f65f761dc1afa50463	2026-09-20 14:18:15	41803	M	apps/electron/src/main/lib/nanju-engineering-template.ts
+bb56ac7d9feec3b5bf1f62cdfd673286ae3b55bf930ee163416aad7a3394c03c	2026-09-20 14:18:15	35127	?	apps/electron/src/main/lib/nanju-engineering-resources.ts
+c582f0a93cd0a42f64e4b4a1892d1217f63d09286911596cfce968922c76b9b3	2026-09-20 14:21:56	6176	?	apps/electron/resources/nanju-engineering-templates/manifest.json
+be22d78651c69582b63791cf64caea4a6da867529c1084d7536111cf029c305e	2026-09-20 13:48:20	5755	?	apps/electron/scripts/verify-engineering-resources.ts

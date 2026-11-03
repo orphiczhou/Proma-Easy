@@ -1,0 +1,167 @@
+{
+  "audit": "recovery-core-r1",
+  "role": "independent-readonly-audit (恢复核心: nanju-project-snapshots / nanju-snapshot / nanju-file-snapshot / nanju-ipc / agent-orchestrator 恢复入口)",
+  "timestamp": "2026-09-20T14:23:23+08:00",
+  "baseline": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+  "branch": "p1-quick-engineering",
+  "bun": "/home/orphic/.bun/bin/bun (1.3.14)",
+  "scope": ["Task 2: 回滚四层透传与文件/会话/阶段一致恢复", "Task 3: 恢复事务中断后的首次打开"],
+  "method": "只读源码审查 + 3 个主动反例脚本(/dev/shm, 已运行后清理) + 63 项现有恢复测试复跑全绿 + 严格路径论证",
+  "counterexamplesRun": [
+    { "id": "audit-cc", "file": "/dev/shm/audit-cc.test.ts", "claim": "并发 createSnapshot 产生相同 snapshotId", "result": "A.snapshotId=2 B.snapshotId=2, 磁盘 ids=[1,2], 一检查点静默覆盖另一" },
+    { "id": "audit-lock2", "file": "/dev/shm/audit-lock2.test.ts", "claim": "活跃恢复锁在场时 recoverInterruptedRestore 仍完成 rename", "result": "action=completed-restore, 锁仍在(token=other-owner)" }
+  ],
+  "testsRun": {
+    "nanju-snapshot.test.ts": "6 pass",
+    "nanju-file-snapshot.test.ts": "31 pass",
+    "nanju-project-snapshots.test.ts": "26 pass",
+    "total": "63 pass / 0 fail"
+  },
+  "filesAudited": [
+    { "path": "apps/electron/src/main/lib/nanju-project-snapshots.ts", "sha256": "e23180fda2b9d6d4873f9e6f2f38cbc5ce170f3f9ed911991c340caa5d0a0e36", "mtime": "2026-09-20T13:59:54+08:00", "status": "M" },
+    { "path": "apps/electron/src/main/lib/nanju-snapshot.ts", "sha256": "ca5307509ee58c7536591e46b70152331967e81423045f824b97aa9fa45627f4", "mtime": "2026-09-20T13:55:32+08:00", "status": "M" },
+    { "path": "apps/electron/src/main/lib/nanju-file-snapshot.ts", "sha256": "4d600b0fdae68d1e9f99976ffcee051c9a29ea0d8531da6a9c57260d3e5a6138", "mtime": "2026-09-14T23:33:19+08:00", "status": "clean" },
+    { "path": "apps/electron/src/main/lib/nanju-ipc.ts", "sha256": "30d3778764adca36175e04f4038f0c5ca367036e6b780c328455fdd303d50792", "mtime": "2026-09-20T14:10:50+08:00", "status": "M" },
+    { "path": "apps/electron/src/main/lib/agent-orchestrator.ts", "sha256": "bec3c46d029b85511ba23e4906788eb11fe328e188319376a13764b559ce9939", "mtime": "2026-09-20T14:10:50+08:00", "status": "M" },
+    { "path": "apps/electron/src/preload/index.ts", "sha256": "aca2301b08cd383004efd98559dd5583dbb0d641608293d6aeffb963da82787e", "mtime": "2026-09-20T13:59:54+08:00", "status": "M" },
+    { "path": "packages/shared/src/types/nanju-recovery.ts", "sha256": "ef9eb3e52320e805e7709ffc583a075d9de588ac13f6b24d0ae157eb0974cf0d", "mtime": "2026-09-20T13:55:07+08:00", "status": "??" }
+  ],
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "red",
+      "title": "snapshotId 由 snapshots.length+1 派生，并发 createSnapshot 产生 ID 冲突导致检查点静默丢失",
+      "file": "apps/electron/src/main/lib/nanju-snapshot.ts",
+      "line": 117,
+      "quote": "snapshotId: snapshots.length + 1,",
+      "trigger": "apps/electron/src/main/lib/agent-orchestrator.ts:730-731 captureCheckpoint 为 fire-and-forget（void (async()=>{})()），阶段推进/交付成功后台并发建检查点；与用户 nanju:create-snapshot 并发即触发",
+      "counterexample": "实际反例(已运行 /dev/shm/audit-cc.test.ts)：两个并发 createSnapshot 均读到 length=1 后各自计算 snapshotId=2，最终磁盘 _snapshots.json 仅存 [1,2]，其中一个检查点(fork 会话+文件快照+描述)被静默覆盖丢失",
+      "fix": "改用持久化单调 ID（写前读 max(snapshotId)+1 且同项目加写锁），或 snapshotId 采用 UUID/时间戳；对同项目 createSnapshot 串行化（模块级 promise 队列或文件写锁）",
+      "hashedFile": "apps/electron/src/main/lib/nanju-snapshot.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C2",
+      "severity": "red",
+      "title": "recoverInterruptedProjectRestore 无锁调用引擎 recoverInterruptedRestore，绕过 _restore.lock 跨实例并发防护",
+      "file": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "line": 355,
+      "quote": "const result = recoverInterruptedRestore(getNanjuProjectDir(workspaceSlug, projectId), getProjectFileSnapshotStorageDir(workspaceSlug, projectId))",
+      "relatedLine": "apps/electron/src/main/lib/nanju-file-snapshot.ts:1050 (export function recoverInterruptedRestore 全程不 acquireRestoreLock)",
+      "counterexample": "实际反例(已运行 /dev/shm/audit-lock2.test.ts)：构造活跃 _restore.lock(pid=当前进程, token='other-owner', procStart='0') + journal phase=current-moved + projectDir 缺失，recoverInterruptedRestore 仍执行 rename 完成恢复(action=completed-restore, projectDir 落位)，锁文件仍在。前提=跨实例(dev/release)共享同一 workspace-files；单进程内由 recoveryLocks(内存 Set) + 同步执行保护",
+      "fix": "recoverInterruptedProjectRestore 在调用引擎 recover 前先获取引擎锁（复用 acquireRestoreLock 的 stale-takeover 语义），或让引擎 recoverInterruptedRestore 自身在破坏性操作前 acquire 锁",
+      "hashedFile": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C3",
+      "severity": "yellow",
+      "title": "补偿路径无条件 invalidateRecoveryAuthorization，回滚失败被补偿后丢失用户既有验收授权",
+      "file": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "line": 363,
+      "quote": "writeProjectInfo(workspaceSlug, projectId, invalidateRecoveryAuthorization(journal.beforeInfo))",
+      "pathArgument": "回滚失败→catch→recoverInterruptedProjectRestore 补偿→对 journal.beforeInfo 套 invalidateRecoveryAuthorization 后写回，删除 deliveryAck/deliveryChallenge/confirmPendingStage/pendingAdvanceCorrection/codingDelegationId。而真实回滚前这些字段存在(如 testing 已 deliveryAck)。补偿态 ≠ 回滚前态：用户失败回滚反而被静默清除既有交付确认",
+      "fix": "补偿路径原样写回 journal.beforeInfo（不调用 invalidateRecoveryAuthorization）；仅成功恢复路径才 invalidate 旧授权",
+      "hashedFile": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C4",
+      "severity": "yellow",
+      "title": "snapshot IPC handler 未校验 projectId 归属，存在路径穿越读取/快照任意目录",
+      "file": "apps/electron/src/main/lib/nanju-ipc.ts",
+      "line": 656,
+      "quote": "ipcMain.handle('nanju:list-snapshots', async (_event, input: { workspaceSlug: string; projectId: string; }) => { return listSnapshots(input.workspaceSlug, input.projectId) })",
+      "pathArgument": "getSnapshotsPath=join(workspaceFilesDir, `project-${projectId}`, '_snapshots.json')(nanju-snapshot.ts:84)、getNanjuProjectDir=join(workspaceFilesDir, `project-${projectId}`)(nanju-project.ts:267)。实测 projectId='../../../x' → normalize 得 workspace/x/_snapshots.json（逃离 workspace-files）。nanju:create-snapshot 经 createProjectCheckpoint→captureFileSnapshot 可快照任意目录（清单泄露目录内容+磁盘占用）。rollback-snapshot 因 getNanjuProject 返回 null 早退相对安全",
+      "fix": "所有 snapshot IPC handler 先 getNanjuProject(workspaceSlug, projectId) 校验存在（或白名单 projectId 匹配 ^[A-Za-z0-9][A-Za-z0-9_-]*$），再进入路径拼接",
+      "hashedFile": "apps/electron/src/main/lib/nanju-ipc.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C5",
+      "severity": "yellow",
+      "title": "恢复块为工作区级，任一项目 partial/未提交即阻断整工作区全部工具（含只读），跨项目干扰且无法自救",
+      "file": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "line": 337,
+      "quote": "for (const project of listNanjuProjects(workspaceSlug)) { const block = getProjectRecoveryBlock(workspaceSlug, project.projectId); if (block) return `${project.name}：${block}` }",
+      "pathArgument": "agent-orchestrator.ts:2335-2337 canUseTool 对 workspaceSlug 调用 getWorkspaceRecoveryBlock，返回非空即对全部工具(含 Read/Grep) deny；run 门(1886-1890)整 workspace 拒绝。项目 A 的 partial(legacy 快照回滚) 阻断无关项目 B 全部工具；partial 项目自身连 Read 也被禁，无法用 agent 读诊断/回滚自救",
+      "fix": "块降为 project 级（canUseTool 解析当前会话所属 projectId 只拦该项目），且 partial 态至少放行只读工具 + 明确「选择恢复前快照」入口",
+      "hashedFile": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C6",
+      "severity": "yellow",
+      "title": "恢复前检查点复用 triggerType='pre-modify'，污染 repair 回滚「健康态」选取",
+      "file": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "line": 429,
+      "quote": "const pre = await createProjectCheckpoint(workspaceSlug, projectId, project.sessionId, `恢复快照 ${snapshotId} 前的版本`, 'pre-modify')",
+      "pathArgument": "resolveRepairRollbackSnapshot(本文件 532 行)以 [...linked].reverse().find(s=>s.triggerType==='pre-modify') 优先取「最近 pre-modify」。回滚产生的恢复前检查点被记为 pre-modify，成为最晚 pre-modify。下一次 repair(agent-orchestrator.ts:960) 会把「被回滚掉的(可能已损坏)当前态」当成「本次任务前的健康态」回滚目标",
+      "fix": "恢复前检查点使用独立 triggerType(如 'pre-restore')，resolveRepairRollbackSnapshot 排除该类型；或 resolveRepairRollbackSnapshot 用 description/字段标记识别真正的 pre-modify",
+      "hashedFile": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C7",
+      "severity": "green",
+      "title": "getWorkspaceRecoveryBlock 每工具调用读盘，且读路径经 getWorkspaceFilesDir 产生 mkdir 副作用",
+      "file": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "line": 327,
+      "quote": "export function getProjectRecoveryBlock(workspaceSlug: string, projectId: string): string | null {",
+      "pathArgument": "canUseTool 每工具调用→getWorkspaceRecoveryBlock→每项目 existsSync+readJsonFileSafe；getProjectFileSnapshotStorageDir→getWorkspaceFilesDir(config-paths.ts:326) 内含 if(!existsSync(dir)) mkdirSync，只读判定路径带写副作用。项目数增长时 O(n) 次同步磁盘 IO 每工具调用",
+      "fix": "读路径用 resolveWorkspaceFilesDir（无 mkdir）；block 判定内存缓存 + 恢复/回滚完成后主动失效",
+      "hashedFile": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C8",
+      "severity": "green",
+      "title": "损坏的 _project-recovery.json 造成永久硬阻塞且无程序内自愈路径",
+      "file": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "line": 348,
+      "quote": "if (existsSync(path) && (!journal || journal.version !== 1 || journal.projectId !== projectId)) { return { ok: false, message: '恢复日志损坏，已停止工程执行；请检查工程旁的快照与恢复日志。' } }",
+      "pathArgument": "日志损坏时 getProjectRecoveryBlock(327 行)返回非空 block、recoverInterruptedProjectRestore 返回 ok:false，两者均无恢复入口，只能用户手工删文件；手工误删则丢失补偿依据。测试 nanju-project-snapshots.test.ts 明确断言此行为(损坏不静默成功)",
+      "fix": "提供「损坏日志隔离归档(改名 .corrupt 后缀)+ 重建」显式入口（保留原始文件、需用户确认），避免永久卡死",
+      "hashedFile": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    },
+    {
+      "id": "C9",
+      "severity": "green",
+      "title": "preload 类型 ProjectRecoveryResult 缺运行时实际返回的 snapshot 字段",
+      "file": "apps/electron/src/preload/index.ts",
+      "line": 1317,
+      "quote": "nanjuRollbackSnapshot: (input: { workspaceSlug: string; projectId: string; snapshotId: number }) => Promise<ProjectRecoveryResult>",
+      "pathArgument": "运行时 nanju-ipc.ts:663 handler 返回 rollbackProjectSnapshot 的 ProjectSnapshotRollbackResult（extends ProjectRecoveryResult，额外含 snapshot: ProjectSnapshot|null）；共享类型 ProjectRecoveryResult(packages/shared/src/types/nanju-recovery.ts)未含 snapshot，类型层丢失该字段。当前 renderer 未消费 snapshot 故无运行期错误，但未来需要时缺类型",
+      "fix": "共享类型补 snapshot?: ProjectSnapshot | null（或显式声明丢弃并在 renderer 注释说明）",
+      "hashedFile": "apps/electron/src/preload/index.ts",
+      "hashedAt": "2026-09-20T14:23:23+08:00"
+    }
+  ],
+  "positiveConfirmations": [
+    {
+      "id": "G1",
+      "title": "恢复核心测试全绿且覆盖失败/正常双路径（非橡皮章）",
+      "evidence": "复跑 nanju-snapshot.test.ts(6) + nanju-file-snapshot.test.ts(31) + nanju-project-snapshots.test.ts(26) = 63 pass / 0 fail。覆盖：捕获中变更拒绝、篡改/路径逃逸/跨设备拒绝、恢复后校验失败补偿、rename1/rename2 崩溃窗口 recover、陈旧锁接管、legacy 无文件快照只切分支、partial、损坏日志、状态提交失败补偿后保持硬阻塞"
+    },
+    {
+      "id": "G2",
+      "title": "fail-closed 设计贯穿",
+      "evidence": "捕获失败不写 fileSnapshotId(S4 唯一写入路径 linkFileSnapshot 校验真实快照)、恢复不完整 complete=false 且文案列 notRestored(S8)、cross-device 给可行动提示(S9)、备份不自动删除(S10)、清单 contentHash 自洽校验(S11)、布局守卫 invalid-layout"
+    },
+    {
+      "id": "G3",
+      "title": "会话/阶段/文件一致 + 旧授权失效（成功路径正确）",
+      "evidence": "完整恢复后 activeSessionId=新 fork、currentStage 回退、subStage 回退、deliveryAck/deliveryChallenge 被清(测试『完整恢复切到新的历史上下文分支…旧交付授权失效』通过)、恢复前版本可再次选择(isCurrent 切换)"
+    }
+  ],
+  "summary": {
+    "total": 9,
+    "red": 2,
+    "yellow": 4,
+    "green": 3,
+    "highPriorityFixes": ["C1", "C2"],
+    "mediumPriorityFixes": ["C3", "C4", "C5", "C6"],
+    "lowPriorityFixes": ["C7", "C8", "C9"]
+  }
+}

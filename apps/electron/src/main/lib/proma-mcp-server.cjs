@@ -7,26 +7,88 @@
 //   node proma-mcp-server.cjs --release  → 找 Release
 //   node proma-mcp-server.cjs --dev      → 显式找 Dev
 //   node proma-mcp-server.cjs --host 192.168.1.100  → 直连 LAN 地址（跳过扫描）
+//     跨机直连需要远端实例的 token：把远端 <配置目录>/.mcp-bridge-token 复制到本机，
+//     并用 PROMA_BRIDGE_TOKEN_PATH 指向该副本；否则远端会按 fail-closed 返回 401。
 // Claude Code 配置:
 //   { "proma-dev-session": { "command": "node", "args": ["D:\\Proma-dev\\...\\proma-mcp-server.cjs", "--dev"] } }
 
 const http = require("node:http");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const PORT_START = 19876;
 const PORT_END = 19895;
 const CONNECT_TIMEOUT = 2000;
+
+// ---- 本地共享 token（NEXT-04）----
+// bridge 启动时把 token 写入 <配置目录>/.mcp-bridge-token（0600，32 字节 hex）。
+// 这里自动读取并注入 x-proma-bridge-token，适用于「目标实例与 CLI 在同一台机器」的场景：
+// 同机 loopback 直连本可无 token 放行（兼容旧实例），带上 token 便于绑定在非 loopback
+// 地址（PROMA_BRIDGE_HOST=0.0.0.0）的同机实例校验通过。
+// 注意（--host 跨机直连）：默认读的是**本机** homedir 下的 token，与远端实例的 token
+// 天然不同，默认必然 401；跨机使用需把远端 <配置目录>/.mcp-bridge-token 复制到本机，
+// 并用 PROMA_BRIDGE_TOKEN_PATH 指向该副本（fail-closed 是预期行为，不加 token 同样 401）。
+// 文件不存在时静默跳过，兼容未升级的旧实例。
+const TOKEN_HEADER = "x-proma-bridge-token";
+const TOKEN_FILE = ".mcp-bridge-token";
+const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 
 // ---- 解析命令行参数 ----
 const hostIdx = process.argv.indexOf("--host");
 const TARGET_HOST = hostIdx >= 0 ? process.argv[hostIdx + 1] : null;
 const targetMode = process.argv.includes("--release") ? "release" : "dev";
 
+/** 读取指定路径下的 token 文件；缺失/内容非法时返回 null（静默跳过） */
+function readTokenFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8").trim();
+    return TOKEN_PATTERN.test(raw) ? raw : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * 解析「本机」配置目录下的 token（不代表远端实例的 token）。
+ * 优先级：PROMA_BRIDGE_TOKEN_PATH 覆盖 → 实例自身配置目录 → 另一配置目录兜底。
+ * dev 实例用 ~/.proma-dev，release 实例用 ~/.proma（与 config-paths.ts 隔离一致）。
+ *
+ * 生效范围：同机实例（含 --host 指向本机另一个 loopback 地址）可直接命中；
+ * 跨机 --host 直连时本机 token 与远端不同，必须用 PROMA_BRIDGE_TOKEN_PATH
+ * 指向从远端复制来的 token 文件，否则请求会按 fail-closed 返回 401。
+ */
+function resolveToken(dev) {
+  const override = process.env.PROMA_BRIDGE_TOKEN_PATH;
+  if (override && override.trim()) {
+    const t = readTokenFile(override.trim());
+    if (t) return t;
+  }
+  const primary = dev ? ".proma-dev" : ".proma";
+  const secondary = dev ? ".proma" : ".proma-dev";
+  return (
+    readTokenFile(path.join(os.homedir(), primary, TOKEN_FILE)) ??
+    readTokenFile(path.join(os.homedir(), secondary, TOKEN_FILE))
+  );
+}
+
+/** 端口 → token 映射：发现阶段按实例 proma_dev 决定该实例的 token 归属 */
+const portTokens = new Map();
+
 // ---- 端口扫描：获取实例信息 ----
 function getInstanceInfo(port, host) {
   host = host || "127.0.0.1";
   return new Promise((resolve, reject) => {
+    // 本机发现走 loopback 放行，不带 token；--host 直连才注入。
+    // 注入的是本机 token：目标为同机实例时有效，跨机直连需 PROMA_BRIDGE_TOKEN_PATH 指向远端 token。
+    const headers = {};
+    if (TARGET_HOST) {
+      const token = resolveToken(targetMode === "dev");
+      if (token) headers[TOKEN_HEADER] = token;
+    }
     const req = http.request({
       hostname: host, port, path: "/get_instance_info", method: "GET",
+      headers,
       timeout: CONNECT_TIMEOUT,
     }, (res) => {
       let d = "";
@@ -47,6 +109,7 @@ async function discoverPort(host) {
   for (let p = PORT_START; p <= PORT_END; p++) {
     try {
       const info = await getInstanceInfo(p, host);
+      portTokens.set(p, resolveToken(info.proma_dev === true));
       instances.push({ port: p, ...info });
     } catch (_) { /* port not available */ }
   }
@@ -56,11 +119,14 @@ async function discoverPort(host) {
 // ---- HTTP 调用 ----
 function callTool(port, name, args, host) {
   host = host || "127.0.0.1";
+  const body = JSON.stringify(args || {});
+  const token = portTokens.get(port) ?? resolveToken(targetMode === "dev");
+  const headers = { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) };
+  if (token) headers[TOKEN_HEADER] = token;
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify(args || {});
     const req = http.request({
       hostname: host, port, path: "/" + name, method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+      headers,
       timeout: 600000,
     }, (res) => {
       let data = "";

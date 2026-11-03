@@ -1,0 +1,6 @@
+### audit-r1 复算：(3) worker 声称邻接 4 文件 163 pass
+
+ 163 pass
+ 0 fail
+ 539 expect() calls
+Ran 163 tests across 4 files. [613.00ms]

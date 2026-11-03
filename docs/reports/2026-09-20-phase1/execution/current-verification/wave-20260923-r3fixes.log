@@ -1,0 +1,24 @@
+# R3 修复轮验证波（2026-09-23 22:20 GMT+8）
+
+## 定向波（受影响文件，隔离运行，全绿）
+(pass) 同事件仅领取一次，取消不重新注入或续接；变化后必须重新生成事件 [4.51ms]
+
+ 216 pass
+ 0 fail
+ 3 snapshots, 758 expect() calls
+Ran 216 tests across 4 files. [3.38s]
+
+## 关联回归（router-gate / phase-advance / engineering-template）
+(pass) W24-10 环境组件白名单扩容与复合名拆分 > 真幻觉包名仍拦（nodej 之类 typo） [0.05ms]
+
+ 310 pass
+ 0 fail
+ 3 snapshots, 1016 expect() calls
+Ran 310 tests across 3 files. [690.00ms]
+
+## typecheck
+$ tsc --noEmit
+TYPE_EXIT:0
+
+## git diff --check
+DIFF_CHECK:OK

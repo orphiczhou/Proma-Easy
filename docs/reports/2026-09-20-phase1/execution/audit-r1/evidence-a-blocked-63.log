@@ -1,0 +1,6 @@
+### audit-r1 复算：(1) worker 声称 5 文件 63 pass
+
+ 63 pass
+ 0 fail
+ 186 expect() calls
+Ran 63 tests across 5 files. [2.30s]

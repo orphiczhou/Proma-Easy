@@ -1,0 +1,40 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-click-to-fix-policy.test.ts:
+(pass) 点选纠错按业务阶段路由 > prototype仍改原型并允许同步PRD [0.17ms]
+(pass) 点选纠错按业务阶段路由 > testing改08_APP且必须重测，不能回写PRD [0.05ms]
+(pass) 点选纠错按业务阶段路由 > coding改应用但不把普通点选误判为需求变更 [0.04ms]
+(pass) 点选纠错按业务阶段路由 > delivered的修复同样失效旧交付事实并重测 [0.04ms]
+
+apps/electron/src/main/lib/nanju-evidence-reference.test.ts:
+(pass) file证据只验引用在场及边界 > URL编码/尖括号空格/中文标点；file只能用于实证且必须普通文件 [3.28ms]
+(pass) file证据只验引用在场及边界 > 未授权外部路径与项目内符号链接逃逸拒绝，显式附加目录可引用 [0.59ms]
+(pass) file证据只验引用在场及边界 > 文证可用有效HTTP(S)，日期必须真实日期而非格式近似 [0.53ms]
+
+apps/electron/src/main/lib/nanju-acceptance-baseline.test.ts:
+(pass) 编码前验收基线 > 规格要求每个US覆盖三类路径，边界不适用需具体理由 [1.72ms]
+(pass) 编码前验收基线 > 普通路径不能豁免、缺类型或缺US均拒绝 [1.16ms]
+(pass) 编码前验收基线 > 编码冻结后PRD或规格变化被拒，未冻结testing不能放行 [2.06ms]
+(pass) 编码前验收基线 > 测试绑定只接受工程契约验收test id或steps JSON中的AC编号 [2.21ms]
+
+apps/electron/src/main/lib/nanju-advance-recovery.test.ts:
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (quick): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-flash(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (iterative): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] attacker-author-family (iterative): planning 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-flash(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+(pass) 推进拒因重启恢复 > 首次拒收即保存同源checks；同产物同拒因幂等键不变，变更产物后必须重验 [7.42ms]
+(pass) 推进拒因重启恢复 > 重新读取磁盘拒因形成下轮上下文，既不授权也不新增委派；旧schema同样可恢复 [1.28ms]
+(pass) 推进拒因重启恢复 > 跨阶段残留不注入，敏感拒因脱敏；目录伪装产出拒绝 [2.93ms]
+(pass) 同事件仅领取一次，取消不重新注入或续接；变化后必须重新生成事件 [8.49ms]
+
+ 15 pass
+ 0 fail
+ 49 expect() calls
+Ran 15 tests across 4 files. [140.00ms]

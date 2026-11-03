@@ -10,6 +10,10 @@
 import { describe, expect, mock, test } from 'bun:test'
 import type { DelegationLifecycleEvent } from './agent-collaboration-tools'
 import type { NanjuDelegationWatchDeps, WatchedDelegation } from './nanju-delegation-watch'
+import { useIsolatedPromaConfigDir } from './__tests__/test-home-fixture'
+
+// NEXT-05 Batch B：生命周期钩子会按工作区 id 解析配置目录（埋点/日志），不隔离会写脏真实 `~/.proma`。
+useIsolatedPromaConfigDir()
 
 // —— mock 依赖（Z-4 同型：真实 agent-collaboration-tools 需 stub 传递依赖链） ——
 let z4ChildSeq = 0

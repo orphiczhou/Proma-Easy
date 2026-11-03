@@ -1,0 +1,2 @@
+$ tsc --noEmit
+src/main/lib/nanju-advance-recovery.ts(56,80): error TS18047: 'previous' is possibly 'null'.

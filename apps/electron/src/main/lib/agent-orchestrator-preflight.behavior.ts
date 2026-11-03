@@ -43,7 +43,7 @@ mock.module('electron', () => electronMock)
 // 先导入 agent-service 完成模块级装配（new AgentOrchestrator），否则环状初始化触发
 // TDZ：Cannot access 'AgentOrchestrator' before initialization。
 await import('./agent-service')
-const { resolveWorkspaceMismatchSelfHeal } = await import('./agent-orchestrator')
+const { resolveWorkspaceMismatchSelfHeal, buildNanjuTestingStartNotice, buildNanjuTestingAlreadyRunningNotice } = await import('./agent-orchestrator')
 
 describe('resolveWorkspaceMismatchSelfHeal 判定矩阵（S 级：真实函数执行，子进程隔离）', () => {
   test('E2E 实测方向：空会话已绑定南大项目 + 过期请求工作区 → 保持会话工作区（不改绑，保护项目绑定）', () => {
@@ -123,5 +123,32 @@ describe('resolveWorkspaceMismatchSelfHeal 判定矩阵（S 级：真实函数�
       sessionWorkspaceIsNanjuProjectBound: false,
       requestedWorkspaceExists: true,
     })).toBe('keep-session')
+  })
+})
+
+describe('南大验收测试文案（I1，S 级：真实函数执行，子进程隔离）', () => {
+  test('legacy 浏览器路径不承诺工程逐项批准', () => {
+    const text = buildNanjuTestingStartNotice({ useEngineeringDrivers: false, engineeringContractReady: false })
+    expect(text).toContain('开始自动验收测试')
+    expect(text).not.toContain('逐项请求真人批准')
+  })
+
+  test('缺工程契约时不承诺逐项批准，改为条件检查口径', () => {
+    const text = buildNanjuTestingStartNotice({ useEngineeringDrivers: true, engineeringContractReady: false })
+    expect(text).toContain('检查工程测试运行条件')
+    expect(text).toContain('不会请求逐项批准')
+    expect(text).not.toContain('逐项请求真人批准')
+  })
+
+  test('契约齐备时才说明逐项请求真人批准', () => {
+    const text = buildNanjuTestingStartNotice({ useEngineeringDrivers: true, engineeringContractReady: true })
+    expect(text).toContain('逐项请求真人批准')
+  })
+
+  test('重复触发 testing 注入可见提示且点明可能正在等待批准', () => {
+    const text = buildNanjuTestingAlreadyRunningNotice('记账本')
+    expect(text).toContain('验收测试已在进行中')
+    expect(text).toContain('记账本')
+    expect(text).toContain('待批准')
   })
 })

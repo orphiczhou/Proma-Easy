@@ -1,0 +1,275 @@
+@startuml
+' DOC-3.3-SEQ1 | v0.3 | 日期: 2026-06-06 | 状态: 终审修正
+' 文档ID: DOC-3.3 | 文件: user-create-project.seq.puml
+' 依赖: architecture.md v0.3, class-diagram.puml v0.5, PRD §6.1/6.2, user-flows Flow1/Flow2
+' 覆盖: 用户打开应用 → 模式选择 → 需求对话(需求分析师+UI/UX顾问并行协作) → PRD确认 → 原型预览 → 裁判第一道关 → 架构设计
+' 架构说明: 图中AppShell→GuideAgent的forwardToRouter消息在架构依赖图中定义为UI→ROUTE→GUIDE两跳
+'   SessionRouter在执行forwardToRouter时透明介入(加载角色→上下文注入→回填), 图中简化为直接消息以保持可读性
+'   (依赖图待更新: 补充UI→GUIDE合成路径标注)
+' 参与者: User, AppShell, SessionRouter, GuideAgent, RequirementAnalyst, UIUXAdvisor, ArchitectDesigner, EngineeringManager, ProjectDocumentSystem, SnapshotManager
+
+actor User
+
+participant AppShell
+participant SessionRouter
+participant GuideAgent
+participant RequirementAnalyst
+participant UIUXAdvisor
+participant ArchitectDesigner
+participant EngineeringManager
+participant ProjectDocumentSystem
+participant SnapshotManager
+participant JudgeAgent
+participant HardConstraintChecker
+participant SoftConstraintEvaluator
+
+== 阶段0: 应用启动与模式选择 ==
+
+User -> AppShell : 启动应用
+activate AppShell
+AppShell -> GuideAgent : forwardToRouter(启动意图)
+activate GuideAgent
+
+GuideAgent -> SessionRouter : switchTo(模式选择引导)
+activate SessionRouter
+SessionRouter -> GuideAgent : backfill(欢迎文案+两道门卡片)
+deactivate SessionRouter
+
+GuideAgent --> AppShell : 展示两道门选择页
+AppShell --> User : 渲染模式选择卡片
+deactivate GuideAgent
+
+User -> AppShell : 点击"快速做一个工具"或"做一个长期维护的项目"
+AppShell -> GuideAgent : forwardToRouter(模式选择=快消型/长期迭代型)
+activate GuideAgent
+
+GuideAgent -> SnapshotManager : autoTrigger(项目创建)
+activate SnapshotManager
+SnapshotManager -> ProjectDocumentSystem : createStructure(模板)
+activate ProjectDocumentSystem
+ProjectDocumentSystem --> SnapshotManager : DirTree
+deactivate ProjectDocumentSystem
+SnapshotManager --> GuideAgent : 快照已创建
+deactivate SnapshotManager
+
+== 阶段1: 需求分析(需求分析师+UI/UX顾问并行协作) ==
+
+GuideAgent -> SessionRouter : switchTo(RequirementAnalyst, contextSummary)
+activate SessionRouter
+SessionRouter -> GuideAgent : backfill(需求分析师SystemPrompt+上下文摘要)
+deactivate SessionRouter
+
+GuideAgent -> RequirementAnalyst : conductInterview(用户首次输入)
+activate RequirementAnalyst
+
+loop 每轮对话(最少3-5问，动态上限)
+  RequirementAnalyst --> User : Question[] (生活化语言+卡片选项)
+  deactivate RequirementAnalyst
+
+  User -> AppShell : 回答/选择/"你帮我决定"
+  AppShell -> GuideAgent : forwardToRouter(用户回答)
+
+  GuideAgent -> RequirementAnalyst : conductInterview(用户回答)
+  activate RequirementAnalyst
+
+  alt 用户描述涉及UI布局
+    RequirementAnalyst -> GuideAgent : 触发UI/UX顾问介入
+    GuideAgent -> SessionRouter : switchTo(UIUXAdvisor, contextSummary)
+    activate SessionRouter
+    SessionRouter -> GuideAgent : backfill(UI/UX顾问SystemPrompt+上下文摘要)
+    deactivate SessionRouter
+
+    GuideAgent -> UIUXAdvisor : generatePrototype(当前PRD草稿)
+    activate UIUXAdvisor
+    UIUXAdvisor --> User : HTML草图嵌入对话区
+    deactivate UIUXAdvisor
+
+    User -> AppShell : 在草图上评论/确认
+    AppShell -> GuideAgent : forwardToRouter(反馈)
+    GuideAgent -> RequirementAnalyst : 视觉反馈→更新功能清单
+  end
+end
+
+RequirementAnalyst -> GuideAgent : detectCompletion(信息完备)
+Note over RequirementAnalyst : 核心功能>=3项且均已明确
+deactivate RequirementAnalyst
+
+GuideAgent -> RequirementAnalyst : generatePRD(意图树)
+activate RequirementAnalyst
+RequirementAnalyst -> ProjectDocumentSystem : 写入 01_PRD/prd.md
+deactivate RequirementAnalyst
+
+alt 快消型
+  RequirementAnalyst --> User : 需求摘要: "我理解你想做的是[描述]。\n具体包括: [功能1/2/3]。\n不包括: [明确不做的事]。"
+  User -> AppShell : "对"/"差不多"/"还要改"
+  AppShell -> GuideAgent : forwardToRouter(PRD确认)
+  Note over RequirementAnalyst : 用户回复"对"/"差不多"即确认\n回复"还要改"则返回继续对话
+else 长期迭代型
+  RequirementAnalyst --> User : 完整PRD草案(分章节展示)
+  User -> AppShell : 逐章点击"确认"或"修改"
+  AppShell -> GuideAgent : forwardToRouter(逐章确认结果)
+  Note over RequirementAnalyst : 每章附带"确认"和"修改"入口\n全部章节确认后PRD标记为"已确认"
+end
+
+GuideAgent -> SnapshotManager : autoTrigger(PRD确认)
+activate SnapshotManager
+SnapshotManager -> ProjectDocumentSystem : createSnapshot
+deactivate SnapshotManager
+
+== 阶段2: 原型预览与确认 ==
+
+GuideAgent -> SessionRouter : switchTo(UIUXAdvisor, contextSummary)
+activate SessionRouter
+SessionRouter -> GuideAgent : backfill(UI/UX顾问SystemPrompt+上下文摘要)
+deactivate SessionRouter
+
+GuideAgent -> UIUXAdvisor : generatePrototype(完整PRD)
+activate UIUXAdvisor
+UIUXAdvisor -> UIUXAdvisor : injectDataAiId(html)
+
+loop PRD中每个核心页面
+  UIUXAdvisor -> ProjectDocumentSystem : 写入 02_UX_DESIGN/wireframes/page-*.prototype.html
+end
+
+alt 长期迭代型
+  UIUXAdvisor -> ProjectDocumentSystem : 写入 sitemap.md, design-system.md, interaction-spec.md
+end
+
+UIUXAdvisor -> UIUXAdvisor : suggestFeatures(PRD)
+Note over UIUXAdvisor : 基于项目类型+行业最佳实践\n主动建议PRD未要求的功能组件\n(如设置页/登录功能), 标注"AI建议"
+UIUXAdvisor --> User : 建议列表: "根据你的项目类型,\n我建议加上以下功能——\n你觉得哪些需要保留？"
+User -> AppShell : 逐项勾选保留/删除(加减法模式)
+AppShell -> GuideAgent : forwardToRouter(用户勾选结果)
+Note over UIUXAdvisor : 仅用户保留的建议项\n纳入原型和后续开发
+
+UIUXAdvisor -> UIUXAdvisor : reviewUI(原型截图) → 调用视觉模型自检
+UIUXAdvisor --> User : 右侧预览面板展示原型首页
+
+User -> AppShell : 预览交互(点击/浏览)
+alt 用户表达满意
+  User -> AppShell : "可以""挺好""就这样"
+  AppShell -> GuideAgent : forwardToRouter(原型确认)
+  UIUXAdvisor --> GuideAgent : 原型已确认
+else 用户要求修改
+  User -> AppShell : "这个按钮不应该在这里"
+  AppShell -> GuideAgent : forwardToRouter(修改意见)
+  GuideAgent -> UIUXAdvisor : 更新原型
+  UIUXAdvisor -> SnapshotManager : autoTrigger(修改前)
+  deactivate UIUXAdvisor
+end
+deactivate UIUXAdvisor
+
+== 阶段3: 裁判Agent第一道关(仅长期迭代型) ==
+
+alt 长期迭代型
+  GuideAgent -> ProjectDocumentSystem : 触发文档审查
+  activate ProjectDocumentSystem
+  ProjectDocumentSystem -> JudgeAgent : 提交审查(project-root)
+  deactivate ProjectDocumentSystem
+  activate JudgeAgent
+  JudgeAgent -> HardConstraintChecker : executeHardCheck
+  activate HardConstraintChecker
+  HardConstraintChecker --> JudgeAgent : HardCheckReport
+  deactivate HardConstraintChecker
+
+  alt 硬约束不通过
+    JudgeAgent --> ProjectDocumentSystem : 退回 + 缺失项清单
+    ProjectDocumentSystem --> GuideAgent : 退回通知
+    Note over GuideAgent : 修复缺失→重新提交\n长期迭代型不限退回次数
+  else 硬约束通过
+    JudgeAgent -> SoftConstraintEvaluator : executeSoftEval
+    activate SoftConstraintEvaluator
+    SoftConstraintEvaluator --> JudgeAgent : SoftEvalReport
+    deactivate SoftConstraintEvaluator
+
+    alt 软约束通过
+      JudgeAgent -> JudgeAgent : verdict("通过")
+      Note over JudgeAgent : 文档体系审查通过,\n可进入架构设计
+    else 软约束不通过
+      JudgeAgent --> ProjectDocumentSystem : 退回 + 矛盾点 + 改进建议
+      activate ProjectDocumentSystem
+      ProjectDocumentSystem --> GuideAgent : 退回通知
+      deactivate ProjectDocumentSystem
+      Note over GuideAgent : 修复后重新提交
+    end
+  end
+  deactivate JudgeAgent
+end
+
+== 阶段4: 架构设计(模式差异化) ==
+
+alt 快消型
+  GuideAgent -> SessionRouter : skipToBackstage(ArchitectDesigner)
+  activate SessionRouter
+  SessionRouter -> GuideAgent : backfill(架构师SystemPrompt, 无UI渲染)
+  deactivate SessionRouter
+
+  GuideAgent -> ArchitectDesigner : selectTech+generatePUML(后台, 不展示)
+  activate ArchitectDesigner
+  ArchitectDesigner -> ProjectDocumentSystem : 写入 architecture.md + .puml (简版)
+  ArchitectDesigner -> GuideAgent : 架构方案完成
+  deactivate ArchitectDesigner
+
+  Note over User : 用户看到"AI正在设计技术方案..."\n架构师全程隐于后台
+
+  GuideAgent -> SessionRouter : skipToBackstage(EngineeringManager)
+  activate SessionRouter
+  SessionRouter -> GuideAgent : backfill(工程经理SystemPrompt, 无UI渲染)
+  deactivate SessionRouter
+
+  GuideAgent -> EngineeringManager : configureTeam+planSprints(自动)
+  activate EngineeringManager
+  EngineeringManager -> ProjectDocumentSystem : 写入 team-config.md (全栈+测试)
+  EngineeringManager -> GuideAgent : 团队配置完成
+  deactivate EngineeringManager
+
+else 长期迭代型
+  GuideAgent -> SessionRouter : switchTo(ArchitectDesigner, contextSummary)
+  activate SessionRouter
+  SessionRouter -> GuideAgent : backfill(架构师SystemPrompt+上下文摘要)
+  deactivate SessionRouter
+
+  GuideAgent -> ArchitectDesigner : 跳到前台, 展示技术选型方案
+  activate ArchitectDesigner
+  ArchitectDesigner --> User : "建议选择[方案A]和[方案B]——\n前者适合你的场景因为..., 后者更灵活但也更复杂"
+
+  User -> AppShell : 选择方案/确认
+  AppShell -> GuideAgent : forwardToRouter(用户选择)
+
+  ArchitectDesigner -> ArchitectDesigner : generatePUML(确认的选型)
+  ArchitectDesigner -> ProjectDocumentSystem : 写入 architecture.md + class-diagram.puml + sequence-diagrams/
+  ArchitectDesigner -> SnapshotManager : autoTrigger(架构确认)
+  ArchitectDesigner -> GuideAgent : 架构方案确认
+  deactivate ArchitectDesigner
+
+  GuideAgent -> SessionRouter : switchTo(EngineeringManager, contextSummary)
+  activate SessionRouter
+  SessionRouter -> GuideAgent : backfill(工程经理SystemPrompt+上下文摘要)
+  deactivate SessionRouter
+
+  GuideAgent -> EngineeringManager : 跳到前台, 展示Sprint拆分建议
+  activate EngineeringManager
+  EngineeringManager --> User : "第一个版本先做[核心A和B],\n预计能看到[效果]。第二个版本再加[C和D]。\n你觉得这个节奏可以吗？"
+
+  User -> AppShell : 调整优先级/确认
+  AppShell -> GuideAgent : forwardToRouter(用户决策)
+
+  EngineeringManager -> ProjectDocumentSystem : 写入 sprint-plan.md + team-config.md + workflow.md
+  EngineeringManager -> SnapshotManager : autoTrigger(规划确认)
+  EngineeringManager -> GuideAgent : 工程规划确认
+  deactivate EngineeringManager
+end
+
+== 阶段4: 文档交接 ==
+
+GuideAgent -> ProjectDocumentSystem : validateStructure(完整目录)
+activate ProjectDocumentSystem
+ProjectDocumentSystem --> GuideAgent : 结构校验通过
+deactivate ProjectDocumentSystem
+
+GuideAgent -> GuideAgent : 发起交接 → 裁判Agent流程(参见SEQ-4)
+
+deactivate GuideAgent
+deactivate AppShell
+
+@enduml

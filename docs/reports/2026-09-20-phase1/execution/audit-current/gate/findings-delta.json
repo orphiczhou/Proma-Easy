@@ -1,0 +1,30 @@
+{
+  "recheck": {
+    "date": "2026-09-23T18:55+08:00",
+    "head": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59（修复为工作树未提交改动）",
+    "method": "实机复现（bun 1.3.14，/tmp 临时脚本）+ 静态 diff（对照审计快照 test-sources/）",
+    "changedFiles": [
+      { "file": "apps/electron/src/main/lib/nanju-acceptance-baseline.ts", "was": "4cfe9bc2", "now": "40460eb8", "mtime": "2026-09-23 18:40 GMT+8" },
+      { "file": "apps/electron/src/main/lib/nanju-router-gate.ts", "was": "abf2c08c", "now": "48679a9a", "mtime": "2026-09-23 18:39 GMT+8" },
+      { "file": "apps/electron/src/main/lib/nanju-delegate-guard.ts", "was": "be6be568", "now": "b0bbe80e", "mtime": "2026-09-23 18:39 GMT+8" }
+    ],
+    "unchangedFiles": ["nanju-click-to-fix-policy.ts", "nanju-phase-advance-consumer.ts", "nanju-gwt-runner.ts"]
+  },
+  "verdicts": [
+    { "finding": "F-01", "originalSeverity": "yellow", "verdict": "fixed-with-residual", "evidence": ["row.notApplicable.trim().length < 20 || !/[，。；;,.]/.test(row.notApplicable)", "实机：6字'理由理由理由'→拒绝（AC-002豁免需具体理由）"], "residual": { "id": "R-01", "severity": "yellow-low", "desc": "20字+含任一标点的凑数豁免仍通过（实机：'理由×20，凑数'→null）；豁免语义判定仍缺" } },
+    { "finding": "F-02", "originalSeverity": "red", "verdict": "partial-fix", "evidence": ["if (previous && (previous.specHash !== spec.specHash || previous.prdHash !== spec.prdHash) && !authorizationId) throw new Error('验收规格已改变；需求变更必须经过显式回退/用户确认授权后才能重冻结。')", "实机：无授权重冻结 THROW；授权重冻结落盘 previous:{specHash,prdHash,changedAt,authorizationId}"], "residual": [
+      { "id": "R-02a", "severity": "red", "desc": "validate 仍为自证式：绕过 freeze 直接手写 _acceptance-baseline.json（hash 与改后规格匹配）→ validateAcceptanceSpecification 返回 null（实机验证）——原 red 主面（有写权限者洗过）未闭合" },
+      { "id": "R-02b", "severity": "yellow", "note": "新增误拦：消费侧 nanju-phase-advance-consumer.ts:1065 单参调用 freezeAcceptanceSpecification，无任何调用方传 authorizationId——合法『回退确认→变更规格→重进coding』路径 THROW 被拦为断头路（'无法冻结编码前验收规格'）" }
+    ] },
+    { "finding": "F-03", "originalSeverity": "yellow", "verdict": "fixed-with-residual", "evidence": ["// 工程契约是设计登记，不构成真实步骤绑定；只接受可读取的 steps/feature 场景证据。", "实机：契约 id=AC-001+零 steps → 正确报'可执行测试缺少冻结验收编号：AC-001'"], "residual": { "id": "R-03", "severity": "yellow", "note": "按名匹配未收敛：双字段占位 {feature:'占位',scenario:'占位'} 仍通过；06_TESTS/features 下任意 .feature/.json 全文入池（含 .steps.json 自身内容），无关 feature 提及三个 AC 编号即全部顶替（实机 null）——扫描面较原实现更宽" } },
+    { "finding": "F-04", "originalSeverity": "yellow", "verdict": "fixed（更正原审计证据）", "evidence": ["clearProjectDeliveryAck(input.workspaceSlug, project.projectId) / clearProjectDeliveryChallenge(...) / clearNanjuAdvanceAuthState(...)（nanju-ipc.ts:602-608，写入于 09-21——早于原审计；原审计读窗未覆盖，'无程序化调用'表述更正）"], "residual": { "id": "R-04", "severity": "low", "note": "06_TESTS/report.json 未标 stale；clearNanjuAdvanceAuthState 连带清 activeConfirmAsk（10min TTL 内收口问句登记一并失效的保守副作用）" } },
+    { "finding": "F-05", "originalSeverity": "yellow", "verdict": "fixed", "evidence": ["return reject('route.missing', `阶段路由节点或产出路径缺失：${phaseId}`, '有效阶段路由与产出路径', phaseId)", "实机（mock workspace）：evaluatePhaseOutput('test-ws', projectId, 'planning') → checks=[{id:'route.missing', pass:false, nextAction:'修正 planning 后重新校验；不得跳过门禁。'}]"], "residual": null, "note": "F-05b（path 标签）同批修复：testing 绑定错误 path 改 '06_TESTS/features'" },
+    { "finding": "F-08", "originalSeverity": "yellow", "verdict": "fixed-with-residual", "evidence": ["const CJK_GAP_WS_RE = /([\\u3400-\\u9fff])[ \\t\\u00a0\\u3000\\r\\n\\u200b-\\u200f\\u2060\\ufeff]+(?=[\\u3400-\\u9fff])/g", "实机：'开\\u200b发一个工具'→{allowed:false, violatedKeyword:'开发', violatedStage:'coding'}；'开\\u2060发…'同拒"], "residual": { "id": "R-08", "severity": "yellow-low", "note": "非空白非不可见字符夹层仍绕过：'开(发)一个工具'→{allowed:true, matchKind:'unmatched'}（实机验证）" } },
+    { "finding": "F-09", "originalSeverity": "yellow", "verdict": "open", "evidence": ["实机复验：requirements 阶段 '根据 PRD 梳理需求…(>20字填充)…代码产物' → {allowed:true, matchKind:'stage', matchedKeyword:'需求'}（与审计时一致）"], "residual": null },
+    { "finding": "F-10", "originalSeverity": "yellow", "verdict": "open（未动）", "evidence": ["实机复验：testing 阶段 '核验 coding 阶段产出的 driver 与被测产物一致性…' → {allowed:false, violatedStage:'coding'}（与审计时一致）"], "residual": null }
+  ],
+  "openResiduals": ["R-02a(red)", "R-02b(yellow)", "R-03(yellow)", "R-01(low)", "R-04(low)", "R-08(low)", "F-09(yellow,未动)", "F-10(yellow,未动)"],
+  "corrections": [
+    "F-04：原审计称『未见 clearProjectDeliveryAck』——实为读窗（nanju-ipc.ts 500-590 行）未覆盖 602-608 行的程序化清理段；该代码写入于 09-21，早于 09-23 18:21 审计。原 F-04 中『ack 维持有效显示』的 impact 不成立，更正。"
+  ]
+}

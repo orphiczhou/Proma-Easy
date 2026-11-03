@@ -12,6 +12,9 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import * as http from 'node:http'
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -23,14 +26,54 @@ const PORT_END = 19895
 const CONNECT_TIMEOUT_MS = 2000
 const CALL_TIMEOUT_MS = 600_000 // 10 分钟
 
+/** 本地共享 token（NEXT-04）：bridge 启动时写入 <配置目录>/.mcp-bridge-token（0600） */
+const BRIDGE_TOKEN_HEADER = 'x-proma-bridge-token'
+const BRIDGE_TOKEN_FILE = '.mcp-bridge-token'
+const BRIDGE_TOKEN_PATTERN = /^[0-9a-f]{64}$/
+
 // 实例发现缓存（60 秒）
 interface InstanceInfo {
   port: number
   instance: string
   isIsolated: boolean
+  /** 目标实例是否 dev 实例（决定其 token 落在 .proma-dev 还是 .proma） */
+  promaDev: boolean
 }
 let discoveryCache: { instances: InstanceInfo[]; ts: number } | null = null
 const DISCOVERY_CACHE_TTL_MS = 60_000
+
+/** 端口 → 本地 token：发现阶段同批解析，调用时直接取用 */
+const portTokens = new Map<number, string | null>()
+
+// ===== 鉴权辅助 =====
+
+/** 读取 token 文件；缺失或内容非法时返回 null（兼容未升级组合，静默跳过） */
+function readBridgeTokenFile(filePath: string): string | null {
+  try {
+    const raw = readFileSync(filePath, 'utf-8').trim()
+    return BRIDGE_TOKEN_PATTERN.test(raw) ? raw : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 解析目标实例的本地 token。
+ * 优先 PROMA_BRIDGE_TOKEN_PATH 覆盖，其次按实例 dev/release 选配置目录，最后另一目录兜底。
+ */
+function resolveBridgeToken(promaDev: boolean): string | null {
+  const override = process.env.PROMA_BRIDGE_TOKEN_PATH?.trim()
+  if (override) {
+    const token = readBridgeTokenFile(override)
+    if (token) return token
+  }
+  const primary = promaDev ? '.proma-dev' : '.proma'
+  const secondary = promaDev ? '.proma' : '.proma-dev'
+  return (
+    readBridgeTokenFile(join(homedir(), primary, BRIDGE_TOKEN_FILE)) ??
+    readBridgeTokenFile(join(homedir(), secondary, BRIDGE_TOKEN_FILE))
+  )
+}
 
 // ===== 通用辅助 =====
 
@@ -55,6 +98,7 @@ function getInstanceInfo(port: number): Promise<InstanceInfo | null> {
               port,
               instance: info.instance ?? (info.proma_dev ? 'dev' : 'release'),
               isIsolated: !!info.proma_dev || !!info.is_isolated,
+              promaDev: info.proma_dev === true,
             })
           } catch {
             resolve(null)
@@ -76,7 +120,11 @@ async function discoverInstances(force = false): Promise<InstanceInfo[]> {
   const instances: InstanceInfo[] = []
   for (let port = PORT_START; port <= PORT_END; port++) {
     const info = await getInstanceInfo(port)
-    if (info) instances.push(info)
+    if (info) {
+      instances.push(info)
+      // 同步解析该端口对应实例的本地 token；无 token 文件则为 null（旧实例兼容）
+      portTokens.set(port, resolveBridgeToken(info.promaDev))
+    }
   }
 
   discoveryCache = { instances, ts: Date.now() }
@@ -92,13 +140,20 @@ async function findPortByInstance(instance: string): Promise<number | null> {
 function callRemoteTool(port: number, toolName: string, args: Record<string, unknown>): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(args)
+    const token = portTokens.get(port) ?? null
+    const headers: Record<string, string | number> = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    }
+    // 仅在拿到本地 token 时注入，避免把旧实例请求变成必然 401
+    if (token) headers[BRIDGE_TOKEN_HEADER] = token
     const req = http.request(
       {
         hostname: '127.0.0.1',
         port,
         path: '/' + toolName,
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        headers,
         timeout: CALL_TIMEOUT_MS,
       },
       (res) => {

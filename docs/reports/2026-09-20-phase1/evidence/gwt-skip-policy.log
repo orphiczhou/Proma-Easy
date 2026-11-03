@@ -1,0 +1,10 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-gwt-runner.test.ts:
+(pass) judgeGwtResult（裁判=规则非模型） > skip 场景不计入通过性但保持透明统计 [0.36ms]
+
+ 1 pass
+ 106 filtered out
+ 0 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [185.00ms]

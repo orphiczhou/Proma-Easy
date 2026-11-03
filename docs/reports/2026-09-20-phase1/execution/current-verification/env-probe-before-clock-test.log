@@ -1,0 +1,39 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-env-probe.test.ts:
+(pass) parseEnvProbeLines（JSON 行解析） > Given 标准 JSON 行 When 解析 Then 组件清单逐行提取（ok/fail 均保留） [0.33ms]
+(pass) parseEnvProbeLines（JSON 行解析） > Given 混杂 stderr/警告/畸形行 When 解析 Then 非 JSON 行跳过、畸形 JSON 跳过、字段异常丢弃 [0.12ms]
+(pass) parseEnvProbeLines（JSON 行解析） > Given 空输出 When 解析 Then 空清单 [0.05ms]
+(pass) buildEnvProbeSummaryLines / buildEnvProbeFailureLines > Given 探测结果 When 摘要 Then 组件/状态/版本逐行 + 探测时间头 [0.18ms]
+(pass) buildEnvProbeSummaryLines / buildEnvProbeFailureLines > Given 失败原因 When 失败说明 Then 含原因 + 不跳过探测的自救指引 [0.05ms]
+(pass) runEnvProbe（探测执行：成功落盘 / 幂等沿用 / 失败退化） > Given 项目内有效脚本 When 执行 Then env_probe.json 写入 03_ARCHITECTURE + 摘要行返回 [6.23ms]
+(pass) runEnvProbe（探测执行：成功落盘 / 幂等沿用 / 失败退化） > Given env_probe.json 已存在 When 再跑 Then 直接沿用不重跑（坏脚本不被执行） [3.41ms]
+(pass) runEnvProbe（探测执行：成功落盘 / 幂等沿用 / 失败退化） > Given 脚本未落位 When 执行 Then 退化失败说明（无子进程开销）不写文件 [0.40ms]
+(pass) runEnvProbe（探测执行：成功落盘 / 幂等沿用 / 失败退化） > Given 脚本超时 When 执行 Then 失败说明含超时硬限 不写文件 [312.14ms]
+(pass) runEnvProbe（探测执行：成功落盘 / 幂等沿用 / 失败退化） > Given 脚本无有效 JSON 输出 When 执行 Then 失败说明（输出不可判读） [3.63ms]
+(pass) runEnvProbe（探测执行：成功落盘 / 幂等沿用 / 失败退化） > Given 仓库真实资源脚本（集成）When 执行 Then JSON 行可解析且含跨品类超集组件 [759.99ms]
+(pass) runEnvProbe（探测执行：成功落盘 / 幂等沿用 / 失败退化） > Given 超时硬限常量 Then 为规格定死的 10s [0.06ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > probedAt 在 maxAgeMs 内 + 无模板锚点 → fresh（within-age） [0.13ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > probedAt 早于模板落地（模板升级未重跑）→ not fresh（before-template） [0.05ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > probedAt 在模板落地之后 + 年龄内 → fresh（after-template） [0.04ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > probedAt 超过 maxAgeMs → not fresh（stale-age） [0.06ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > probedAt 不可解析 → not fresh（unparseable-probed-at） [0.03ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > nowMs 注入测试可重现时间窗口 [0.12ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > 默认 maxAgeMs = 24h（ENV_PROBE_DEFAULT_MAX_AGE_MS） [0.04ms]
+(pass) Task 10：isEnvProbeFresh（新鲜度判定，纯函数） > ageMs 与 templateDeltaMs 字段正确 [0.05ms]
+(pass) Task 10：runEnvProbe 接入 freshness（删除旧文件 + 重跑） > Given env_probe.json 已存在 + 早于模板落地 When 执行 Then 删除旧文件并重跑 [4.05ms]
+(pass) Task 10：runEnvProbe 接入 freshness（删除旧文件 + 重跑） > Given env_probe.json 已存在 + 新鲜 When 执行 Then 不重跑直接沿用 [0.81ms]
+(pass) Task 10：runEnvProbe 接入 freshness（删除旧文件 + 重跑） > forceRerun=true 忽略 freshness 直接重跑 [7.22ms]
+(pass) Task 10：runEnvProbe 接入 category（品类扩展） > Given category=desktop-app When 执行 Then 输出含 desktop 扩展探测项 [4.89ms]
+(pass) Task 10：runEnvProbe 接入 category（品类扩展） > Given category=mobile-app When 执行 Then 输出含 mobile 扩展探测项 [4.08ms]
+(pass) Task 10：runEnvProbe 接入 category（品类扩展） > Given 未传 category（默认 universal）When 执行 Then 输出不含品类扩展项 [3.70ms]
+(pass) Task 10：runEnvProbe 接入 category（品类扩展） > Given 仓库真实 check_env.sh + category=desktop-app（集成）When 执行 Then desktop 扩展探测项在场 [1764.43ms]
+(pass) Task 10：getTemplateCopiedAt（模板时间锚点） > Given template-manifest.json 不存在 When 调用 Then null [0.34ms]
+(pass) Task 10：getTemplateCopiedAt（模板时间锚点） > Given template-manifest.json 存在且含 copiedAt When 调用 Then 返回 ISO 字符串 [0.39ms]
+(pass) Task 10：getTemplateCopiedAt（模板时间锚点） > Given template-manifest.json 损坏（JSON 错） When 调用 Then null（不抛） [0.35ms]
+(pass) Task 10：getTemplateCopiedAt（模板时间锚点） > Given template-manifest.json 缺 copiedAt 字段 When 调用 Then null [0.49ms]
+
+ 31 pass
+ 0 fail
+ 83 expect() calls
+Ran 31 tests across 1 file. [2.95s]

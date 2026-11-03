@@ -1,0 +1,2234 @@
+<!-- DOC-2.3 | 后台分析看板 | v0.1 | 2026-06-05 | 依赖: sitemap v0.3, design-system v0.2 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>后台分析看板 - Proma Research</title>
+<style>
+/* ===== CSS Variables from design-system v0.2 ===== */
+:root {
+  --color-primary: #4F46E5;
+  --color-primary-hover: #4338CA;
+  --color-primary-shadow: rgba(79, 70, 229, 0.35);
+  --color-primary-subtle: rgba(79, 70, 229, 0.06);
+  --color-primary-subtle-active: rgba(79, 70, 229, 0.12);
+  --color-success: #059669;
+  --color-success-bg: #ECFDF5;
+  --color-warning: #D97706;
+  --color-warning-bg: #FEF3C7;
+  --color-danger: #DC2626;
+  --color-danger-bg: #FEE2E2;
+  --color-info: #3B82F6;
+  --color-info-bg: #DBEAFE;
+  --color-error-amber: #D97706;
+  --color-error-amber-bg: #FEF3C7;
+  --color-bg: #1E1E2E;
+  --color-bg-workspace: #F9FAFB;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #F3F4F6;
+  --color-overlay: rgba(0, 0, 0, 0.55);
+  --color-popup-bg: #2A2A3E;
+  --color-bg-secondary: #F3F4F6;
+  --color-bg-secondary-hover: #E5E7EB;
+  --color-text: #111827;
+  --color-text-secondary: #6B7280;
+  --color-text-tertiary: #9CA3AF;
+  --color-text-on-dark-heading: #FFFFFF;
+  --color-text-on-dark: rgba(255, 255, 255, 0.88);
+  --color-text-on-dark-subtle: rgba(255, 255, 255, 0.55);
+  --color-text-on-dark-muted: rgba(255, 255, 255, 0.40);
+  --color-border: #E5E7EB;
+  --color-border-light: rgba(255, 255, 255, 0.25);
+  --color-border-light-hover: rgba(255, 255, 255, 0.55);
+  --color-border-focus: #4F46E5;
+  --font-family-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  --font-size-hero: 28px;
+  --font-size-section-title: 22px;
+  --font-size-card-title: 20px;
+  --font-size-body: 15px;
+  --font-size-subtitle: 14px;
+  --font-size-caption: 13px;
+  --font-size-small: 12px;
+  --font-size-badge: 11px;
+  --font-weight-bold: 700;
+  --font-weight-semibold: 600;
+  --font-weight-medium: 500;
+  --font-weight-regular: 400;
+  --letter-spacing-title: 1px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 50%;
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-card-hover: 0 10px 30px rgba(0,0,0,0.12);
+  --shadow-dialog: 0 24px 64px rgba(0,0,0,0.35);
+  --shadow-popup: 0 8px 28px rgba(0,0,0,0.40);
+  --shadow-btn-primary: 0 4px 14px rgba(79,70,229,0.35);
+  --padding-card: 20px 24px 24px;
+  --padding-btn: 8px 20px;
+  --padding-btn-sm: 5px 12px;
+  --padding-input: 8px 12px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --gap-cards: 20px;
+  --gap-form: 14px;
+  --gap-btn-group: 10px;
+  --duration-fast: 150ms;
+  --duration-normal: 180ms;
+  --duration-slow: 200ms;
+  --ease-default: ease;
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Chart palette */
+  --chart-1: #4F46E5;
+  --chart-2: #059669;
+  --chart-3: #D97706;
+  --chart-4: #3B82F6;
+  --chart-5: #DC2626;
+  --chart-6: #8B5CF6;
+  --chart-7: #EC4899;
+  --chart-8: #14B8A6;
+  --chart-9: #F59E0B;
+  --chart-10: #6366F1;
+
+  /* Sidebar */
+  --sidebar-width: 220px;
+  --sidebar-collapsed-width: 60px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-body);
+  color: var(--color-text);
+  background: var(--color-bg-workspace);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== Layout ===== */
+#app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ===== Sidebar ===== */
+#sidebar {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  z-index: 10;
+}
+
+.sidebar-header {
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-header .logo-icon {
+  width: 28px; height: 28px;
+  background: var(--color-primary);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: var(--font-weight-bold);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.sidebar-header .logo-text {
+  color: var(--color-text-on-dark-heading);
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-title);
+}
+
+.sidebar-header .logo-sub {
+  color: var(--color-text-on-dark-muted);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-regular);
+}
+
+.sidebar-section-label {
+  padding: 18px 18px 6px;
+  color: var(--color-text-on-dark-muted);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+.sidebar-tabs {
+  list-style: none;
+  padding: 4px 10px;
+  flex: 1;
+}
+
+.sidebar-tab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-on-dark-subtle);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-default);
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-medium);
+  user-select: none;
+}
+
+.sidebar-tab:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--color-text-on-dark);
+}
+
+.sidebar-tab.active {
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(79,70,229,0.3);
+}
+
+.sidebar-tab .tab-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+}
+
+.sidebar-tab.active .tab-icon { opacity: 1; }
+
+.sidebar-tab .tab-badge {
+  margin-left: auto;
+  background: rgba(255,255,255,0.12);
+  color: var(--color-text-on-dark-subtle);
+  font-size: var(--font-size-badge);
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+.sidebar-tab.active .tab-badge {
+  background: rgba(255,255,255,0.2);
+  color: #fff;
+}
+
+.sidebar-footer {
+  padding: 12px 18px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-footer .user-badge {
+  color: var(--color-text-on-dark-muted);
+  font-size: var(--font-size-small);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-footer .user-dot {
+  width: 6px; height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-success);
+}
+
+.back-link {
+  color: var(--color-text-on-dark-muted);
+  font-size: var(--font-size-small);
+  cursor: pointer;
+  padding: 4px 0;
+  transition: color var(--duration-fast);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.back-link:hover { color: var(--color-text-on-dark); }
+
+/* ===== Main ===== */
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ===== Top Bar ===== */
+#top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  gap: 16px;
+}
+
+.top-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.top-bar-left h1 {
+  font-size: var(--font-size-hero);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  letter-spacing: var(--letter-spacing-title);
+}
+
+.top-bar-left .researcher-tag {
+  background: var(--color-primary-subtle-active);
+  color: var(--color-primary);
+  font-size: var(--font-size-badge);
+  font-weight: var(--font-weight-semibold);
+  padding: 2px 10px;
+  border-radius: 10px;
+}
+
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.filter-select {
+  padding: 7px 30px 7px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-subtitle);
+  color: var(--color-text);
+  background: var(--color-surface);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 2px var(--color-primary-shadow);
+}
+
+.filter-select-sm {
+  padding: 5px 26px 5px 10px;
+  font-size: var(--font-size-small);
+  background-position: right 8px center;
+  background-size: 10px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--padding-btn);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-default);
+  white-space: nowrap;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--color-primary-hover);
+  box-shadow: var(--shadow-btn-primary);
+}
+
+.btn-secondary {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+.btn-secondary:hover {
+  background: var(--color-bg-secondary-hover);
+}
+
+.btn-sm {
+  padding: var(--padding-btn-sm);
+  font-size: var(--font-size-small);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+.btn-outline:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text);
+}
+
+.btn-success {
+  background: var(--color-success);
+  color: #fff;
+}
+.btn-success:hover {
+  background: #047857;
+}
+
+/* ===== Content Area ===== */
+#content-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.tab-content {
+  display: none;
+  animation: fadeIn 200ms ease;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== Stats Cards ===== */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--gap-cards);
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.stat-card .stat-label {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+  margin-bottom: 6px;
+}
+
+.stat-card .stat-value {
+  font-size: 28px;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.stat-card .stat-value .stat-unit {
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+  margin-left: 2px;
+}
+
+.stat-card .stat-change {
+  font-size: var(--font-size-small);
+  margin-top: 4px;
+}
+
+.stat-card .stat-change.up { color: var(--color-success); }
+.stat-card .stat-change.down { color: var(--color-danger); }
+.stat-card .stat-change.neutral { color: var(--color-text-tertiary); }
+
+.stat-card .stat-sub {
+  font-size: var(--font-size-small);
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
+
+/* ===== Chart Card ===== */
+.chart-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.chart-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.chart-card-header h3 {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chart-card-header .chart-subtitle {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
+}
+
+.chart-card-body {
+  padding: 20px;
+}
+
+.chart-card-footer {
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-border);
+  font-size: var(--font-size-small);
+  color: var(--color-text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ===== Bar Chart (CSS-only) ===== */
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  height: 200px;
+  padding: 0 10px 30px;
+  position: relative;
+}
+
+.bar-chart .bar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+  position: relative;
+}
+
+.bar-chart .bar {
+  width: 100%;
+  max-width: 48px;
+  border-radius: 4px 4px 0 0;
+  min-height: 4px;
+  position: relative;
+  transition: height 400ms var(--ease-smooth);
+}
+
+.bar-chart .bar:hover {
+  opacity: 0.85;
+}
+
+.bar-chart .bar-value {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.bar-chart .bar-label {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* Grouped bars */
+.bar-chart.grouped .bar-group {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  height: 100%;
+  position: relative;
+}
+
+.bar-chart.grouped .bar-group .bar {
+  max-width: 30px;
+}
+
+.bar-chart .bar-legend {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.bar-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+}
+
+.bar-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* Y-axis labels */
+.bar-chart-wrapper {
+  position: relative;
+}
+
+.bar-chart-yaxis {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 30px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-right: 6px;
+  border-right: 1px solid var(--color-border);
+}
+
+.bar-chart-yaxis span {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  line-height: 1;
+}
+
+/* ===== Pie/Donut Chart (CSS-only) ===== */
+.donut-chart {
+  position: relative;
+  width: 180px;
+  height: 180px;
+  border-radius: var(--radius-full);
+  background: conic-gradient(
+    var(--chart-2) 0deg 64.8deg,
+    var(--chart-4) 64.8deg 154.8deg,
+    var(--chart-1) 154.8deg 306deg,
+    var(--chart-3) 306deg 360deg
+  );
+  flex-shrink: 0;
+}
+
+.donut-chart .donut-hole {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 90px;
+  height: 90px;
+  background: var(--color-surface);
+  border-radius: var(--radius-full);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.donut-chart .donut-hole .donut-total {
+  font-size: var(--font-size-section-title);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  line-height: 1;
+}
+.donut-chart .donut-hole .donut-label {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+}
+
+.pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.pie-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast);
+  cursor: default;
+}
+.pie-legend-item:hover {
+  background: var(--color-bg-secondary);
+}
+
+.pie-legend-item .legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.pie-legend-item .legend-label {
+  font-size: var(--font-size-subtitle);
+  color: var(--color-text);
+  flex: 1;
+}
+
+.pie-legend-item .legend-value {
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.pie-legend-item .legend-pct {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* ===== Line Chart (SVG) ===== */
+.line-chart-container {
+  width: 100%;
+  position: relative;
+}
+
+.line-chart-container svg {
+  width: 100%;
+  height: auto;
+}
+
+.line-chart-y-labels {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 30px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-right: 4px;
+  pointer-events: none;
+}
+
+.line-chart-y-labels span {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+/* ===== Horizontal Bar (for comparison) ===== */
+.h-bar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.h-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.h-bar-row .h-bar-label {
+  min-width: 80px;
+  font-size: var(--font-size-subtitle);
+  color: var(--color-text-secondary);
+  text-align: right;
+}
+
+.h-bar-row .h-bar-track {
+  flex: 1;
+  height: 22px;
+  background: var(--color-bg-secondary);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.h-bar-row .h-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 400ms var(--ease-smooth);
+  position: relative;
+}
+
+.h-bar-row .h-bar-fill .h-bar-val {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+/* ===== Comparison Table ===== */
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-subtitle);
+}
+
+.comparison-table th {
+  text-align: left;
+  padding: 10px 14px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-small);
+  border-bottom: 2px solid var(--color-border);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.comparison-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.comparison-table tr:hover td {
+  background: var(--color-primary-subtle);
+}
+
+.comparison-table .sig-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+}
+
+.sig-badge.significant {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.sig-badge.not-significant {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+}
+
+/* ===== Cluster Visualization ===== */
+.cluster-viz {
+  position: relative;
+  width: 100%;
+  height: 280px;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.cluster-viz .cluster-dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  border: 2px solid rgba(255,255,255,0.8);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  cursor: pointer;
+  transition: transform var(--duration-fast);
+}
+
+.cluster-viz .cluster-dot:hover {
+  transform: scale(1.5);
+  z-index: 2;
+}
+
+.cluster-viz .cluster-center {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  border: 3px solid;
+  opacity: 0.5;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* ===== Pattern Cards ===== */
+.pattern-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--color-primary);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-card);
+  margin-bottom: 14px;
+}
+
+.pattern-card .pattern-rank {
+  font-size: var(--font-size-badge);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+
+.pattern-card .pattern-title {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 6px;
+  color: var(--color-text);
+}
+
+.pattern-card .pattern-desc {
+  font-size: var(--font-size-subtitle);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.pattern-card .pattern-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: var(--font-size-small);
+}
+
+.pattern-card .pattern-meta span {
+  background: var(--color-bg-secondary);
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+}
+
+/* ===== A/B Experiment Card ===== */
+.exp-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.exp-card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.exp-card-header .exp-name {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.exp-card-header .exp-status {
+  font-size: var(--font-size-small);
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.exp-status.active {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.exp-status.completed {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.exp-body {
+  padding: 20px;
+}
+
+.exp-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.exp-group-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.exp-group-card .group-label {
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.exp-group-card .group-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: var(--font-size-subtitle);
+}
+
+.exp-group-card .group-stat .gs-label {
+  color: var(--color-text-secondary);
+}
+.exp-group-card .group-stat .gs-value {
+  font-weight: var(--font-weight-semibold);
+}
+
+.exp-p-value {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.exp-p-value .p-label {
+  font-size: var(--font-size-subtitle);
+  color: var(--color-text-secondary);
+}
+
+.exp-p-value .p-value {
+  font-size: 20px;
+  font-weight: var(--font-weight-bold);
+}
+
+.exp-p-value .p-significance {
+  margin-left: auto;
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+}
+
+.exp-p-value .p-significance.sig {
+  color: var(--color-success);
+}
+
+.exp-p-value .p-significance.not-sig {
+  color: var(--color-text-tertiary);
+}
+
+/* ===== Experiment Creation Panel ===== */
+.creation-panel {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  border: 1px dashed var(--color-border);
+}
+
+.creation-panel h3 {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 16px;
+}
+
+.form-group {
+  margin-bottom: var(--gap-form);
+}
+
+.form-group label {
+  display: block;
+  font-size: var(--font-size-subtitle);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+
+.form-group .form-hint {
+  font-size: var(--font-size-small);
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+
+.form-input {
+  width: 100%;
+  padding: var(--padding-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-subtitle);
+  color: var(--color-text);
+  background: var(--color-surface);
+  transition: border-color var(--duration-fast);
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 2px var(--color-primary-shadow);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap-form);
+}
+
+/* ===== Insight tag ===== */
+.insight-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+}
+
+.insight-tag.positive {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.insight-tag.negative {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.insight-tag.neutral {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+}
+
+/* ===== Toast / Modal ===== */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dialog);
+  padding: 14px 20px;
+  font-size: var(--font-size-subtitle);
+  z-index: 1000;
+  opacity: 0;
+  transition: all 300ms var(--ease-smooth);
+  pointer-events: none;
+  border: 1px solid var(--color-border);
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+/* ===== Empty state ===== */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--color-text-tertiary);
+}
+
+.empty-state .empty-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.4;
+}
+
+.empty-state .empty-title {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+
+.empty-state .empty-desc {
+  font-size: var(--font-size-subtitle);
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 860px) {
+  #sidebar {
+    width: var(--sidebar-collapsed-width);
+    min-width: var(--sidebar-collapsed-width);
+  }
+  .sidebar-header .logo-text,
+  .sidebar-header .logo-sub,
+  .sidebar-section-label,
+  .sidebar-tab .tab-text,
+  .sidebar-tab .tab-badge,
+  .sidebar-footer .user-badge span,
+  .back-link span {
+    display: none;
+  }
+  .sidebar-tab {
+    justify-content: center;
+    padding: 10px;
+  }
+  .sidebar-header {
+    justify-content: center;
+    padding: 16px 10px;
+  }
+  .sidebar-footer {
+    padding: 10px;
+    align-items: center;
+  }
+  .sidebar-tab .tab-icon { opacity: 1; }
+
+  .exp-metrics {
+    grid-template-columns: 1fr;
+  }
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  #top-bar {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  #content-area {
+    padding: 16px;
+  }
+  .bar-chart {
+    height: 160px;
+  }
+}
+
+@media (max-width: 480px) {
+  #sidebar {
+    display: none;
+  }
+  #top-bar {
+    padding: 10px 12px;
+  }
+  .top-bar-left h1 {
+    font-size: 20px;
+  }
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  #content-area {
+    padding: 12px;
+  }
+  .chart-card-body {
+    padding: 14px;
+  }
+  .bar-chart {
+    height: 140px;
+    gap: 8px;
+  }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== Sidebar ===== -->
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-icon">P</div>
+      <div>
+        <div class="logo-text">Proma</div>
+        <div class="logo-sub">Research</div>
+      </div>
+    </div>
+    <div class="sidebar-section-label">分析面板</div>
+    <ul class="sidebar-tabs">
+      <li class="sidebar-tab active" data-tab="6a" data-ai-id="tab-efficiency">
+        <span class="tab-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M7 3v3"/><path d="M17 3v3"/></svg></span>
+        <span class="tab-text">效率看板</span>
+      </li>
+      <li class="sidebar-tab" data-tab="6b" data-ai-id="tab-cognitive">
+        <span class="tab-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span>
+        <span class="tab-text">认知摩擦</span>
+      </li>
+      <li class="sidebar-tab" data-tab="6c" data-ai-id="tab-token">
+        <span class="tab-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+        <span class="tab-text">Token效率</span>
+      </li>
+      <li class="sidebar-tab" data-tab="6d" data-ai-id="tab-compliance">
+        <span class="tab-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
+        <span class="tab-text">文档合规</span>
+      </li>
+      <li class="sidebar-tab" data-tab="6e" data-ai-id="tab-pattern">
+        <span class="tab-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
+        <span class="tab-text">范式挖掘</span>
+      </li>
+      <li class="sidebar-tab" data-tab="6f" data-ai-id="tab-abtest">
+        <span class="tab-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M8 3H3v5"/><path d="M21 3l-7 7M3 3l7 7"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/></svg></span>
+        <span class="tab-text">A/B实验</span>
+      </li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="user-badge">
+        <span class="user-dot"></span>
+        <span>研究者 · 管理员</span>
+      </div>
+      <div class="back-link" data-ai-id="back-to-settings">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+        <span>返回设置页</span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ===== Main ===== -->
+  <div id="main">
+    <!-- Top Bar -->
+    <header id="top-bar">
+      <div class="top-bar-left">
+        <h1>后台分析看板</h1>
+        <span class="researcher-tag">研究者</span>
+      </div>
+      <div class="top-bar-right">
+        <select class="filter-select" data-ai-id="time-range-select" id="timeRangeSelect" onchange="onTimeRangeChange(this.value)">
+          <option value="7d">近 7 天</option>
+          <option value="30d" selected>近 30 天</option>
+          <option value="all">全部时间</option>
+        </select>
+        <select class="filter-select filter-select-sm" data-ai-id="project-type-filter" id="projectTypeFilter" onchange="onProjectTypeFilter(this.value)">
+          <option value="all">全部项目类型</option>
+          <option value="fast">快消型</option>
+          <option value="long">长期迭代型</option>
+        </select>
+        <button class="btn btn-primary" data-ai-id="export-csv-btn" onclick="onExportCSV()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          导出CSV
+        </button>
+      </div>
+    </header>
+
+    <!-- Content Area -->
+    <div id="content-area">
+
+      <!-- ===== 6a 效率看板 ===== -->
+      <div class="tab-content active" id="tab-6a" data-ai-id="panel-efficiency">
+        <div class="stats-grid" id="stats6a">
+          <div class="stat-card" data-ai-id="stat-total-projects">
+            <div class="stat-label">总项目数</div>
+            <div class="stat-value" id="statTotalProjects">847</div>
+            <div class="stat-change up">↑ 12.3% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-avg-success">
+            <div class="stat-label">平均成功闭环率</div>
+            <div class="stat-value" id="statAvgSuccess">65.5<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 3.2% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-avg-mvp">
+            <div class="stat-label">平均MVP触达时间中位数</div>
+            <div class="stat-value" id="statAvgMvp">26.5<span class="stat-unit">min</span></div>
+            <div class="stat-change down">↓ 4.1% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-avg-abandon">
+            <div class="stat-label">平均放弃率</div>
+            <div class="stat-value" id="statAvgAbandon">22.5<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 1.8% 较上期</div>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-mvp-time">
+          <div class="chart-card-header">
+            <h3>MVP触达时间中位数</h3>
+            <span class="chart-subtitle">按项目类型分组</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="bar-chart-wrapper">
+              <div class="bar-chart" id="chartMvpTime" style="height:200px;padding-left:0;">
+                <div class="bar-item">
+                  <div class="bar" style="height:18%;background:var(--chart-1);border-radius:4px 4px 0 0;"><div class="bar-value">8min</div></div>
+                  <div class="bar-label">快消型</div>
+                </div>
+                <div class="bar-item">
+                  <div class="bar" style="height:100%;background:var(--chart-4);border-radius:4px 4px 0 0;"><div class="bar-value">45min</div></div>
+                  <div class="bar-label">长期迭代型</div>
+                </div>
+                <div class="bar-item">
+                  <div class="bar" style="height:49%;background:var(--chart-6);border-radius:4px 4px 0 0;"><div class="bar-value">22min</div></div>
+                  <div class="bar-label">混合型</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="chart-card-footer">
+            <span>基准参考线: 30min（SLA目标）</span>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-success-rate">
+          <div class="chart-card-header">
+            <h3>成功闭环率 vs 放弃率</h3>
+            <span class="chart-subtitle">按项目类型分组</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="bar-chart grouped" id="chartSuccessRate" style="height:200px;">
+              <div class="bar-group">
+                <div class="bar" style="height:73%;background:var(--chart-1);"><div class="bar-value">73%</div></div>
+                <div class="bar" style="height:18%;background:var(--chart-5);"><div class="bar-value" style="color:var(--chart-5);">18%</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">快消型</div>
+              </div>
+              <div class="bar-group">
+                <div class="bar" style="height:58%;background:var(--chart-1);"><div class="bar-value">58%</div></div>
+                <div class="bar" style="height:27%;background:var(--chart-5);"><div class="bar-value" style="color:var(--chart-5);">27%</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">长期迭代型</div>
+              </div>
+              <div class="bar-group">
+                <div class="bar" style="height:65%;background:var(--chart-1);"><div class="bar-value">65%</div></div>
+                <div class="bar" style="height:22%;background:var(--chart-5);"><div class="bar-value" style="color:var(--chart-5);">22%</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">混合型</div>
+              </div>
+            </div>
+            <div class="bar-legend">
+              <div class="bar-legend-item"><span class="bar-legend-dot" style="background:var(--chart-1);"></span>成功闭环率</div>
+              <div class="bar-legend-item"><span class="bar-legend-dot" style="background:var(--chart-5);"></span>放弃率</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 6b 认知摩擦 ===== -->
+      <div class="tab-content" id="tab-6b" data-ai-id="panel-cognitive">
+        <div class="stats-grid" id="stats6b">
+          <div class="stat-card" data-ai-id="stat-avg-corrections">
+            <div class="stat-label">平均每项目意图修正次数</div>
+            <div class="stat-value">3.2<span class="stat-unit">次</span></div>
+            <div class="stat-change down">↓ 0.7 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-clickfix-usage">
+            <div class="stat-label">点选纠错总体使用率</div>
+            <div class="stat-value">58.2<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 5.3% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-avg-undo">
+            <div class="stat-label">平均每项目撤销次数</div>
+            <div class="stat-value">3.2<span class="stat-unit">次</span></div>
+            <div class="stat-change down">↓ 0.4 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-friction-index">
+            <div class="stat-label">认知摩擦指数</div>
+            <div class="stat-value">0.48</div>
+            <div class="stat-change down">↓ 0.06 较上期</div>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-correction-dist">
+          <div class="chart-card-header">
+            <h3>用户意图修正频次分布</h3>
+            <span class="chart-subtitle">每项目修正次数·占比</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="bar-chart" id="chartCorrectionDist" style="height:200px;">
+              <div class="bar-item">
+                <div class="bar" style="height:32%;background:var(--chart-1);"><div class="bar-value">32%</div></div>
+                <div class="bar-label">0 次</div>
+              </div>
+              <div class="bar-item">
+                <div class="bar" style="height:30%;background:var(--chart-4);"><div class="bar-value">30%</div></div>
+                <div class="bar-label">1-2 次</div>
+              </div>
+              <div class="bar-item">
+                <div class="bar" style="height:20%;background:var(--chart-6);"><div class="bar-value">20%</div></div>
+                <div class="bar-label">3-5 次</div>
+              </div>
+              <div class="bar-item">
+                <div class="bar" style="height:12%;background:var(--chart-3);"><div class="bar-value">12%</div></div>
+                <div class="bar-label">6-10 次</div>
+              </div>
+              <div class="bar-item">
+                <div class="bar" style="height:6%;background:var(--chart-5);"><div class="bar-value">6%</div></div>
+                <div class="bar-label">10+ 次</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-clickfix-compare">
+          <div class="chart-card-header">
+            <h3>点选纠错使用率</h3>
+            <span class="chart-subtitle">快消型 vs 长期迭代型</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="bar-chart grouped" id="chartClickfixCompare" style="height:200px;">
+              <div class="bar-group">
+                <div class="bar" style="height:64%;background:var(--chart-1);"><div class="bar-value">64%</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">快消型</div>
+              </div>
+              <div class="bar-group">
+                <div class="bar" style="height:52%;background:var(--chart-4);"><div class="bar-value">52%</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">长期迭代型</div>
+              </div>
+            </div>
+            <div class="chart-card-footer">
+              <span class="insight-tag positive">快消型用户更倾向使用点选纠错 (+12%)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-undo-compare">
+          <div class="chart-card-header">
+            <h3>平均撤销次数</h3>
+            <span class="chart-subtitle">按用户类型分组对比</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="h-bar-group" style="max-width:500px;">
+              <div class="h-bar-row">
+                <span class="h-bar-label">快消型</span>
+                <div class="h-bar-track">
+                  <div class="h-bar-fill" style="width:56%;background:var(--chart-1);"><span class="h-bar-val">2.3 次</span></div>
+                </div>
+              </div>
+              <div class="h-bar-row">
+                <span class="h-bar-label">长期迭代型</span>
+                <div class="h-bar-track">
+                  <div class="h-bar-fill" style="width:100%;background:var(--chart-4);"><span class="h-bar-val">4.1 次</span></div>
+                </div>
+              </div>
+              <div class="h-bar-row">
+                <span class="h-bar-label">总平均</span>
+                <div class="h-bar-track">
+                  <div class="h-bar-fill" style="width:78%;background:var(--chart-6);"><span class="h-bar-val">3.2 次</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="chart-card-footer">
+              <span class="insight-tag neutral">长期迭代型项目阶段更多，撤销次数相应增加</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 6c Token效率 ===== -->
+      <div class="tab-content" id="tab-6c" data-ai-id="panel-token">
+        <div class="stats-grid" id="stats6c">
+          <div class="stat-card" data-ai-id="stat-total-tokens">
+            <div class="stat-label">总Token消耗（当期）</div>
+            <div class="stat-value">12.8<span class="stat-unit">M</span></div>
+            <div class="stat-change up">↑ 8.2% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-avg-tokens">
+            <div class="stat-label">平均每项目Token消耗</div>
+            <div class="stat-value">15.2<span class="stat-unit">K</span></div>
+            <div class="stat-change down">↓ 3.1% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-token-efficiency">
+            <div class="stat-label">Token效率指数</div>
+            <div class="stat-value">87.3<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 2.4% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-benchmark">
+            <div class="stat-label">投入产出比最优基准</div>
+            <div class="stat-value">快消·工具类</div>
+            <div class="stat-sub">效率指数 94.2% · 参考基准</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--gap-cards);">
+          <div class="chart-card" data-ai-id="chart-token-pie">
+            <div class="chart-card-header">
+              <h3>各阶段Token消耗占比</h3>
+              <span class="chart-subtitle">总体分布</span>
+            </div>
+            <div class="chart-card-body" style="display:flex;gap:24px;align-items:center;">
+              <div class="donut-chart" style="background:conic-gradient(var(--chart-1) 0deg 64.8deg, var(--chart-4) 64.8deg 154.8deg, var(--chart-2) 154.8deg 306deg, var(--chart-3) 306deg 360deg);">
+                <div class="donut-hole">
+                  <span class="donut-total">12.8M</span>
+                  <span class="donut-label">总Token</span>
+                </div>
+              </div>
+              <div class="pie-legend">
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-1);"></span>
+                  <span class="legend-label">需求分析</span>
+                  <span class="legend-value">18%</span>
+                  <span class="legend-pct">2.3M</span>
+                </div>
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-4);"></span>
+                  <span class="legend-label">UX设计</span>
+                  <span class="legend-value">25%</span>
+                  <span class="legend-pct">3.2M</span>
+                </div>
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-2);"></span>
+                  <span class="legend-label">编码实现</span>
+                  <span class="legend-value">42%</span>
+                  <span class="legend-pct">5.4M</span>
+                </div>
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-3);"></span>
+                  <span class="legend-label">测试验证</span>
+                  <span class="legend-value">15%</span>
+                  <span class="legend-pct">1.9M</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="chart-card" data-ai-id="chart-token-benchmark">
+            <div class="chart-card-header">
+              <h3>投入产出比最优基准</h3>
+              <span class="chart-subtitle">快消·工具类</span>
+            </div>
+            <div class="chart-card-body" style="display:flex;gap:24px;align-items:center;">
+              <div class="donut-chart" style="background:conic-gradient(var(--chart-1) 0deg 54deg, var(--chart-4) 54deg 140.4deg, var(--chart-2) 140.4deg 302.4deg, var(--chart-3) 302.4deg 360deg);">
+                <div class="donut-hole">
+                  <span class="donut-total">7.2K</span>
+                  <span class="donut-label">平均/项目</span>
+                </div>
+              </div>
+              <div class="pie-legend">
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-1);"></span>
+                  <span class="legend-label">需求分析</span>
+                  <span class="legend-value">15%</span>
+                  <span class="legend-pct">1.1K</span>
+                </div>
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-4);"></span>
+                  <span class="legend-label">UX设计</span>
+                  <span class="legend-value">24%</span>
+                  <span class="legend-pct">1.7K</span>
+                </div>
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-2);"></span>
+                  <span class="legend-label">编码实现</span>
+                  <span class="legend-value">45%</span>
+                  <span class="legend-pct">3.2K</span>
+                </div>
+                <div class="pie-legend-item">
+                  <span class="legend-color" style="background:var(--chart-3);"></span>
+                  <span class="legend-label">测试验证</span>
+                  <span class="legend-value">16%</span>
+                  <span class="legend-pct">1.2K</span>
+                </div>
+              </div>
+            </div>
+            <div class="chart-card-footer">
+              <span class="insight-tag positive">效率指数 94.2% · 较总体均值高 6.9%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-token-compare" style="margin-top:20px;">
+          <div class="chart-card-header">
+            <h3>每项目平均Token消耗对比</h3>
+            <span class="chart-subtitle">快消型 vs 长期迭代型 · 按阶段</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="bar-chart grouped" id="chartTokenCompare" style="height:200px;">
+              <div class="bar-group">
+                <div class="bar" style="height:24%;background:var(--chart-1);"><div class="bar-value" style="font-size:11px;">12K</div></div>
+                <div class="bar" style="height:70%;background:var(--chart-1);opacity:0.5;"><div class="bar-value" style="font-size:11px;">35K</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">需求</div>
+              </div>
+              <div class="bar-group">
+                <div class="bar" style="height:30%;background:var(--chart-4);"><div class="bar-value" style="font-size:11px;">15K</div></div>
+                <div class="bar" style="height:96%;background:var(--chart-4);opacity:0.5;"><div class="bar-value" style="font-size:11px;">48K</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">设计</div>
+              </div>
+              <div class="bar-group">
+                <div class="bar" style="height:56%;background:var(--chart-2);"><div class="bar-value" style="font-size:11px;">28K</div></div>
+                <div class="bar" style="height:100%;background:var(--chart-2);opacity:0.5;"><div class="bar-value" style="font-size:11px;">85K</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">编码</div>
+              </div>
+              <div class="bar-group">
+                <div class="bar" style="height:16%;background:var(--chart-3);"><div class="bar-value" style="font-size:11px;">8K</div></div>
+                <div class="bar" style="height:44%;background:var(--chart-3);opacity:0.5;"><div class="bar-value" style="font-size:11px;">22K</div></div>
+                <div class="bar-label" style="position:absolute;bottom:-24px;">测试</div>
+              </div>
+            </div>
+            <div class="bar-legend">
+              <div class="bar-legend-item"><span class="bar-legend-dot" style="background:var(--chart-1);"></span>快消型</div>
+              <div class="bar-legend-item"><span class="bar-legend-dot" style="background:var(--chart-1);opacity:0.5;"></span>长期迭代型</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 6d 文档合规 ===== -->
+      <div class="tab-content" id="tab-6d" data-ai-id="panel-compliance">
+        <div class="stats-grid" id="stats6d">
+          <div class="stat-card" data-ai-id="stat-overall-pass">
+            <div class="stat-label">裁判Agent综合通过率</div>
+            <div class="stat-value">82.4<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 3.7% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-hard-pass">
+            <div class="stat-label">硬约束通过率</div>
+            <div class="stat-value">91.2<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 2.1% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-soft-pass">
+            <div class="stat-label">软约束通过率</div>
+            <div class="stat-value">73.6<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 5.3% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-anomalies">
+            <div class="stat-label">异常标注数</div>
+            <div class="stat-value">2<span class="stat-unit">项</span></div>
+            <div class="stat-change down">↓ 1 较上期</div>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-pass-trend">
+          <div class="chart-card-header">
+            <h3>裁判Agent通过率时间趋势</h3>
+            <span class="chart-subtitle">近30天 · 含异常标注</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="line-chart-container" style="position:relative;">
+              <svg viewBox="0 0 700 220" style="width:100%;">
+                <!-- Grid lines -->
+                <line x1="50" y1="30" x2="700" y2="30" stroke="#E5E7EB" stroke-width="0.5"/>
+                <line x1="50" y1="77" x2="700" y2="77" stroke="#E5E7EB" stroke-width="0.5"/>
+                <line x1="50" y1="125" x2="700" y2="125" stroke="#E5E7EB" stroke-width="0.5"/>
+                <line x1="50" y1="172" x2="700" y2="172" stroke="#E5E7EB" stroke-width="0.5"/>
+                <!-- Baseline (mean) -->
+                <line x1="50" y1="85" x2="690" y2="85" stroke="#D97706" stroke-width="1" stroke-dasharray="6,3" opacity="0.6"/>
+                <!-- Mean label -->
+                <text x="52" y="82" font-size="10" fill="#D97706" opacity="0.7">均值 82.4%</text>
+                <!-- -2σ line -->
+                <line x1="50" y1="125" x2="690" y2="125" stroke="#DC2626" stroke-width="1" stroke-dasharray="4,4" opacity="0.4"/>
+                <text x="52" y="143" font-size="9" fill="#DC2626" opacity="0.5">-2σ = 68.2%</text>
+                <!-- Y-axis labels -->
+                <text x="42" y="34" font-size="10" text-anchor="end" fill="#9CA3AF">100%</text>
+                <text x="42" y="81" font-size="10" text-anchor="end" fill="#9CA3AF">80%</text>
+                <text x="42" y="129" font-size="10" text-anchor="end" fill="#9CA3AF">60%</text>
+                <text x="42" y="176" font-size="10" text-anchor="end" fill="#9CA3AF">40%</text>
+                <!-- Line -->
+                <!-- Data points (30 days): trends upward with some fluctuations, 2 anomalies -->
+                <!-- y = 220 - value*1.7 (so 100%=50, 50%=135, 0%=220) -->
+                <!-- Normal range: 72%-92% -->
+                <polyline fill="none" stroke="#4F46E5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                  points="63,102 85,96 107,99 129,93 151,88 173,85 195,90 217,82 239,78 261,85 283,80 305,76 327,82 349,78 371,70 393,65 415,72 437,68 459,62 481,58 503,65 525,72 547,68 569,62 591,55 613,60 635,68 657,63 679,58 690,56"/>
+                <!-- Anomaly markers (day 11 and day 25 - below -2σ) -->
+                <circle cx="371" cy="70" r="5" fill="none" stroke="#DC2626" stroke-width="2" data-ai-id="anomaly-marker-1"/>
+                <circle cx="371" cy="70" r="10" fill="none" stroke="#DC2626" stroke-width="0.5" opacity="0.3"/>
+                <text x="371" y="62" font-size="9" text-anchor="middle" fill="#DC2626" font-weight="600">异常</text>
+                <!-- Anomaly marker 2 - more severe -->
+                <circle cx="591" cy="55" r="5" fill="none" stroke="#DC2626" stroke-width="2" data-ai-id="anomaly-marker-2"/>
+                <circle cx="591" cy="55" r="10" fill="none" stroke="#DC2626" stroke-width="0.5" opacity="0.3"/>
+                <text x="591" y="47" font-size="9" text-anchor="middle" fill="#DC2626" font-weight="600">异常</text>
+              </svg>
+            </div>
+          </div>
+          <div class="chart-card-footer">
+            <span class="insight-tag negative">第11日异常：PRD硬约束缺失项集中爆发（新模板上线）</span>
+            <span class="insight-tag negative" style="margin-left:8px;">第25日异常：GWT覆盖率不足退回（批量项目提交）</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 6e 范式挖掘 ===== -->
+      <div class="tab-content" id="tab-6e" data-ai-id="panel-pattern">
+        <div class="stats-grid" id="stats6e">
+          <div class="stat-card" data-ai-id="stat-clusters">
+            <div class="stat-label">聚类数</div>
+            <div class="stat-value">3<span class="stat-unit">个</span></div>
+            <div class="stat-sub">基于 ≥30 已完成项目的对话模式</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-efficient-ratio">
+            <div class="stat-label">高效用户占比</div>
+            <div class="stat-value">34.2<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 5.8% 较上期</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-avg-token-efficiency">
+            <div class="stat-label">高效用户Token节省</div>
+            <div class="stat-value">38<span class="stat-unit">%</span></div>
+            <div class="stat-sub">较平均用户低</div>
+          </div>
+          <div class="stat-card" data-ai-id="stat-top-pattern">
+            <div class="stat-label">最佳指令范式采纳率</div>
+            <div class="stat-value">91.5<span class="stat-unit">%</span></div>
+            <div class="stat-change up">↑ 3.2% 较上期</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--gap-cards);margin-bottom:20px;">
+          <div class="chart-card" data-ai-id="chart-cluster-viz">
+            <div class="chart-card-header">
+              <h3>对话模式特征聚类分析</h3>
+              <span class="chart-subtitle">基于交互行为维度</span>
+            </div>
+            <div class="chart-card-body">
+              <div class="cluster-viz" data-ai-id="cluster-visualization">
+                <!-- Cluster 1: Efficient users, top-right -->
+                <div class="cluster-center" style="left:72%;top:28%;border-color:var(--chart-1);"></div>
+                <div class="cluster-dot" style="left:65%;top:22%;background:var(--chart-1);" data-ai-id="cluster-dot-eff-1" title="高效用户"></div>
+                <div class="cluster-dot" style="left:70%;top:18%;background:var(--chart-1);" data-ai-id="cluster-dot-eff-2" title="高效用户"></div>
+                <div class="cluster-dot" style="left:78%;top:25%;background:var(--chart-1);" data-ai-id="cluster-dot-eff-3" title="高效用户"></div>
+                <div class="cluster-dot" style="left:75%;top:32%;background:var(--chart-1);" data-ai-id="cluster-dot-eff-4" title="高效用户"></div>
+                <div class="cluster-dot" style="left:68%;top:35%;background:var(--chart-1);" data-ai-id="cluster-dot-eff-5" title="高效用户"></div>
+                <div class="cluster-dot" style="left:80%;top:20%;background:var(--chart-1);" data-ai-id="cluster-dot-eff-6" title="高效用户"></div>
+                <div class="cluster-dot" style="left:73%;top:38%;background:var(--chart-1);" data-ai-id="cluster-dot-eff-7" title="高效用户"></div>
+                <!-- Cluster 2: Medium users, center -->
+                <div class="cluster-center" style="left:45%;top:55%;border-color:var(--chart-4);"></div>
+                <div class="cluster-dot" style="left:38%;top:50%;background:var(--chart-4);" data-ai-id="cluster-dot-med-1" title="中等用户"></div>
+                <div class="cluster-dot" style="left:42%;top:45%;background:var(--chart-4);" data-ai-id="cluster-dot-med-2" title="中等用户"></div>
+                <div class="cluster-dot" style="left:50%;top:48%;background:var(--chart-4);" data-ai-id="cluster-dot-med-3" title="中等用户"></div>
+                <div class="cluster-dot" style="left:48%;top:58%;background:var(--chart-4);" data-ai-id="cluster-dot-med-4" title="中等用户"></div>
+                <div class="cluster-dot" style="left:40%;top:60%;background:var(--chart-4);" data-ai-id="cluster-dot-med-5" title="中等用户"></div>
+                <div class="cluster-dot" style="left:55%;top:52%;background:var(--chart-4);" data-ai-id="cluster-dot-med-6" title="中等用户"></div>
+                <div class="cluster-dot" style="left:46%;top:65%;background:var(--chart-4);" data-ai-id="cluster-dot-med-7" title="中等用户"></div>
+                <div class="cluster-dot" style="left:52%;top:42%;background:var(--chart-4);" data-ai-id="cluster-dot-med-8" title="中等用户"></div>
+                <div class="cluster-dot" style="left:36%;top:55%;background:var(--chart-4);" data-ai-id="cluster-dot-med-9" title="中等用户"></div>
+                <!-- Cluster 3: Inefficient users, bottom-left -->
+                <div class="cluster-center" style="left:22%;top:75%;border-color:var(--chart-5);"></div>
+                <div class="cluster-dot" style="left:15%;top:70%;background:var(--chart-5);" data-ai-id="cluster-dot-ineff-1" title="低效用户"></div>
+                <div class="cluster-dot" style="left:20%;top:65%;background:var(--chart-5);" data-ai-id="cluster-dot-ineff-2" title="低效用户"></div>
+                <div class="cluster-dot" style="left:28%;top:72%;background:var(--chart-5);" data-ai-id="cluster-dot-ineff-3" title="低效用户"></div>
+                <div class="cluster-dot" style="left:18%;top:78%;background:var(--chart-5);" data-ai-id="cluster-dot-ineff-4" title="低效用户"></div>
+                <div class="cluster-dot" style="left:25%;top:80%;background:var(--chart-5);" data-ai-id="cluster-dot-ineff-5" title="低效用户"></div>
+                <div class="cluster-dot" style="left:30%;top:68%;background:var(--chart-5);" data-ai-id="cluster-dot-ineff-6" title="低效用户"></div>
+                <!-- Axis labels -->
+                <div style="position:absolute;bottom:6px;right:10px;font-size:10px;color:var(--color-text-tertiary);">→ 结构化程度</div>
+                <div style="position:absolute;top:50%;left:-36px;transform:rotate(-90deg) translateX(50%);font-size:10px;color:var(--color-text-tertiary);white-space:nowrap;transform-origin:left center;">Token效率 →</div>
+              </div>
+              <div class="bar-legend" style="margin-top:8px;">
+                <div class="bar-legend-item"><span class="bar-legend-dot" style="background:var(--chart-1);border-radius:50%;"></span>高效用户 (34.2%)</div>
+                <div class="bar-legend-item"><span class="bar-legend-dot" style="background:var(--chart-4);border-radius:50%;"></span>中等用户 (42.6%)</div>
+                <div class="bar-legend-item"><span class="bar-legend-dot" style="background:var(--chart-5);border-radius:50%;"></span>低效用户 (23.2%)</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="chart-card" data-ai-id="chart-cluster-summary">
+            <div class="chart-card-header">
+              <h3>聚类特征摘要</h3>
+            </div>
+            <div class="chart-card-body" style="display:flex;flex-direction:column;gap:14px;">
+              <div class="pattern-card" style="border-left-color:var(--chart-1);margin:0;">
+                <div class="pattern-rank">集群 1 · 高效用户</div>
+                <div class="pattern-title">明确需求 + 分步确认 + 及时反馈</div>
+                <div class="pattern-desc">成功率 89%，Token消耗低于平均 38%，平均 1.2 轮修正</div>
+                <div class="pattern-meta"><span>用户占比 34.2%</span><span>快消型为主 78%</span></div>
+              </div>
+              <div class="pattern-card" style="border-left-color:var(--chart-4);margin:0;">
+                <div class="pattern-rank">集群 2 · 中等用户</div>
+                <div class="pattern-title">模糊需求 + 多轮修正 + 点选纠错</div>
+                <div class="pattern-desc">成功率 67%，Token消耗接近平均，平均 3.8 轮修正</div>
+                <div class="pattern-meta"><span>用户占比 42.6%</span><span>快消/长期约各半</span></div>
+              </div>
+              <div class="pattern-card" style="border-left-color:var(--chart-5);margin:0;">
+                <div class="pattern-rank">集群 3 · 低效用户</div>
+                <div class="pattern-title">频繁变更 + 大量撤销 + 多次回滚</div>
+                <div class="pattern-desc">成功率 41%，Token消耗高于平均 52%，平均 7.6 轮修正</div>
+                <div class="pattern-meta"><span>用户占比 23.2%</span><span>长期迭代型为主 71%</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card" data-ai-id="chart-best-patterns">
+          <div class="chart-card-header">
+            <h3>排名前 3 的最佳指令范式</h3>
+            <span class="chart-subtitle">基于高效用户对话模式提取</span>
+          </div>
+          <div class="chart-card-body">
+            <div class="pattern-card">
+              <div class="pattern-rank">范式 #1 · 采纳率 91.5%</div>
+              <div class="pattern-title">"先做一个包含 [A] [B] [C] 的基础版本"</div>
+              <div class="pattern-desc">结构明确的分步请求范式。用户在一句话中同时指定了"做什么"（基础版本）和"有什么"（功能清单A/B/C），Agent无需追问即可直接生成。平均节省 2.3 轮对话。</div>
+              <div class="pattern-meta"><span>Token节省 34%</span><span>成功率提升 22%</span><span>推荐用于快消型</span></div>
+            </div>
+            <div class="pattern-card">
+              <div class="pattern-rank">范式 #2 · 采纳率 85.2%</div>
+              <div class="pattern-title">"把 [A] 改成 [B]，同时也调整一下 [C]"</div>
+              <div class="pattern-desc">带上下文的批量修改范式。用户在一个修改指令中同时表达了对元素A的变更和对元素B的关联调整，Agent可以一次性理解完整修改意图。平均节省 1.8 轮修正。</div>
+              <div class="pattern-meta"><span>Token节省 28%</span><span>修改准确率 94%</span><span>推荐用于点选纠错</span></div>
+            </div>
+            <div class="pattern-card">
+              <div class="pattern-rank">范式 #3 · 采纳率 78.6%</div>
+              <div class="pattern-title">"这个效果不错，但在 [具体位置] 需要调整"</div>
+              <div class="pattern-desc">肯定+精准定位的反馈范式。用户先肯定了整体方向（降低Agent的决策不确定性），再精准定位需要修改的位置。Agent可以精确执行而非重新理解意图。</div>
+              <div class="pattern-meta"><span>Token节省 22%</span><span>单轮修正成功率 87%</span><span>推荐用于长期迭代型</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 6f A/B实验管理 ===== -->
+      <div class="tab-content" id="tab-6f" data-ai-id="panel-abtest">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+          <h3 style="font-size:var(--font-size-section-title);font-weight:var(--font-weight-semibold);">A/B 实验管理</h3>
+          <button class="btn btn-primary" data-ai-id="btn-create-experiment" onclick="toggleCreatePanel()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            创建实验
+          </button>
+        </div>
+
+        <!-- Creation Panel -->
+        <div class="creation-panel" id="createExperimentPanel" style="display:none;" data-ai-id="experiment-creation-panel">
+          <h3>创建新 A/B 实验</h3>
+          <div class="form-group">
+            <label for="expName">实验名称</label>
+            <input type="text" class="form-input" id="expName" placeholder="例：原生对话 vs 结构化引导" data-ai-id="input-exp-name">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="groupA">对照组 (A) 描述</label>
+              <input type="text" class="form-input" id="groupA" placeholder="例：原生大模型聊天界面" data-ai-id="input-group-a">
+            </div>
+            <div class="form-group">
+              <label for="groupB">实验组 (B) 描述</label>
+              <input type="text" class="form-input" id="groupB" placeholder="例：本平台多Agent协作" data-ai-id="input-group-b">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>用户分组策略</label>
+            <div style="font-size:var(--font-size-subtitle);color:var(--color-text-secondary);">系统自动将新用户随机均分到两组，用户不知自己属于哪一组（双盲）</div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:4px;">
+            <button class="btn btn-success" data-ai-id="btn-confirm-create" onclick="onCreateExperiment()">确认创建</button>
+            <button class="btn btn-secondary" data-ai-id="btn-cancel-create" onclick="toggleCreatePanel()">取消</button>
+          </div>
+        </div>
+
+        <!-- Experiment 1 -->
+        <div class="exp-card" data-ai-id="experiment-1">
+          <div class="exp-card-header">
+            <span class="exp-name">原生对话 vs 结构化引导</span>
+            <span class="exp-status completed">已完成</span>
+          </div>
+          <div class="exp-body">
+            <div class="exp-metrics">
+              <div class="exp-group-card">
+                <div class="group-label">对照组 A · 原生大模型</div>
+                <div class="group-stat"><span class="gs-label">成功率</span><span class="gs-value">52.1%</span></div>
+                <div class="group-stat"><span class="gs-label">MVP时间中位数</span><span class="gs-value">22.3 min</span></div>
+                <div class="group-stat"><span class="gs-label">认知摩擦指数</span><span class="gs-value">0.74</span></div>
+                <div class="group-stat"><span class="gs-label">样本量</span><span class="gs-value">n = 24</span></div>
+              </div>
+              <div class="exp-group-card">
+                <div class="group-label">实验组 B · 多Agent引导</div>
+                <div class="group-stat"><span class="gs-label">成功率</span><span class="gs-value">71.3%</span></div>
+                <div class="group-stat"><span class="gs-label">MVP时间中位数</span><span class="gs-value">14.1 min</span></div>
+                <div class="group-stat"><span class="gs-label">认知摩擦指数</span><span class="gs-value">0.42</span></div>
+                <div class="group-stat"><span class="gs-label">样本量</span><span class="gs-value">n = 26</span></div>
+              </div>
+              <div class="exp-group-card">
+                <div class="group-label">统计检验结果</div>
+                <div class="group-stat"><span class="gs-label">p 值</span><span class="gs-value" style="font-size:22px;">0.003</span></div>
+                <div class="group-stat"><span class="gs-label">效应量 (Cohen's d)</span><span class="gs-value">0.87</span></div>
+                <div class="group-stat"><span class="gs-label">统计功效</span><span class="gs-value">91.2%</span></div>
+              </div>
+            </div>
+            <div class="exp-p-value">
+              <span class="p-label">统计显著性判定</span>
+              <span class="p-value">p = 0.003</span>
+              <span class="p-significance sig">✅ 统计显著 · 实验组显著优于对照组</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Experiment 2 -->
+        <div class="exp-card" data-ai-id="experiment-2">
+          <div class="exp-card-header">
+            <span class="exp-name">单Agent vs 双Agent并行</span>
+            <span class="exp-status active">进行中</span>
+          </div>
+          <div class="exp-body">
+            <div class="exp-metrics">
+              <div class="exp-group-card">
+                <div class="group-label">对照组 A · 单Agent串行</div>
+                <div class="group-stat"><span class="gs-label">成功率</span><span class="gs-value">61.3%</span></div>
+                <div class="group-stat"><span class="gs-label">MVP时间中位数</span><span class="gs-value">18.5 min</span></div>
+                <div class="group-stat"><span class="gs-label">认知摩擦指数</span><span class="gs-value">0.58</span></div>
+                <div class="group-stat"><span class="gs-label">样本量</span><span class="gs-value">n = 18</span></div>
+              </div>
+              <div class="exp-group-card">
+                <div class="group-label">实验组 B · 双Agent并行</div>
+                <div class="group-stat"><span class="gs-label">成功率</span><span class="gs-value">68.2%</span></div>
+                <div class="group-stat"><span class="gs-label">MVP时间中位数</span><span class="gs-value">15.3 min</span></div>
+                <div class="group-stat"><span class="gs-label">认知摩擦指数</span><span class="gs-value">0.51</span></div>
+                <div class="group-stat"><span class="gs-label">样本量</span><span class="gs-value">n = 15</span></div>
+              </div>
+              <div class="exp-group-card">
+                <div class="group-label">统计检验结果</div>
+                <div class="group-stat"><span class="gs-label">p 值</span><span class="gs-value" style="font-size:22px;">0.087</span></div>
+                <div class="group-stat"><span class="gs-label">效应量 (Cohen's d)</span><span class="gs-value">0.34</span></div>
+                <div class="group-stat"><span class="gs-label">统计功效</span><span class="gs-value">64.5%</span></div>
+              </div>
+            </div>
+            <div class="exp-p-value">
+              <span class="p-label">统计显著性判定</span>
+              <span class="p-value">p = 0.087</span>
+              <span class="p-significance not-sig">⚠ 未达统计显著 · 样本量不足，建议继续收集数据</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Experiment 3 (pending, sample insufficient) -->
+        <div class="exp-card" data-ai-id="experiment-3">
+          <div class="exp-card-header">
+            <span class="exp-name">即时预览 vs 按需预览</span>
+            <span class="exp-status active">进行中</span>
+          </div>
+          <div class="exp-body">
+            <div class="exp-metrics">
+              <div class="exp-group-card">
+                <div class="group-label">对照组 A · 即时预览</div>
+                <div class="group-stat"><span class="gs-label">成功率</span><span class="gs-value">66.7%</span></div>
+                <div class="group-stat"><span class="gs-label">MVP时间中位数</span><span class="gs-value">16.2 min</span></div>
+                <div class="group-stat"><span class="gs-label">样本量</span><span class="gs-value">n = 9</span></div>
+              </div>
+              <div class="exp-group-card">
+                <div class="group-label">实验组 B · 按需预览</div>
+                <div class="group-stat"><span class="gs-label">成功率</span><span class="gs-value">62.5%</span></div>
+                <div class="group-stat"><span class="gs-label">MVP时间中位数</span><span class="gs-value">14.8 min</span></div>
+                <div class="group-stat"><span class="gs-label">样本量</span><span class="gs-value">n = 8</span></div>
+              </div>
+              <div class="exp-group-card">
+                <div class="group-label">统计检验结果</div>
+                <div class="group-stat"><span class="gs-label">p 值</span><span class="gs-value" style="font-size:22px;color:var(--color-text-tertiary);">—</span></div>
+                <div class="group-stat"><span class="gs-label">状态</span><span class="gs-value" style="color:var(--color-text-tertiary);">样本不足</span></div>
+              </div>
+            </div>
+            <div class="exp-p-value">
+              <span class="p-label">状态提示</span>
+              <span class="p-value" style="font-size:14px;color:var(--color-text-secondary);">样本量不足</span>
+              <span class="p-significance not-sig" style="font-weight:var(--font-weight-regular);">当前对照组 9 例 / 实验组 8 例，建议每组至少收集 20 例后再进行统计对比</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content-area -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- Toast -->
+<div class="toast" id="toast" data-ai-id="export-toast"></div>
+
+<script>
+/* ===== Mock Data ===== */
+const mockData = {
+  '7d': {
+    stats6a: { total: 183, avgSuccess: 68.2, avgMvp: 24.8, avgAbandon: 20.1 },
+    mvpTime: { fast: 7, long: 42, hybrid: 20 },
+    successRate: { fast: { success: 76, abandon: 16 }, long: { success: 61, abandon: 25 }, hybrid: { success: 68, abandon: 19 } },
+    correctionDist: [30, 32, 18, 14, 6],
+    clickfix: { fast: 67, long: 54 },
+    undo: { fast: 2.1, long: 3.8, avg: 2.9 },
+    tokenTotal: '2.8M',
+    tokenAvg: '13.8K',
+    tokenEfficiency: 89.1,
+    passRate: 84.6,
+    hardPass: 92.8,
+    softPass: 76.4,
+    anomalies: 1
+  },
+  '30d': {
+    stats6a: { total: 847, avgSuccess: 65.5, avgMvp: 26.5, avgAbandon: 22.5 },
+    mvpTime: { fast: 8, long: 45, hybrid: 22 },
+    successRate: { fast: { success: 73, abandon: 18 }, long: { success: 58, abandon: 27 }, hybrid: { success: 65, abandon: 22 } },
+    correctionDist: [32, 30, 20, 12, 6],
+    clickfix: { fast: 64, long: 52 },
+    undo: { fast: 2.3, long: 4.1, avg: 3.2 },
+    tokenTotal: '12.8M',
+    tokenAvg: '15.2K',
+    tokenEfficiency: 87.3,
+    passRate: 82.4,
+    hardPass: 91.2,
+    softPass: 73.6,
+    anomalies: 2
+  },
+  'all': {
+    stats6a: { total: 2341, avgSuccess: 63.2, avgMvp: 28.1, avgAbandon: 24.3 },
+    mvpTime: { fast: 9, long: 48, hybrid: 24 },
+    successRate: { fast: { success: 71, abandon: 20 }, long: { success: 55, abandon: 30 }, hybrid: { success: 62, abandon: 25 } },
+    correctionDist: [35, 28, 22, 10, 5],
+    clickfix: { fast: 62, long: 47 },
+    undo: { fast: 2.5, long: 4.4, avg: 3.4 },
+    tokenTotal: '42.6M',
+    tokenAvg: '18.3K',
+    tokenEfficiency: 84.5,
+    passRate: 80.1,
+    hardPass: 89.5,
+    softPass: 70.7,
+    anomalies: 4
+  }
+};
+
+let currentTimeRange = '30d';
+let currentProjectType = 'all';
+
+/* ===== Tab Switching ===== */
+function switchTab(tabId) {
+  document.querySelectorAll('.sidebar-tab').forEach(function(t) {
+    t.classList.toggle('active', t.dataset.tab === tabId);
+  });
+  document.querySelectorAll('.tab-content').forEach(function(c) {
+    c.classList.toggle('active', c.id === 'tab-' + tabId);
+  });
+}
+
+document.querySelectorAll('.sidebar-tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    switchTab(this.dataset.tab);
+    updateDataForCurrentTab(this.dataset.tab);
+  });
+});
+
+document.querySelector('.back-link').addEventListener('click', function() {
+  showToast('返回设置页（模拟导航）');
+});
+
+/* ===== Time Range & Project Type ===== */
+function onTimeRangeChange(val) {
+  currentTimeRange = val;
+  updateDataForCurrentTab(getActiveTab());
+}
+
+function onProjectTypeFilter(val) {
+  currentProjectType = val;
+  updateDataForCurrentTab(getActiveTab());
+}
+
+function getActiveTab() {
+  var active = document.querySelector('.sidebar-tab.active');
+  return active ? active.dataset.tab : '6a';
+}
+
+/* ===== Update Data ===== */
+function updateDataForCurrentTab(tabId) {
+  var d = mockData[currentTimeRange];
+  if (!d) return;
+
+  switch (tabId) {
+    case '6a': updateEfficiency(d); break;
+    case '6b': updateCognitive(d); break;
+    case '6c': updateToken(d); break;
+    case '6d': updateCompliance(d); break;
+    case '6e': break; // static data
+    case '6f': break; // static data
+  }
+}
+
+function updateEfficiency(d) {
+  var s = d.stats6a;
+  document.getElementById('statTotalProjects').textContent = s.total.toLocaleString();
+  document.getElementById('statAvgSuccess').innerHTML = s.avgSuccess + '<span class="stat-unit">%</span>';
+  document.getElementById('statAvgMvp').innerHTML = s.avgMvp + '<span class="stat-unit">min</span>';
+  document.getElementById('statAvgAbandon').innerHTML = s.avgAbandon + '<span class="stat-unit">%</span>';
+
+  // MVP time chart
+  var mvpChart = document.getElementById('chartMvpTime');
+  var maxVal = Math.max(d.mvpTime.fast, d.mvpTime.long, d.mvpTime.hybrid);
+  var pct = function(v) { return Math.max(8, (v / maxVal) * 100); };
+  mvpChart.innerHTML =
+    '<div class="bar-item"><div class="bar" style="height:' + pct(d.mvpTime.fast) + '%;background:var(--chart-1);border-radius:4px 4px 0 0;"><div class="bar-value">' + d.mvpTime.fast + 'min</div></div><div class="bar-label">快消型</div></div>' +
+    '<div class="bar-item"><div class="bar" style="height:' + pct(d.mvpTime.long) + '%;background:var(--chart-4);border-radius:4px 4px 0 0;"><div class="bar-value">' + d.mvpTime.long + 'min</div></div><div class="bar-label">长期迭代型</div></div>' +
+    '<div class="bar-item"><div class="bar" style="height:' + pct(d.mvpTime.hybrid) + '%;background:var(--chart-6);border-radius:4px 4px 0 0;"><div class="bar-value">' + d.mvpTime.hybrid + 'min</div></div><div class="bar-label">混合型</div></div>';
+
+  // Success rate chart
+  var sr = d.successRate;
+  var srChart = document.getElementById('chartSuccessRate');
+  srChart.innerHTML =
+    '<div class="bar-group"><div class="bar" style="height:' + sr.fast.success + '%;background:var(--chart-1);"><div class="bar-value">' + sr.fast.success + '%</div></div><div class="bar" style="height:' + sr.fast.abandon + '%;background:var(--chart-5);"><div class="bar-value" style="color:var(--chart-5);">' + sr.fast.abandon + '%</div></div><div class="bar-label" style="position:absolute;bottom:-24px;">快消型</div></div>' +
+    '<div class="bar-group"><div class="bar" style="height:' + sr.long.success + '%;background:var(--chart-1);"><div class="bar-value">' + sr.long.success + '%</div></div><div class="bar" style="height:' + sr.long.abandon + '%;background:var(--chart-5);"><div class="bar-value" style="color:var(--chart-5);">' + sr.long.abandon + '%</div></div><div class="bar-label" style="position:absolute;bottom:-24px;">长期迭代型</div></div>' +
+    '<div class="bar-group"><div class="bar" style="height:' + sr.hybrid.success + '%;background:var(--chart-1);"><div class="bar-value">' + sr.hybrid.success + '%</div></div><div class="bar" style="height:' + sr.hybrid.abandon + '%;background:var(--chart-5);"><div class="bar-value" style="color:var(--chart-5);">' + sr.hybrid.abandon + '%</div></div><div class="bar-label" style="position:absolute;bottom:-24px;">混合型</div></div>';
+}
+
+function updateCognitive(d) {
+  var c = d.correctionDist;
+  var chart = document.getElementById('chartCorrectionDist');
+  var labels = ['0 次', '1-2 次', '3-5 次', '6-10 次', '10+ 次'];
+  var colors = ['var(--chart-1)', 'var(--chart-4)', 'var(--chart-6)', 'var(--chart-3)', 'var(--chart-5)'];
+  chart.innerHTML = '';
+  for (var i = 0; i < c.length; i++) {
+    var bar = document.createElement('div');
+    bar.className = 'bar-item';
+    bar.innerHTML = '<div class="bar" style="height:' + c[i] + '%;background:' + colors[i] + ';"><div class="bar-value">' + c[i] + '%</div></div><div class="bar-label">' + labels[i] + '</div>';
+    chart.appendChild(bar);
+  }
+}
+
+function updateToken(d) {
+  // Stat updates for token page
+  var s = document.querySelectorAll('#tab-6c .stat-value');
+  if (s.length >= 4) {
+    s[0].innerHTML = d.tokenTotal;
+    s[1].innerHTML = d.tokenAvg;
+    s[2].innerHTML = d.tokenEfficiency + '<span class="stat-unit">%</span>';
+  }
+}
+
+function updateCompliance(d) {
+  var s = document.querySelectorAll('#tab-6d .stat-value');
+  if (s.length >= 4) {
+    s[0].innerHTML = d.passRate + '<span class="stat-unit">%</span>';
+    s[1].innerHTML = d.hardPass + '<span class="stat-unit">%</span>';
+    s[2].innerHTML = d.softPass + '<span class="stat-unit">%</span>';
+    s[3].innerHTML = d.anomalies + '<span class="stat-unit">项</span>';
+  }
+}
+
+/* ===== Create Experiment ===== */
+function toggleCreatePanel() {
+  var panel = document.getElementById('createExperimentPanel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+function onCreateExperiment() {
+  var name = document.getElementById('expName').value || '未命名实验';
+  document.getElementById('expName').value = '';
+  document.getElementById('groupA').value = '';
+  document.getElementById('groupB').value = '';
+  toggleCreatePanel();
+  showToast('实验 "' + name + '" 已创建，系统将自动分配新用户至两组');
+}
+
+/* ===== Export CSV ===== */
+function onExportCSV() {
+  showToast('正在导出CSV数据...（模拟下载）');
+  setTimeout(function() {
+    var d = mockData[currentTimeRange];
+    var header = '指标,值,时间范围\n';
+    var rows = '总项目数,' + d.stats6a.total + ',' + currentTimeRange + '\n' +
+      '平均成功闭环率,' + d.stats6a.avgSuccess + '%' + ',' + currentTimeRange + '\n' +
+      '平均MVP时间中位数,' + d.stats6a.avgMvp + 'min,' + currentTimeRange + '\n' +
+      '快消型成功率,' + d.successRate.fast.success + '%' + ',' + currentTimeRange + '\n' +
+      '长期迭代型成功率,' + d.successRate.long.success + '%' + ',' + currentTimeRange + '\n' +
+      '总Token消耗,' + d.tokenTotal + ',' + currentTimeRange + '\n' +
+      '裁判Agent通过率,' + d.passRate + '%' + ',' + currentTimeRange;
+    var blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+    var link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'proma-analytics-export-' + currentTimeRange + '.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+    showToast('CSV 导出完成 · 数据已脱敏');
+  }, 800);
+}
+
+/* ===== Toast ===== */
+function showToast(msg) {
+  var toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(function() {
+    toast.classList.remove('show');
+  }, 2500);
+}
+
+/* ===== Init ===== */
+document.addEventListener('DOMContentLoaded', function() {
+  // Ensure 6a is active by default
+  updateDataForCurrentTab('6a');
+});
+</script>
+</body>
+</html>

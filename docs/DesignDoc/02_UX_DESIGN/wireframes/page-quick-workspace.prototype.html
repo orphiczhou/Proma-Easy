@@ -1,0 +1,764 @@
+<!-- DOC-2.3 | 快消型工作区 | v0.3 | 2026-06-05 | 变更: 问题2-PRD §7.5文案精确匹配/问题3-US-U07熔断回滚安抚消息 -->
+<!-- 变更(v0.1→v0.2): B2点选纠错完整交互 B3时间轴回滚可执行 S5状态通知扩展为5种 S6测试结果摘要卡片 S7截图上传入口 工具栏文案修正 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>快速做一个工具 - 向导Agent</title>
+<style>
+:root{
+  --color-primary:#4F46E5;--color-primary-hover:#4338CA;--color-primary-subtle:rgba(79,70,229,0.06);--color-primary-subtle-active:rgba(79,70,229,0.12);
+  --color-success:#059669;--color-success-bg:#ECFDF5;--color-warning:#D97706;--color-warning-bg:#FEF3C7;--color-error-amber:#D97706;--color-error-amber-bg:#FEF3C7;
+  --color-info:#3B82F6;--color-info-bg:#DBEAFE;
+  --color-bg:#F9FAFB;--color-surface:#FFFFFF;--color-surface-alt:#F3F4F6;--color-overlay:rgba(0,0,0,0.55);
+  --color-text:#111827;--color-text-secondary:#6B7280;--color-text-tertiary:#9CA3AF;
+  --color-border:#E5E7EB;--color-border-focus:#4F46E5;
+  --radius-sm:6px;--radius-md:8px;--radius-lg:12px;
+  --shadow-dialog:0 24px 64px rgba(0,0,0,0.35);--shadow-btn-primary:0 4px 14px rgba(79,70,229,0.35);--shadow-banner:0 2px 12px rgba(0,0,0,0.10);--shadow-card:0 4px 20px rgba(0,0,0,0.08);--shadow-card-hover:0 12px 36px rgba(0,0,0,0.18);
+  --padding-msg-bubble:12px 16px;--padding-btn:10px 32px;--padding-btn-sm:6px 16px;--padding-input:10px 14px;--padding-toast:12px 20px;
+  --gap-chat-msg:16px;--gap-option-cards:12px;--gap-btn-group:14px;
+  --font-family-sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif;
+  --font-size-body:16px;--font-size-subtitle:15px;--font-size-caption:14px;--font-size-small:13.5px;
+  --font-weight-semibold:600;--font-weight-medium:500;--font-weight-regular:400;
+  --duration-fast:150ms;--duration-normal:180ms;--duration-slow:200ms;--duration-overlay:250ms;
+  --ease-default:ease;--ease-bounce:cubic-bezier(0.34,1.56,0.64,1);--ease-smooth:cubic-bezier(0.4,0,0.2,1);
+  --height-header:56px;--height-input-min:44px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--font-family-sans);background:var(--color-bg);color:var(--color-text);height:100vh;overflow:hidden;display:flex;flex-direction:column}
+/* 工具栏 */
+.toolbar{height:var(--height-header);background:var(--color-surface);border-bottom:1px solid var(--color-border);display:flex;align-items:center;padding:0 20px;gap:16px;flex-shrink:0;z-index:100}
+.toolbar-brand{font-size:var(--font-size-subtitle);font-weight:var(--font-weight-semibold);color:var(--color-primary);margin-right:auto}
+.toolbar-btn{height:36px;padding:0 14px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface);color:var(--color-text-secondary);font-size:var(--font-size-small);cursor:pointer;transition:all var(--duration-normal) var(--ease-default);display:flex;align-items:center;gap:6px}
+.toolbar-btn:hover{background:var(--color-primary-subtle);color:var(--color-primary);border-color:var(--color-primary)}
+.toolbar-badge{background:var(--color-primary-subtle);color:var(--color-primary);font-size:11px;padding:2px 8px;border-radius:var(--radius-sm)}
+/* 状态栏 */
+.status-bar{height:32px;background:var(--color-surface-alt);border-bottom:1px solid var(--color-border);display:flex;align-items:center;padding:0 20px;font-size:var(--font-size-small);color:var(--color-text-secondary);flex-shrink:0}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--color-success);margin-right:8px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+/* 主工作区 */
+.workspace{flex:1;display:flex;overflow:hidden}
+/* 聊天区 */
+.chat-panel{flex:1;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--color-border)}
+.chat-messages{flex:1;overflow-y:auto;padding:20px}
+.chat-msg{max-width:75%;margin-bottom:var(--gap-chat-msg);animation:msgIn var(--duration-fast) var(--ease-bounce)}
+@keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.chat-msg.user{margin-left:auto}
+.chat-msg.user .bubble{background:var(--color-primary);color:#fff;border-radius:var(--radius-md) var(--radius-md) 0 var(--radius-md)}
+.chat-msg.agent .bubble{background:var(--color-surface-alt);color:var(--color-text);border-radius:var(--radius-md) var(--radius-md) var(--radius-md) 0}
+.chat-msg.system{max-width:100%;text-align:center}
+.chat-msg.system .bubble{background:transparent;color:var(--color-text-secondary);font-size:var(--font-size-small)}
+.chat-msg.test-result{max-width:100%}
+.bubble{padding:var(--padding-msg-bubble);font-size:var(--font-size-body);line-height:1.5}
+.msg-sender{font-size:var(--font-size-small);font-weight:var(--font-weight-medium);margin-bottom:4px;opacity:0.7}
+/* 卡片选项组 */
+.option-cards{display:flex;gap:var(--gap-option-cards);flex-wrap:wrap;margin:8px 0}
+.option-card{padding:10px 16px;border:1.5px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-surface);cursor:pointer;font-size:var(--font-size-caption);transition:all var(--duration-normal) var(--ease-default);user-select:none}
+.option-card:hover{border-color:var(--color-primary);background:var(--color-primary-subtle)}
+.option-card.selected{border-color:var(--color-primary);background:var(--color-primary-subtle);color:var(--color-primary)}
+.option-card.dashed{border-style:dashed}
+/* 测试结果卡片 */
+.test-result-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:20px;box-shadow:var(--shadow-card);margin:8px 0}
+.test-result-card h3{font-size:var(--font-size-subtitle);font-weight:var(--font-weight-semibold);margin-bottom:4px}
+.test-result-card .stats{display:flex;gap:16px;margin:12px 0;font-size:var(--font-size-subtitle);flex-wrap:wrap}
+.test-result-card .stat-pass{color:var(--color-success)}
+.test-result-card .stat-fail{color:var(--color-error-amber)}
+.test-result-card .expand-btn{background:none;border:none;color:var(--color-primary);cursor:pointer;font-size:var(--font-size-caption);padding:4px 0;font-weight:var(--font-weight-medium)}
+.test-result-card .expand-btn:hover{text-decoration:underline}
+.test-result-card .detail-items{border-top:1px solid var(--color-border);margin-top:12px;padding-top:12px;display:none}
+.test-result-card .detail-items.open{display:block}
+.test-result-card .detail-item{padding:8px 0;font-size:var(--font-size-body);display:flex;align-items:flex-start;gap:8px}
+.test-result-card .detail-item .icon{flex-shrink:0;width:20px;text-align:center}
+.test-result-card .detail-item .detail-desc{font-size:var(--font-size-small);color:var(--color-text-secondary);margin-top:4px;padding-left:28px;line-height:1.5}
+/* 截图消息 */
+.chat-msg.screenshot .bubble{background:var(--color-surface-alt);border:1px dashed var(--color-border);text-align:center;padding:16px 20px}
+.chat-msg.screenshot.user .bubble{background:var(--color-primary);border-color:transparent}
+/* 聊天输入 */
+.chat-input-area{border-top:1px solid var(--color-border);padding:12px 16px;display:flex;gap:8px;align-items:flex-end;background:var(--color-surface)}
+.chat-input{flex:1;min-height:var(--height-input-min);max-height:120px;padding:var(--padding-input);border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:var(--font-size-body);font-family:inherit;resize:none;outline:none;transition:border-color var(--duration-normal) var(--ease-default)}
+.chat-input:focus{border-color:var(--color-border-focus)}
+.chat-input::placeholder{color:var(--color-text-tertiary)}
+.chat-send{height:var(--height-input-min);padding:0 20px;background:var(--color-primary);color:#fff;border:none;border-radius:var(--radius-sm);font-size:var(--font-size-subtitle);font-weight:var(--font-weight-semibold);cursor:pointer;transition:all var(--duration-normal) var(--ease-default);flex-shrink:0}
+.chat-send:hover{background:var(--color-primary-hover);box-shadow:var(--shadow-btn-primary)}
+.btn-upload{height:var(--height-input-min);width:44px;border:1px dashed var(--color-border);border-radius:var(--radius-sm);background:var(--color-bg);color:var(--color-text-secondary);font-size:18px;cursor:pointer;transition:all var(--duration-normal) var(--ease-default);flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.btn-upload:hover{border-color:var(--color-primary);color:var(--color-primary);background:var(--color-primary-subtle)}
+/* 预览区 */
+.preview-panel{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--color-surface)}
+.preview-header{height:36px;border-bottom:1px solid var(--color-border);display:flex;align-items:center;padding:0 12px;font-size:var(--font-size-small);color:var(--color-text-secondary);flex-shrink:0}
+.preview-frame{flex:1;border:none;background:#fff}
+.preview-placeholder{flex:1;display:flex;align-items:center;justify-content:center;color:var(--color-text-tertiary);font-size:var(--font-size-body)}
+/* 预览区模拟元素 */
+.preview-mock{width:100%;height:100%;display:flex;flex-direction:column;background:#fff;padding:0;overflow:auto}
+.preview-mock-header{background:var(--color-primary);color:#fff;padding:14px 16px}
+.preview-mock-header h4{font-size:15px;font-weight:600}
+.preview-mock-body{padding:16px;flex:1}
+.preview-mock-input-row{display:flex;gap:8px;margin-bottom:16px}
+.preview-mock-input-row input{flex:1;padding:8px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-size:13.5px;background:#fff}
+.preview-mock-input-row input:focus{outline:none;border-color:var(--color-primary)}
+.preview-mock-btn{padding:8px 16px;border:none;border-radius:var(--radius-sm);font-size:13.5px;font-weight:600;cursor:default;color:#fff;transition:background var(--duration-normal) var(--ease-default)}
+.preview-mock-cardlist{display:flex;flex-direction:column;gap:10px}
+.preview-mock-card{padding:12px;border:1px solid var(--color-border);border-radius:var(--radius-md);background:#FAFBFC;cursor:pointer;transition:all var(--duration-fast) var(--ease-default)}
+.preview-mock-card:hover{box-shadow:var(--shadow-card-hover)}
+.preview-mock-card .card-title{font-weight:600;font-size:14px;margin-bottom:4px}
+.preview-mock-card .card-note{font-size:13px;color:var(--color-text-secondary)}
+/* 点选纠错覆盖层 */
+.click-highlight{position:absolute;border:2px solid var(--color-primary);border-radius:var(--radius-sm);pointer-events:none;z-index:200;transition:all var(--duration-fast) var(--ease-default);background:rgba(79,70,229,0.08)}
+.quick-options{position:absolute;background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);box-shadow:var(--shadow-dialog);z-index:450;padding:16px 20px;min-width:240px;max-width:300px}
+.quick-options .qo-close{float:right;background:none;border:none;cursor:pointer;font-size:16px;color:var(--color-text-tertiary);padding:0 4px}
+.quick-options .qo-close:hover{color:var(--color-text)}
+.quick-options h4{font-size:var(--font-size-caption);margin-bottom:12px;color:var(--color-text-secondary);font-weight:var(--font-weight-regular)}
+.quick-options h4 strong{color:var(--color-text)}
+.quick-option-btn{display:block;width:100%;text-align:left;padding:8px 12px;border:none;background:transparent;font-size:var(--font-size-body);cursor:pointer;border-radius:var(--radius-sm);transition:background var(--duration-normal) var(--ease-default)}
+.quick-option-btn:hover{background:var(--color-primary-subtle)}
+.quick-option-btn .qo-icon{margin-right:8px}
+.quick-option-btn.selected{background:var(--color-primary-subtle);color:var(--color-primary);font-weight:var(--font-weight-medium)}
+.qo-color-options{display:flex;gap:8px;padding:8px 12px;flex-wrap:wrap}
+.qo-color-swatch{width:32px;height:32px;border-radius:var(--radius-full);border:2px solid transparent;cursor:pointer;transition:all var(--duration-fast) var(--ease-default)}
+.qo-color-swatch:hover{transform:scale(1.15);border-color:var(--color-primary)}
+.qo-color-swatch.selected{border-color:var(--color-primary);box-shadow:0 0 0 2px #fff,0 0 0 4px var(--color-primary)}
+/* Toast */
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);padding:var(--padding-toast);border-radius:var(--radius-sm);font-size:var(--font-size-caption);z-index:300;animation:slideUp var(--duration-fast) var(--ease-bounce);box-shadow:var(--shadow-dialog);display:flex;align-items:center;gap:10px;max-width:520px}
+.toast .toast-icon{font-size:18px;flex-shrink:0}
+.toast.amber{background:var(--color-error-amber-bg);color:var(--color-warning);border:1px solid var(--color-warning)}
+.toast.success{background:var(--color-success-bg);color:var(--color-success);border:1px solid var(--color-success)}
+.toast.info{background:var(--color-info-bg);color:var(--color-info);border:1px solid var(--color-info)}
+.toast.progress{background:var(--color-info-bg);color:var(--color-info);border:1px solid var(--color-info)}
+.toast .spinner-inline{display:inline-block;width:16px;height:16px;border:2px solid var(--color-info);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(16px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+/* 横幅 */
+.banner{background:var(--color-error-amber-bg);border-left:4px solid var(--color-error-amber);padding:16px 20px;border-radius:var(--radius-md);box-shadow:var(--shadow-banner);font-size:var(--font-size-body);margin:8px 0}
+.banner-actions{display:flex;gap:var(--gap-btn-group);margin-top:12px}
+.btn-sm{padding:var(--padding-btn-sm);border-radius:var(--radius-sm);font-size:var(--font-size-caption);font-weight:var(--font-weight-semibold);border:none;cursor:pointer;transition:all var(--duration-normal) var(--ease-default)}
+.btn-sm.primary{background:var(--color-primary);color:#fff}
+.btn-sm.primary:hover{background:var(--color-primary-hover)}
+.btn-sm.text{background:transparent;color:var(--color-primary)}
+.btn-sm.text:hover{background:var(--color-primary-subtle)}
+/* 内嵌消息卡片 (US-U07 熔断回滚) */
+.card-in-chat{background:var(--color-surface-alt);border-left:4px solid var(--color-primary);padding:16px 20px;border-radius:var(--radius-md);margin:8px 0}
+.card-in-chat h4{font-size:var(--font-size-subtitle);font-weight:var(--font-weight-semibold);margin-bottom:8px}
+.card-in-chat .card-body{font-size:var(--font-size-body);color:var(--color-text-secondary);line-height:1.5;margin-bottom:12px}
+.card-in-chat .card-actions{display:flex;gap:var(--gap-btn-group);justify-content:flex-end;border-top:1px solid var(--color-border);padding-top:12px}
+/* 时间轴面板 */
+.timeline-overlay{position:fixed;inset:0;background:var(--color-overlay);z-index:400;opacity:0;pointer-events:none;transition:opacity var(--duration-overlay) var(--ease-default)}
+.timeline-overlay.active{opacity:1;pointer-events:auto}
+.timeline-panel{position:fixed;top:0;right:0;width:360px;height:100%;background:var(--color-surface);box-shadow:-4px 0 24px rgba(0,0,0,0.15);z-index:401;transform:translateX(100%);transition:transform var(--duration-overlay) var(--ease-smooth);overflow-y:auto}
+.timeline-overlay.active .timeline-panel{transform:translateX(0)}
+.timeline-header{padding:20px;border-bottom:1px solid var(--color-border);font-size:var(--font-size-subtitle);font-weight:var(--font-weight-semibold);display:flex;align-items:center;justify-content:space-between}
+.timeline-header button{background:none;border:none;cursor:pointer;font-size:18px;color:var(--color-text-secondary);padding:4px}
+.timeline-header button:hover{color:var(--color-text)}
+.timeline-list{padding:12px 20px}
+.timeline-item{padding:16px 0;border-bottom:1px solid var(--color-border);position:relative;padding-left:24px}
+.timeline-item:last-child{border-bottom:none}
+.timeline-item .tl-dot{position:absolute;left:0;top:22px;width:10px;height:10px;border-radius:50%;border:2px solid var(--color-border);background:var(--color-surface)}
+.timeline-item.current .tl-dot{background:var(--color-primary);border-color:var(--color-primary)}
+.timeline-item .tl-line{position:absolute;left:4px;top:32px;bottom:0;width:2px;background:var(--color-border)}
+.timeline-item:last-child .tl-line{display:none}
+.timeline-time{font-size:var(--font-size-caption);color:var(--color-text-secondary);margin-bottom:4px}
+.timeline-desc{font-size:var(--font-size-body);margin-bottom:6px}
+.timeline-current-badge{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;background:var(--color-primary-subtle);color:var(--color-primary);font-weight:var(--font-weight-medium);margin-left:8px}
+.timeline-rollback{padding:4px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);background:var(--color-surface);font-size:var(--font-size-small);cursor:pointer;transition:all var(--duration-normal) var(--ease-default)}
+.timeline-rollback:hover{background:var(--color-primary-subtle);border-color:var(--color-primary);color:var(--color-primary)}
+.timeline-empty{padding:40px 20px;text-align:center;color:var(--color-text-secondary);font-size:var(--font-size-body)}
+.timeline-empty-sub{font-size:var(--font-size-small);color:var(--color-text-tertiary);margin-top:8px}
+/* 确认弹窗 */
+.dialog-overlay{position:fixed;inset:0;background:var(--color-overlay);z-index:500;display:flex;align-items:center;justify-content:center;animation:fadeIn var(--duration-overlay) var(--ease-default)}
+.dialog-box{background:var(--color-surface);border-radius:var(--radius-lg);padding:32px 40px;max-width:420px;width:90vw;box-shadow:var(--shadow-dialog);text-align:center;animation:scaleIn var(--duration-overlay) var(--ease-smooth)}
+.dialog-box h4{font-size:18px;font-weight:var(--font-weight-semibold);margin-bottom:8px}
+.dialog-box p{font-size:var(--font-size-body);color:var(--color-text-secondary);margin-bottom:24px;line-height:1.5}
+.dialog-actions{display:flex;gap:12px;justify-content:center}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes scaleIn{from{opacity:0;transform:scale(0.92) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@media(max-width:860px){.workspace{flex-direction:column}.preview-panel{max-height:40vh}}
+</style>
+</head>
+<body>
+
+<!-- 工具栏 -->
+<div class="toolbar">
+  <span class="toolbar-brand">快速做一个工具</span>
+  <span class="toolbar-badge">快速模式</span>
+  <button class="toolbar-btn" onclick="openTimeline()" data-ai-id="btn-history">📋 历史版本</button>
+  <button class="toolbar-btn" data-ai-id="btn-my-projects" onclick="showToast('「我的项目」页（sitemap §4·原型待建）\n\n在此可查看所有历史项目列表，支持继续、删除操作。','info')">📁 我的项目</button>
+  <button class="toolbar-btn" data-ai-id="btn-settings" onclick="showToast('「设置」页（sitemap §5·原型待建）\n\n在此可管理数据与隐私、查看帮助。','info')">⚙ 设置</button>
+  <button class="toolbar-btn" onclick="showUpgradeConfirm()" data-ai-id="btn-upgrade">⬆ 转为长期维护项目</button>
+</div>
+
+<!-- 状态栏 -->
+<div class="status-bar">
+  <span class="status-dot"></span> AI正在了解你的需求...
+</div>
+
+<!-- 工作区 -->
+<div class="workspace">
+  <!-- 聊天区 -->
+  <div class="chat-panel" id="chatPanel">
+    <div class="chat-messages" id="chatMessages">
+      <!-- 初始Agent消息 -->
+      <div class="chat-msg agent">
+        <div class="bubble">
+          <div class="msg-sender">向导助手</div>
+          你好！说说你想做什么？不用想得太清楚，随便聊聊就行。
+        </div>
+      </div>
+    </div>
+    <div class="chat-input-area">
+      <button class="btn-upload" onclick="document.getElementById('screenshotInput').click()" title="上传截图">📎</button>
+      <input type="file" id="screenshotInput" accept="image/*" style="display:none" onchange="handleScreenshot(this)">
+      <textarea class="chat-input" id="chatInput" placeholder="描述你的想法..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+      <button class="chat-send" onclick="sendMessage()" data-ai-id="btn-send">发送</button>
+    </div>
+  </div>
+
+  <!-- 预览区 -->
+  <div class="preview-panel" id="previewPanel" style="position:relative">
+    <div class="preview-header">📱 点击预览中的元素可直接修改</div>
+    <div class="preview-placeholder" id="previewPlaceholder" style="display:none">开始描述需求后，这里会出现可交互的预览</div>
+    <!-- 模拟预览内容 -->
+    <div class="preview-mock" id="previewMock">
+      <div class="preview-mock-header">
+        <h4 id="previewTitle" data-ai-id="title" data-ai-type="标题">我的读书笔记</h4>
+      </div>
+      <div class="preview-mock-body">
+        <div class="preview-mock-input-row">
+          <input type="text" placeholder="书名..." data-ai-id="input-search" data-ai-type="输入框" readonly>
+          <button class="preview-mock-btn" id="previewBtnSave" data-ai-id="btn-save" data-ai-type="按钮" style="background:#4F46E5">添加笔记</button>
+        </div>
+        <div class="preview-mock-cardlist">
+          <div class="preview-mock-card" data-ai-id="card-0" data-ai-type="卡片">
+            <div class="card-title">百年孤独</div>
+            <div class="card-note">精彩的开篇，魔幻现实主义的巅峰</div>
+          </div>
+          <div class="preview-mock-card" data-ai-id="card-1" data-ai-type="卡片">
+            <div class="card-title">三体</div>
+            <div class="card-note">黑暗森林法则令人深思</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 点选纠错高亮层 -->
+    <div class="click-highlight" id="clickHighlight" style="display:none"></div>
+    <!-- 快速选项面板 -->
+    <div class="quick-options" id="quickOptions" style="display:none"></div>
+  </div>
+</div>
+
+<!-- 时间轴面板 -->
+<div class="timeline-overlay" id="timelineOverlay">
+  <div class="timeline-panel">
+    <div class="timeline-header">
+      历史版本
+      <button onclick="closeTimeline()">✕</button>
+    </div>
+    <div class="timeline-list" id="timelineList">
+      <!-- 由JS动态渲染 -->
+    </div>
+    <!-- 熔断回滚模拟按钮 (US-U07 问题3) -->
+    <div style="padding:16px 20px;border-top:1px solid var(--color-border)">
+      <button class="btn-sm primary" onclick="simulateCircuitBreaker()" style="width:100%">⚡ 模拟熔断回滚</button>
+    </div>
+  </div>
+</div>
+
+<!-- 回滚确认弹窗 -->
+<div class="dialog-overlay" id="rollbackDialog" style="display:none">
+  <div class="dialog-box">
+    <h4 id="rollbackDialogTitle">确定要回到这个版本吗？</h4>
+    <p id="rollbackDialogMsg">不会丢失现在的版本。你随时可以从历史版本中切回来。</p>
+    <div class="dialog-actions">
+      <button class="btn-sm text" onclick="cancelRollback()">取消</button>
+      <button class="btn-sm primary" onclick="confirmRollback()">确定回滚</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* === Wireframe 快消型工作区 v0.3 === */
+
+/* ========== 聊天模拟 ========== */
+var msgCount = 0;
+var demoFlow = [
+  { type: 'user', text: '我想做一个记录读书笔记的小工具' },
+  { type: 'agent', text: '好的！读书笔记是个很实用的想法。我先问你几个问题帮你理清思路：', options: [
+    { text: '书名、作者、笔记内容', selected: false },
+    { text: '书名、阅读进度、评分', selected: false },
+    { text: '书名、笔记、分类标签', selected: false },
+    { text: '以上都要', selected: false, dashed: true }
+  ]},
+  { type: 'agent', text: '另外，你想怎么查看笔记？', options: [
+    { text: '列表形式，一目了然', selected: false },
+    { text: '可以搜索和筛选', selected: false },
+    { text: '你帮我决定', selected: true, dashed: true }
+  ]},
+  { type: 'test-result', text: '' }
+];
+
+function sendMessage() {
+  var input = document.getElementById('chatInput');
+  var text = input.value.trim();
+  if (!text) return;
+
+  addMessage('user', text);
+  input.value = '';
+  input.style.height = 'auto';
+
+  /* 模拟Agent响应：从demoFlow取下一项 */
+  if (msgCount < demoFlow.length) {
+    var step = demoFlow[msgCount];
+    setTimeout(function() {
+      if (step.type === 'agent') {
+        addMessage('agent', step.text, step.options);
+      } else if (step.type === 'test-result') {
+        addTestResultCard();
+      }
+    }, 600 + Math.random() * 400);
+    msgCount++;
+  }
+}
+
+function addMessage(type, text, options) {
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'chat-msg ' + type;
+  var senderName = type === 'user' ? '我' : (type === 'agent' ? '向导助手' : '');
+  var bubble = '<div class="bubble">';
+  if (senderName) bubble += '<div class="msg-sender">' + senderName + '</div>';
+  bubble += text;
+  if (options) {
+    bubble += '<div class="option-cards">';
+    options.forEach(function(opt) {
+      var cls = opt.dashed ? 'option-card dashed' : 'option-card';
+      if (opt.selected) cls += ' selected';
+      bubble += '<div class="' + cls + '" data-ai-id="option-' + opt.text.replace(/[^a-zA-Z一-鿿]/g,'').slice(0,10) + '" onclick="selectOption(this)">' + opt.text + '</div>';
+    });
+    bubble += '</div>';
+  }
+  bubble += '</div>';
+  div.innerHTML = bubble;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function selectOption(el) {
+  el.classList.toggle('selected');
+  /* 推断：如果选择了"你帮我决定"，发送自动消息 */
+  if (el.classList.contains('dashed') && el.classList.contains('selected')) {
+    setTimeout(function() {
+      addMessage('system', '已选择「你帮我决定」，AI将根据常见实践自动填补该决策。');
+    }, 300);
+  }
+}
+
+/* ========== 测试结果摘要卡片 (S6) ========== */
+var testResultExpanded = false;
+
+function addTestResultCard() {
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'chat-msg test-result';
+  div.innerHTML = '<div class="bubble"><div class="test-result-card">' +
+    '<h3>测试完成 ✓</h3>' +
+    '<div class="stats">' +
+    '<span class="stat-pass">✅ 通过: 5</span>' +
+    '<span class="stat-fail">⚠ 失败: 0</span>' +
+    '<span style="color:var(--color-text-secondary)">⏸ 跳过: 0</span>' +
+    '</div>' +
+    '<button class="expand-btn" onclick="toggleTestResult(this)">展开详情 ▾</button>' +
+    '<div class="detail-items">' +
+    '<div class="detail-item"><span class="icon">✅</span> 能正常添加笔记<div class="detail-desc">我们试了：打开添加页面 → 输入书名《百年孤独》→ 写笔记内容 → 点保存 → 在列表中看到了这条笔记。✓ 成功。</div></div>' +
+    '<div class="detail-item"><span class="icon">✅</span> 空书名时有提示<div class="detail-desc">我们试了：不输入书名直接点保存 → 系统提示"请输入书名"→ 笔记不会被保存。✓ 正常。</div></div>' +
+    '<div class="detail-item"><span class="icon">✅</span> 按分类筛选正确<div class="detail-desc">我们试了：已有"文学"分类2条和"技术"分类3条 → 选择"文学"→ 列表只显示2条，全部是文学类笔记。✓ 正常。</div></div>' +
+    '<div class="detail-item"><span class="icon">✅</span> 超长内容不崩溃<div class="detail-desc">我们试了：在笔记内容中输入超过2000字 → 系统正常保存并显示。✓ 正常。</div></div>' +
+    '<div class="detail-item"><span class="icon">✅</span> 编辑已有笔记<div class="detail-desc">我们试了：点击已有笔记 → 修改内容 → 保存 → 列表中显示修改后的内容。✓ 成功。</div></div>' +
+    '</div>' +
+    '</div></div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function toggleTestResult(btn) {
+  var items = btn.parentElement.querySelector('.detail-items');
+  testResultExpanded = !testResultExpanded;
+  if (testResultExpanded) {
+    items.classList.add('open');
+    btn.textContent = '收起详情 ▴';
+  } else {
+    items.classList.remove('open');
+    btn.textContent = '展开详情 ▾';
+  }
+}
+
+/* ========== 截图上传 (S7) ========== */
+function handleScreenshot(input) {
+  if (!input.files || input.files.length === 0) return;
+  var file = input.files[0];
+  /* 插入用户截图消息 */
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'chat-msg user screenshot';
+  div.innerHTML = '<div class="bubble">📷 截图已发送</div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  /* Agent回复 */
+  setTimeout(function() {
+    addMessage('agent', '收到了你的截图！我看到了页面上的内容。你想让我改什么地方？比如可以描述一下哪个部分你不太满意，或者直接在右边的预览区点击你想改的元素。');
+  }, 800);
+  input.value = '';
+}
+
+/* ========== 时间轴 (B3) ========== */
+var timelineVersions = [
+  { id: 3, time: '2 分钟前', desc: '修改了按钮颜色后', isCurrent: true },
+  { id: 2, time: '10 分钟前', desc: '确认了原型方案后', isCurrent: false },
+  { id: 1, time: '25 分钟前', desc: '项目创建时', isCurrent: false }
+];
+var pendingRollbackId = null;
+
+function openTimeline() {
+  renderTimeline();
+  document.getElementById('timelineOverlay').classList.add('active');
+}
+
+function closeTimeline() {
+  document.getElementById('timelineOverlay').classList.remove('active');
+}
+
+document.getElementById('timelineOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closeTimeline();
+});
+
+function renderTimeline() {
+  var list = document.getElementById('timelineList');
+  if (timelineVersions.length === 0) {
+    list.innerHTML = '<div class="timeline-empty"><p class="timeline-empty-sub">暂无历史版本</p><p class="timeline-empty-sub">当你确认方案或进行重要修改时，系统会自动保存版本。</p></div>';
+    return;
+  }
+  var html = '';
+  for (var i = timelineVersions.length - 1; i >= 0; i--) {
+    var v = timelineVersions[i];
+    var isCurrent = v.isCurrent;
+    html += '<div class="timeline-item' + (isCurrent ? ' current' : '') + '">';
+    html += '<div class="tl-dot"></div>';
+    html += '<div class="tl-line"></div>';
+    html += '<div class="timeline-time">v' + v.id + ' · ' + v.time + (isCurrent ? '<span class="timeline-current-badge">当前版本</span>' : '') + '</div>';
+    html += '<div class="timeline-desc">' + v.desc + '</div>';
+    if (!isCurrent) {
+      html += '<button class="timeline-rollback" onclick="showRollbackDialog(' + v.id + ')">回到这个版本</button>';
+    }
+    html += '</div>';
+  }
+  list.innerHTML = html;
+}
+
+function showRollbackDialog(versionId) {
+  pendingRollbackId = versionId;
+  var v = timelineVersions.find(function(x) { return x.id === versionId; });
+  document.getElementById('rollbackDialogTitle').textContent = '确定要回到「' + v.desc + '」吗？';
+  document.getElementById('rollbackDialog').style.display = '';
+}
+
+function cancelRollback() {
+  pendingRollbackId = null;
+  document.getElementById('rollbackDialog').style.display = 'none';
+}
+
+function confirmRollback() {
+  if (pendingRollbackId === null) return;
+  var targetVer = timelineVersions.find(function(x) { return x.id === pendingRollbackId; });
+  /* 保存当前版本为快照 */
+  var currentVer = timelineVersions.find(function(x) { return x.isCurrent; });
+  /* 执行回滚 */
+  timelineVersions.forEach(function(v) { v.isCurrent = false; });
+  targetVer.isCurrent = true;
+  /* 更新版本列表 */
+  renderTimeline();
+  /* Toast通知 */
+  showToast('已回到「' + targetVer.desc + '」。你随时可以从历史版本中切回来。', 'rollback');
+  pendingRollbackId = null;
+  document.getElementById('rollbackDialog').style.display = 'none';
+}
+
+/* ========== 点选纠错 (B2) ========== */
+var clickHighlightTimer = null;
+var lastClickTarget = null;
+
+function initClickToFix() {
+  var previewPanel = document.getElementById('previewPanel');
+  previewPanel.addEventListener('click', function(e) {
+    /* 忽略对 quick-options 面板内部的点击 */
+    if (e.target.closest && e.target.closest('#quickOptions')) return;
+    if (e.target.closest && e.target.closest('.quick-options')) return;
+
+    var target = e.target.closest('[data-ai-id]');
+    if (!target) {
+      /* 点击空白区域 */
+      addMessage('agent', '这个位置好像没有可以修改的组件。你想在页面上的哪个具体元素？可以试试点按钮、文字或图片。');
+      hideQuickOptions();
+      if (clickHighlightTimer) clearTimeout(clickHighlightTimer);
+      document.getElementById('clickHighlight').style.display = 'none';
+      return;
+    }
+
+    /* 连续快速点击：以最后一次为准 */
+    if (clickHighlightTimer) clearTimeout(clickHighlightTimer);
+    if (lastClickTarget && lastClickTarget !== target) {
+      /* 重置，以当前为准 */
+    }
+    lastClickTarget = target;
+
+    var id = target.getAttribute('data-ai-id');
+    var type = target.getAttribute('data-ai-type') || '元素';
+    var rect = target.getBoundingClientRect();
+    var panelRect = previewPanel.getBoundingClientRect();
+
+    /* 计算高亮位置 */
+    var highlight = document.getElementById('clickHighlight');
+    highlight.style.top = (rect.top - panelRect.top) + 'px';
+    highlight.style.left = (rect.left - panelRect.left) + 'px';
+    highlight.style.width = rect.width + 'px';
+    highlight.style.height = rect.height + 'px';
+    highlight.style.display = '';
+    highlight.style.borderColor = 'var(--color-primary)';
+
+    /* 3秒后自动消失 */
+    clickHighlightTimer = setTimeout(function() {
+      highlight.style.display = 'none';
+    }, 3000);
+
+    /* 弹出快速选项面板 */
+    showQuickOptions(target, id, type, rect, panelRect);
+
+    /* 聊天区提示 */
+    addMessage('agent', '好的，我看到了这个' + type + '。你想怎么改？');
+  });
+}
+
+function showQuickOptions(target, id, type, rect, panelRect) {
+  var qo = document.getElementById('quickOptions');
+  /* 计算位置：放在高亮元素下方或右侧 */
+  var top = rect.bottom - panelRect.top + 8;
+  var left = rect.left - panelRect.left;
+
+  /* 确保不超出右侧边界 */
+  if (left + 260 > panelRect.width) {
+    left = Math.max(0, panelRect.width - 280);
+  }
+  /* 如果下方不够，放上方 */
+  if (top + 260 > panelRect.height && top > 200) {
+    top = rect.top - panelRect.top - 260;
+  }
+
+  qo.style.top = Math.max(4, top) + 'px';
+  qo.style.left = Math.max(4, left) + 'px';
+
+  /* 构建选项内容 - PRD §7.3 五个选项 */
+  var html = '';
+  html += '<button class="qo-close" onclick="hideQuickOptions()">✕</button>';
+  html += '<h4>对此<strong>' + type + '</strong>的操作：</h4>';
+  html += '<button class="quick-option-btn" onclick="quickOptionColor(this, \'' + id + '\')"><span class="qo-icon">🎨</span>换个颜色</button>';
+  html += '<button class="quick-option-btn" onclick="quickOptionMove(this, \'' + id + '\')"><span class="qo-icon">📐</span>换个位置</button>';
+  html += '<button class="quick-option-btn" onclick="quickOptionText(this, \'' + id + '\')"><span class="qo-icon">🖊</span>改文字</button>';
+  html += '<button class="quick-option-btn quick-option-delete" onclick="quickOptionDelete(this, \'' + id + '\')" style="color:#D97706"><span class="qo-icon">🗑</span>删掉它</button>';
+  html += '<button class="quick-option-btn" onclick="quickOptionOther(this, \'' + id + '\')"><span class="qo-icon">💬</span>其他</button>';
+
+  qo.innerHTML = html;
+  qo.style.display = '';
+  /* 标记当前选中的元素id */
+  qo.setAttribute('data-target-id', id);
+  qo.setAttribute('data-target-type', type);
+}
+
+function hideQuickOptions() {
+  document.getElementById('quickOptions').style.display = 'none';
+  /* 移除颜色子选项 */
+  var existing = document.querySelector('.qo-color-options');
+  if (existing) existing.remove();
+}
+
+/* 颜色子选项 */
+function quickOptionColor(btn, id) {
+  /* 切换颜色选择器显示 */
+  var existing = document.querySelector('.qo-color-options');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+  var colors = [
+    { name: '红色', val: '#DC2626' },
+    { name: '蓝色', val: '#4F46E5' },
+    { name: '绿色', val: '#059669' },
+    { name: '靛蓝', val: '#6366F1' }
+  ];
+  var html = '<div class="qo-color-options">';
+  colors.forEach(function(c) {
+    html += '<div class="qo-color-swatch" style="background:' + c.val + '" title="' + c.name + '" onclick="applyColor(\'' + id + '\',\'' + c.val + '\',\'' + c.name + '\')"></div>';
+  });
+  html += '</div>';
+  btn.parentNode.insertBefore(createElementFromHTML(html), btn.nextSibling);
+}
+
+function createElementFromHTML(html) {
+  var div = document.createElement('div');
+  div.innerHTML = html;
+  return div.firstElementChild;
+}
+
+function applyColor(id, colorVal, colorName) {
+  if (id === 'btn-save') {
+    var btn = document.getElementById('previewBtnSave');
+    if (btn) btn.style.background = colorVal;
+  } else if (id === 'title') {
+    var title = document.getElementById('previewTitle');
+    if (title) title.style.color = colorVal;
+  } else if (id.indexOf('card-') === 0) {
+    var card = document.querySelector('[data-ai-id="' + id + '"]');
+    if (card) card.style.borderLeftColor = colorVal; card.style.borderLeftWidth = '4px';
+  }
+  hideQuickOptions();
+  showToast('改好了，你看看效果？不满意随时告诉我。', 'success');
+}
+
+function quickOptionMove(btn, id) {
+  hideQuickOptions();
+  showToast('好的，我来调整位置。', 'progress');
+  /* 模拟位置交换 */
+  if (id === 'btn-save' || id === 'input-search') {
+    var row = document.querySelector('.preview-mock-input-row');
+    if (row) {
+      var children = row.children;
+      if (children.length >= 2) {
+        var temp = children[0].outerHTML;
+        children[0].outerHTML = children[1].outerHTML;
+        children[1].outerHTML = temp;
+        showToast('已经帮你换了一下位置，看看是不是你想要的？不满意随时告诉我。', 'success');
+      }
+    }
+  } else {
+    showToast('已经调整了位置，你看看效果？不满意随时告诉我。', 'success');
+  }
+}
+
+function quickOptionText(btn, id) {
+  hideQuickOptions();
+  if (id === 'btn-save') {
+    document.getElementById('previewBtnSave').textContent = '提交笔记';
+    showToast('改好了，你看看效果？不满意随时告诉我。', 'success');
+  } else if (id === 'title') {
+    document.getElementById('previewTitle').textContent = '我的读书笔记 · 已修改';
+    showToast('改好了，你看看效果？不满意随时告诉我。', 'success');
+  } else {
+    showToast('改好了，你看看效果？不满意随时告诉我。', 'success');
+  }
+}
+
+function quickOptionDelete(btn, id) {
+  hideQuickOptions();
+  var el = document.querySelector('[data-ai-id="' + id + '"]');
+  if (el) {
+    el.style.opacity = '0.3';
+    el.style.transition = 'opacity 0.3s';
+  }
+  showToast('已经帮你删掉了这个元素，你看看效果？不满意随时告诉我。', 'success');
+}
+
+function quickOptionOther(btn, id) {
+  hideQuickOptions();
+  addMessage('agent', '你想怎么改这个元素？可以直接在输入框里告诉我你的想法。');
+}
+
+/* ========== Toast 通知系统 (S5) ========== */
+function showToast(msg, type) {
+  var existing = document.querySelector('.toast');
+  if (existing) existing.remove();
+
+  var el = document.createElement('div');
+  el.className = 'toast';
+
+  var iconMap = {
+    progress: '⏳',
+    success: '✓',
+    error: '⚠',
+    rollback: '↩',
+    timeout: '⏳',
+    info: 'ℹ',
+    amber: '⚠'
+  };
+  var typeMap = {
+    progress: 'progress',
+    success: 'success',
+    error: 'amber',
+    rollback: 'amber',
+    timeout: 'amber',
+    info: 'info',
+    amber: 'amber'
+  };
+
+  el.className = 'toast ' + (typeMap[type] || 'amber');
+
+  // PRD §7.5 五条心理防御文案原文 (问题2修复)
+  var prdMessages = {
+    progress: '我正在帮你生成可运行的版本，这个过程只发生在安全环境里，不会影响你的电脑文件。',
+    success: '改好了，你看看效果？不满意随时告诉我。',
+    error: '刚才的修改没有成功，我已经帮你回到上一个正常版本，你的内容没有丢失。我们换个思路试试？',
+    rollback: '已经回到之前的版本了，一切都在。要继续的话随时告诉我。',
+    timeout: '这次操作花了比预期更长的时间，我还在处理中。如果等太久，你可以催我。'
+  };
+  if (prdMessages[type]) msg = prdMessages[type];
+
+  var icon = iconMap[type] || 'ℹ';
+  var content = '';
+
+  if (type === 'progress') {
+    content = '<span class="spinner-inline"></span>';
+  } else {
+    content = '<span class="toast-icon">' + icon + '</span>';
+  }
+  content += '<span>' + msg + '</span>';
+  el.innerHTML = content;
+
+  document.body.appendChild(el);
+
+  /* progress 类型不自动消失，其他3-4秒消失 */
+  if (type !== 'progress') {
+    var duration = (type === 'rollback') ? 4000 : 3500;
+    setTimeout(function() { el.remove(); }, duration);
+  }
+}
+
+/* ========== 熔断回滚模拟 (US-U07 问题3) ========== */
+function simulateCircuitBreaker() {
+  closeTimeline();
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'chat-msg agent';
+  div.innerHTML = '<div class="bubble"><div class="card-in-chat" style="border-left-color:var(--color-warning)"><h4>⚠ 遇到了一点技术问题</h4><div class="card-body">刚才的修改遇到了一点技术问题，没有成功。我已经帮你回到了上一个正常版本 [确认了原型方案后]，你的内容没有丢失。</div><div class="card-actions"><button class="btn-sm text" onclick="showToast(\'已选择换个方案\',\'info\')">换个方案</button><button class="btn-sm primary" onclick="showToast(\'已跳过这个功能\',\'info\')">先跳过这个功能</button></div></div></div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+/* ========== 升级确认 ========== */
+function showUpgradeConfirm() {
+  var banner = document.createElement('div');
+  banner.className = 'banner';
+  banner.setAttribute('data-ai-id', 'banner-upgrade');
+  banner.innerHTML = '建议你先完成快速制作的全过程，充分交流想法后再升级。不过如果你想现在切换——之前的沟通和成果都会保留，作为长期项目的原始素材。<div class="banner-actions"><button class="btn-sm text" onclick="this.parentElement.parentElement.remove()">继续快速模式</button><button class="btn-sm primary" onclick="showToast(\'已转为长期维护项目\',\'success\');this.parentElement.parentElement.remove()">确定升级</button></div>';
+  document.getElementById('chatMessages').appendChild(banner);
+  banner.scrollIntoView({ behavior: 'smooth' });
+}
+
+/* ========== 初始化 ========== */
+/* 预览区默认显示模拟内容，隐藏placeholder */
+document.getElementById('previewPlaceholder').style.display = 'none';
+document.getElementById('previewMock').style.display = '';
+
+/* 初始化点选纠错 */
+initClickToFix();
+
+/* 渲染时间轴空状态（默认显示空状态） */
+renderTimeline();
+
+console.log('[wireframe] quick-workspace v0.3 | 问题2-PRD §7.5文案精确匹配/问题3-US-U07熔断回滚安抚消息 | US-U02,U04,U05,U06,U07,U08 | design-system v0.2 aligned');
+</script>
+</body>
+</html>

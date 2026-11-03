@@ -61,8 +61,19 @@ export function getUpdateStatus(): UpdateStatus {
   return currentStatus
 }
 
+/**
+ * W24-4：开发部署（PROMA_DEV=1，start-dev.sh 注入）屏蔽商业版更新提示。
+ * dev 实例是打包形态（isPackaged=true）但 feed 指向商业版仓库（app-update.yml:
+ * proma-ai/Proma），检查到的「新版本」与 dev 部署无关且提示扰人——检查/下载/安装全禁用。
+ */
+const isDevDeployment = process.env.PROMA_DEV === '1'
+
 /** 手动触发检查更新 */
 export async function checkForUpdates(): Promise<void> {
+  if (isDevDeployment) {
+    console.log('[更新] 开发部署（PROMA_DEV=1），更新检查已禁用')
+    return
+  }
   // 已在下载中或已下载完成，不重复检查
   if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
     console.log('[更新] 跳过检查：已在下载中或已下载完成')
@@ -153,6 +164,16 @@ export function cleanupUpdater(): void {
  */
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   configureUpdater(mainWindow)
+  if (isDevDeployment) {
+    // W24-4：不注册事件/定时器（无 status 推送 → 渲染端无「更新」角标/横幅）；
+    // closed 清理照常挂接（幂等）
+    console.log('[更新] 开发部署（PROMA_DEV=1），自动更新已禁用（商业版更新提示屏蔽）')
+    mainWindow.on('closed', () => {
+      idleInstallScheduler.dispose()
+      win = null
+    })
+    return
+  }
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),

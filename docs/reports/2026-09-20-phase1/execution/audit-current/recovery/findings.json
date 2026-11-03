@@ -1,0 +1,85 @@
+{
+  "audit": "recovery-audit-current",
+  "role": "independent-readonly-audit（恢复：nanju-project-snapshots / nanju-file-snapshot / nanju-snapshot / nanju-ipc / preload/index / agent-orchestrator / nanju-advance-recovery）",
+  "timestamp": "2026-09-23T18:30:00+08:00",
+  "baseline": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+  "branch": "p1-quick-engineering",
+  "versions": { "electron": "0.17.132", "shared": "0.1.63" },
+  "bun": "/home/orphic/.bun/bin/bun (1.3.14)",
+  "method": "只读源码审查 + 3 组主动反例测试（持久化于 docs/reports/2026-09-20-phase1/execution/audit-current/recovery/negative/）",
+  "filesAudited": [
+    { "path": "apps/electron/src/main/lib/nanju-project-snapshots.ts", "sha256": "2f3ce00e0678c020433e8f8cf7bfaa75a8189928d15e200912054cb1c9cc2809", "mtime": "2026-09-20T14:51:09+08:00", "status": "M", "changedSinceR2": true },
+    { "path": "apps/electron/src/main/lib/nanju-file-snapshot.ts", "sha256": "4b30c2dec727bf1ecd562d1ceccf06027c7335e29991e1293d979a4c758b892e", "mtime": "2026-09-20T14:28:29+08:00", "status": "M", "changedSinceR2": false },
+    { "path": "apps/electron/src/main/lib/nanju-snapshot.ts", "sha256": "faa9332322d9a04bec98ed93076cac782bc21c207303330b63175e7a795e4647", "mtime": "2026-09-20T14:28:29+08:00", "status": "M", "changedSinceR2": false },
+    { "path": "apps/electron/src/main/lib/nanju-ipc.ts", "sha256": "4d537e57e349a71c827718a384311b7deb0fdca4a66579b4c271191b1a4f97c5", "mtime": "2026-09-21T14:35:40+08:00", "status": "M", "changedSinceR2": true },
+    { "path": "apps/electron/src/preload/index.ts", "sha256": "ca5e167e813396682744e3e3cbb335567f3ae4b6d25c160b7c747f6f6ae59601", "mtime": "2026-09-21T14:35:40+08:00", "status": "M" },
+    { "path": "apps/electron/src/main/lib/agent-orchestrator.ts", "sha256": "2c45de2238538131991ec125d143559f55b90c40fe41ecef6419349afa8e314b", "mtime": "2026-09-20T14:58:17+08:00", "status": "M" },
+    { "path": "apps/electron/src/main/lib/nanju-advance-recovery.ts", "sha256": "c581fbc164249cd1df98b89ee4f61b5f37b703ed17105fa9b95e880afb179050", "mtime": "2026-09-20T15:00:15+08:00", "status": "??（新增未跟踪）" }
+  ],
+  "testsRun": {
+    "advance-recovery-eventkey-collision.test.ts": "2 pass / 0 fail（1 项演示缺陷行为 + 1 项对照组）",
+    "recovery-state-corruption.test.ts": "3 pass / 0 fail（2 项演示缺陷行为 + 1 项对照）",
+    "recovery-boundary-green.test.ts": "5 pass / 0 fail（跨项目/符号链接/只读自救/损坏journal 保护复核）"
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "yellow",
+      "title": "phaseArtifactFingerprint 失败（eventKey=undefined）时幂等判定退化为 undefined===undefined，取消后新拒因被静默吞掉",
+      "file": "apps/electron/src/main/lib/nanju-advance-recovery.ts",
+      "line": 60,
+      "quote": "executionState: previous?.eventKey === eventKey && previous?.executionState === 'cancelled' ? 'cancelled' : 'blocked'",
+      "related": "同文件 line 62 consumedEventKey: previous?.eventKey === eventKey ? previous?.consumedEventKey : undefined；line 54 注释「无指纹仍记录blocked，绝不视为已消费」",
+      "trigger": "项目阶段产物含 >20MB 文件（或 >5000 文件 / 读取错误）→ phaseArtifactFingerprint 抛错 → eventKey=undefined；用户取消一次后，任何后续拒收（即使目标/内容不同）都因 undefined===undefined 被判为同一事件，继承 'cancelled'；buildPendingAdvanceRecoveryPrompt 见 cancelled 返回 null，新拒因对模型与跨重启恢复均不可见",
+      "counterexample": "negative/advance-recovery-eventkey-collision.test.ts 第 1 项：取消后 persist 不同 message 的拒因 → executionState 仍为 'cancelled'，buildPendingAdvanceRecoveryPrompt 返回 null；对照组（指纹可用 + 产物变化 → 新 eventKey）恢复 'blocked' 且可领取续接",
+      "impact": "与 line 54 注释意图相悖；在指纹退化场景下自动纠偏被永久抑制（仅当前轮教育消息仍注入，跨重启/自动续接全部失效）",
+      "suggestion": "eventKey 为 undefined 时不应参与「同事件」判定（例如改为显式哨兵或仅当 eventKey 非空才保留 cancelled/consumed 语义）"
+    },
+    {
+      "id": "F2",
+      "severity": "yellow",
+      "title": "rollbackProjectSnapshot 未校验 target.recoveryState 形状，损坏的 recoveryState 导致假 'restored' 或写入非法 currentStage",
+      "file": "apps/electron/src/main/lib/nanju-project-snapshots.ts",
+      "line": 533,
+      "quote": "const complete = Boolean(fileRestore?.ok && fileRestore.complete && state)",
+      "related": "同文件 line 522-523：const state = target.recoveryState；const restoredStage = state?.currentStage === 'delivered' ? 'testing' : state?.currentStage ?? project.currentStage",
+      "trigger": "_snapshots.json 被部分损坏为 recoveryState={}（或 currentStage 缺失/非法）。recoveryState={} 时 state 为 truthy → complete=true → status='restored' 且文案「已恢复会话、工程文件与阶段」，但 restoredStage 退化为当前阶段，阶段实际未回退；recoveryState.currentStage 为非法串时直接 updateNanjuProject 写入非法 currentStage 仍报 restored",
+      "counterexample": "negative/recovery-state-corruption.test.ts：recoveryState={} → result.status='restored' 但 currentStage 仍为 'testing'（未回退到 'coding'）；recoveryState.currentStage='garbage-stage' → currentStage 被写成 'garbage-stage' 且 status='restored'。对照：recoveryState 完整时正确回退到 'coding'",
+      "impact": "对损坏/被篡改的快照索引产生假成功声明（文件恢复真实但阶段承诺不成立），且可能把非法 stage 串写入项目状态，向下游路由/校验扩散",
+      "suggestion": "在 rollback 前校验 target.recoveryState.currentStage 属于合法 PhaseId 集合、status 存在，否则按「旧快照缺阶段信息」走 partial 路径"
+    },
+    {
+      "id": "F3",
+      "severity": "yellow",
+      "title": "nanju:cancel-advance-correction 只标记持久态 cancelled，不停止已在运行的续接（设计分歧）",
+      "file": "apps/electron/src/main/lib/nanju-ipc.ts",
+      "line": 260,
+      "quote": "cancelAdvanceCorrection(input.workspaceSlug, input.projectId)",
+      "related": "cancelAdvanceCorrection（nanju-advance-recovery.ts:89）仅 setProjectPendingAdvanceCorrection({executionState:'cancelled'})；不增 nanjuContinuationEpoch、不调用 stop()/abort()",
+      "trigger": "续接已由 runNanjuGuardContinuation 经 runRegisteredHeadlessAgent 发出后（L1 正在运行），用户点击取消 → 仅持久态置 cancelled，运行中的纠偏续接继续直至完成",
+      "impact": "取消语义为「停止自动纠偏」但仅覆盖未发出的续接（epoch 重查 / executionState 重查会拦截排队中续接）；已发出的续接不受影响。若产品语义要求取消即停止当前运行，则需在 cancel 路径补 epoch 递增或 stop",
+      "note": "设计分歧而非明确缺陷：fail-safe 方向（多跑一段纠偏）无错误放行风险；本项仅记录语义边界"
+    },
+    {
+      "id": "F4",
+      "severity": "yellow",
+      "title": "IPC 四层类型侵蚀：preload 快照/项目通道返回 unknown 或丢失字段，渲染端手动重声明",
+      "file": "apps/electron/src/preload/index.ts",
+      "line": 1284,
+      "quote": "nanjuListProjects: (workspaceSlug: string) => Promise<unknown[]>",
+      "related": "preload:1285-1320 nanjuCreateProject/UpdateProject/GetProject/GetProjectStage/GetAutoClarify 均 Promise<unknown>；nanjuRollbackSnapshot 返回 ProjectRecoveryResult（丢弃 ProjectSnapshotRollbackResult 的 snapshot 字段与 FileRestoreOutcome.reason，见 nanju-project-snapshots.ts:456/152）；渲染端 useNanjuGuideData.ts 手动重声明 advanceCorrection 类型",
+      "impact": "四层（shared 类型 → preload 接口 → preload invoke → main handler）类型不收敛：main 返回的结构化失败原因 reason（cross-device/locked/hash-mismatch）在类型上不可分支，只能读 userMessage 文案；项目通道 unknown 使渲染端各自重声明，缺乏编译期契约约束",
+      "note": "非运行时缺陷（对象字段仍在，结构兼容），属类型安全/可维护性侵蚀"
+    }
+  ],
+  "greenConfirmations": [
+    { "id": "G1", "topic": "跨项目/会话归属", "evidence": "findRecoveryProjectForSession 沿 parentSessionId 上溯（≤64 跳防环），getRecoveryToolBlock 先判 ownsBlocked 再对 write/edit/multiedit 绝对路径逐根 realpath 判定；green 测试确认无关工程会话写自身文件放行、写被阻塞工程文件被拒" },
+    { "id": "G2", "topic": "写路径符号链接逃逸", "evidence": "resolveWithExistingParents 对最近存在祖先 realpath 归位；green 测试确认项目外符号链接指向被阻塞工程文件时，写路径经 realpath 归位后仍被拒" },
+    { "id": "G3", "topic": "只读自救", "evidence": "RECOVERY_READ_TOOLS 白名单（read/ls/glob/grep/find/browser*/ask/task*）恒放行，写工具与 shell/MCP 保守阻止；green 测试确认被阻塞工程自身会话读放行、写拒绝" },
+    { "id": "G4", "topic": "损坏 journal 选择完整检查点", "evidence": "rollbackProjectSnapshot damagedJournal 分支要求 target 同时具备 recoveryState + 合法 fileSnapshotId + verifyFileSnapshotDir.ok 才放行并归档原日志；green 测试确认「损坏 + 无文件/阶段记录 → 拒绝」「损坏 + 完整 → 归档恢复」" },
+    { "id": "G5", "topic": "锁与并发", "evidence": "文件锁 _restore.lock（wx 独占 + pid/procStart/TTL 陈旧接管 + token 匹配才释放），内存 recoveryLocks 同进程互斥；r2 C2 已修复 recoverInterruptedRestore 无锁绕过" },
+    { "id": "G6", "topic": "恢复前授权失效语义", "evidence": "invalidateRecoveryAuthorization 删 deliveryAck/deliveryChallenge/confirmPendingStage/pendingAdvanceCorrection/codingDelegationId（盘上）+ clearNanjuAdvanceAuthState 清 5 个内存授权/计数 store，双层覆盖；r2 C3 已确认为有意 fail-closed 语义" },
+    { "id": "G7", "topic": "持久消息/取消旧续接", "evidence": "nanjuContinuationEpoch 在 stop()/非 systemInitiated 用户消息时递增；runNanjuGuardContinuation 每次重查 epoch + stoppedByUser + executionState==='cancelled'；stop() 同步调 cancelAdvanceCorrection" }
+  ],
+  "conclusion": "未发现 red/high 级缺陷。新增/变更代码（nanju-ipc.ts、nanju-project-snapshots.ts 的跨项目归属/符号链接/损坏journal 处理、nanju-advance-recovery.ts 事件键与续接）主体 fail-closed 且保护面完整；发现 4 项 yellow：F1/F2 为退化输入下的健壮性缺口（指纹失败、快照索引损坏），F3 为取消语义边界，F4 为 IPC 类型侵蚀。均仅报证据，交由父会话决定是否修复。"
+}

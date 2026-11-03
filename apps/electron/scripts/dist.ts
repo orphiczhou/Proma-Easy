@@ -19,6 +19,7 @@
 
 import { spawnSync } from 'child_process'
 import { join } from 'path'
+import { verifyEngineeringResourcesAt } from '../src/main/lib/nanju-engineering-resources'
 
 // ============================================
 // 类型定义
@@ -167,7 +168,7 @@ function main(): void {
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
-  const totalSteps = 7
+  const totalSteps = 8
   let step = 0
 
   // ── 步骤 1: 构建主进程 ──
@@ -223,7 +224,16 @@ function main(): void {
   )
   printStepResult(results[results.length - 1])
 
-  // ── 步骤 7: electron-builder 打包 ──
+  // ── 步骤 7: 打包前资源完整性门禁 ──
+  step++
+  printStepStart(step, totalSteps + 1, '校验工程模板资源')
+  const resourceCheck = verifyEngineeringResourcesAt()
+  results.push({ name: '校验工程模板资源', duration: 0, success: resourceCheck.ok, skipped: false })
+  if (!resourceCheck.ok) console.error(JSON.stringify(resourceCheck.issues, null, 2))
+  printStepResult(results[results.length - 1])
+  if (!resourceCheck.ok) return printSummary(results)
+
+  // ── 步骤 8: electron-builder 打包 ──
   step++
   printStepStart(step, totalSteps, 'Electron Builder 打包')
 

@@ -118,18 +118,45 @@ describe('remote_abort_session 真实 HTTP 路由（本地 mock 实例）', () =
 })
 
 describe('HTTP bridge abort_session handler 接线（源码断言，M 级）', () => {
+  /**
+   * M1-3 之后（2026-11-02）abort_session 业务实现已下沉到共享层 session-tool-handlers.ts，
+   * bridge 只保留「外部调用身份 + 路由」，因此源码断言改为「共享层含完整实现 ∧ bridge 经共享层接入」。
+   * 断言口径未放宽：stop / capability 清理 / 会话存在性校验三项语义仍逐条核对。
+   */
+  const sharedSource = readFileSync(new URL('./session-tool-handlers.ts', import.meta.url), 'utf-8')
+
+  /** 截取共享层 abort_session handler 段落（到下一个同级 handler 或 handlers 收口） */
+  function sharedAbortHandlerSlice(): string {
+    const start = sharedSource.indexOf('abort_session: async (args')
+    if (start < 0) return ''
+    const endCandidates = [
+      sharedSource.indexOf('\n    },\n    ', start),
+      sharedSource.indexOf('\n  }\n  return handlers', start),
+    ].filter((i) => i > start)
+    const end = endCandidates.length > 0 ? Math.min(...endCandidates) : sharedSource.length
+    return sharedSource.slice(start, end)
+  }
+
   test('handler 存在且执行 stop + 确定性 capability abort', () => {
-    const handler = bridgeSource.slice(
-      bridgeSource.indexOf('abort_session: async (args)'),
-      bridgeSource.indexOf("return {\n        session_id: sessionId,\n        title: meta.title,\n        was_active: wasActive,", 0),
-    )
+    const handler = sharedAbortHandlerSlice()
+    expect(handler.length).toBeGreaterThan(0)
+    // 会话不存在 → 早退，不得对未知会话执行 stop/清理
+    expect(handler).toContain('if (!meta) return { error: `Session not found: ${sessionId}` }')
     expect(handler).toContain('isAgentSessionActive(sessionId)')
     expect(handler).toContain('if (wasActive) stopRegisteredAgent(sessionId)')
     expect(handler).toContain('abortAgentPendingCapabilities(sessionId)')
+    // 返回形态保持 wire 兼容（was_active 反映停止前状态）
+    expect(handler).toContain('was_active: wasActive')
   })
 
-  test('bridge 从 agent-service 导入 abort 能力（经由 registry 的 stop 不新增直依赖）', () => {
-    expect(bridgeSource).toContain("import { runRegisteredHeadlessAgent, stopRegisteredAgent } from './agent-headless-runner-registry'")
-    expect(bridgeSource).toContain("import { isAgentSessionActive, abortAgentPendingCapabilities } from './agent-service'")
+  test('abort 能力由共享层导入，bridge 不新增直依赖', () => {
+    // 共享层：stop 走 registry，abort/活跃判定走 agent-service（不重复实现）
+    expect(sharedSource).toContain("import { runRegisteredHeadlessAgent, stopRegisteredAgent } from './agent-headless-runner-registry'")
+    expect(sharedSource).toContain("import { isAgentSessionActive, abortAgentPendingCapabilities } from './agent-service'")
+    // bridge：只经共享层接入，且不直接 import agent-service / registry（保持双入口单一实现）
+    expect(bridgeSource).toContain("await import('./session-tool-handlers')")
+    expect(bridgeSource).toContain('createSessionToolHandlers({ isExternal: true })')
+    expect(bridgeSource).not.toContain("from './agent-service'")
+    expect(bridgeSource).not.toContain("from './agent-headless-runner-registry'")
   })
 })

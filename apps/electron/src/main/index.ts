@@ -473,7 +473,9 @@ function saveMainWindowState(): void {
 
 function isDevServerNavigation(url: string): boolean {
   try {
-    return new URL(url).origin === 'http://127.0.0.1:5173'
+    // 与 vite.config.ts 的 PROMA_DEV_PORT 约定保持同源判定（缺省 5173）。
+    const devPort = process.env.PROMA_DEV_PORT ?? '5173'
+    return new URL(url).origin === `http://127.0.0.1:${devPort}`
   } catch {
     return false
   }
@@ -536,7 +538,10 @@ function createWindow(): void {
   // Load the renderer
   const isDev = !app.isPackaged
   const rendererPath = join(__dirname, 'renderer', 'index.html')
-  const rendererEntryUrl = isDev ? 'http://127.0.0.1:5173' : pathToFileURL(rendererPath).toString()
+  // 与 vite.config.ts 一致：PROMA_DEV_PORT 覆盖 dev 端口（缺省 5173）。
+  const rendererEntryUrl = isDev
+    ? `http://127.0.0.1:${process.env.PROMA_DEV_PORT ?? '5173'}`
+    : pathToFileURL(rendererPath).toString()
   const loadMainRenderer = (): Promise<void> => {
     if (!mainWindow || mainWindow.isDestroyed()) {
       return Promise.reject(new Error('主窗口已销毁'))

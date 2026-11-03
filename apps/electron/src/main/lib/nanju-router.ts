@@ -13,8 +13,17 @@
 
 import type { ProjectMode } from './nanju-project'
 import { CATEGORY_MARKER_GUIDE } from './nanju-engineering-template'
+// I-P2（B-e）：US-U02 快消对话策略常量/模板唯一真源（F2 模块；router 只引用不复制字面量）
+import {
+  AUTO_DECIDE_LABEL, AUTO_SUGGEST_TAG, QUICK_VAGUE_LOOP_LIMIT,
+  buildVagueLoopExitReply,
+} from './nanju-quick-dialog'
+import { ENGINEERING_CONTRACT_GUIDE, ENGINEERING_CODING_GUIDE } from './nanju-engineering-guide'
+import { ACCEPTANCE_SPEC_GUIDE } from './nanju-acceptance-baseline'
+import { TEST_ARCHITECTURE_GUIDE } from './nanju-test-architecture'
 import {
   FALLBACK_AC_PRESETS,
+  getConfigGeneration,
   resolveAcPreset,
   resolvePhaseModelConfig,
   type NanjuModelPhaseId,
@@ -49,6 +58,14 @@ export interface PhaseNode {
   /** AC 审计防御者配置（显式指定时覆盖 taskWeight 预设；不得与作者同家族） */
   acDefenderChannel?: string
   acDefenderModel?: string
+  /**
+   * B2：独立视觉验证者配置（与 author 解耦；prototype 阶段专属）。
+   * channel 可为 'minimax' 家族标记（运行时按渠道记录解析为具体 UUID 渠道，参考
+   * resolvePrototypeAuthor 思路）；与 author 同端点视为同端点自证，gate 拒绝。
+   * nanju-router-prompt.resolveVisualValidatorSlot 统一处理 family marker 解析与同端点校验（未配置/同端点 → 清晰 blocked）。
+   */
+  visualReviewerChannel?: string
+  visualReviewerModel?: string
 }
 
 // ===== AC 审计分级预设（P1：v0.16.87） =====
@@ -184,13 +201,14 @@ const SENTINEL: PhaseNode = {
  * 节点字面硬编码模型值已收敛到兑底常量（与内置 json 同值，锁定测试保证一致）。
  */
 function phaseModelFields(id: NanjuModelPhaseId): Pick<PhaseNode, 'channel' | 'model'>
-  & Partial<Pick<PhaseNode, 'acAttackerChannel' | 'acAttackerModel' | 'acDefenderChannel' | 'acDefenderModel'>> {
+  & Partial<Pick<PhaseNode, 'acAttackerChannel' | 'acAttackerModel' | 'acDefenderChannel' | 'acDefenderModel' | 'visualReviewerChannel' | 'visualReviewerModel'>> {
   const cfg = resolvePhaseModelConfig(id)
   return {
     channel: cfg.channel,
     model: cfg.model,
     ...(cfg.acAttacker ? { acAttackerChannel: cfg.acAttacker.channel, acAttackerModel: cfg.acAttacker.model } : {}),
     ...(cfg.acDefender ? { acDefenderChannel: cfg.acDefender.channel, acDefenderModel: cfg.acDefender.model } : {}),
+    ...(cfg.visualReviewer ? { visualReviewerChannel: cfg.visualReviewer.channel, visualReviewerModel: cfg.visualReviewer.model } : {}),
   }
 }
 
@@ -212,6 +230,12 @@ const REQUIREMENTS_BASE: Omit<PhaseNode, 'taskWeight' | 'channel' | 'model'> = {
     // 工程品类初判（W3，v0.17.66）：coding 阶段按品类加载工程模板；PRD 标注是 quick 模式的
     // 唯一判定源（iterative 模式架构师可终判修正）。缺失时 coding 降级 web-fullstack + 自检。
     '工程品类初判（强烈建议）：' + CATEGORY_MARKER_GUIDE + '；放在 PRD 靠前位置（如「## 工程品类」一节）',
+    // I-P2（B-e）：US-U02 快消需求沟通策略——程序化策略骨架的唯一注入点
+    // （措辞真源在 nanju-quick-dialog 的常量/模板函数；本数组只引用，不复制字面量）。
+    `每轮末尾都提供「${AUTO_DECIDE_LABEL}」选项：用户选它即由你（用「${AUTO_SUGGEST_TAG}」标注）替他决定该项，不要反过来追问`,
+    `用户连续 ${QUICK_VAGUE_LOOP_LIMIT} 轮仍然说不出具体需求时，第 ${QUICK_VAGUE_LOOP_LIMIT + 1} 轮不要继续追问，直接按通用版开工并告知：${buildVagueLoopExitReply()}`,
+    '用户答复极模糊（只说「帮我做个东西」这类）时，给四方向选择而不是继续追问：实用小工具 / 内容整理 / 可视化展示 / 你帮我决定',
+    `用户表达「开始吧 / 直接做 / 先看看」这类开工意图时，立刻停止追问，先给他看当前产出（预览）再边做边问`,
   ],
   requiresUserConfirmation: true,
   requiresAC: false,
@@ -268,21 +292,9 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     role: 'fullstack-developer',
     title: '全栈开发',
     ...phaseModelFields('coding'),
-    task: '你是全栈开发工程师。先阅读任务末尾「前序产出文件」一节实际列出的产出（PRD 必读；原型按取舍提示阅读），'
-      + '然后生成可直接在浏览器运行的零构建应用代码，入口写入 08_APP/index.html。',
-    outputPath: '08_APP/index.html',
-    constraints: [
-      '零构建约束：纯 HTML/CSS/原生 JS，禁止 npm/打包器/框架构建链，浏览器直接打开即可运行',
-      '以 02_UX_DESIGN/prototype.html 为视觉与交互基准，页面结构、文案、交互行为不得偏离',
-      '数据持久化（如需要）只用 localStorage/IndexedDB，不引入任何后端服务（file:// 本地打开时 localStorage 作用域与 http 站点不同，所有键名加项目前缀避免跨项目串数据）',
-      '所有资源（css/js/图片）放在 08_APP/ 内用相对路径引用，不得引用 08_APP 之外或远程 CDN 生产依赖',
-      '点选纠错标记（硬性标准）：所有可交互/可修改 UI 元素必须标 data-ai-id（唯一英文ID）+ data-ai-type（中文类型），与原型同一套 ID 命名，保持原型→代码可对照',
-      '只在项目目录 08_APP/ 下写入文件，禁止触碰其他 project-* 目录与工作区根的配置文件',
-      '自测（必须）：生成后用 chrome-devtools MCP 的 new_page 打开入口文件（绝对路径见「产出文件」一节），'
-        + '逐条对照 PRD 用户故事实测每个 P0 交互（点击/输入/提交都要真实触发并看到结果），'
-        + '发现问题修复后重测，连续 1 轮无缺陷才算完成'
-        + '（new_page 需 URL 形态：本地文件用 file:// 前缀+正斜杠绝对路径；若 chrome-devtools MCP 不可用，降级为逐项人工核对入口结构、资源引用与 P0 交互逻辑，并在交付说明中注明未实测）',
-    ],
+    task: '你是全栈开发工程师。先阅读PRD、UX及架构，按工程交付契约实现真实可运行软件；不得用网页模拟替代非Web产品。',
+    outputPath: '08_APP/index.html', // 旧静态Web兼容值；新工程由resolveCodingOutputPath解析为DELIVERY.md
+    constraints: [ENGINEERING_CODING_GUIDE],
     requiresUserConfirmation: true, // 预览 + 用户确认（Sprint A 骨架的核心收口）
     requiresAC: false,              // 不开 red 硬门禁；AC 攻防指令仍由 buildL2TaskWithAC 自动注入
     retryLimit: 2,
@@ -317,11 +329,12 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
     outputPath: '06_TESTS/features/index.feature', // 汇总入口文件（FORMAT_CHECKS 用）
     constraints: [
       '场景派生：从 01_PRD/prd.md 用户故事清单（US-xx）逐条生成验收场景，每条故事至少 1 个 happy path 场景，场景命名「US-xx 场景标题」',
-      '映射前提（硬性）：先 Read 08_APP/index.html（及 08_APP/ 内被引用的 js），从实际代码提取 data-ai-id 清单，再写步骤映射；禁止臆造 selector',
-      '双文件成对产出：每个 us-XX 一个 us-XX.feature（中文 Gherkin：Feature/Scenario/Given/When/Then）+ 一个 us-XX.steps.json（机器可执行步骤脚本，schema 见任务描述），两文件语义必须一致',
+      '映射前提（硬性）：先读architecture.md及engineering.json，明确真实测试对象；只有browser-file适配器才从实际HTML及引用代码提取data-ai-id。旧静态Web兼容08_APP/index.html，禁止臆造selector或把系统行为改成网页模拟。',
+      '浏览器双文件成对产出：每个 us-XX 一个 us-XX.feature（中文 Gherkin：Feature/Scenario/Given/When/Then）+ 一个 us-XX.steps.json（机器可执行步骤脚本，schema 见任务描述），两文件语义必须一致',
+      '非浏览器工程：读取coding已产出的driver，独立核验真实对象和行为检查；在06_TESTS中记录场景与审查结论，不生成虚假的DOM映射。宿主按engineering.json执行驱动；驱动缺失回coding补齐，禁止测试工程师跨目录改08_APP。',
       '汇总入口：把全部场景汇总写入 06_TESTS/features/index.feature（每条用户故事一个 Feature 段，保持与分文件同名对应）',
       'selector 只允许 [data-ai-id="xxx"] 形态（与原型/代码同一套 ID）；操作步骤 op 白名单：click/fill/press/wait-selector/assert-text/assert-visible/assert-count（复杂状态断言暂不支持自定义脚本，用 assert-text 轮询读界面呈现的状态文本替代），每步可配 timeoutMs（断言类默认 4000，轮询窗口内重试，禁止严格时刻断言）',
-      '无法可靠映射到实际元素的步骤：该步 op 置 null 且 unmapped=true，并在场景级标 skip:true + skipReason 说明（透明跳过，不臆造）',
+      '非browser-file测试若驱动尚未接入，明确报告blocked及所需能力，不得伪造DOM步骤。无法可靠映射到实际元素的浏览器步骤：该步 op 置 null 且 unmapped=true，并在场景级标 skip:true + skipReason 说明（透明跳过，不臆造）',
       '只在项目目录 06_TESTS/ 下写入文件，禁止触碰 08_APP/ 等其他目录',
     ],
     requiresUserConfirmation: false, // 机器判定收口（裁判规则：全场景通过 + US 全覆盖 = 交付），不做人肉确认
@@ -345,6 +358,34 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       + '或 `projectEnv: missing:<组件逗号清单>`（有缺失）——系统按此标记拦截未就绪推进',
   ]
 
+  /**
+   * P0-5（L1，2026-09-18）：架构师任务书注入四件（J1/J3/J4/J5，B1 03 §7 P0 定级），
+   * 两变体共用。用户指令「架构师派子会话做架构探索实验+留工程化资料」的机制入口；
+   * 与模版迁移同批（J1 引用模版 §2/§7，模版不迁则注入无对象）。知识边界条文（模版无
+   * [实证] 知识须主动网络检索+来源引用）为提示词级；凭证门禁（三形态+事后抽检）在
+   * L2-4 承接。00_SPIKES/ 已注册进工程目录规范合法产物目录集（docDirs/写放行清单）。
+   */
+  const ARCHITECT_SPIKE_CONSTRAINTS = [
+    '工程模版必读（J1）：Read 00_ENGINEERING_TEMPLATE/template.md 后再选型，重点 §2 组件环境清单'
+      + '（组件/探测/安装/已知坑；§2.3 探测脚本可照抄）与 §7 坑库（按 [实证]/[推断] 证据等级引用，'
+      + '[推断] 条目不得当作已验证结论写入架构）。',
+    'Spike 派发权（J3）：架构师有权对本机可验证的技术不确定点派子会话做架构探索实验（Spike），'
+      + '同一阶段可并行多个；单 Spike 时间盒快消型≤30 分钟、返工≤1 轮，部分结论也必须落盘（标 PARTIAL）。',
+    'Spike 触发判据（J4，T1-T3 同时满足必须派发，不得凭记忆拍板）：T1 知识缺口——决策点不在模版'
+      + ' §2/§7/§8 覆盖范围或仅 [推断] 级；T2 决策影响——影响架构选型、组件选型或验收方案（非实现细节）；'
+      + 'T3 可时间盒——时间盒内能设计出可判定实验。',
+    'Spike 产物落位（J5）：一律写入工程目录 00_SPIKES/spike-<NNN>-<slug>/（README 报告/NOTES 试错轨迹'
+      + '/env-manifest/setup.sh/probe 脚本/evidence/ 六件套），索引写 00_SPIKES/INDEX.md；该目录已注册为'
+      + '合法产物目录。实验资料与环境留给后续开发与测试阶段消费。',
+    '知识边界硬性条文（三形态凭证规则，L2-4 补完整）：模版与坑库无 [实证] 知识支撑的关键决策'
+      + '（新端点/新模型/新平台能力），必须主动网络搜索求证，不得仅凭训练记忆断言。'
+      + '凡依据网络检索的结论须附来源引用（URL+检索日期），覆盖三形态：'
+      + '①[推断]→[实证]/[文证] 升级、②直接新增 [实证]/[文证] 条目——两形态每条须附「URL+检索日期」，'
+      + '无凭证视为未执行（推进门禁拦截）；③保持 [推断] 者须注明「已检索无结论（关键词+日期）」'
+      + '或「未触发检索条件」——检索行为在推理内部不可观测，此形态为自我申报+事后抽检追责，'
+      + '不得伪造。凭证记录统一写入架构文档「## 证据升级与检索记录」节。',
+  ]
+
   // architecture 节点（W7，v0.17.69：两模式统一必经，按 mode 输出变体——复用同一
   // PhaseNode 与 defaultWeight 惯例，quick 轻量化方案 A + 四层兑底，用户 U1-U5 已确认）：
   // - quick 变体：免 AC 攻防；用户确认与环境就绪合并为一次（一条消息看架构摘要+环境清单）。
@@ -360,9 +401,9 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       role: 'architect',
       title: '架构师',
       ...phaseModelFields('architecture'),
-      task: '你是架构设计师。根据 PRD 和原型，产出精简架构文档（约 30-60 行）：'
+      task: '你是架构设计师。根据 PRD 和原型，产出精简架构文档（以完整说明交付和测试所需内容为准）：'
         + '品类终判（projectCategory 标记）+ 技术选型（每项一句话理由）'
-        + '+ 组件清单（含环境探测结果）+ 环境就绪结论。',
+        + '+ 组件清单（含环境探测结果）+ 环境就绪结论 + 交付与运行说明 + 测试架构。',
       outputPath: '03_ARCHITECTURE/architecture.md',
       constraints: [
         '品类终判（必须）：' + CATEGORY_MARKER_GUIDE + '；基于部署/运行形态判定（本地桌面程序≠网站），可修正 PRD 初判，写在文档显目位置',
@@ -370,8 +411,12 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
         // 但 quick 无 Read 指令 → 架构师不参考模板（与 W7 v3 §五 iterative 前移契约不对齐）。
         // 补齐：终判前必读初判模板（缺失容忍降级，与 iterative 同语义）。
         '品类终判前必读工程模板：Read 00_ENGINEERING_TEMPLATE/template.md（初判品类的参考工程模板；若项目目录无该文件，按品类自行降级判定）；终判若与初判不一致，以终判为准并在选型理由中说明',
-        '架构精简为快消定位服务：不写长篇目录树/接口定义，技术选型与组件清单为主（长期演进细节交给工程模板参考）',
+        '架构精简为快消定位服务：长期演进细节可引用工程模板，但交付、运行与测试设计不可省略',
+        TEST_ARCHITECTURE_GUIDE,
+        ACCEPTANCE_SPEC_GUIDE,
+        ENGINEERING_CONTRACT_GUIDE,
         ...ENV_PROBE_CONSTRAINTS,
+        ...ARCHITECT_SPIKE_CONSTRAINTS, // P0-5：架构师任务书注入四件（J1/J3/J4/J5）
       ],
       requiresUserConfirmation: true, // 合并确认：架构摘要 + 环境清单一条消息确认（U1 方案 A）
       requiresAC: false,              // 免 AC 攻防；兜底 = 规则校验层（R2）+ 合并确认 + envReady 门禁
@@ -390,6 +435,9 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
       constraints: [
         '技术选型 + 目录结构',
         'API 规范设计',
+        TEST_ARCHITECTURE_GUIDE,
+        ACCEPTANCE_SPEC_GUIDE,
+        ENGINEERING_CONTRACT_GUIDE,
         // 工程品类终判（W3，v0.17.66）：架构师对项目形态的判断优先于 PRD 初判
         // （resolveProjectCategoryForCoding 按 architecture > prd 顺序提取）；
         // 未标注时 coding 降级 web-fullstack（对本地程序/CLI 等形态会误配工程模板）。
@@ -402,6 +450,7 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
         '架构文档必含「## 环境配置」节：清单表（列：组件 | 版本 | 用途 | 安装命令 | 验证命令），'
           + '按品类列全运行时/包管理器/构建工具；环境探测结果与缺失标记写入验证命令列备注',
         ...ENV_PROBE_CONSTRAINTS,
+        ...ARCHITECT_SPIKE_CONSTRAINTS, // P0-5：架构师任务书注入四件（J1/J3/J4/J5）
       ],
       requiresUserConfirmation: true,
       requiresAC: true,
@@ -441,16 +490,25 @@ function makeRoute(mode: ProjectMode): PhaseNode[] {
   return [REQUIREMENTS, prototype, architecture, planning, coding, testing, SENTINEL]
 }
 
-const ROUTES: Record<ProjectMode, PhaseNode[]> = {
-  quick: makeRoute('quick'),
-  iterative: makeRoute('iterative'),
+// W23（§六.1）：ROUTES 改代次脏缓存——配置 reload（代次 +1）后下一次 getRoute 按需重建
+//（makeRoute 纯函数、构建廉价；主进程单线程无竞态）。保存链路 reload → 新委派即用新矩阵，
+// 无需重启。配置侧只暴露 getConfigGeneration 计数，本模块不反向写配置（type-only 约束不变）。
+let _routesCache: { generation: number; routes: Record<ProjectMode, PhaseNode[]> } | undefined
+
+function getRoutesTable(): Record<ProjectMode, PhaseNode[]> {
+  const generation = getConfigGeneration()
+  if (!_routesCache || _routesCache.generation !== generation) {
+    _routesCache = { generation, routes: { quick: makeRoute('quick'), iterative: makeRoute('iterative') } }
+  }
+  return _routesCache.routes
 }
 
 // ===== 路由查询 =====
 
 /** 获取指定模式的完整路由 */
 export function getRoute(mode: ProjectMode): PhaseNode[] {
-  return ROUTES[mode] ?? ROUTES.iterative
+  const routes = getRoutesTable()
+  return routes[mode] ?? routes.iterative
 }
 
 /**
@@ -606,7 +664,8 @@ export function reportModelDiversityWarnings(
 }
 
 // W22 M#8 启动断言：模块加载期两模式各评估一次（console warn，不 throw 不阻断）。
-// 路由构建（ROUTES）已完成，此处读同一配置缓存；用户改参数文件重启后重新评估。
+// evaluateModelDiversity 内部走 getRoute（首次调用触发 ROUTES 构建，与旧加载期构建等价），
+// 此处读同一配置缓存；配置 reload 后（W23 代次脏缓存）下一次 getRoute 重新评估。
 for (const _mode of ['quick', 'iterative'] as const) {
   reportModelDiversityWarnings(evaluateModelDiversity(_mode))
 }

@@ -1,7 +1,7 @@
 /**
  * 树形会话执行体系 MCP 工具（mcp__tree__*）
  *
- * 包装层：将 tree-engine.cjs 的 27 个命令 + 1 个 help 元工具暴露为 Pi custom tools。
+ * 包装层：将 tree-engine.cjs 的命令集 + 1 个 help 元工具暴露为 Pi custom tools。
  * 引擎逻辑（状态文件管理、DbC 硬约束、V10 加固）全部保留在 tree-engine.cjs 中。
  *
  * 移植自 proma-patches 项目的 createTreeMcpServer。
@@ -357,6 +357,39 @@ export function buildPiTreeTools(sdk: PiSdk, ctx: TreeToolsContext): ToolDefinit
       desc: '列出事件。',
       params: { tree_id: Type.String(), leaf_id: Type.Optional(Type.String()), type: Type.Optional(Type.String()) },
       argBuilder: (a) => ['event', 'list', a.tree_id as string, ...(a.leaf_id ? ['--leaf', a.leaf_id as string] : []), ...(a.type ? ['--type', a.type as string] : [])],
+      readOnly: true,
+    },
+
+    // ---- Communication（v0.17.133：跨会话通信日志）----
+    {
+      name: 'tree_log_communication',
+      desc: '记录跨会话通信日志（send_message 调用后记录 caller→target 活动并刷新 target last_event_ts）。',
+      params: {
+        tree_id: Type.String(),
+        from_leaf: Type.Optional(Type.String()),
+        to_leaf: Type.String(),
+        summary: Type.Optional(Type.String()),
+      },
+      argBuilder: (a) => [
+        'communication', 'log', a.tree_id as string,
+        '--to', a.to_leaf as string,
+        ...(a.from_leaf ? ['--from', a.from_leaf as string] : []),
+        ...(a.summary ? ['--summary', a.summary as string] : []),
+      ],
+    },
+    {
+      name: 'tree_communication_list',
+      desc: '列出树内跨会话通信日志。',
+      params: {
+        tree_id: Type.String(),
+        leaf_id: Type.Optional(Type.String()),
+        limit: Type.Optional(Type.Number()),
+      },
+      argBuilder: (a) => [
+        'communication', 'list', a.tree_id as string,
+        ...(a.leaf_id ? ['--leaf', a.leaf_id as string] : []),
+        ...(a.limit ? ['-n', String(a.limit)] : []),
+      ],
       readOnly: true,
     },
   ]

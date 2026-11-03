@@ -1,0 +1,39 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/__tests__/nanju-file-snapshot.test.ts:
+(pass) 场景：正常捕获生成不可变文件快照 > 快照是真实拷贝：修改/删除源文件后快照内容不变，且 inode 不同（非 hardlink） [4.77ms]
+(pass) 场景：正常捕获生成不可变文件快照 > 清单 hash 与磁盘文件一致，contentHash 可重算验证 [3.04ms]
+(pass) 场景：捕获期间源文件被修改 → 拒绝并失败 > onProgress 注入变更：捕获中止、changedPaths 指明被改文件、无快照残留 [3.89ms]
+(pass) 场景：依赖/密钥/会话控制文件不入快照 > 清单与快照磁盘均不含排除项，但 .env.example 保留 [5.20ms]
+(pass) 场景：正常恢复到快照内容，恢复前当前工程保留 > 恢复后工程回到快照内容；恢复前状态（含新增文件）完整保留在备份目录 [9.72ms]
+(pass) 场景：排除类文件（密钥/依赖）跨恢复保留当前值 > 恢复后 .env 与 node_modules 是恢复前的当前内容，不来自快照也不丢失 [7.29ms]
+(pass) 场景：快照损坏或被篡改 → 恢复中止，当前工程原样保留 > 快照文件内容被改写（hash 不符）→ 中止，工程保持当前内容 [3.38ms]
+(pass) 场景：快照损坏或被篡改 → 恢复中止，当前工程原样保留 > 清单被篡改含路径逃逸（../）→ unsafe-path 拒绝，工程原样保留 [2.89ms]
+(pass) 场景：快照损坏或被篡改 → 恢复中止，当前工程原样保留 > 快照目录不存在 → snapshot-missing，工程原样保留 [1.33ms]
+(pass) 场景：恢复落位后校验失败 → 失败补偿回滚到恢复前状态 > 补偿后工程与恢复前逐字节一致，journal 记录 compensated [7.41ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > rename1 之前崩溃（备份后）：工程未动，recover 清理 staging 并报告 aborted-clean [11.80ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > rename1 之后、rename2 之前崩溃：工程目录缺失，recover 完成恢复并保留备份 [7.63ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > rename2 之后崩溃：工程已是快照内容，recover 清理 trash 报告 completed-restore [7.79ms]
+(pass) 场景：进程在恢复事务中途崩溃 → 下次 recover 可恢复/可清理 > 无中断残留时 recover 报告 nothing-to-recover 且不动工程 [0.98ms]
+(pass) 场景：存储目录只读 → 捕获/恢复干净失败 > 捕获阶段 staging 无法创建 → io-error，源工程未动 [1.38ms]
+(pass) 场景：存储目录只读 → 捕获/恢复干净失败 > 恢复阶段备份无法写入 → 中止，当前工程未动 [3.45ms]
+(pass) 场景：已有活跃恢复事务 → 第二个恢复被锁拒绝 > 持锁方 pid 存活时 restore 返回 locked；pid 已死时接管并先 recover [7.33ms]
+(pass) 场景：产物形状稳定（供 D2/集成消费） > storageDir 只含 snapshots/_staging/_pre-restore-backups 与 journal，快照目录含 manifest.json+files/ [7.80ms]
+(pass) 场景 S1：恢复锁在所有出口都被自己释放，且不误删他人锁 > 补偿成功后 _restore.lock 已释放，同进程第二次 restore 不再返回 locked [10.65ms]
+(pass) 场景 S1：恢复锁在所有出口都被自己释放，且不误删他人锁 > 早期被他人活跃锁拒绝时不删除他人锁（token 不被误清） [1.50ms]
+(pass) 场景 S2：Proma 控制状态文件不入快照，恢复不回滚当前控制状态 > _project-info.json / _repair-log.json（含 .bak）不进清单不进快照，恢复后保持当前值 [7.52ms]
+(pass) 场景 S3：projectDir / storageDir 布局非法 → invalid-layout fail-closed 且无写入残留 > storageDir 嵌套在 projectDir 内：capture/restore/recover 全部 invalid-layout，不创建 staging/journal [2.72ms]
+(pass) 场景 S3：projectDir / storageDir 布局非法 → invalid-layout fail-closed 且无写入残留 > projectDir 与 storageDir 同址：capture/restore 拒绝，工程不受影响 [2.75ms]
+(pass) 场景 S5：陈旧锁被接管而非永久 locked > 锁内 procStart 与当前进程不符（pid 被复用）→ 接管并完成恢复 [7.96ms]
+(pass) 场景 S5：陈旧锁被接管而非永久 locked > 锁超过 TTL（pid 存活但 startedAt 过旧）→ 接管并完成恢复 [8.05ms]
+(pass) 场景 S6：rename2 完成但 journal 未更新窗口（掉电）→ recover 判已完成 > 故障点 after-restore-rename-before-journal：落位已发生，recover 报 completed-restore 且清 trash [6.59ms]
+(pass) 场景 S7：同 size 同 mtime 的内容变更被 sha256 二次比对检出 > 把已处理文件改成等长内容并还原 mtime → changed-during-capture 而非静默放过 [3.21ms]
+(pass) 场景 S8：symlink 不入快照且列入不可恢复清单，恢复语义不夸大 > manifest.unrecoverable 记录 symlink；restore 返回 notRestored 且 complete=false [9.52ms]
+(pass) 场景 S9：projectDir 与 storageDir 跨文件系统 → restore 明确 cross-device 拒绝 > 跨设备 rename 不静默降级；无第二文件系统时跳过（Linux 上 /dev/shm 常为 tmpfs） [2.12ms]
+(pass) 场景 S10：备份为全量（含 node_modules/.git）且返回 backupSizeBytes，不自动删除 > 恢复前备份包含依赖与 .git，结果携带 backupSizeBytes，备份目录保留 [7.36ms]
+(pass) 场景 S11：清单 contentHash 与实际 entries 自洽性校验 > 篡改 entries（重复条目使文件 hash 仍过）→ contentHash 不符被拒 [2.79ms]
+
+ 31 pass
+ 0 fail
+ 162 expect() calls
+Ran 31 tests across 1 file. [237.00ms]

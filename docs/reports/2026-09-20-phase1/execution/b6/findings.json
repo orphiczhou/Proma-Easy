@@ -1,0 +1,155 @@
+{
+  "audit": "B6-product-acceptance-parent-captured",
+  "capturedAt": "2026-09-23T19:30:00+08:00",
+  "reverifiedAt": "2026-09-23T19:16-19:35 GMT+8",
+  "reportVersion": "1.1",
+  "repoSha": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+  "worktree": {
+    "modified": 46,
+    "untracked": 26,
+    "total": 72,
+    "note": "2026-09-23 22:15 实测（R3 W-06 校正：原 modified:42 统计时点早于 R3 修复轮）"
+  },
+  "versions": {
+    "electron": "0.17.132",
+    "shared": "0.1.63",
+    "templateBundle": "2.5.0"
+  },
+  "verdict": "blocked-not-accepted",
+  "coveredUs": [],
+  "scenarioExecuted": false,
+  "verification": {
+    "v1_0": {
+      "typecheck": "exit 0",
+      "resourcesCli": "exit 0",
+      "waves": {
+        "delivery/resources/env": "270 pass",
+        "recovery": "65 pass",
+        "gate/gwt": "485 pass",
+        "focused": "15 pass"
+      }
+    },
+    "v1_1_recheck": {
+      "processes": "无Proma Electron进程；19877/9224无监听（19:29复核）",
+      "waves": {
+        "b6-core": "74 pass / 0 fail",
+        "gate-chain": "457 pass / 0 fail",
+        "resources": "128 pass / 0 fail",
+        "suite": "99 pass / 0 fail",
+        "counterexamples": "11 pass / 0 fail"
+      }
+    },
+    "counterexampleFixture": "隔离HOME(mktemp)+PROMA_DEV=1；未触碰~/.proma"
+  },
+  "findings": [
+    {
+      "id": "B6-F-01",
+      "severity": "red",
+      "title": "真实GUI产品流程未执行",
+      "evidence": "dev实例未运行且9224未监听；本轮不启动/不部署",
+      "impact": "不能证明可试用、可回看、可再打开、真实交付",
+      "status": "blocked"
+    },
+    {
+      "id": "B6-F-02",
+      "severity": "red",
+      "title": "六品类无本轮代表工程产品验收",
+      "evidence": "模板/协议测试通过不含用户故事coveredUs；web/api/mobile/AI无代表工程",
+      "impact": "不能宣称Phase1六品类产品验收完成",
+      "status": "blocked"
+    },
+    {
+      "id": "B6-F-03",
+      "severity": "yellow",
+      "title": "旧工程仍停在coding pending testing",
+      "evidence": "_project-info currentStage=coding/subStage=CODE/pending target=testing/06_TESTS为空",
+      "impact": "旧挂起工程尚未通过产品恢复与真实testing收口",
+      "status": "open"
+    },
+    {
+      "id": "B6-F-04",
+      "severity": "green",
+      "title": "源码结论状态分层与恢复护栏有定向证据",
+      "evidence": "v1.0定向波exit 0；v1.1复验641 pass / 0 fail + 11反例；日志在b6/logs",
+      "impact": "仅支持源码/协议层结论，不升级为产品验收",
+      "status": "verified-source-only"
+    },
+    {
+      "id": "B6-F-05",
+      "severity": "yellow",
+      "title": "交付视图信任report.json verdict，不按counts二次推导且无报告完整性校验",
+      "evidence": "反例R4：篡改verdict=pass+skipped=5仍显示验收通过（b6-counterexample-delivery.log）；GWT生成端有skipped=0硬约束",
+      "impact": "手工篡改面/纵深防御缺口，不阻断正常链",
+      "status": "fixed-source-verified",
+      "fix": "已修：nanju-delivery-view.mapReportVerdict 交叉核对计数不变量（passed>0 && failed===0 && skipped===0 && passed===scenariosTotal），不一致按 fail 处理并追加「计数不自洽」警告（DeliveryCard 已渲染 warnings[0]）；新增 7 项单测 + 隔离 HOME 端到端 9/9（current-verification/b6f05-integrity-e2e.log）。"
+    },
+    {
+      "id": "B6-F-06",
+      "severity": "yellow",
+      "title": "element-click埋点stage固定发射pick-color",
+      "evidence": "nanju-ipc.ts点选收口分支emitClickToFix(...,'pick-color')",
+      "impact": "点选遥测阶段归因失真",
+      "status": "fixed-source-verified",
+      "fix": "已修：nanju-ipc.ts 与 useGlobalAgentListeners.ts 裸元素点击 stage 由固定 pick-color 改为 pick-other（panel-action 仍按真实动作映射）；w-i-b-e-wiring 断言更新（实测 24 pass / 0 fail / 104 expect；R3 W-05 校正原记 46/46 系引用错误，修复本身真实）。"
+    },
+    {
+      "id": "B6-F-07",
+      "severity": "yellow",
+      "title": "可执行交付物缺启动/安装说明动作",
+      "evidence": "buildDeliveryLaunchInstructions仅预览类指引；DeliveryCard动作=预览/查看测试目录",
+      "impact": "与计划Task12.2/12.3差异，desktop等品类等价入口未落地",
+      "status": "partial-fixed-source-verified",
+      "fix": "部分修：buildDeliveryLaunchInstructions 支持品类参数，desktop/cli/api/ai/web/mobile 各自给出等价入口与 README 安装/启动说明（仍不代执行命令）；缺真实「启动动作」差异已在 product-acceptance.md 明示，未偷偷降低 DoD。"
+    },
+    {
+      "id": "B6-F-08",
+      "severity": "green",
+      "title": "模板目录残留manifest.json.bak；delivery-view JSDoc与返回行为不一致",
+      "evidence": "electron-builder filter !**/*.bak + afterPack拦截已核实；损坏JSON实际返回not-tested视图而非null",
+      "impact": "不进包；fail-closed行为正确，仅注释失准",
+      "status": "fixed-source-verified",
+      "fix": "已修：源码模板 manifest.json.bak 已删除（原子写备份残留，不进包）；delivery-view JSDoc 更正为「报告缺失/损坏返回 not-tested 视图」，并新增历史读取注释。resources:strict 校验通过。"
+    },
+    {
+      "id": "B6-F-09",
+      "severity": "yellow",
+      "title": "跨run历史证据无产品UI列表",
+      "evidence": "DeliveryCard.evidence仅含最新report.json一条；evidence/<runId>/index.json需经查看测试目录文件面板到达",
+      "impact": "历史回看深度受限，不阻塞主链",
+      "status": "partial-fixed-source-verified",
+      "fix": "部分修：交付视图新增 history 字段，从 06_TESTS/evidence/<runId>/index.json 汇总最近 10 次记录（倒序、坏索引跳过、runId 白名单防穿越），DeliveryCard 增加「历史验收记录」列表；新增隔离 HOME 子进程端到端单测。GUI 未开，视觉未验收。"
+    },
+    {
+      "id": "B6-F-10",
+      "severity": "yellow",
+      "title": "dev部署资源漂移仍存在",
+      "evidence": "/home/orphic/proma-easy/dev/app外置desktop-app.md=v1.0（源码v2.4/bundle2.5.0），无manifest/skeleton/check_env",
+      "impact": "印证台账问题#3；部署修复未实施",
+      "status": "open-blocked-by-deploy",
+      "fix": "未修（需部署）：dev 外置模板漂移属部署动作，本轮不部署；保留 open。"
+    }
+  ],
+  "notRun": [
+    "electron-build",
+    "pack",
+    "afterPack-runtime",
+    "dev-gui",
+    "old-project-recovery-gui",
+    "clean-platform-quick-e2e",
+    "six-category-product-e2e"
+  ],
+  "fixedAt": "2026-09-23T21:20+08:00",
+  "fixRound": "parent-integration-r3",
+  "verificationAfterFix": {
+    "typecheck": "exit 0（typecheck-20260923-b6fixes.log）",
+    "resourcesStrict": "exit 0（resources-strict-20260923.log）",
+    "wave": "428 pass / 0 fail / 1413 expect（wave-20260923-b6fixes.log，9 个文件）",
+    "b6f05E2E": "9 pass / 0 fail（b6f05-integrity-e2e.log，隔离 HOME）",
+    "notRun": [
+      "Electron GUI",
+      "pack/afterPack",
+      "dev 部署",
+      "真实工程产品 E2E"
+    ]
+  }
+}

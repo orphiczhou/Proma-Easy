@@ -38,6 +38,7 @@ import {
   type NanjuProject,
 } from './nanju-project'
 import { channelFamily, getPhaseNode, resolveACActors, type PhaseId } from './nanju-router'
+import { loadNanjuModelConfig } from './nanju-model-config'
 import { recordTelemetry } from './nanju-telemetry'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import {
@@ -99,7 +100,7 @@ const PHASE_TITLE_PREFIXES: ReadonlyArray<{ title: string; category: NanjuClarif
 /** 代理渠道候选池（偏好序：快模型优先；minimax 是家族标记，运行时校验不通过自动跳过） */
 export const PROXY_CHANNEL_CANDIDATES: ReadonlyArray<{ channelId: string; modelId: string }> = Object.freeze([
   { channelId: 'glm-zhipu', modelId: 'glm-5.3-flash' },
-  { channelId: 'deepseek', modelId: 'deepseek-v4-flash' },
+  { channelId: 'deepseek', modelId: 'deepseek-flash' },
   { channelId: 'deepseek', modelId: 'deepseek-v4-pro' },
   { channelId: 'glm-zhipu', modelId: 'GLM-5.3' },
   { channelId: 'minimax', modelId: 'MiniMax-M3' },
@@ -155,6 +156,11 @@ export interface ProxyChannelResolution {
  * 解析代理渠道。硬约束：候选家族 ≠ 提问方家族；软约束：候选家族 ∉ AC 攻/防家族。
  * 无硬约束解 → undefined（调用方 fallback:'human'，reason:'no-channel'）。
  * 端点校验注入（assertEnabledModelForChannel）：不可用候选按序跳过。
+ *
+ * W23（§六.2）：缺省候选优先读配置 proxyCandidates（四层：user > override > builtin >
+ * 代码兑底 FALLBACK_PROXY_CANDIDATES，与 PROXY_CHANNEL_CANDIDATES 同值、锁定测试保证）；
+ * 配置层无法提供（意外空数组）时回退本文件常量。设置界面改代理候选后即时生效
+ * （save → reload → 下一次解析即用新候选）。运行时校验逻辑不变。
  */
 export function resolveProxyChannel(input: {
   askerChannelId: string
@@ -162,7 +168,16 @@ export function resolveProxyChannel(input: {
   candidates?: ReadonlyArray<{ channelId: string; modelId: string }>
   validateEndpoint?: (endpoint: { channelId: string; modelId: string }) => boolean
 }): ProxyChannelResolution | undefined {
-  const candidates = input.candidates ?? PROXY_CHANNEL_CANDIDATES
+  let candidates = input.candidates
+  if (!candidates) {
+    // 缺省候选接配置（W23）：单向 import model-config（它只 type-only 引 router，无环）
+    try {
+      const configured = loadNanjuModelConfig().proxyCandidates
+      candidates = configured && configured.length > 0 ? configured : PROXY_CHANNEL_CANDIDATES
+    } catch {
+      candidates = PROXY_CHANNEL_CANDIDATES
+    }
+  }
   const askerFamily = channelFamily(input.askerChannelId)
   const acFamilies = new Set(input.acChannelIds.map((c) => channelFamily(c)))
 
@@ -356,6 +371,34 @@ export type ClarifyProxyResult = ClarifyProxyOk | ClarifyProxyFallback | Clarify
  * D8 §九 B′（R7-09）：clarifyKind='decision'（design-preference 代决）用代决准则模板分支——
  * 保守优先/维持现状优先/可逆性优先，与 requirement-clarify 的需求澄清准则（answer）区分。
  */
+/**
+ * W24-9（用户实测 23:2x 报障）：本地环境事实段——代理代答/代决的问题常涉及运行环境
+ * （目标 OS/桌面/调试方式），此前无环境事实输入，代理按类比对象假设（实测把类 typeless
+ * 输入法补全成 macOS 菜单栏应用，而本地是 Linux/X11——到架构阶段才发现无法本机调试）。
+ * 事实优先于类比：环境相关问题必须以本地事实为准，不得假设其他操作系统。
+ */
+export function buildLocalEnvFactsSection(): string {
+  try {
+    const os = require('node:os') as typeof import('node:os')
+    const isLinux = os.platform() === 'linux'
+    const isMac = os.platform() === 'darwin'
+    const isWin = os.platform() === 'win32'
+    const osName = isLinux ? `Linux（${os.release()}）` : isMac ? `macOS（${os.release()}）` : isWin ? `Windows（${os.release()}）` : `${os.platform()}（${os.release()}）`
+    const hasDisplay = Boolean(process.env.DISPLAY)
+    const lines = [
+      '## 本地环境事实（环境类问题的唯一权威依据）',
+      `- 操作系统：${osName}`,
+      hasDisplay ? `- 桌面环境：X11/Wayland 图形会话（DISPLAY=${process.env.DISPLAY}）——具备本机 GUI 调试条件` : '- 桌面环境：无图形会话（无 DISPLAY）',
+      '- 规则：凡涉及「目标运行环境/操作系统/平台能力/如何调试」的问题，一律以本节事实为准作答；',
+      '  不得因需求类比对象（如“类似 typeless/macOS 工具”）而假设其他操作系统——类比只说明产品形态，不改变运行环境。',
+      '  若产品确实需要面向其他平台，答案中必须注明「目标平台与本地不一致，需跨平台适配与远程验证」并作为风险提出。',
+    ]
+    return lines.join('\n')
+  } catch {
+    return ''
+  }
+}
+
 export function buildProxyDelegationTask(input: {
   projectName: string
   stageTitle: string
@@ -378,6 +421,8 @@ export function buildProxyDelegationTask(input: {
     `- 项目名：${input.projectName}（快消型）`,
     `- 当前阶段：${input.stageTitle}`,
     `- 需求背景：${input.projectDir}/01_PRD/prd.md（如需背景可 Read，允许只读结构与关键段）`,
+    '',
+    buildLocalEnvFactsSection(),
     '',
     isDecision
       ? '## 待决问题（原文锁定：只决策下列问题，不得改写/扩展问题本身）'

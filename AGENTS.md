@@ -2,6 +2,13 @@
 
 Proma 是一个本地优先的 Electron AI 桌面 Agent。仓库是 Bun monorepo；主应用在 `apps/electron`，共享包在 `packages/*`。
 
+<!-- proma:project-knowledge:start -->
+## 项目知识入口
+
+- 开工先读 [Agent.md](Agent.md)，按其索引读取项目状态、决策记忆、当前计划和证据；本文件保留通用工程规则，不重复维护项目进度。
+- 用户于 2026-09-20 明确要求项目资料在本仓库持久化：报告及证据放 `docs/reports/`，计划放 `docs/plans/`，项目记忆放 `docs/project-memory/` 并索引到 `Agent.md`。不要把会话目录或 Proma 托管工作区目录作为这些交付物的权威位置。
+<!-- proma:project-knowledge:end -->
+
 ## 必须遵守
 
 - 使用 **Bun**，不使用 npm/pnpm：`bun run dev`、`bun run typecheck`、`bun test`。
@@ -13,6 +20,11 @@ Proma 是一个本地优先的 Electron AI 桌面 Agent。仓库是 Bun monorepo
 - 修改 JSON 配置或会话元数据时，使用 `apps/electron/src/main/lib/safe-file.ts` 的原子写封装；不要直接 `writeFileSync`。
 - 功能改动应有 BDD 风格的可执行测试，至少覆盖正常路径和主要边界。
 - 改动 UI 时复用既有 Radix/shadcn primitives 与主题变量；重视空状态、键盘操作、加载态和深浅主题。
+
+### 多渠道模型协作开发策略（2026-11-03 用户授权记录）
+
+- 核心架构与功能实现由多渠道 SOTA 国产模型主导（GLM-5.3、DeepSeek Flash 等）；关键与安全相关交付必须异构模型交叉独立审查，严禁实现模型自审。
+- flash 级模型（glm-5.3-flash、deepseek-flash 等）承担勘察、文档整理、批处理等普通工作；自动任务一律 flash（沿用 2026-11-02 治理）。
 
 ## 常用命令
 

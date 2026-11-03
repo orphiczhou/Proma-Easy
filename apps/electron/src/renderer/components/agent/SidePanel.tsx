@@ -47,6 +47,7 @@ import { agentSideChatMapAtom } from '@/atoms/chat-atoms'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
+import { useOpenSession } from '@/hooks/useOpenSession'
 import { detectIsWindows } from '@/lib/platform'
 import type { FileEntry, AgentPendingFile } from '@proma/shared'
 import { setFilePanelDragData, getMediaTypeFromFilename, dispatchInsertFileMention } from '@/lib/file-panel-drag'
@@ -84,6 +85,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const selectedFilePath = previewFileMap.get(sessionId)?.filePath
 
   const openPreview = useOpenPreview()
+  const openSession = useOpenSession()
 
   // 用 ref 存 basePaths 相关值，避免声明顺序问题
   const basePathsRef = React.useRef<string[]>([])
@@ -649,7 +651,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             </div>
           ) : effectiveActiveTab === 'tree' ? (
             <div className="flex-1 min-h-0 overflow-hidden">
-              <TreeViewPanel sessionId={sessionId} />
+              <TreeViewPanel
+                sessionId={sessionId}
+                onNavigateToSession={(targetSessionId, title) => openSession('agent', targetSessionId, title)}
+              />
             </div>
           ) : effectiveActiveTab === 'guide' ? (
             <div className="flex-1 min-h-0 overflow-hidden">

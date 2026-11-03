@@ -1,0 +1,12 @@
+bun test v1.3.14 (0d9b296a)
+
+apps/electron/src/main/lib/nanju-acceptance-baseline.test.ts:
+(pass) 编码前验收基线 > 规格要求每个US覆盖三类路径，边界不适用需具体理由 [4.02ms]
+(pass) 编码前验收基线 > 普通路径不能豁免、缺类型或缺US均拒绝 [0.98ms]
+(pass) 编码前验收基线 > 编码冻结后PRD或规格变化被拒，未冻结testing不能放行 [2.02ms]
+(pass) 编码前验收基线 > 测试绑定只接受工程契约验收test id或steps JSON中的AC编号 [6.07ms]
+
+ 4 pass
+ 0 fail
+ 7 expect() calls
+Ran 4 tests across 1 file. [81.00ms]

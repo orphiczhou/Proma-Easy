@@ -331,9 +331,26 @@ export function CtfChangesBar(): React.ReactElement | null {
 
   if (changes.length === 0 && !previewVisible) return null
 
+  /** #6 user.undo（PRD §12.4，I-P8）：撤销是渲染端事实，经 nanju:record-event 上报
+   *  （主进程按 sessionId 解析归属项目）。只记发生与来源，不记被撤销的内容。 */
+  const recordUndo = (source: 'single' | 'all'): void => {
+    if (!sessionId) return
+    const workspace = store.get(agentWorkspacesAtom).find(
+      (w) => w.id === store.get(agentSessionsAtom).find((s) => s.id === sessionId)?.workspaceId,
+    )
+    if (!workspace) return
+    void window.electronAPI.nanjuRecordEvent?.({
+      workspaceSlug: workspace.slug,
+      eventType: 'user.undo',
+      payload: { source },
+      sessionId,
+    }).catch(() => {})
+  }
+
   const removeChange = (index: number): void => {
     const item = changes[index]
     if (!item) return
+    recordUndo('single')
     // 撤销 iframe 内即时效果：voice 项清角标计数；其余恢复原始样式
     // v0.17.59（WO3②）：undo 报文携带 value.action——iframe 按动作选择性还原，
     // 同元素其它动作的即时效果不受单条撤销影响（撤销粒度）
@@ -354,6 +371,7 @@ export function CtfChangesBar(): React.ReactElement | null {
   }
 
   const discardAll = (): void => {
+    recordUndo('all')
     const frame = getPreviewFrame()
     if (frame?.contentWindow) {
       frame.contentWindow.postMessage({ __promaCtfApply: true, action: 'undo-all' }, '*')

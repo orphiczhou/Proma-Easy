@@ -28,6 +28,8 @@ export * from './reasoning-profile'
 
 // 南大向导「向导图」共享契约
 export * from './nanju'
+export * from './nanju-recovery'
+export * from './nanju-delivery'
 
 // Agent Provider 适配器接口
 export * from './agent-provider'

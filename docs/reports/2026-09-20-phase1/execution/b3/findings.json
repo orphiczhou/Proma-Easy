@@ -1,0 +1,160 @@
+{
+  "meta": {
+    "task": "B3 只读验证：旧挂起工程恢复前事实 + 干净对照工程推演 + 恢复/路由相关测试",
+    "scope": "只读验证，未操作 release/dev 部署，未启动/删除真实用户工程，未修改产品代码",
+    "generatedAt": "2026-09-23T19:11:00+08:00",
+    "gitSha": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+    "gitHeadVersion": "0.17.131 (34f72fbc)",
+    "workingTree": {
+      "dirty": true,
+      "uncommittedFiles": 68,
+      "currentElectronVersion": "0.17.132 (未提交，B1/B2 进行中)",
+      "note": "测试运行于当前工作树（含 B1/B2 未提交改动），非 34f72fbc 干净基线"
+    },
+    "bun": "1.3.14",
+    "environment": {
+      "os": "Ubuntu 24.04.1 LTS (kernel 6.8.0-139, Hyper-V)",
+      "display": ":12.0",
+      "xdpyinfo": "X.Org 21.1.11, screen 2200x1000, 可达",
+      "dbusScreenSaver": "org.gnome.ScreenSaver 服务不存在，无法通过 dbus 判定锁屏态",
+      "devInstanceRunning": false,
+      "devCdpPort9224Listening": false,
+      "releaseInstanceRunning": true,
+      "releaseInstanceNote": "release 实例在跑（不能动）"
+    }
+  },
+  "verdict": "blocked",
+  "verdictReason": "真流程 GUI 验证（旧工程恢复 + 新工程从头走通）需要运行中的 dev 实例与产品恢复入口；当前 dev 实例未运行（无 proma-dev 进程、9224 未监听），且任务边界禁止启动 dev 实例。因此本会话只能产出恢复前事实取证、干净工程步骤推演与源码级 bun 测试，不能声称任何用户故事被真流程测试覆盖。",
+  "coveredUs": [],
+  "coveredUsRationale": "旧工程 06_TESTS 为空（testing 未真实执行）；干净工程为 release 侧编排样本（非平台 quick 流程引擎驱动）；dev 实例未运行无法从头走通。故 coveredUs 为空，不伪造 pass。",
+  "tests": {
+    "command": "bun test apps/electron/src/main/lib/nanju-project-snapshots.test.ts apps/electron/src/main/lib/nanju-snapshot.test.ts apps/electron/src/main/lib/__tests__/nanju-file-snapshot.test.ts apps/electron/src/main/lib/nanju-gwt-runner.test.ts apps/electron/src/main/lib/nanju-router-gate.test.ts apps/electron/src/main/lib/nanju-advance-recovery.test.ts apps/electron/src/main/lib/__tests__/w17-phase-advance-chain.test.ts",
+    "exitCode": 0,
+    "elapsedSeconds": 57,
+    "pass": 399,
+    "fail": 0,
+    "expectCalls": 1477,
+    "files": 7,
+    "log": "docs/reports/2026-09-20-phase1/execution/b3/recovery-routing-tests.log",
+    "note": "源码级测试绿 ≠ 真流程/产品验收通过；仅证明当前工作树恢复/路由相关单元与集成测试通过"
+  },
+  "oldProject": {
+    "path": "/home/orphic/.proma-dev/agent-workspaces/workspace-1786847832507/workspace-files/project-真流程e2e-剪贴板历史/",
+    "role": "旧挂起真流程工程（platform quick 引擎驱动）",
+    "controlFile": {
+      "path": "_project-info.json",
+      "projectId": "真流程e2e-剪贴板历史",
+      "mode": "quick",
+      "sessionId": "540110fb-58d7-42c6-a322-4f8e09fb2723",
+      "subStage": "CODE",
+      "pendingAdvanceCorrection": {
+        "kind": "gate-deny",
+        "target": "testing",
+        "expected": "testing",
+        "at": "2026-09-19T22:02:55.863Z",
+        "count": 1
+      },
+      "codingDelegationId": "881611b5-33c8-4c94-94ae-93e-84e74cd18b4b",
+      "phaseGuards": {
+        "coding": { "failCount": 0, "errorCount": 2, "lastErrorAt": "2026-09-19T21:46:28.749Z" }
+      },
+      "envReady": true,
+      "envCheckComponents": 11,
+      "bakDiff": "pendingAdvanceCorrection 字段仅存在于 .json，.json.bak 无（pending 为恢复时新落盘）"
+    },
+    "registry": {
+      "source": "_nanju-projects.json",
+      "status": "active",
+      "currentStage": "coding",
+      "updatedAt": "2026-09-19T20:32:06.577Z"
+    },
+    "stageDirectories": {
+      "01_PRD": "prd.md (US-01~US-08) + audit-conclusion.md（red=0 通过）",
+      "02_UX_DESIGN": "prototype.html",
+      "03_ARCHITECTURE": "architecture.md + engineering.json(schema v2) + env_probe.json + ac-verdict.json(yellow,2轮)",
+      "04_API_SPEC": "空目录",
+      "05_PROJECT_PLAN": "空目录",
+      "06_TESTS": "空目录（无任何 report/feature，testing 未真实执行）",
+      "07_VERSIONS": "空目录",
+      "08_APP": "app/clipboard_history.py + history_store.py + clipboard_io.py + tests/drivers/run_driver.py + README.md + ac-verdict.json(yellow,3轮,red=0,3 yellow open)",
+      "09_IMPROVEMENTS": "gate-delegation-latency.md"
+    },
+    "acVerdict08App": {
+      "verdict": "yellow",
+      "rounds": 3,
+      "red": 0,
+      "openYellow": 3,
+      "finalRuns": {
+        "unit @:12.0": "10/10 PASS rc=0",
+        "integration @:12.0": "6/6 PASS rc=0",
+        "acceptance @:12.0(锁屏)": "39 PASS / 0 FAIL / 15 BLOCKED rc=1",
+        "acceptance @:99(Xvfb)": "48 PASS / 0 FAIL / 4 BLOCKED rc=1"
+      },
+      "note": "08_APP 是 coding 阶段产物 + 附加 ac-verdict，不构成 testing 阶段（06_TESTS）收口；不能当作产品验收通过"
+    },
+    "telemetry": {
+      "source": "workspace-files/_telemetry/events-2026-09.jsonl",
+      "projectEventCount": 118,
+      "eventTypeDistribution": {
+        "router.gate.unbound-write-deny": 27,
+        "delegate.guard.stage-deny": 19,
+        "dialog.submitted": 7,
+        "spike.verdict": 6,
+        "advance.reject-escalate": 6,
+        "advance.auto-gate": 6,
+        "delegate.guard.ac-override": 4,
+        "phase.elapsed": 3,
+        "confirm.auto-confirm": 3,
+        "其他": 37
+      },
+      "lastProjectEvents": [
+        { "ts": "2026-09-20T01:11:38.931Z", "type": "dialog.submitted", "payload": "turn 7, inputLength 1923" },
+        { "ts": "2026-09-20T01:10:54.169Z", "type": "spike.verdict", "payload": "SPIKE-001/002 confirmed (architect GLM-5.3)" },
+        { "ts": "2026-09-20T01:10:35.116Z", "type": "spike.verdict", "payload": "SPIKE-001/002 confirmed" },
+        { "ts": "2026-09-19T22:02:55.863Z", "type": "advance.reject-escalate", "payload": "continuation-giveup, gate-deny, target=testing, count=1" },
+        { "ts": "2026-09-19T22:02:45.859Z", "type": "advance.auto-gate", "payload": "coding→testing, auto_block_reason=verify-failed" },
+        { "ts": "2026-09-19T21:09:28.623Z", "type": "circuit_break", "payload": "coding, delegation_hard_timeout, L2 委派硬超时" }
+      ],
+      "lastWorkspaceEvent": {
+        "ts": "2026-09-20T01:19:22.701Z",
+        "type": "phase.advance.discarded-unanchored",
+        "payload": "count=1, stages=[testing], sample 提及 'PHASE_ADVANCE: testing 不含确认词、不构成推进授权'",
+        "note": "workspace 级事件（无 projectId），表明曾尝试推进 testing 但因无确认词被丢弃为 unanchored"
+      }
+    },
+    "recoveryPrecondition": {
+      "summary": "旧工程停在 CODE，pending 指向 testing（gate-deny, count=1），06_TESTS 空，08_APP 有 coding 产物 + yellow 级 ac-verdict。恢复需通过产品恢复入口消费 pending 并真实走 testing，而非直接改 stage。",
+      "blocked": "dev 实例未运行 + 任务边界禁止启动 dev，无法在本会话执行恢复。"
+    }
+  },
+  "cleanProject": {
+    "path": "/home/orphic/.proma-dev/agent-workspaces/default/workspace-files/project-剪贴板历史工具e2e/",
+    "role": "干净对照工程（release 侧编排样本）",
+    "controlFile": {
+      "path": "_project-info.json",
+      "projectId": "剪贴板历史工具e2e",
+      "mode": "quick",
+      "sessionId": "0ae71da9-45b9-4294-a118-d5b62d8defa3",
+      "subStage": "TEST_JUDGE",
+      "note": "E2E 编排工程（非平台 UI 流程创建）：多角色会话由 release 侧指挥官驱动；PRD/UX/04/05/07 及 features 为事后按 PRD §5.3 补档"
+    },
+    "nature": "编排样本，非平台 quick 流程引擎驱动；README 显式声明 '非平台 quick 流程引擎驱动——故无 requirements/prototype 阶段产物'。不能作为平台 quick 引擎真流程的验收证据。",
+    "contract": {
+      "engineeringJson": "schemaVersion=2, tests: unit(tst-unit-history-store) / integration(tst-integration-clipboard) / acceptance(tst-acceptance-loop, covers US-01~05)",
+      "entry": "src/main.py（run: python3 src/main.py，需 DISPLAY + X11）",
+      "build": "python3 -m venv + pip install（仅 xclip 系统依赖）"
+    },
+    "tests": {
+      "06_TESTS": "完整 report-*.json + SUMMARY.md，16/16 run-rounds 全绿，宿主 checks 32/32，退出码全 0",
+      "nature": "编排样本下的测试，非平台引擎从头走通"
+    },
+    "deducedSteps": [
+      "启动隔离 dev 实例（PROMA_INSTANCE=dev, PROMA_DEV=1, CDP 9224）",
+      "通过平台 quick 引擎从正常入口创建全新工程（南大向导→快消卡→起名→发自然语言需求）",
+      "需求→原型→架构→编码→testing→试用→确认 全链真实执行",
+      "06_TESTS 落真实 report，核对 PRD/契约/代码指纹与 runId"
+    ],
+    "blocked": "无运行中的 dev 实例（无 proma-dev 进程，9224 未监听），且任务边界禁止启动 dev；无法从头走通干净工程，明确 blocked。"
+  },
+  "notAcceptance": "读取旧工程/干净工程与运行源码级测试，均不构成产品验收。真流程 testing 未真实执行，coveredUs 为空，无任何 pass 伪造。"
+}

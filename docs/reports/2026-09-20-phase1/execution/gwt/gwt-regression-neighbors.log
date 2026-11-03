@@ -1,0 +1,372 @@
+bun test v1.3.14 (0d9b296a)
+
+src/main/lib/nanju-engineering-suite.test.ts:
+(pass) Given 全部工程计划 When 辅助测试和验收均执行 Then 汇总分列且只计算验收覆盖 [27.31ms]
+(pass) Given 辅助测试失败 When 用户故事检查通过 Then 不能忽略辅助失败交付 [10.11ms]
+(pass) Given 真实系统能力要求 When 项目驱动自报检查通过 Then 仍等待独立证据 [6.08ms]
+(pass) Given 部分驱动尚未注册 When 开始整套工程测试 Then 不批准任何执行 [1.81ms]
+(pass) Given 全量环境预检意外异常 When 运行工程套件 Then 返回error而不是裸抛中断报告 [2.58ms]
+
+src/main/lib/nanju-engineering-browser-driver.test.ts:
+(pass) Given 浏览器契约绑定场景 When 注册驱动执行 Then 调用GWT并记录testId和实际场景 [4.36ms]
+(pass) Given 浏览器场景跳过 When 汇总 Then 跳过不是通过 [1.70ms]
+(pass) Given 场景归属不完整或缺少Then断言 When 预检 Then 不请求运行 [2.13ms]
+(pass) Given 浏览器执行已取消 When 调用驱动 Then 不打开测试页面 [1.77ms]
+(pass) Given 尚未确认受管浏览器风险 When 预检混合测试 Then 保留告知门不打开页面 [1.81ms]
+(pass) Given 浏览器验收对象与交付入口不同 When 预检 Then 要求校准契约而不验收替身页面 [2.01ms]
+(pass) Given 已批准的browser-url测试 When 驱动执行 Then 先启动宿主服务再以实际入口URL跑GWT并必停服务 [5.06ms]
+(pass) Given 批准被拒 When 执行协议先行 Then 0启动服务0打开页面 [3.22ms]
+(pass) Given 服务在浏览器场景执行期间退出 When 驱动收尾 Then 不采信本轮结果且服务已停 [2.60ms]
+(pass) Given 场景执行抛出异常 When 驱动收尾 Then finally仍停止服务不泄漏 [3.17ms]
+(pass) Given browser-url验收对象与交付入口不同 When 预检 Then 阻塞而不启动服务 [1.79ms]
+(pass) Given browser-url缺少服务计划或未确认风险告知 When 预检 Then 无副作用阻塞 [2.74ms]
+(pass) Given 浏览器执行已取消 When 驱动执行 Then 不启动服务 [1.91ms]
+(pass) Given 服务运行时缺失或文件不可执行 When 驱动预检 Then 返回缺失原因且0启动（S5） [1.54ms]
+
+src/main/lib/__tests__/w18-delivery-gate.test.ts:
+[配置] 配置目录: ~/.proma/（正式版本）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (quick): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (quick): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-flash(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding 主选=glm-zhipu:GLM-5.3(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[0]=glm-zhipu:glm-5.3-flash(family-glm) 而 testing fallback[0]=glm-zhipu:glm-5.3-flash(family-glm)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing 主选=deepseek:deepseek-flash(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] author-cross-family-fallback (iterative): fallback 降级点跨族被破坏（diversity_broken）：若 coding fallback[1]=deepseek:deepseek-flash(family-deepseek) 而 testing fallback[1]=deepseek:deepseek-v4-pro(family-deepseek)，两者同族（应急路径允许破族，本告警仅观测）
+[nanju-model-diversity] attacker-author-family (iterative): requirements 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-v4-pro(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+[nanju-model-diversity] attacker-author-family (iterative): planning 阶段 AC 攻击者与作者同族：attacker=deepseek:deepseek-v4-pro(family-deepseek) / author=deepseek:deepseek-flash(family-deepseek)（合法配置，观测项；testing 阶段语义上应避免——运动员/裁判同源）
+(pass) W18 T0：边界固化——deliveryAck 只存 _project-info.json，updateNanjuProject 不得写入 > 经 updateNanjuProject 注入 deliveryAck 键 → ProjectInfo 读值不变（IPC 只写 _nanju-projects，两文件不互通） [6.27ms]
+(pass) W18 T1-T4：checkGwtDeliveryFacts 四道校验 > T1 旧 schema 报告（无 runId/entryFingerprint）→ 拦「旧版格式」+ delivery.gate.blocked 埋点 [3.09ms]
+(pass) W18 T1-T4：checkGwtDeliveryFacts 四道校验 > T2 pass + runId + 无 ack → 拦，注入文案含「满意交付确认」与 AskUserQuestion 指引 [1.31ms]
+(pass) W18 T1-T4：checkGwtDeliveryFacts 四道校验 > T3 ack.reportRunId ≠ report.runId（新报告落盘后旧 ack）→ 拦「已被替代」 [1.33ms]
+(pass) W18 T1-T4：checkGwtDeliveryFacts 四道校验 > T3b 冗余防御：同 runId 内 ack.at ≤ report.generatedAt → 拦「已过期」 [1.27ms]
+(pass) W18 T1-T4：checkGwtDeliveryFacts 四道校验 > T4 pass 后改入口文件（fingerprint 不符）→ 拦「被修改」；改回原文件则放行 [1.31ms]
+(pass) W18 T1-T4：checkGwtDeliveryFacts 四道校验 > 指纹实测纯函数：computeGwtEntryFingerprint 与写入报告口径一致；入口缺失返回 null [0.59ms]
+(pass) W18 T1-T4：checkGwtDeliveryFacts 四道校验 > 四道校验全过（ack 绑当前 runId + 指纹一致 + ack 晚于报告）→ 放行 null [5.22ms]
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R1，W18 测试项目）
+(pass) W18 T5：挑战绑定——ack 绑登记 runId，不绑磁盘当前报告 > challenge 登记 R1 → 期间新报告 R2 落盘 → ask-answer 应答 → ack.reportRunId===R1（非 R2），且门禁按替代校验拦 [30.80ms]
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R1，W18 测试项目）
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R2，W18 测试项目）
+(pass) W18 T5：挑战绑定——ack 绑登记 runId，不绑磁盘当前报告 > 重新注入重建 challenge=R2（清旧 ack/challenge 后登记）→ 重新应答 → ack=R2 → 门禁放行 [10.04ms]
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R1，W18 测试项目）
+(pass) W18 T5：挑战绑定——ack 绑登记 runId，不绑磁盘当前报告 > 应答后 challenge 被清除（单次有效）；ack 登记埋点 delivery.ack-recorded 落库 [3.56ms]
+[南大路由] 交付确认检测：ask-answer 满意交付但前置不满足（stage=coding，challenge=在场），不置位
+[南大路由] 交付确认检测：ask-answer 满意交付但前置不满足（stage=testing，challenge=缺失），不置位
+[南大路由] 交付确认检测：磁盘报告非 pass/新 schema，不置位 ack（W18 测试项目）
+[南大路由] 交付确认检测：磁盘报告非 pass/新 schema，不置位 ack（W18 测试项目）
+(pass) W18 T5：挑战绑定——ack 绑登记 runId，不绑磁盘当前报告 > 前置条件缺失不置位：非 testing 阶段 / 无 challenge / 报告非 pass / 旧 schema 报告 [4.24ms]
+[南大路由] 交付确认检测：message 来源命中交付词，仅观测不置位（W18 测试项目）
+(pass) W18 T6/T9：message 来源命中交付词 → 只埋点不置位 > T6 自由文本 message 来源「满意交付」→ 不置位 ack，仅 delivery.ack-rejected-freetext 埋点（challenge 原样保留） [1.33ms]
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R1，W18 测试项目）
+[南大路由] 交付确认检测：message 来源命中交付词，仅观测不置位（W18 测试项目）
+(pass) W18 T6/T9：message 来源命中交付词 → 只埋点不置位 > T9 旧 tool_result 重放（message 通道携带旧答案文本）→ ack 不重绑：新 challenge=R2 在场时旧答案不置位/不改绑 [2.49ms]
+[南大路由] 交付确认检测：否定词清除 ack+challenge（W18 测试项目）
+[南大路由] 交付确认检测：否定词清除 ack+challenge（W18 测试项目）
+(pass) W18 T7：否定词清除 ack+challenge（ask-answer 与 message 均生效） > ask-answer「我不确认交付」→ 不置位；已置位则清除 [4.24ms]
+[南大路由] 交付确认检测：否定词清除 ack+challenge（W18 测试项目）
+(pass) W18 T7：否定词清除 ack+challenge（ask-answer 与 message 均生效） > message「暂不确认交付」→ 同样清除（两来源一致） [2.41ms]
+(pass) W18 T7：否定词清除 ack+challenge（ask-answer 与 message 均生效） > 否定词表边界：五词命中；普通确认/中性文本不清除 [5.12ms]
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R1，W18 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] ✅ 阶段推进: W18 测试项目 → delivered（status=completed）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] 标记 delivered 本轮已消费过，跳过（防重放）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] 推进目标校验拒绝: delivered → delivered（合法目标 无（终态））
+(pass) W18 T8：幂等 > 同 run 重复 delivered 消费 → 状态单次推进 + project.finished 恰一条；跨 run 重复声明被终态校验拒绝（不重复计） [17.54ms]
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R1，W18 测试项目）
+[南大路由] 交付确认检测：ask-answer 满意交付但前置不满足（stage=testing，challenge=缺失），不置位
+(pass) W18 T8：幂等 > 重复 ask-answer 精确应答 → ack 不重写（at 不变） [4.20ms]
+[南大路由] 交付确认检测：登记 deliveryAck（runId=R1，W18 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] ✅ 阶段推进: W18 测试项目 → delivered（status=completed）
+(pass) W18 交付成功链：T5 ack 后 delivered 标记 → delivered+completed 同拍 + project.finished + ack 终态清理 > 全链：pass 报告 → challenge 登记 → ask-answer「满意交付」→ L1 输出 delivered → 门禁放行推进 [4.03ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] GWT 交付门禁拦截，不推进: 尚未记录到用户满意交付确认。请先用 AskUserQuestion 发起交付验收（options 含「满意交付」），用户确认满意交付后再输出 delivered 标记。
+(pass) W18 交付成功链：T5 ack 后 delivered 标记 → delivered+completed 同拍 + project.finished + ack 终态清理 > 反向链：无 ack 时 delivered 标记 → 门禁拦截（不推进、状态机不动、无 finished 埋点） [2.47ms]
+(pass) W18 编排器接线源码断言 > 挑战登记时点：GWT-pass 注入前——清旧 ack → 清旧 challenge → 读刚落盘 runId → setProjectDeliveryChallenge(runId, sessionId) → 注入验收消息 [0.87ms]
+(pass) W18 编排器接线源码断言 > 来源传参：AskUser tool_result 路径传 source=ask-answer；事件流/初始输入两处保持默认 message [5.11ms]
+(pass) W18 编排器接线源码断言 > 门禁接线：verdict=pass 后调 checkGwtDeliveryFacts（四道事实校验） [1.63ms]
+(pass) W18 编排器接线源码断言 > 话术同步（W12 段升级）：resume 消息与 router-prompt 均声明「verdict=pass 且系统已记录用户满意交付确认」 [4.25ms]
+(pass) W18 编排器接线源码断言 > 话术尾注覆盖边界（gwt-runner 验收续接指令） [0.86ms]
+(pass) W18 编排器接线源码断言 > 埋点类型：三事件已入 telemetry 事件枚举 [0.73ms]
+
+src/main/lib/__tests__/w17-phase-advance-chain.test.ts:
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > 标记在 run 中段（其后还有委派/兜底 assistant 消息）仍被收集——原末条扫描窗口的零消费场景 [9.47ms]
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > 多标记按「消息序 × 消息内偏移」收集；PHASE_COMPLETE 同型；大小写归一（S1 锚定形态：注释 ∪ 行首） [0.90ms]
+[南大路由] 丢弃 1 处未锚定推进标记引用（句中非声明形态）: architecture
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > S1 锚定收集：句中引用（正文/说明文字复述协议字面串）不收集 [4.93ms]
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > S1 锚定收集：独立行裸标记仍收集（欠收集比误收集致命，行首声明视为真实意图） [3.30ms]
+[南大路由] 丢弃 1 处未锚定推进标记引用（句中非声明形态）: prototype
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > S1 丢弃观测：未锚定命中记 phase.advance.discarded-unanchored telemetry（锚定命中仍正常收集） [4.22ms]
+(pass) W17 §3-1：collectPhaseAdvanceStages 全消息扫描 > 非 assistant 消息（user/tool_result 回包/result/system）不参与扫描；无标记返回空数组 [0.80ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: test
+[南大路由] 推进目标校验拒绝: prototype → test（合法目标 architecture）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivery
+[南大路由] 推进目标校验拒绝: prototype → delivery（合法目标 architecture）
+(pass) W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费 > 终局复测案例重演：[prototype, test, delivery]——prototype 消费、test/delivery 按序拒绝并注入纠正教育消息 [5.46ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] 推进目标校验拒绝: requirements → delivered（合法目标 prototype）
+(pass) W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费 > 全部标记非法时：状态机不动、返回 null、逐个注入纠正消息 [1.80ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大路由] 文件验证失败，不推进: 产出文件不存在：01_PRD/prd.md
+(pass) W17 §3-2：consumePhaseAdvanceMarks 同轮多标记按序消费 > 合法目标但产出不达标：W11 放行 → verifyPhaseOutput 拦截（AC L-002 可见化注入） [1.03ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 标记 prototype 本轮已消费过，跳过（防重放）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 标记 prototype 本轮已消费过，跳过（防重放）
+(pass) W17 §3-3：已消费标记去重（防重放） > 同 run 重复声明同目标：第二次直接跳过，不二次推进、不注入拒绝消息 [2.61ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进目标校验拒绝: prototype → prototype（合法目标 architecture）
+(pass) W17 §3-3：已消费标记去重（防重放） > 前序消费推进状态机后，后续消费按新状态校验（不是按初始状态）；跨 run 不受去重影响 [2.56ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 user-message → prototype（W17 测试项目）
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 确认文本作为 run 初始输入（活跃收口问句在场 + humanOrigin）→ confirmPending 置位 + 授权 + 埋点落库（v2.4 F2-3/F2-4：散点不再置位） [1.97ms]
+[南大路由] 确认检测：反义词清除 confirmPending（W17 测试项目）
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 反义词清除（与事件流路径同一函数同一语义） [8.10ms]
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 产出不达标（PRD 缺失）→ 确认文本不置位（verifyPhaseOutput 门禁保持） [1.03ms]
+(pass) W17 §3-4：checkConfirmAdvanceInput（入口路径共用实现） > 非确认文本 → 无动作（置位语义不扩散） [0.76ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] GWT 交付门禁拦截，不推进: 尚未记录到用户满意交付确认。请先用 AskUserQuestion 发起交付验收（options 含「满意交付」），用户确认满意交付后再输出 delivered 标记。
+(pass) W18 前置：delivered 消费需 runId+ack 双事实（无 ack 拦截，有 ack 推进+completed） > 无 ack（用户尚未应答）→ 门禁拦截：状态机不动，注入含「满意交付确认」的拦截文案 [4.63ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] ✅ 阶段推进: W17 测试项目 → delivered（status=completed）
+(pass) W18 前置：delivered 消费需 runId+ack 双事实（无 ack 拦截，有 ack 推进+completed） > 有 ack（绑当前 runId）→ 推进 delivered + status=completed + project.finished 埋点 + ack 终态清理 [4.23ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > 事件流路径：user 消息检测调用 checkConfirmAdvanceInput（共用同一实现，未复制逻辑） [0.83ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > run 初始输入路径：sendMessage 入口在 getNanjuRouterPrompt 之前调用同一检测（本轮 prompt 即带强推进提示） [1.05ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > Q1 接线：result 块用 collectPhaseAdvanceStages(accumulatedMessages) 全量收集并交 consumePhaseAdvanceMarks 按序消费（经 hooks 装配） [1.72ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M4（A5 顺序断言）：result 块标记扫描先于 accumulatedMessages 清空（Q1 核心时序防静默回退） [0.93ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W11 规则零变化：validateAdvanceTarget 仍是消费链唯一目标校验（复用而非复制） [1.09ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M1（A1 横幅接活）：run 闭包登记 tool_use，AskUserQuestion 答案 tool_result → 同一确认检测（横幅主确认通道） [1.64ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M2（A2 系统消息豁免）：systemInitiated 续接不进用户意图检测，且不用 triggeredBy 替代 [1.65ms]
+(pass) W17 §3-5/§3-6：编排器接线源码断言（防退化） > W17-AC-M3（A2 提示词缓和）：强提示末句扩用户修改请求优先 [1.04ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：纯 mark 无任何授权 → 拒绝推进 + 注入教育消息 + advance.gate-deny 埋点，状态机不动 [4.60ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：无授权时产出验证也不执行（拒绝先于文件验证——教育路径清晰） [4.87ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：confirm:ask-answer（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进目标校验拒绝: prototype → prototype（合法目标 architecture）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > ask-answer 授权（target 匹配）→ 推进成功且消费即清（单次授权单次有效） [2.41ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：ask-answer 授权但 expectedTarget 不匹配（确认 A 却推进 B）→ 拒绝且授权保留 [3.91ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > systemAdvanceAuthorized（I2）匹配 → 推进；消费即清（单次）；目标不符 → 拒且授权保留 [5.86ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：send_message 注入消息（humanOrigin 缺省 false）+ 确认词 → 不授权也不置 confirmPending（R4-01+F2-4：无 ⏩ 强推进提示） [4.00ms]
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：事件流路径显式 humanOrigin:false + 确认词 → 不授权（工具注入免疫） [0.76ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测：真 UI 消息（humanOrigin:true）+ 确认词但无活跃确认问句（散点「继续」）→ 不授权（R4-02）+ 埋点观测 [3.25ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 user-message → prototype（W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：confirm:user-message（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > I1-② 完整链：活跃确认问句（harness 登记）+ humanOrigin:true + 确认词 → 授权并消费推进 [5.26ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 user-message → prototype（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 「跳过」入确认词表：活跃问句 + humanOrigin +「跳过」→ 授权（I1-②c） [2.13ms]
+[南大路由] 确认检测：置位 confirmPending=requirements + 授权 ask-answer → prototype（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > ask-answer + 活跃收口问句匹配（F2-3②）→ 置位授权 + confirmPending（I1-① 主通道） [2.92ms]
+[南大路由] ask-answer 无匹配活跃收口问句（无问句），不授权（W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-3②/#3）：中间确认横幅答案（无活跃收口问句的 ask-answer）→ 不授权，仅埋 suspect-fake-confirm（Defender #4 收紧） [2.26ms]
+[南大路由] ask-answer 无匹配活跃收口问句（目标不匹配），不授权（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-3②）：活跃问句 expectedTarget 不匹配 → 不授权（reason=target-mismatch）且问句清除 [2.30ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-4/#15）：散点确认词不注入 ⏩ 强推进提示（无 activeConfirmAsk → confirmPending 不置位，仅埋点） [1.39ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 红测（F2-5/#5/§3）：新 humanOrigin 消息到达即清除活跃问句——非确认消息后续确认词不再授权 [3.58ms]
+[南大路由] 确认检测：反义词清除 confirmPending（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > F2-5 对照：反义词（humanOrigin）同样终结活跃问句 [1.16ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > TTL：授权与活跃问句 10min 过期后失效（惰性清除） [1.34ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: testing
+[南大路由] testing 重入推进：触发 GWT 验收测试（W17 测试项目）
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 既有特判保留：testing 自环（isTestingSelfAdvance）与 delivered 交付不走授权门（无授权也可触发 GWT/交付门禁） [4.70ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：system（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+(pass) v2.4 §2：推进硬门（PHASE_ADVANCE 消费前授权校验） > 幂等：同 target 重复 registerSystemAdvance 不叠加（覆盖式刷新） [6.64ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > main/ipc.ts 用户消息通道（SEND_MESSAGE）权威打标：缺省 true，显式 false 优先（Defender #1/#2） [1.92ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > 三个工具/桥接注入入口显式 humanOrigin:false（R4-01 攻击面；缺省即 false 防回归） [1.08ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > canUseTool 门禁条件：nanjuProxy 代理会话重入门禁（triggeredBy 会话中代理仍过门禁，D7 §4） [1.11ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > systemInitiated 推进指令点统一 registerSystemAdvance（D7 §1 I2：delivered ×1 + testing ×5） [2.23ms]
+(pass) v2.4 源码断言：humanOrigin 分级 + nanjuProxy 门禁重入 + registerSystemAdvance 接线 > router-gate 第一行为 nanjuProxy 分支（先于 !workspaceSlug 早退与 project 查询，Defender #13） [1.34ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: D8 测试项目 → prototype
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ 主路径：auto on + quick + requirements 产出达标 → 无三形态授权直接推进（auto-confirm）+ 埋点 [5.71ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，D8 测试项目，auto 拒因=verify-failed）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（A1′/§六-1）：auto on + 产出未达标 → 拒 + advance.auto-gate 埋点 + auto 专属教育文案 [2.28ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（R7-08）：auto on + 跳级标记 → W11 目标校验先拒（target 校验不短路，非授权门文案） [2.19ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（planning → coding，D8 测试项目，auto 拒因=stage-not-whitelisted）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（§六-4 验收增补 10）：currentStage=planning 异常值 + 推进 → 拒（五阶段白名单，quick 无 planning） [1.91ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，D8 测试项目）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 红测（A1′ 条件 2）：iterative + autoClarify 残留 enabled → 不自动确认（回落三形态，拒） [3.94ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（architecture → coding，D8 测试项目，auto 拒因=ac-red-missing）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ AC 三态（R7-05）：architecture 缺失 ac-verdict → 拒 + 回炉提示（未审查视为不通过） [6.75ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（architecture → coding，D8 测试项目，auto 拒因=ac-red）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ AC 三态：ac-verdict=red → 拒 + 回炉提示（含 findings 修复指令） [2.53ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门通过：auto-confirm（architecture → coding）
+[南大护栏] phaseGuard 更新 p1/architecture: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] 工程品类判定: D8 测试项目 → web-fullstack（architecture）
+[南大路由] ✅ 阶段推进: D8 测试项目 → coding
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > A1′ AC 三态：ac-verdict=green → 自动确认推进（architecture → coding） [10.42ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: D8 测试项目 → prototype
+[南大路由] 消费 PHASE_ADVANCE 标记: architecture
+[南大路由] 推进硬门拒绝：无授权（prototype → architecture，D8 测试项目）
+(pass) D8 A1′：autoConfirmAuthorized 第四形态（§九五条件严格式） > 验收增补 11（关闭回落）：auto 推进成功后关闭开关 → 下一推进点真人门拒且不静默卡死（教育含真人确认路径） [5.68ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > 红测（验收增补 9/R7-02）：伪造 report（runId 无 main 登记）→ 拒 + reason:no-main-run + 教育触发 GWT [2.38ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ 主路径：main 实跑登记（recordMainGwtRun）+ 非运行中 → 四道过（放行交付，无需 deliveryAck） [2.59ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ d′：GWT 运行中 → gwt-running 拒（旧报告不可交付） [2.70ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] ✅ 阶段推进: D8 交付项目 → delivered（status=completed）
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ consumer 链：auto on testing + delivered 标记 + main 登记 → 推进 delivered + challenge 终态清理 [5.37ms]
+(pass) D8 A2′：交付 main 实跑 provenance（R7-02） > A2′ auto off 回归：非 auto 项目无 ack → no-ack 拒（W18 原文路径逐字节不变） [2.35ms]
+[南大向导图] 子步骤单调守卫拦截回退写入: REQ_ATK → REQ（同阶段序数回退，不落盘）
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > 同阶段序数回退 → 拦截不落盘（REQ_ATK 后写 REQ） [1.09ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > 同阶段序数前进/持平 → 写入（REQ → REQ_ATK → REQ_UC） [1.98ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > 跨阶段切换 → bypass（REQ_UC 后写 PROTO 主节点） [1.40ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > force 显式重置 bypass（delivered 清空等显式重置通道） [1.45ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > sentinel 排序（F2-4 前基准行为保留）：主节点后可写 _CLARIFY，_CLARIFY 后前进子步骤不被阻塞 [2.44ms]
+(pass) D8 S4′-1：setProjectSubStage 单调守卫（全局生效，防回退加固） > getClarifySentinelNodeId：六阶段主节点 sentinel；未知阶段 null [0.83ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > 归因失败（项目不存在）→ false 不写 [0.76ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > 当前阶段无 outputPath（异常值 planning，quick 无此路由）→ false 不写（S4′ 验收增补 10 同源） [1.00ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > requirements 有 outputPath → 写入成功（write-then-emit） [0.97ms]
+(pass) D8 S4′-2：tryAdvanceGuideSubStage 归因+outputPath 匹配 > S4′-4：ATK 判据 = requiresAC（quick requirements requiresAC=false → ATK 由调用方 gating，本函数只管写入） [1.55ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > delegation-watch：blocked → sentinel + 解除恢复（S4′ b 点） [1.14ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > preview-watcher：产出写入 → 归因+verify+requiresAC → ATK（S4′ c 点） [1.18ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > gwt-runner：report 落盘 → provenance 登记 + TEST_JUDGE（S4′ d 点 / A2′） [1.74ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > consumer：autoConfirm 放行 → UC 写入（S4′ e 点 / R7-13）+ advance.auto-gate/confirm.auto-confirm 事件 [1.63ms]
+(pass) D8 S4′ 写入点源码断言（防退化） > A3′：交付成功清 challenge + orchestrator GWT-pass 登记链未回归 [1.53ms]
+(pass) D8 F1-1（§十方案 B）：provenance 绑定 verdict+登记指纹（不信任 report 自述） > 红测①（F1-1）：登记 fail 轮 R → L2 改写 report 为 verdict:pass+runId:R+重算指纹 → 必拒 no-main-run（main 登记事实为准） [2.90ms]
+(pass) D8 F1-1（§十方案 B）：provenance 绑定 verdict+登记指纹（不信任 report 自述） > 红测②（F1-1）：登记 pass → 入口文件被改（report 自述指纹同步伪造成新实测使 b 道放行）→ d″ 登记指纹校验拒 [2.24ms]
+(pass) D8 F1-1（§十方案 B）：provenance 绑定 verdict+登记指纹（不信任 report 自述） > 对照：登记 pass+指纹未被改 → 放行（null） [2.17ms]
+[南大向导图] 子步骤单调守卫拦截回退写入: REQ_UC → REQ_CLARIFY（同阶段序数回退，不落盘）
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > 红测：已 UC 后 blocked 补问 → sentinel 写入被拦，图面保持 UC [1.21ms]
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > 主节点 → sentinel 前进可写；sentinel → 子步骤前进可写 [1.95ms]
+[南大向导图] 子步骤单调守卫拦截回退写入: REQ_CLARIFY → REQ（同阶段序数回退，不落盘）
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > sentinel → 主节点恢复走显式 force（watch 恢复通道，S4′ 纪律同款） [1.54ms]
+(pass) D8 F2-4（§十）：sentinel 纳入单调排序（序数=主节点后首位） > watch 恢复接线：tryRestoreMainFromClarify 用 force（源码断言） [6.36ms]
+[南大护栏] L2 委派超时观察哨已登记: p1
+[南大护栏] auto-degrade blocked 硬停: projectId=p1 stage=prototype delegation=dg-1 stopped=true
+(pass) D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人） > 红测：auto on ∧ pendingQuestionIds 非空 → blocked 不重置时钟，10min 后强停 + auto 语义话术 + 不计熔断 [7.53ms]
+[南大护栏] L2 委派超时观察哨已登记: p1
+(pass) D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人） > 对照：auto off（或 pending 空）→ blocked 维持用户驱动重置（不硬停） [1.98ms]
+(pass) D8 F1-2（§十）：auto-degrade blocked 有限时钟（10min 硬停，不转述真人） > 常量契约：AUTO_DEGRADE_BLOCKED_HARD_TIMEOUT_MS = 10 分钟 [0.87ms]
+(pass) D8 R2′ 源码断言：F2-3 接线 + F3 清理 > F2-3：orchestrator 交付续接消息走 resolveGwtDeliveryResumeMessage 分发（1 行接线） [1.88ms]
+(pass) D8 R2′ 源码断言：F2-3 接线 + F3 清理 > F3-4：未使用 NANJU_ASK_EXEMPT_PREFIXES 已删除 [1.37ms]
+(pass) D8 R2′ 源码断言：F2-3 接线 + F3 清理 > F3-5：gwt-runner auto 分支注释更正（delivered 质量由 GWT 门上游保证，非第四形态） [3.76ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测：无授权拒收 → 教育注入存在 且 systemInitiated 续接被触发（注入≠续接，D8-1/D8-2 真实缺口）+ gate-deny 埋点 [3.90ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测：W11 跳级拒收 → 注入+续接+advance.target-deny 埋点（D8-1 补齐）；off 版文案含确认问句指引 [1.31ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进目标校验拒绝: requirements → coding（合法目标 prototype）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（W11 auto 版）：auto 项目跳级拒收文案含「直接输出推进标记」与 nanju_clarify_proxy 指引 [5.58ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（防环 F5③）：前 2 次教育+续接，第 3 次拒收转人工提示（不再注入教育/续接）+ advance.reject-escalate 埋点 [2.23ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：confirm:ask-answer（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: W17 测试项目 → prototype
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（计数复位）：阶段推进成功 → 拒收计数清零（新阶段重新计数）+ 待纠正拒因清除 [2.89ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门拒绝：无授权（requirements → prototype，W17 测试项目）
+(pass) W22 F5：advance 拒收教育闭环（注入 + systemInitiated 续接 + 防环 + 降级） > 红测（F5④续接失败降级）：onGiveUp 回调 → 可见注入 + reject-escalate(kind=continuation-giveup) 埋点 + 拒因登记 _project-info [7.05ms]
+[南大路由] ask-answer 无匹配活跃收口问句（install-only 横幅白名单豁免），不授权（W17 测试项目）
+(pass) W22 M-6：install-only 横幅答案回传豁免 suspect-fake-confirm（红测双向） > 豁免路径：install 标记在场 + ask-answer 确认词 → suspect 埋点 whitelisted:true + reason=install-whitelisted，不授权 [9.27ms]
+[南大路由] ask-answer 无匹配活跃收口问句（无问句），不授权（W17 测试项目）
+(pass) W22 M-6：install-only 横幅答案回传豁免 suspect-fake-confirm（红测双向） > 真伪造路径：install 标记不在场 + ask-answer 确认词 → 仍标 suspect（reason=no-active-ask，无 whitelisted 标记） [2.30ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 有 ID：可见注入版含 continue_delegation(<ID>) + 保留上下文 + 不新建修复会话 [1.11ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 无 ID：降级文案指明新建但沿用 coding 配置渠道（GLM） [0.65ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 续接指令（systemInitiated 版）双口径同源 [0.80ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > codingDelegationId 唯一写入点 + 幂等覆盖（setProjectCodingDelegationId） [1.30ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 源码断言（防退化）：orchestrator behavior-fail 分支消费 codingDelegationId + 纯函数；mapping/coverage 分支不经 R1 文案 [2.66ms]
+(pass) W22 R1：codingDelegationId 回炉文案（纯函数 + 编排器接线源码断言） > 源码断言：gate AskUser 放行登记 install-ask（精确等值 header 才入白名单） [1.03ms]
+(pass) W22 M-9：autoClarify.lastToggledAt（updateNanjuProject 单一检测点，覆盖 IPC 直写路径） > enabled 变化自动盖戳；同值更新（预算扣减）不刷新 [3.11ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: B-c 测试项目 → prototype
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 普通阶段推进成功 → hook 收到 confirm 检查点请求（含工作区/项目/会话/描述） [4.33ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门通过：auto-confirm（architecture → coding）
+[南大护栏] phaseGuard 更新 p1/architecture: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] 工程品类判定: B-c 测试项目 → web-fullstack（architecture）
+[南大路由] ✅ 阶段推进: B-c 测试项目 → coding
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 推进进入 coding → triggerType=pre-modify（捕获的是改动前工程内容） [10.46ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: coding
+[南大路由] 推进硬门拒绝：无授权（architecture → coding，B-c 测试项目，auto 拒因=ac-red）
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 推进被拒（产出/ac 拦截）→ 不请求检查点（不留假恢复点） [2.03ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: prototype
+[南大路由] 推进硬门通过：auto-confirm（requirements → prototype）
+[南大护栏] phaseGuard 更新 p1/requirements: reset（阶段推进收口）→ fail=0 error=0
+[南大路由] ✅ 阶段推进: B-c 测试项目 → prototype
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > 未接线（缺省 hook）→ 零副作用，推进仍成功（纯消费器零依赖） [3.70ms]
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > orchestrator 接线源码断言：hooks 装配注入三段式检查点且失败可见化 [1.47ms]
+(pass) W-I B-c：captureCheckpoint hook（阶段推进即工程检查点） > IPC 接线源码断言：create-project/create-snapshot/rollback-snapshot 走快照网关 [0.99ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] GWT 交付门禁拦截，不推进: 需要 verdict=pass 的测试报告
+(pass) P0-3/Y-06：交付门禁拦截附带授权链状态 > gateError 时注入消息含授权链状态（无活跃问句常态显式化——G3b testing 8 轮未登记场景） [1.58ms]
+[南大路由] 消费 PHASE_ADVANCE 标记: delivered
+[南大路由] GWT 交付门禁拦截，不推进: 需要 verdict=pass 的测试报告
+(pass) P0-3/Y-06：交付门禁拦截附带授权链状态 > 问句在场时 gateError 附注显示态②（在位+剩余时间） [1.80ms]
+(pass) P0-3：收口问句登记历史与三态拒因诊断 > 登记历史：setActiveConfirmAsk 带 stage 追加历史，getConfirmAskDiagnostics 可观测 [0.97ms]
+[南大路由] 确认词命中但无活跃收口问句，不授权不提示（散点确认，W17 测试项目）
+(pass) P0-3：收口问句登记历史与三态拒因诊断 > 散点确认（无活跃问句）→ notifyDenial 注入三态拒因提示（态①：本阶段登记 0 次） [2.96ms]
+[南大路由] ask-answer 无匹配活跃收口问句（目标不匹配），不授权（W17 测试项目）
+(pass) P0-3：收口问句登记历史与三态拒因诊断 > 横幅答案目标不匹配 → notifyDenial 态③（附期望/实际） [5.68ms]
+
+ 163 pass
+ 0 fail
+ 539 expect() calls
+Ran 163 tests across 4 files. [812.00ms]

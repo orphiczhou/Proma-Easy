@@ -1,0 +1,13 @@
+{
+  "name": "book-notes-app",
+  "version": "1.0.0",
+  "description": "读书笔记管理 Web 应用",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

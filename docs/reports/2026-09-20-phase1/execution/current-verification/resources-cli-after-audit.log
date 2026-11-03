@@ -1,0 +1,11 @@
+$ bun run scripts/verify-engineering-resources.ts
+=== 工程模板资源完整性校验 ===
+资源目录：/home/orphic/proma-patches/p1-quick-engineering/apps/electron/resources/nanju-engineering-templates
+Manifest：已加载（bundleVersion=2.5.0）
+  - bundleVersion:    2.5.0
+  - requiredCount:    12
+  - bundleSha256:     64b9d8731406098b0675e0857af31b489aad14ea023e1551055ef4baedb402ef
+  - computed sha256:  64b9d8731406098b0675e0857af31b489aad14ea023e1551055ef4baedb402ef
+  - sha256 校验：      一致
+
+✓ 校验通过（无问题）

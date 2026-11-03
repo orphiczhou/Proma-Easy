@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我的任务</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #F5F7FA;
+    color: #333;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 32px 20px;
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+  }
+
+  h1 {
+    font-size: 24px;
+    font-weight: 700;
+    color: #1a1a1a;
+  }
+
+  .btn-add {
+    background: #2E75B6;
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .btn-add:hover {
+    background: #2563a0;
+  }
+
+  .task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .task-item {
+    background: #fff;
+    border-radius: 8px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    transition: box-shadow 0.2s;
+  }
+
+  .task-item:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+
+  .task-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #2E75B6;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .task-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .task-name {
+    font-size: 15px;
+    font-weight: 500;
+    color: #1a1a1a;
+    transition: all 0.2s;
+  }
+
+  .task-name.done {
+    text-decoration: line-through;
+    color: #999;
+  }
+
+  .task-date {
+    font-size: 12px;
+    color: #888;
+    margin-top: 2px;
+  }
+
+  .btn-delete {
+    background: none;
+    border: none;
+    color: #ccc;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: color 0.2s, background 0.2s;
+    flex-shrink: 0;
+  }
+
+  .btn-delete:hover {
+    color: #e74c3c;
+    background: #fef0f0;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 48px 20px;
+    color: #aaa;
+  }
+
+  .empty-state p {
+    font-size: 15px;
+    margin-top: 8px;
+  }
+
+  footer {
+    text-align: center;
+    margin-top: 24px;
+    font-size: 13px;
+    color: #999;
+  }
+
+  /* Dialog */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s, visibility 0.25s;
+  }
+
+  .overlay.active {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .dialog {
+    background: #fff;
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 400px;
+    max-width: 90vw;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    transform: scale(0.9);
+    transition: transform 0.25s;
+  }
+
+  .overlay.active .dialog {
+    transform: scale(1);
+  }
+
+  .dialog h2 {
+    font-size: 18px;
+    margin-bottom: 20px;
+    color: #1a1a1a;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #555;
+    margin-bottom: 6px;
+  }
+
+  .form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+    outline: none;
+  }
+
+  .form-group input:focus {
+    border-color: #2E75B6;
+    box-shadow: 0 0 0 3px rgba(46,117,182,0.12);
+  }
+
+  .dialog-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 24px;
+  }
+
+  .btn-cancel {
+    padding: 9px 20px;
+    border: 1px solid #ddd;
+    background: #f9f9f9;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .btn-cancel:hover {
+    background: #f0f0f0;
+  }
+
+  .btn-confirm {
+    padding: 9px 20px;
+    border: none;
+    background: #2E75B6;
+    color: #fff;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .btn-confirm:hover {
+    background: #2563a0;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>我的任务</h1>
+    <button class="btn-add" onclick="openDialog()">+ 新建任务</button>
+  </header>
+
+  <div class="task-list" id="taskList"></div>
+
+  <footer id="footer"></footer>
+</div>
+
+<!-- 新建任务对话框 -->
+<div class="overlay" id="overlay" onclick="handleOverlayClick(event)">
+  <div class="dialog">
+    <h2>新建任务</h2>
+    <div class="form-group">
+      <label for="taskTitle">任务名称</label>
+      <input type="text" id="taskTitle" placeholder="输入任务名称..." />
+    </div>
+    <div class="form-group">
+      <label for="taskDate">截止日期</label>
+      <input type="date" id="taskDate" />
+    </div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeDialog()">取消</button>
+      <button class="btn-confirm" onclick="addTask()">添加</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const STORAGE_KEY = 'glm_tasks';
+
+  function loadTasks() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  }
+
+  function saveTasks(tasks) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  }
+
+  function render() {
+    const tasks = loadTasks();
+    const list = document.getElementById('taskList');
+    const footer = document.getElementById('footer');
+
+    if (tasks.length === 0) {
+      list.innerHTML = '<div class="empty-state"><p>暂无任务，点击右上角添加</p></div>';
+      footer.textContent = '';
+      return;
+    }
+
+    list.innerHTML = tasks.map(function(task, i) {
+      return '<div class="task-item">'
+        + '<input type="checkbox" ' + (task.done ? 'checked' : '') + ' onchange="toggleTask(' + i + ')" />'
+        + '<div class="task-info">'
+        + '  <div class="task-name ' + (task.done ? 'done' : '') + '">' + escapeHtml(task.title) + '</div>'
+        + (task.date ? '  <div class="task-date">' + escapeHtml(task.date) + '</div>' : '')
+        + '</div>'
+        + '<button class="btn-delete" onclick="deleteTask(' + i + ')" title="删除">&times;</button>'
+        + '</div>';
+    }).join('');
+
+    var done = tasks.filter(function(t) { return t.done; }).length;
+    footer.textContent = '已完成 ' + done + ' 项，共 ' + tasks.length + ' 项';
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+  function openDialog() {
+    document.getElementById('overlay').classList.add('active');
+    document.getElementById('taskTitle').value = '';
+    document.getElementById('taskDate').value = '';
+    setTimeout(function() {
+      document.getElementById('taskTitle').focus();
+    }, 100);
+  }
+
+  function closeDialog() {
+    document.getElementById('overlay').classList.remove('active');
+  }
+
+  function handleOverlayClick(e) {
+    if (e.target === document.getElementById('overlay')) {
+      closeDialog();
+    }
+  }
+
+  function addTask() {
+    var title = document.getElementById('taskTitle').value.trim();
+    var date = document.getElementById('taskDate').value;
+    if (!title) return;
+
+    var tasks = loadTasks();
+    tasks.push({ title: title, date: date, done: false });
+    saveTasks(tasks);
+    closeDialog();
+    render();
+  }
+
+  function toggleTask(index) {
+    var tasks = loadTasks();
+    tasks[index].done = !tasks[index].done;
+    saveTasks(tasks);
+    render();
+  }
+
+  function deleteTask(index) {
+    var tasks = loadTasks();
+    tasks.splice(index, 1);
+    saveTasks(tasks);
+    render();
+  }
+
+  document.getElementById('taskTitle').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') addTask();
+  });
+
+  render();
+</script>
+</body>
+</html>

@@ -1,0 +1,300 @@
+{
+  "$schema": "https://proma.cool/schemas/audit-findings-v1.json",
+  "auditId": "audit-current-resources",
+  "auditTitle": "Phase1 resources/template/env-probe/delivery-view 域独立只读审计",
+  "auditor": "MiniMax-M3 (Pi Agent, audit role)",
+  "auditorMode": "read-only-no-commit",
+  "auditDate": "2026-09-23T18:23+08:00",
+  "auditWindow": {
+    "startedAt": "2026-09-23T18:23+08:00",
+    "endedAt": "2026-09-23T18:55+08:00"
+  },
+  "baseline": {
+    "gitHead": "34f72fbc8114608b998eaf4e1f5e1937f3deeb59",
+    "gitBranch": "p1-quick-engineering",
+    "headCommitMessage": "fix: v0.17.131 - 门禁透明化与模板资源解析",
+    "headCommitTime": "2026-09-20T09:24:11+08:00",
+    "workingTreeStatus": "66 处修改 / 新增未提交",
+    "appsElectronVersionDisk": "0.17.132",
+    "appsElectronVersionHead": "0.17.131",
+    "packagesSharedVersionDisk": "0.1.63",
+    "packagesSharedVersionHead": "0.1.62",
+    "manifestBundleVersion": "2.5.0",
+    "manifestPlatformVersion": "0.17.132",
+    "manifestBundleSha256": "d4f6e6fb7100733282b38b303f86b2daf6d6a3469357cbaf558e2ee1ea845ff1",
+    "manifestBundleSha256Recomputed": "d4f6e6fb7100733282b38b303f86b2daf6d6a3469357cbaf558e2ee1ea845ff1",
+    "manifestSha256Match": true,
+    "manifestRequiredCount": 12,
+    "manifestRequiredMinCount": 12,
+    "manifestKinds": {
+      "category": 6,
+      "shared-protocol": 1,
+      "shared-readme": 1,
+      "shared-changelog": 1,
+      "shared-script": 1,
+      "shared-driver": 2
+    }
+  },
+  "scope": [
+    "apps/electron/resources/nanju-engineering-templates/",
+    "apps/electron/scripts/verify-engineering-resources.ts",
+    "apps/electron/electron-builder.yml",
+    "apps/electron/package.json (scripts + version)",
+    "apps/electron/src/main/lib/nanju-engineering-template.ts",
+    "apps/electron/src/main/lib/nanju-engineering-resources.ts",
+    "apps/electron/src/main/lib/nanju-env-probe.ts",
+    "apps/electron/src/main/lib/nanju-delivery-view.ts",
+    "apps/electron/src/main/lib/nanju-ipc.ts (delivery handler only)",
+    "apps/electron/src/preload/index.ts (nanjuGetDeliveryView only)",
+    "apps/electron/src/renderer/components/nanju/delivery/DeliveryCard.tsx",
+    "packages/shared/src/types/nanju-delivery.ts"
+  ],
+  "outOfScope": [
+    "packages/shared/src/types/nanju-recovery.ts (审计未深入)",
+    "apps/electron/src/main/lib/nanju-evidence-reference.ts",
+    "apps/electron/src/main/lib/nanju-engineering-evidence.ts",
+    "nanju-engineering-contract.ts 内部 detail",
+    "manifest 内部 hash 自洽外的字段验证"
+  ],
+  "typecheck": {
+    "appsElectron": { "command": "tsc --noEmit -p apps/electron/tsconfig.json", "exitCode": 0 },
+    "packagesShared": { "command": "tsc --noEmit -p packages/shared/tsconfig.json", "exitCode": 0 }
+  },
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "red",
+      "title": "check_env.sh 探测脚本 fail-open：未装组件被标 status=ok version=missing",
+      "category": "fail-open-detection",
+      "location": {
+        "file": "apps/electron/resources/nanju-engineering-templates/check_env.sh",
+        "lines": "34-41 (probe), 89-117 (desktop case)",
+        "function": "probe + case '$CATEGORY' desktop"
+      },
+      "evidence": [
+        {
+          "type": "live-shell-output",
+          "snippet": "{\"component\":\"pynput\",\"status\":\"ok\",\"version\":\"missing\",\"detail\":\"missing\"}",
+          "command": "bash check_env.sh desktop-app",
+          "hostTime": "2026-09-23T18:25+08:00"
+        },
+        {
+          "type": "file-content",
+          "file": "check_env.sh",
+          "snippet": "probe \"pynput\"      \"python3 -c 'import pynput; print(pynput.__version__)' 2>/dev/null || echo missing\""
+        }
+      ],
+      "impact": [
+        "parseEnvProbeLines 不丢弃 status=ok 条目",
+        "runEnvProbe 把 missing-ok 写入 env_probe.json",
+        "架构师读到「已知环境事实」段对 desktop 关键依赖给出乐观 false-positive",
+        "违反 Phase1 plan §8 Task 10：ready 由所需组件有效机器证据推导"
+      ],
+      "affectedComponents": ["pynput", "pystray", "webkit2gtk-4.0", "portaudio"],
+      "fixProposal": "探测函数识别 version === 'missing' 字符串强制改 status=fail；或类别扩展 probe 拆分为成功/失败两条命令",
+      "negativeTest": "negative/f01-check-env-fail-open.sh",
+      "autonomy": "blocked (autonomy 禁改 skeleton/check_env)"
+    },
+    {
+      "id": "F-02",
+      "severity": "red",
+      "title": "nanju-engineering-template.ts syncProjectEnvStateFromArchitectureDoc 在 ESM 模块使用 require()",
+      "category": "esm-cjs-mismatch",
+      "location": {
+        "file": "apps/electron/src/main/lib/nanju-engineering-template.ts",
+        "lines": "787, 788, 791, 818, 819, 833, 834",
+        "function": "syncProjectEnvStateFromArchitectureDoc"
+      },
+      "evidence": [
+        {
+          "type": "file-content",
+          "snippet": "const { readFileSync, existsSync } = require('node:fs') as typeof import('node:fs')"
+        },
+        {
+          "type": "package-config",
+          "snippet": "\"type\": \"module\" (apps/electron/package.json:7)"
+        }
+      ],
+      "impact": [
+        "标准 Node.js ESM 抛 ReferenceError: require is not defined",
+        "仅 Bun runtime + esbuild transform 能运行",
+        "打包后 Electron 主进程可能抛异常（被 try/catch 吞，console.warn 不抛）"
+      ],
+      "requireCount": 7,
+      "fixProposal": "顶部 import 静态依赖；删除 require 调用",
+      "negativeTest": "negative/f02-template-require.test.ts",
+      "autonomy": "blocked (autonomy 禁改 template.ts)"
+    },
+    {
+      "id": "F-03",
+      "severity": "red",
+      "title": "electron-builder 未接 afterPack / afterSign 钩子触发 verify",
+      "category": "gate-missing",
+      "location": {
+        "file": "apps/electron/electron-builder.yml",
+        "scope": "全文"
+      },
+      "evidence": [
+        {
+          "type": "grep-result",
+          "command": "grep -n 'afterPack\\|afterSign\\|verify-resources\\|verify:resources' apps/electron/electron-builder.yml apps/electron/package.json",
+          "result": "仅 npm scripts 两行命中；electron-builder.yml 无钩子"
+        }
+      ],
+      "impact": [
+        "pack 后 manifest 篡改/覆盖无 gate 阻止",
+        "部署目标验证只能人工跑 verify CLI",
+        "与 v0.17.131 门禁透明化方向不一致"
+      ],
+      "fixProposal": "electron-builder.yml 顶部加 afterPack: 'bun run scripts/verify-engineering-resources.ts --strict'",
+      "negativeTest": "无（autonomy 禁改 electron-builder.yml）",
+      "autonomy": "blocked (autonomy 禁改 build 配置)"
+    },
+    {
+      "id": "F-04",
+      "severity": "yellow",
+      "title": "manifest.json.bak（untracked）会被 extraResources 静默打包",
+      "category": "housekeeping-pack-noise",
+      "location": {
+        "file": "apps/electron/resources/nanju-engineering-templates/manifest.json.bak"
+      },
+      "evidence": [
+        {
+          "type": "file-existence",
+          "sha256": "284e3ac7913d86333bc5d58c9ca339ff11ed1bd0a487896a06eb72052e89e190",
+          "size": 6429,
+          "untracked": true
+        },
+        {
+          "type": "yaml-config",
+          "snippet": "extraResources: - from: resources/nanju-engineering-templates\n  to: nanju-engineering-templates\n  filter: - '**/*'"
+        }
+      ],
+      "impact": [
+        "out/.../resources/nanju-engineering-templates/manifest.json.bak 进入安装包",
+        "verify 不感知 .bak（仅校验 manifest.json 列出的 12 条目）",
+        "运维 debug 易混淆（哪个 manifest 是当前权威）"
+      ],
+      "fixProposal": "git rm manifest.json.bak；或 filter 加 '**/*, !*.bak'；或迁到 docs/reports/evidence/",
+      "negativeTest": "无（需打包验证，超出只读范围）",
+      "autonomy": "allowed (housekeeping)"
+    },
+    {
+      "id": "F-05",
+      "severity": "yellow",
+      "title": "isEnvProbeFresh 在 nowMs < probedAtMs 时旁路 stale-age 检查",
+      "category": "fail-open-freshness",
+      "location": {
+        "file": "apps/electron/src/main/lib/nanju-env-probe.ts",
+        "lines": "165-174",
+        "function": "isEnvProbeFresh"
+      },
+      "evidence": [
+        {
+          "type": "file-content",
+          "snippet": "const effectiveNowMs = opts?.nowMs ?? Math.max(nowMs, probedAtMs)"
+        }
+      ],
+      "impact": [
+        "生产调用不传 nowMs 时 effectiveNowMs 走 Math.max",
+        "系统时钟异常（NTP 步退）使 Date.now() < probedAtMs 时 effectiveNowMs = probedAtMs",
+        "stale-age 检查被旁路，永远 fresh=true"
+      ],
+      "fixProposal": "删除 Math.max 兜底，让生产 effectiveNowMs = nowMs；测试由 opts.nowMs 注入",
+      "negativeTest": "negative/f05-env-probe-stale-time-bypass.test.ts",
+      "autonomy": "blocked (autonomy 禁改 env-probe)"
+    },
+    {
+      "id": "F-06",
+      "severity": "green",
+      "title": "shared/nanju-delivery.ts GwtReportJson 字段定义与 runner 不一致",
+      "category": "type-drift",
+      "location": {
+        "files": [
+          "apps/electron/src/main/lib/nanju-gwt-runner.ts:416-466",
+          "packages/shared/src/types/nanju-delivery.ts:33-58"
+        ]
+      },
+      "evidence": [
+        {
+          "type": "field-diff",
+          "runnerHasButSharedMisses": [
+            "engineeringEvidence", "blockedReason", "retryPending",
+            "engineeringSuite", "coverageUnverified", "failureKind",
+            "prdUserStoriesMissing", "errorCount", "driverIo",
+            "executionContext"
+          ],
+          "scenariosStatusEnumDiff": {
+            "runner": "'pass'|'fail'|'skip'",
+            "shared": "'pass'|'fail'|'skip'|'skipped'|'error'"
+          }
+        }
+      ],
+      "impact": [
+        "shared 是 runner 子集，structural typing 不报错",
+        "渲染层读 runner 报告，多余字段静默忽略",
+        "scenarios[].status 共享层枚举更宽，反向赋值类型不兼容"
+      ],
+      "fixProposal": "把 runner GwtReportJson 迁到 shared，runner 引用 @proma/shared 类型",
+      "negativeTest": "无（仅类型层）",
+      "autonomy": "info (仅信息，不构成 blocker)"
+    }
+  ],
+  "positiveConfirmations": [
+    {
+      "id": "G-01",
+      "title": "manifest 12 条目 sha256/size 实测与 manifest.json 自描述 100% 一致",
+      "evidence": [
+        {"sha256Recomputed": "d4f6e6fb7100733282b38b303f86b2daf6d6a3469357cbaf558e2ee1ea845ff1", "sha256Manifest": "d4f6e6fb7100733282b38b303f86b2daf6d6a3469357cbaf558e2ee1ea845ff1", "match": true}
+      ]
+    },
+    {
+      "id": "G-02",
+      "title": "IPC nanju:get-delivery-view 三层契约对齐（shared/main/preload/renderer）",
+      "evidence": [
+        {"layer": "main", "file": "nanju-ipc.ts:660", "snippet": "ipcMain.handle('nanju:get-delivery-view', ...)"},
+        {"layer": "preload-types", "file": "preload/index.ts:1283", "snippet": "nanjuGetDeliveryView: (input) => Promise<DeliveryViewModel | null>"},
+        {"layer": "preload-impl", "file": "preload/index.ts:3047", "snippet": "nanjuGetDeliveryView: (input) => ipcRenderer.invoke('nanju:get-delivery-view', input)"},
+        {"layer": "renderer-call", "file": "DeliveryCard.tsx:128", "snippet": "window.electronAPI.nanjuGetDeliveryView({ workspaceSlug, projectId })"}
+      ]
+    },
+    {
+      "id": "G-03",
+      "title": "preview 真实路径：DeliveryCard.openPreview → useOpenPreview → preview-atoms.PreviewFile.previewOnly",
+      "evidence": [
+        {"file": "DeliveryCard.tsx:121", "snippet": "openPreview(sessionId, { filePath: viewModel.entryAbsPath, previewOnly: true })"},
+        {"file": "preview-opener.ts:48-52", "snippet": "useOpenPreview = (sessionId, file: PreviewFile, options?)"},
+        {"file": "preview-atoms.ts:19", "snippet": "previewOnly?: boolean"}
+      ]
+    },
+    {
+      "id": "G-04",
+      "title": "check_env.sh 真实运行产出与 parseEnvProbeLines 解析契约对齐",
+      "evidence": [
+        {"command": "bash check_env.sh", "outputLines": 13, "kinds": ["node","npm","bun","pnpm","yarn","python3","pip","git","rustc","cargo","go","docker","display"]},
+        {"command": "bash check_env.sh desktop-app", "outputLines": 27, "extraKinds": ["webkit2gtk-4.1","gtk+-3.0","libsoup-3.0","ayatana-appindicator3-0.1","pkg-config","webkit2gtk-4.0","pynput","sounddevice","pystray","xclip","xdotool","notify-send","portaudio"]}
+      ]
+    }
+  ],
+  "testCoverageAudit": {
+    "nanju-delivery-view.test.ts": { "lines": 291, "describeCount": 8, "covered": ["report-missing", "schema-validation", "verdict-mapping", "stale-detection", "realpath-validation", "contract-kind", "launch-instructions"] },
+    "nanju-engineering-resources.test.ts": { "describeCount": 11, "covered": ["resolveAuthoritativeResourcesPath", "extractTemplateVersion", "computeFileSha256", "validatePathSafety", "loadManifest", "validateManifestSchema", "verifyEngineeringResources", "loadEngineeringResources", "verifyEngineeringResourcesAt", "buildManifest", "MIN_REQUIRED_ENTRIES"] },
+    "nanju-engineering-template.test.ts": { "describeCount": 13, "testCount": 99 },
+    "nanju-env-probe.test.ts": { "describeCount": 9, "covered": ["parseEnvProbeLines", "buildEnvProbeSummaryLines", "runEnvProbe-execution", "isEnvProbeFresh", "runEnvProbe-freshness", "runEnvProbe-category", "getTemplateCopiedAt"] }
+  },
+  "recommendation": {
+    "immediate": ["F-01", "F-02", "F-03"],
+    "beforePhaseClose": ["F-04", "F-05"],
+    "deferrable": ["F-06"]
+  },
+  "deliverables": {
+    "report": "resources.md",
+    "baselineHashes": "baseline-hashes.md",
+    "structuredFindings": "findings.json",
+    "negativeTests": [
+      "negative/f01-check-env-fail-open.sh",
+      "negative/f02-template-require.test.ts",
+      "negative/f05-env-probe-stale-time-bypass.test.ts"
+    ]
+  }
+}

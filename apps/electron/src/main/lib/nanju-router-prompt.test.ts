@@ -39,8 +39,9 @@ mock.module('./channel-manager', () => ({
   getChannelById: () => null,
 }))
 
-const { buildL2TaskWithAC, resolveMinimaxM3Channel, getNanjuRouterPrompt } = await import('./nanju-router-prompt')
+const { buildL2TaskWithAC, resolveMinimaxM3Channel, resolveMinimaxM3Actor, resolveVisualValidatorSlot, resolvePhaseDelegationSlots, validateVisualValidatorDelegation, isVisualValidatorEndpointTarget, applyConfigAutofix, getNanjuRouterPrompt } = await import('./nanju-router-prompt')
 const { getPhaseNode, resolveACActors } = await import('./nanju-router')
+const { reloadNanjuModelConfig } = await import('./nanju-model-config')
 
 /** 构造测试用渠道 */
 function makeChannel(overrides: Partial<Channel> = {}): Channel {
@@ -132,13 +133,28 @@ describe('L2 委派指令构建（视觉闭环）', () => {
     expect(task).toContain('视觉还原度、交互可用性')
   })
 
-  test('prototype 阶段包含独立视觉裁决（inline minimax，只看 PRD 用户故事 + 最新截图，red 回修复循环）', () => {
+  test('prototype 阶段 未配独立视觉端点 → 独立视觉裁决段为清晰 blocked，不退回作者端点冒充', () => {
     const phase = getPhaseNode('quick', 'prototype')!
+    // 不传 visualValidator（默认未配 visualReviewer）→ 必须 blocked，禁止同端点自证
     const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('独立视觉裁决')
-    expect(task).toContain('channel=' + authorUuid)
-    expect(task).toContain('model=MiniMax-M3')
+    expect(task).toContain('视觉裁决 unavailable')
+    expect(task).toContain('禁止用作者自身或同端点模型冒充')
+    // 关键回归：不再渲染以作者端点为视觉验证者的 delegate_agent 指令
+    expect(task).not.toContain('创建视觉验证者')
+    expect(task).not.toContain('channel=' + authorUuid + ', model=MiniMax-M3) 创建视觉验证者')
+  })
+
+  test('prototype 阶段 视觉验证者 resolved → inline 独立端点（只看 PRD 用户故事 + 最新截图，red 回修复循环）', () => {
+    const phase = getPhaseNode('quick', 'prototype')!
+    const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project', null, null, undefined, undefined,
+      { status: 'resolved', channelId: 'vision-ch', modelId: 'vision-model' })
+
+    expect(task).toContain('独立视觉裁决')
+    expect(task).toContain('用 delegate_agent(inline:true, channel=vision-ch, model=vision-model, title=「独立视觉裁决」) 创建视觉验证者')
+    // R1(a)：title 稳定锚点必须写进指令（gate 无 slot 时的识别依据）
+    expect(task).toContain('title 必须逐字写作「独立视觉裁决」')
     expect(task).toContain('PRD 用户故事清单 + 最新原型截图')
     expect(task).toContain('不允许参考你的自述')
     expect(task).toContain('回到「截图渲染自检循环」')
@@ -148,7 +164,7 @@ describe('L2 委派指令构建（视觉闭环）', () => {
     const phase = getPhaseNode('quick', 'prototype')!
     const task = buildL2TaskWithAC(phase, minimaxAuthor, '无（这是需求阶段）', [], '/tmp/project')
 
-    expect(task).toContain('channel=deepseek, model=deepseek-v4-flash')
+    expect(task).toContain('channel=deepseek, model=deepseek-flash')
     expect(task).toContain('channel=glm-zhipu, model=glm-5.3-flash')
   })
 
@@ -182,12 +198,12 @@ describe('L2 委派指令构建（视觉闭环）', () => {
 describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
   const dsAuthor = { channel: 'deepseek', model: 'deepseek-v4-pro' }
 
-  test('coding 包含零构建约束、沙箱边界约束与入口产出路径', () => {
+  test('coding 包含架构驱动交付、目录边界与旧静态入口兼容', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
-    expect(task).toContain('零构建约束')
-    expect(task).toContain('禁止触碰其他 project-')
+    expect(task).toContain('按engineering.json的artifacts清单')
+    expect(task).toContain('不得触碰其他项目')
     expect(task).toContain('请将产出写入：/tmp/project/08_APP/index.html')
     // 点选纠错标记与原型同构
     expect(task).toContain('data-ai-id')
@@ -195,25 +211,25 @@ describe('L2 委派指令构建（coding 阶段，P1 Sprint A）', () => {
 
   test('coding 强调 PRD 用户故事清单必读（自测对照基准）+ 原型大文件取舍提示', () => {
     const phase = getPhaseNode('iterative', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('前序必读：PRD 用户故事清单')
     expect(task).toContain('代码生成、运行自测、AC 审计')
     expect(task).toContain('允许只读其结构与关键交互段')
   })
 
-  test('coding 自测指令：chrome-devtools new_page 打开入口实测 P0 交互，连续 1 轮无缺陷', () => {
+  test('coding 自测依据真实架构与受管工具，缺能力不宣称实测', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
-    expect(task).toContain('chrome-devtools MCP 的 new_page 打开入口文件')
-    expect(task).toContain('实测每个 P0 交互')
-    expect(task).toContain('连续 1 轮无缺陷才算完成')
+    expect(task).toContain('使用受管浏览器预览工具')
+    expect(task).toContain('真实用户故事验证依照架构执行')
+    expect(task).toContain('不把人工读代码记为实测通过')
   })
 
   test('coding 不含 prototype 专属视觉闭环（截图自检/视觉裁决/视觉维度），沿用默认五维审计', () => {
     const phase = getPhaseNode('iterative', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('完整性、正确性、一致性、可执行性、安全性。')
     expect(task).not.toContain('截图渲染自检循环')
@@ -227,7 +243,7 @@ describe('coding 工程品类注入（W3，v0.17.66）', () => {
 
   test('未传品类时降级 web-fullstack 并注入品类自检（旧签名兼容 + 第二道防线）', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
 
     expect(task).toContain('工程品类判定：web-fullstack（Web 全栈应用）')
     expect(task).toContain('降级默认值')
@@ -344,7 +360,7 @@ describe('AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①�
   test('AC 审计状态机注入轮次预算：攻防修复 ≤2 轮 + 未清零收敛为已知问题清单（所有阶段）', () => {
     for (const stage of ['prototype', 'coding', 'testing'] as const) {
       const phase = getPhaseNode('quick', stage)!
-      const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+      const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
       expect(task).toContain('轮次预算（硬性，v0.17.64）：攻防修复循环 ≤2 轮')
       expect(task).toContain('第 2 轮防御确认后无论 red 是否清零都必须收敛')
       expect(task).toContain('已知问题清单')
@@ -354,7 +370,9 @@ describe('AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①�
 
   test('prototype 阶段：总预算 ≤30 分钟提示 + 视觉裁决 red 回炉 ≤2 次', () => {
     const phase = getPhaseNode('quick', 'prototype')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    // resolved 视觉端点才渲染回炉预算；blocked 时不冒充视觉裁决
+    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project', null, null, undefined, undefined,
+      { status: 'resolved', channelId: 'vision-ch', modelId: 'vision-model' })
     expect(task).toContain('整个原型阶段（生成+截图自检+AC 攻防+视觉裁决）预算 ≤30 分钟')
     expect(task).toContain('超时应收敛交付当前最优版本')
     expect(task).toContain('视觉裁决 red 回炉 ≤2 次（v0.17.64）')
@@ -363,7 +381,7 @@ describe('AC 攻防轮次预算 + 时长控制（v0.17.64 Sprint C1，实证①�
 
   test('非 prototype 阶段不含 prototype 专属时长预算（内环预算仍注入）', () => {
     const phase = getPhaseNode('quick', 'coding')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
     expect(task).not.toContain('预算 ≤30 分钟')
     expect(task).not.toContain('视觉裁决 red 回炉')
   })
@@ -464,7 +482,8 @@ describe('architecture L2 环境配置指令（W7 B3：探测 + projectEnv 标�
     const quickTask = buildL2TaskWithAC(quickPhase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD', [], '/tmp/project')
     expect(quickTask).not.toContain('AC 对抗审计（必须执行）')
     expect(quickTask).toContain('产出自查（代替 AC 攻防')
-    expect(quickTask).toContain('30-60 行精简')
+    expect(quickTask).toContain('架构文档保持精简')
+    expect(quickTask).toContain('测试架构')
     const iterPhase = getPhaseNode('iterative', 'architecture')!
     const iterTask = buildL2TaskWithAC(iterPhase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD', [], '/tmp/project')
     expect(iterTask).toContain('AC 对抗审计（必须执行）')
@@ -876,7 +895,7 @@ describe('架构师阶段：quick 变体同样必读工程模板（与 iterative
 
   test('quick architecture L2 任务含「品类终判前 Read 00_ENGINEERING_TEMPLATE/template.md」指令', () => {
     const phase = getPhaseNode('quick', 'architecture')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
     expect(task).toContain('00_ENGINEERING_TEMPLATE/template.md')
     expect(task).toContain('初判')
     // 模板缺失的降级容忍（与 iterative 同语义：无文件时按品类自行降级判定）
@@ -885,7 +904,7 @@ describe('架构师阶段：quick 变体同样必读工程模板（与 iterative
 
   test('iterative architecture L2 任务仍含既有模板前移契约（回归锁定）', () => {
     const phase = getPhaseNode('iterative', 'architecture')!
-    const task = buildL2TaskWithAC(phase, dsAuthor, 'PRD 摘要', [], '/tmp/project')
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
     expect(task).toContain('品类终判前必读工程模板')
     expect(task).toContain('00_ENGINEERING_TEMPLATE/template.md')
   })
@@ -990,8 +1009,11 @@ describe('D8：L1 话术 auto 分叉（协议段/UX 跳过/轻过渡/交付/auto
     expect(prompt).not.toContain('你用过了吗')
   })
 
-  test('auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化）', () => {
-    const normalize = (p: string) => p.split(fixtureRoot).join('<FIXTURE_ROOT>')
+  test('auto off：话术与 v0.17.97 逐字节一致（快照锁定——两阶段全 prompt，路径占位符化 + 环境段机器值剥离）', () => {
+    // W24-9：本地环境事实段含机器相关值（os.release/DISPLAY）——快照前剥离整段
+    //（协议话术锁定意图不变；环境段正确性由 W24-9 专项断言覆盖，不进字节级快照）
+    const stripEnv = (p: string) => p.replace(/## 本地环境事实\n(?:- [^\n]*\n)+\n?/g, '<ENV_FACTS>')
+    const normalize = (p: string) => stripEnv(p.split(fixtureRoot).join('<FIXTURE_ROOT>'))
     expect(normalize(buildPromptForD8('requirements', false))).toMatchSnapshot('d8-auto-off-requirements')
     expect(normalize(buildPromptForD8('prototype', false))).toMatchSnapshot('d8-auto-off-prototype')
   })
@@ -1055,11 +1077,13 @@ describe('D8：quick architecture ac-verdict 载体契约（§九 A1′/R7-05）
     expect(task).toContain('拒绝自动确认')
   })
 
-  test('auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定）', () => {
+  test('auto off：无 ac-verdict 契约（与 v0.17.97 一致，快照锁定；W24-9 环境段机器值剥离）', () => {
     const phase = getPhaseNode('quick', 'architecture')!
     const task = buildL2TaskWithAC(phase, minimaxAuthor, 'PRD 摘要', [], '/tmp/project', null, null, false)
     expect(task).not.toContain('ac-verdict')
-    expect(task).toMatchSnapshot('d8-auto-off-quick-arch-l2')
+    // W24-9：本地环境事实段含机器相关值（os.release/DISPLAY），快照前剥离
+    const stripEnv = (p: string) => p.replace(/## 本地环境事实\n(?:- [^\n]*\n)+\n?/g, '<ENV_FACTS>')
+    expect(stripEnv(task)).toMatchSnapshot('d8-auto-off-quick-arch-l2')
   })
 })
 
@@ -1228,5 +1252,802 @@ describe('W22 M-9：autoClarify 开关每轮 prompt 头部行（#13 主通道，
     expect(parseAutoClarifyToggledAt(undefined)).toBeNull()
     expect(parseAutoClarifyToggledAt(0)).toBeNull()
     expect(parseAutoClarifyToggledAt(-1)).toBeNull()
+  })
+})
+
+
+// ═══════════════ W23（§六.3）：配置级 autofix——预检失效端点 → 单槽临时替换 + 遥测 ═══════════════
+
+describe('W23 配置级 autofix（getNanjuRouterPrompt 预检 + model.config-autofix 遥测）', () => {
+  /** 全渠道宇宙 mock（deepseek 家族只剩新名 deepseek-flash——厂家改名形态） */
+  function mockFullChannels(): void {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'deepseek', name: 'DeepSeek', provider: 'deepseek' as Channel['provider'], models: [
+          { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: true },
+          { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
+        ] }),
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+          { id: 'GLM-5.3', name: 'GLM 5.3', enabled: true },
+        ] }),
+        makeChannel(), // minimax UUID 渠道（默认工厂形态，含 MiniMax-M3）
+      ],
+      getChannelById: () => null,
+    }))
+  }
+
+  /** 恢复文件级默认 mock（后续调用方不受本 describe 影响） */
+  function restoreDefaultChannels(): void {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [makeChannel()],
+      getChannelById: () => null,
+    }))
+  }
+
+  /** planning 阶段 iterative 项目 fixture（L1 prompt）；userConfig 指定各层路径 */
+  async function buildPlanningPrompt(userLayer: Record<string, unknown> | null): Promise<string> {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    const root = mkdtempSync(join(tmpdir(), 'nanju-autofix-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    if (userLayer) writeFileSync(userPath, JSON.stringify(userLayer))
+    reloadNanjuModelConfig(userLayer
+      ? { userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null }
+      : { userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-autofix')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示\n内容补齐最低体积。')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'autofix-demo', name: 'autofix 演示', mode: 'iterative', status: 'active',
+      currentStage: 'planning', createdAt: '', updatedAt: '', sessionId: 's-autofix',
+    }]))
+    const prompt = getNanjuRouterPrompt(root, 's-autofix')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(async () => {
+    const { reloadNanjuModelConfig, getConfigGeneration } = await import('./nanju-model-config')
+    void getConfigGeneration
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    restoreDefaultChannels()
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('改名场景：配置仍指旧名 deepseek-v4-flash → prompt 委派值被临时替换为 deepseek-flash + 遥测载荷（slot/from/to/reason）', async () => {
+    mockFullChannels()
+    const prompt = await buildPlanningPrompt({ phases: { planning: { channel: 'deepseek', model: 'deepseek-v4-flash' } } })
+    // autofix 生效：本次指令的委派端点 = 新名（不落盘）
+    expect(prompt).toContain('modelId: deepseek-flash')
+    expect(prompt).not.toContain('modelId: deepseek-v4-flash')
+    // 遥测：model.config-autofix 载荷含 slot/from/to/reason
+    const { readTelemetry } = await import('./nanju-telemetry')
+    const events = readTelemetry(fixtureRoot, 'model.config-autofix')
+    expect(events.length).toBe(1)
+    expect(events[0]!.projectId).toBe('autofix-demo')
+    expect(events[0]!.payload).toEqual({
+      slot: 'phases.planning.primary',
+      from: 'deepseek:deepseek-v4-flash',
+      to: 'deepseek:deepseek-flash',
+      reason: 'same-channel-rename',
+    })
+  })
+
+  test('预检失败不阻断：渠道宇宙无 deepseek 家族（无同族替换）→ 降级原值，prompt 正常构建且零遥测', async () => {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+          { id: 'GLM-5.3', name: 'GLM 5.3', enabled: true },
+        ] }),
+        makeChannel(),
+      ],
+      getChannelById: () => null,
+    }))
+    const prompt = await buildPlanningPrompt({ phases: { planning: { channel: 'deepseek', model: 'deepseek-v4-flash' } } })
+    // 同族守卫：跨族替换（glm/minimax）被放弃 → 保持原值（委派将走既有 fallback 链兜底）
+    expect(prompt).toContain('modelId: deepseek-v4-flash')
+    const { readTelemetry } = await import('./nanju-telemetry')
+    expect(readTelemetry(fixtureRoot, 'model.config-autofix')).toEqual([])
+  })
+
+  test('端点全部有效：零替换零遥测（默认配置与全渠道宇宙匹配）', async () => {
+    mockFullChannels()
+    const prompt = await buildPlanningPrompt(null)
+    expect(prompt).toContain('modelId: deepseek-flash')
+    const { readTelemetry } = await import('./nanju-telemetry')
+    expect(readTelemetry(fixtureRoot, 'model.config-autofix')).toEqual([])
+  })
+
+  test('buildL2TaskWithAC 新增 acAttackerRuntime 覆盖位（向后兼容：缺省不注入）', () => {
+    const phase = getPhaseNode('iterative', 'testing')!
+    const withOverride = buildL2TaskWithAC(
+      phase, { channel: 'deepseek', model: 'deepseek-flash' }, 'PRD', [], '/tmp/project',
+      null, null, false,
+      { channel: 'kimi', model: 'k3' },
+    )
+    expect(withOverride).toContain('channel=kimi, model=k3')
+    expect(withOverride).toContain('channel=minimax, model=MiniMax-M3') // 防御者解析值不受影响
+    const withoutOverride = buildL2TaskWithAC(
+      phase, { channel: 'deepseek', model: 'deepseek-flash' }, 'PRD', [], '/tmp/project',
+    )
+    expect(withoutOverride).toContain('channel=glm-zhipu, model=glm-5.3-flash') // testing 攻击者预设覆盖
+  })
+})
+
+test('Given 直接构建工程coding委派 When 不经过L1外层 Then 产出路径仍指向工程交付说明', () => {
+  fixtureRoot = mkdtempSync(join(tmpdir(), 'nanju-direct-coding-'))
+  mkdirSync(join(fixtureRoot, '03_ARCHITECTURE'))
+  writeFileSync(join(fixtureRoot, '03_ARCHITECTURE/engineering.json'), '{}')
+  const task = buildL2TaskWithAC(getPhaseNode('quick', 'coding')!, { channel: 'deepseek', model: 'deepseek-flash' }, 'fixture', [], fixtureRoot)
+  expect(task).toContain('请将产出写入：' + fixtureRoot + '/08_APP/DELIVERY.md')
+  expect(task).not.toContain('请将产出写入：' + fixtureRoot + '/08_APP/index.html')
+})
+
+// ═══════════════ W-B：模型优先级与 AC 配置实现（B1 红测与既有契约锁定）═══════════════
+//
+// 验收契约（W-B §任务包）：
+// - 显式 prototype 作者配置优先：用户显式设置 phase.prototype.channel≠'minimax' 时，
+//   prompt 委派值用 phase.channel/phase.model，不被 resolvePrototypeAuthor 默认 M3 覆盖
+// - 默认配置与 resolvePhaseModelConfig 来源一致：FALLBACK_PHASE_MODELS.prototype 与
+//   resolvePhaseModelConfig('prototype') 字段深等（layer 3 兜底 = 参数文件解析基底）
+// - AC 默认 flash 仅在无显式选择时使用：用户未显式配置 acAttacker/acDefender 时用预设
+//   （quick=light=flash；iterative=medium=pro/5.3），显式覆盖时按显式值（不被默认 flash 覆盖）
+// - 不可用显式配置清晰处理：用户显式配置不可用端点时 prompt 透传显式值（delegate_agent 层
+//   报错），不静默硬换到 family marker 或其他可用端点
+
+describe('W-B B1：显式 prototype 作者配置优先（不被默认 M3 覆盖）', () => {
+  /** reload nanju-model-config + 构造 prototype 项目 fixture 并返回 prompt */
+  async function buildPrototypePrompt(userLayer: Record<string, unknown> | null): Promise<string> {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    const root = mkdtempSync(join(tmpdir(), 'nanju-wb-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    if (userLayer) writeFileSync(userPath, JSON.stringify(userLayer))
+    reloadNanjuModelConfig(userLayer
+      ? { userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null }
+      : { userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-wb')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'wb-demo', name: 'WB 演示', mode: 'iterative', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-wb-demo',
+    }]))
+    const prompt = getNanjuRouterPrompt(root, 's-wb-demo')
+    expect(prompt).toBeTruthy()
+    return prompt as string
+  }
+
+  afterEach(async () => {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('显式配置 channel=kimi model=k3（异族端点不踩中默认 M3）：prompt 委派值用 kimi:k3，不被 MiniMax-M3 覆盖', async () => {
+    // 选择 "kimi" 作为 prototype 作者（异族端点，不与默认 minimax/glm/deepseek 任一族重叠）；
+    // 修复前会调用 resolvePrototypeAuthor 覆盖为默认 M3 UUID → 失败；
+    // 修复后 resolvePrototypeAuthor 不被调用 → prompt 使用显式值。
+    // （使用 kimi 而非 glm-zhipu：避免 AC 家族多样性拋错——glm 作者与 medium 预设
+    // 防御者 glm-5.3 同族，证拋错亦为有效行为但本测不验证“拋错”，只验证“显式优先”。）
+    const prompt = await buildPrototypePrompt({
+      phases: { prototype: { channel: 'kimi', model: 'k3' } },
+    })
+    // 显式配置生效（红测关键断言：修复前会失败）
+    expect(prompt).toContain('channelId: kimi')
+    expect(prompt).toContain('modelId: k3')
+    // 不被默认 M3 覆盖
+    expect(prompt).not.toContain('modelId: MiniMax-M3')
+    expect(prompt).not.toContain('channelId: ' + makeChannel().id) // 不使用 makeChannel 默认 minimax UUID
+  })
+
+  test('默认配置 channel=minimax（family marker）：走 resolvePrototypeAuthor 解析 UUID（回归锁定）', async () => {
+    const prompt = await buildPrototypePrompt(null)
+    // 默认行为：family marker 触发 resolvePrototypeAuthor（modelId 必为 MiniMax-M3）
+    expect(prompt).toMatch(/channelId: [^\n]+\n.*modelId: MiniMax-M3/s)
+    // B2：默认未配独立 visualReviewer → 视觉裁决 blocked（不退回作者端点冒充独立裁决）
+    expect(prompt).toContain('视觉裁决 unavailable')
+  })
+
+  test('显式配置但端点不可用（未配置渠道）：prompt 透传显式值，不静默替换到 family marker 解析', async () => {
+    // 显式指向不存在的渠道（resolvePrototypeAuthor 会成功找到 minimax 渠道，
+    // 但 fix 后不应触发——作者应使用显式配置）
+    const prompt = await buildPrototypePrompt({
+      phases: { prototype: { channel: 'nonexistent-channel', model: 'nonexistent-model' } },
+    })
+    // 显式值透传
+    expect(prompt).toContain('channelId: nonexistent-channel')
+    expect(prompt).toContain('modelId: nonexistent-model')
+    // 不静默硬换到 M3 模型（family marker 解析不应被触发）
+    expect(prompt).not.toContain('modelId: MiniMax-M3')
+  })
+
+  test('显式配置 minimax 家族（保留 family marker）：仍走 resolvePrototypeAuthor 解析 UUID', async () => {
+    const prompt = await buildPrototypePrompt({
+      phases: { prototype: { channel: 'minimax', model: 'MiniMax-M3' } },
+    })
+    // 显式保留 family marker 仍触发解析（modelId 必为 MiniMax-M3）
+    expect(prompt).toMatch(/channelId: [^\n]+\n.*modelId: MiniMax-M3/s)
+  })
+})
+
+describe('W-B B1：默认配置与 resolvePhaseModelConfig 来源一致（层 3 兜底 = 参数文件解析基底）', () => {
+  test('FALLBACK_PHASE_MODELS.prototype === resolvePhaseModelConfig("prototype")（两层禁用态；来源同 = FALLBACK_PHASE_MODELS）', async () => {
+    const { reloadNanjuModelConfig, resolvePhaseModelConfig, FALLBACK_PHASE_MODELS } = await import('./nanju-model-config')
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    const resolved = resolvePhaseModelConfig('prototype')
+    // 字段逐一比对：source 一致 = 解析基底 = 层 3 兜底常量
+    expect(resolved.channel).toBe(FALLBACK_PHASE_MODELS.prototype.channel)
+    expect(resolved.model).toBe(FALLBACK_PHASE_MODELS.prototype.model)
+    expect(resolved.fallbacks).toEqual(
+      (FALLBACK_PHASE_MODELS.prototype.fallbacks ?? []).map((raw) => {
+        const idx = raw.indexOf(':')
+        return { channelId: raw.slice(0, idx), modelId: raw.slice(idx + 1) }
+      }),
+    )
+    // per-phase AC 覆盖位（prototype 无显式覆盖，与兜底一致）
+    expect(resolved.acAttacker).toBeUndefined()
+    expect(resolved.acDefender).toBeUndefined()
+  })
+
+  test('FALLBACK_PHASE_MODELS 全六阶段 === resolvePhaseModelConfig 全六阶段（端到端一致性锁定）', async () => {
+    const { reloadNanjuModelConfig, resolvePhaseModelConfig, FALLBACK_PHASE_MODELS, NANJU_MODEL_PHASE_ORDER } = await import('./nanju-model-config')
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null, builtinConfigPath: null })
+    for (const phaseId of NANJU_MODEL_PHASE_ORDER) {
+      const resolved = resolvePhaseModelConfig(phaseId)
+      expect(resolved.channel).toBe(FALLBACK_PHASE_MODELS[phaseId].channel)
+      expect(resolved.model).toBe(FALLBACK_PHASE_MODELS[phaseId].model)
+      // fallbacks：兜底链解析形态与解析函数一致
+      expect(resolved.fallbacks).toEqual(
+        (FALLBACK_PHASE_MODELS[phaseId].fallbacks ?? []).map((raw) => {
+          const idx = raw.indexOf(':')
+          return { channelId: raw.slice(0, idx), modelId: raw.slice(idx + 1) }
+        }),
+      )
+    }
+  })
+})
+
+describe('W-B B1：AC 默认 flash 仅无显式选择时使用（显式覆盖不被默认 flash 替换）', () => {
+  test('用户未显式配置 AC：quick=light 用 flash 预设，iterative=medium 用 pro/5.3 预设', () => {
+    // prototype 阶段：quick 与 iterative 都无显式 acAttacker/acDefender 覆盖
+    for (const mode of ['quick', 'iterative'] as const) {
+      const phase = getPhaseNode(mode, 'prototype')!
+      const actors = resolveACActors(phase)
+      const expected = mode === 'quick'
+        ? { attacker: 'deepseek-flash', defender: 'glm-5.3-flash' } // light preset = flash
+        : { attacker: 'deepseek-v4-pro', defender: 'GLM-5.3' }      // medium preset = pro/5.3
+      expect(actors.attacker.model).toBe(expected.attacker)
+      expect(actors.defender.model).toBe(expected.defender)
+    }
+  })
+
+  test('用户显式配置 acAttacker=glm-zhipu:deepseek-v4-pro：覆盖 light 预设的 flash（不被默认 flash 替换）', async () => {
+    const { reloadNanjuModelConfig } = await import('./nanju-model-config')
+    const root = mkdtempSync(join(tmpdir(), 'nanju-wb-ac-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    // quick 模式默认 light 预设攻击者 = deepseek-flash；显式覆盖为 deepseek-v4-pro
+    writeFileSync(userPath, JSON.stringify({
+      phases: { prototype: { acAttacker: { channel: 'deepseek', model: 'deepseek-v4-pro' } } },
+    }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null })
+    const phase = getPhaseNode('quick', 'prototype')!
+    const actors = resolveACActors(phase)
+    expect(actors.attacker.channel).toBe('deepseek')
+    expect(actors.attacker.model).toBe('deepseek-v4-pro') // 显式覆盖生效
+    // 防御者未显式 → 仍用 light 预设 flash
+    expect(actors.defender.model).toBe('glm-5.3-flash')
+    // 收尾
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+  })
+
+  test('buildL2TaskWithAC：显式 acAttacker 透传到 L2 指令，不被默认 flash 替换', () => {
+    const phase = getPhaseNode('quick', 'prototype')!
+    const glmAuthor = { channel: 'ch-minimax-uuid', model: 'MiniMax-M3' }
+    const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    // quick 模式默认 light 预设攻击者 = deepseek-flash（无显式 acAttacker）
+    expect(task).toContain('channel=deepseek, model=deepseek-flash')
+    // 防御者：family marker 'minimax'（PhaseNode 字面值）→ L2 指令中保留字面标记
+    // （family marker 实际解析仅在 getNanjuRouterPrompt 路径发生；buildL2TaskWithAC 直接消费 phase）
+    // 此处验证 prototype 默认无显式 acDefender → 使用 light 预设 defender = glm-5.3-flash
+    expect(task).toContain('channel=glm-zhipu, model=glm-5.3-flash')
+  })
+})
+
+
+// ═══════════════ W-B B2：显式内部 slot producer + 独立视觉槽位（capability 或清晰 blocked）══════════════
+
+const { resolveDelegationSlot, detectDelegationSlot } = await import('./nanju-delegate-guard')
+
+describe('W-B B2：slot producer（resolvePhaseDelegationSlots——slot 的唯一权威来源）', () => {
+  test('按 config 产出四槽位：author 用解析端点，AC 攻防来自 resolveACActors（非 title 文本猜测）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const slots = resolvePhaseDelegationSlots(phase, {
+      authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' },
+    })
+    expect(slots.author).toEqual({ channel: 'author-uuid', model: 'MiniMax-M3' })
+    // quick=light 预设：flash 攻 / 5.3-flash 防（config 驱动，与 title 无关）
+    expect(slots.acAttacker).toEqual({ channel: 'deepseek', model: 'deepseek-flash' })
+    expect(slots.acDefender).toEqual({ channel: 'glm-zhipu', model: 'glm-5.3-flash' })
+    // 未配 visualReviewer → 清晰 blocked（不是默认 minimax、不是 null 静默跳过）
+    expect(slots.visualValidator.status).toBe('blocked')
+  })
+
+  test('authorResolved 缺省 → author 槽位回落 phase 字面配置', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const slots = resolvePhaseDelegationSlots(phase, { authorResolved: null })
+    expect(slots.author).toEqual({ channel: phase.channel, model: phase.model })
+  })
+
+  test('显式 visualReviewer 异端点（显式 capability）→ resolved，且与 author 解耦', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const slots = resolvePhaseDelegationSlots(phase, {
+      authorResolved: { channelId: 'kimi-uuid', modelId: 'k3' },
+    })
+    expect(slots.visualValidator).toEqual({
+      status: 'resolved', channelId: 'glm-zhipu', modelId: 'glm-5.3-vision',
+    })
+  })
+})
+
+describe('W-B B2：resolveVisualValidatorSlot（显式 capability 或清晰 blocked，二者必居其一）', () => {
+  test('非 prototype 阶段 → not-applicable', () => {
+    const phase = getPhaseNode('quick', 'coding')!
+    expect(resolveVisualValidatorSlot(phase, { authorResolved: null }).status).toBe('not-applicable')
+  })
+
+  test('未显式配置 → blocked（原因含「未显式配置」，非默认 minimax）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: null })
+    expect(r.status).toBe('blocked')
+    if (r.status === 'blocked') expect(r.reason).toContain('未显式配置')
+  })
+
+  test('显式配置但与作者同端点 → blocked（同端点自证）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const author = { channelId: 'glm-zhipu', modelId: 'glm-5.3-vision' }
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: author })
+    expect(r.status).toBe('blocked')
+    if (r.status === 'blocked') expect(r.reason).toContain('同端点')
+  })
+
+  test('family marker minimax 解析后与作者同 UUID → blocked（不按模型名猜视觉）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'minimax'
+    phase.visualReviewerModel = 'MiniMax-M3'
+    // minimax 渠道运行时解析（本文件最晚注册的 channel-manager mock）；用实际解析结果
+    // 作为作者端点 → 与 visualReviewer family marker 解析结果同 UUID → 同端点自证 blocked
+    const actor = resolveMinimaxM3Actor()
+    expect(actor).toBeTruthy()
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: actor })
+    expect(r.status).toBe('blocked')
+  })
+
+  test('family marker minimax + 作者端点未知 → blocked（无法证明异端点，不冒充独立能力）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'minimax'
+    phase.visualReviewerModel = 'MiniMax-M3'
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: null })
+    expect(r.status).toBe('blocked')
+  })
+
+  test('显式异端点 → resolved（视觉能力来自显式声明，非模型名匹配）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: { channelId: 'kimi-uuid', modelId: 'k3' } })
+    expect(r).toEqual({ status: 'resolved', channelId: 'glm-zhipu', modelId: 'glm-5.3-vision' })
+  })
+
+  test('channel 同但 model 不同 → resolved（非同端点）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = resolveVisualValidatorSlot(phase, { authorResolved: { channelId: 'glm-zhipu', modelId: 'GLM-5.3' } })
+    expect(r.status).toBe('resolved')
+  })
+})
+
+describe('W-B B2：validateVisualValidatorDelegation（gate 端权威校验）', () => {
+  test('未配置独立视觉端点 → ok:false（gate 拒绝，不静默放行）', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    const r = validateVisualValidatorDelegation({ phase, authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' } })
+    expect(r.ok).toBe(false)
+  })
+
+  test('端点为 resolved 但 target 不匹配（退回作者端点）→ ok:false', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = validateVisualValidatorDelegation({
+      phase,
+      authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' },
+      targetChannelId: 'author-uuid',
+      targetModelId: 'MiniMax-M3',
+    })
+    expect(r.ok).toBe(false)
+  })
+
+  test('target 与 producer resolved 端点完全一致 → ok:true', () => {
+    const phase = { ...getPhaseNode('quick', 'prototype')! }
+    phase.visualReviewerChannel = 'glm-zhipu'
+    phase.visualReviewerModel = 'glm-5.3-vision'
+    const r = validateVisualValidatorDelegation({
+      phase,
+      authorResolved: { channelId: 'author-uuid', modelId: 'MiniMax-M3' },
+      targetChannelId: 'glm-zhipu',
+      targetModelId: 'glm-5.3-vision',
+    })
+    expect(r.ok).toBe(true)
+  })
+})
+
+describe('W-B B2：resolveDelegationSlot（内部 slot 权威优先于 legacy 文本推断）', () => {
+  test('内部 slot=visual-validator 覆盖文本推断（即使文本不含视觉标记）', () => {
+    expect(resolveDelegationSlot('visual-validator', 'general')).toBe('visual-validator')
+  })
+
+  test('内部 slot 缺省/非法 → 回退 legacy 文本推断', () => {
+    expect(resolveDelegationSlot(undefined, 'author')).toBe('author')
+    expect(resolveDelegationSlot('not-a-slot', 'ac-attacker')).toBe('ac-attacker')
+  })
+
+  test('detectDelegationSlot 为 legacy 低信任：title 含视觉标记 → visual-validator', () => {
+    expect(detectDelegationSlot({ title: '独立视觉裁决：原型' }, 'prototype')).toBe('visual-validator')
+  })
+})
+
+describe('W-B B2 R1：isVisualValidatorEndpointTarget（端点到槽位检测）', () => {
+  test('resolved 且 target 完全一致 → true；缺 target/状态非 resolved → false', () => {
+    const resolved = { status: 'resolved' as const, channelId: 'kimi', modelId: 'k3-vision' }
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(true)
+    // 端点只差模型 / 只差渠道 → false（不得误判为同一独立端点）
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'kimi', targetModelId: 'other' })).toBe(false)
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'other', targetModelId: 'k3-vision' })).toBe(false)
+    // 未解析（blocked / not-applicable）→ false：未配置时不纳入端点门禁，交由 title 兜底
+    expect(isVisualValidatorEndpointTarget({ slot: { status: 'blocked', reason: 'x' }, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(false)
+    expect(isVisualValidatorEndpointTarget({ slot: { status: 'not-applicable' }, targetChannelId: 'kimi', targetModelId: 'k3-vision' })).toBe(false)
+    // target 非字符串（继承/缺省）→ false
+    expect(isVisualValidatorEndpointTarget({ slot: resolved })).toBe(false)
+    expect(isVisualValidatorEndpointTarget({ slot: resolved, targetChannelId: 'kimi' })).toBe(false)
+  })
+})
+
+// ═══════════════ W-B B1-1（R6）：显式端点失效 → autofix 同族替换 + 遥测 ═══════════════
+
+describe('W-B B1-1（R6）：显式配置的 prototype 作者端点失效 → 同族替换 + 遥测（非静默硬换）', () => {
+  /** 渠道宇宙：deepseek 家族只剩新名 deepseek-flash（显式配置里的 deepseek-v4-flash 已下线） */
+  function mockRenameUniverse(): void {
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'deepseek', name: 'DeepSeek', provider: 'deepseek' as Channel['provider'], models: [
+          { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: true },
+        ] }),
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+        ] }),
+        makeChannel(),
+      ],
+      getChannelById: () => null,
+    }))
+  }
+
+  afterEach(() => {
+    reloadNanjuModelConfig({ userConfigPath: null, overrideConfigPath: null })
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [makeChannel()],
+      getChannelById: () => null,
+    }))
+    if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true })
+    fixtureRoot = ''
+  })
+
+  test('prototype 显式作者 deepseek:deepseek-v4-flash（已下线）→ prompt 委派值替换为同族 deepseek-flash + model.config-autofix 遥测', async () => {
+    mockRenameUniverse()
+    const root = mkdtempSync(join(tmpdir(), 'nanju-b1-autofix-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    writeFileSync(userPath, JSON.stringify({ phases: { prototype: { channel: 'deepseek', model: 'deepseek-v4-flash' } } }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-b1fix')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'b1fix', name: 'B1 autofix', mode: 'quick', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-b1fix',
+    }]))
+
+    const prompt = getNanjuRouterPrompt(root, 's-b1fix')
+    expect(prompt).toBeTruthy()
+    // autofix 生效：失效的显式端点被同族新名替换（本次 prompt 有效值，不落盘）
+    expect(prompt).toContain('modelId: deepseek-flash')
+    expect(prompt).not.toContain('modelId: deepseek-v4-flash')
+    // 遥测留痕：替换不是静默的（slot/from/to 可审计）
+    const { readTelemetry } = await import('./nanju-telemetry')
+    const events = readTelemetry(fixtureRoot, 'model.config-autofix')
+    expect(events.length).toBe(1)
+    expect(events[0]!.payload).toEqual({
+      slot: 'phases.prototype.primary',
+      from: 'deepseek:deepseek-v4-flash',
+      to: 'deepseek:deepseek-flash',
+      reason: 'same-channel-rename',
+    })
+  })
+
+  test('跨族候选存在但不同族 → 放弃替换保持原值（家族拓扑守卫，零遥测）', async () => {
+    // 渠道宇宙只有 glm 系（跨族候选），deepseek 失效端点无同族替换
+    mock.module('./channel-manager', () => ({
+      listChannels: () => [
+        makeChannel({ id: 'glm-zhipu', name: '智谱', provider: 'zhipu' as Channel['provider'], models: [
+          { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', enabled: true },
+        ] }),
+        makeChannel(),
+      ],
+      getChannelById: () => null,
+    }))
+    const root = mkdtempSync(join(tmpdir(), 'nanju-b1-autofix-x-'))
+    fixtureRoot = root
+    const userPath = join(root, 'user-model-config.json')
+    writeFileSync(userPath, JSON.stringify({ phases: { prototype: { channel: 'deepseek', model: 'deepseek-v4-flash' } } }))
+    reloadNanjuModelConfig({ userConfigPath: userPath, overrideConfigPath: null, builtinConfigPath: null })
+    const projectDir = join(root, 'project-b1nofix')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'b1nofix', name: 'B1 no-autofix', mode: 'quick', status: 'active',
+      currentStage: 'prototype', createdAt: '', updatedAt: '', sessionId: 's-b1nofix',
+    }]))
+
+    const prompt = getNanjuRouterPrompt(root, 's-b1nofix')
+    expect(prompt).toBeTruthy()
+    // 保持原值（透传）；跨族不换 → 既有 delegate_agent 层错误路径负责
+    expect(prompt).toContain('modelId: deepseek-v4-flash')
+    const { readTelemetry } = await import('./nanju-telemetry')
+    expect(readTelemetry(fixtureRoot, 'model.config-autofix')).toHaveLength(0)
+  })
+})
+
+// ===== L2-4（2026-09-18）：架构师任务书注入·余三件（已知环境事实段 + 凭证三形态 + env 提示） =====
+
+describe('L2-4 J2：architecture 任务书「已知环境事实」段注入（ATK-F-005：环境事实先于架构师首次决策）', () => {
+  const authorUuid = 'ad74ac74-aaaa-bbbb-cccc-dddddddddddd'
+  const glmAuthor = { channel: 'glm-zhipu', model: 'GLM-5.3' }
+
+  test('Given architecture + 探测摘要行 When 构建任务 Then 注入「已知环境事实」段（摘要+通用集说明+品类补测提示+CP-A）', () => {
+    const phase = getPhaseNode('iterative', 'architecture')!
+    const task = buildL2TaskWithAC(
+      phase, glmAuthor, 'PRD 摘要', [], '/tmp/project',
+      null, null, false, null, null,
+      ['探测时间：2026-09-18T10:00:00.000Z', '- node：可用（v22.0.0）', '- rustc：缺失/不可用（command not found）'],
+    )
+    expect(task).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(task).toContain('- node：可用（v22.0.0）')
+    expect(task).toContain('- rustc：缺失/不可用（command not found）')
+    expect(task).toContain('03_ARCHITECTURE/env_probe.json')
+    expect(task).toContain('品类专用探测项按品类模版 §2.3 自行补测')
+    expect(task).toContain('CP-A 环境普查对照')
+    expect(task).toContain('缺失的必须级组件须决定安装或降级替代')
+  })
+
+  test('Given 探测失败说明行 When 构建任务 Then 失败说明注入（不阻断任务书生成的诚实退化）', () => {
+    const phase = getPhaseNode('quick', 'architecture')!
+    const task = buildL2TaskWithAC(
+      phase, glmAuthor, 'PRD 摘要', [], '/tmp/project',
+      null, null, false, null, null,
+      ['探测失败（执行超时）：无平台侧环境事实可注入。', '请架构师在「## 环境配置」环节自行逐组件探测，不得因本段缺失跳过探测。'],
+    )
+    expect(task).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(task).toContain('探测失败（执行超时）')
+    expect(task).toContain('不得因本段缺失跳过探测')
+  })
+
+  test('Given envProbeLines 未传（null/undefined）When 构建任务 Then 无「已知环境事实」段（向后兼容旧调用）', () => {
+    const phase = getPhaseNode('iterative', 'architecture')!
+    const taskNull = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+    const taskUndefined = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project', null, null, false, null, null, null)
+    expect(taskNull).not.toContain('已知环境事实')
+    expect(taskUndefined).not.toContain('已知环境事实')
+  })
+
+  test('Given 非 architecture 阶段 + 探测行 When 构建任务 Then 不注入（段仅 architecture 消费）', () => {
+    const phase = getPhaseNode('iterative', 'planning')!
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project', null, null, false, null, null, ['- node：可用'])
+    expect(task).not.toContain('已知环境事实')
+  })
+})
+
+describe('L2-4②：网络检索凭证三形态条文 + 证据记录节载体指令（ATK-G-002/G-007/U-006）', () => {
+  const glmAuthor = { channel: 'glm-zhipu', model: 'GLM-5.3' }
+
+  test('Given architecture 任务书 When 构建 Then 三形态条文完整（①②URL 凭证 + ③自我申报+事后抽检追责）', () => {
+    for (const mode of ['quick', 'iterative'] as const) {
+      const phase = getPhaseNode(mode, 'architecture')!
+      const task = buildL2TaskWithAC(phase, glmAuthor, 'PRD 摘要', [], '/tmp/project')
+      // 三形态完整条文（约束节，nanju-router ARCHITECT_SPIKE_CONSTRAINTS）
+      expect(task).toContain('①[推断]→[实证]/[文证] 升级、②直接新增 [实证]/[文证] 条目')
+      expect(task).toContain('「已检索无结论（关键词+日期）」或「未触发检索条件」')
+      expect(task).toContain('自我申报+事后抽检追责，不得伪造')
+      expect(task).toContain('无凭证视为未执行')
+      // 架构文档载体指令（architecture 块）
+      expect(task).toContain('## 证据升级与检索记录（架构文档必须含此节）')
+      expect(task).toContain('结论点 | 证据等级变化或新增 | 来源 URL | 检索日期')
+      expect(task).toContain('缺 URL 的 [实证]/[文证] 条目会被推进门禁拦截')
+      expect(task).toContain('本轮无证据升级；未触发检索条件')
+    }
+  })
+
+  test('Given 非 architecture 阶段 When 构建 Then 不含证据记录节指令（阶段专属）', () => {
+    const phase = getPhaseNode('iterative', 'prototype')!
+    const task = buildL2TaskWithAC(phase, { channel: 'deepseek', model: 'deepseek-v4-pro' }, 'PRD 摘要', [], '/tmp/project')
+    expect(task).not.toContain('证据升级与检索记录')
+  })
+})
+
+describe('L2-4③：契约 env 声明字段提示（P0-1 schema v2 字段的提示词增补）', () => {
+  test('Given architecture 任务书 When 构建 Then 含云端服务 env 声明提示行（变量名清单，不落密钥）', () => {
+    const phase = getPhaseNode('iterative', 'architecture')!
+    const task = buildL2TaskWithAC(phase, { channel: 'glm-zhipu', model: 'GLM-5.3' }, 'PRD 摘要', [], '/tmp/project')
+    expect(task).toContain('涉及云端服务/外部 API 的项目：在契约 driver.env / service.env 声明所需环境变量名')
+    expect(task).toContain('DASHSCOPE_API_KEY')
+    expect(task).toContain('值由宿主从自身环境注入子进程，不得写入契约或产物')
+  })
+})
+
+describe('L2-4 J2 集成：getNanjuRouterPrompt 在 architecture 阶段执行探测并注入', () => {
+  /** 构造项目 fixture 并返回 prompt（同文件既有 buildPromptFor 模式，项目 id 独立） */
+  function buildArchPrompt(projectId: string, sessionId: string, checkEnvScript?: string): string | undefined {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-l24-'))
+    fixtureRoot = root
+    const projectDir = join(root, `project-${projectId}`)
+    mkdirSync(projectDir, { recursive: true })
+    if (checkEnvScript !== undefined) {
+      mkdirSync(join(projectDir, '00_ENGINEERING_TEMPLATE'), { recursive: true })
+      writeFileSync(join(projectDir, '00_ENGINEERING_TEMPLATE', 'check_env.sh'), checkEnvScript)
+    }
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId, name: 'L2-4 集成项目', mode: 'iterative', status: 'active',
+      currentStage: 'architecture', createdAt: '', updatedAt: '', sessionId,
+    }]))
+    return getNanjuRouterPrompt('test-ws', sessionId)
+  }
+
+  test('Given 项目内 check_env.sh 在场 When 生成 architecture prompt Then 执行探测：env_probe.json 落盘 + 已知环境事实段注入', () => {
+    const { existsSync, readFileSync } = require('node:fs') as typeof import('node:fs')
+    const prompt = buildArchPrompt(
+      'l24a', 's-l24a',
+      '#!/usr/bin/env bash\necho \'{"component":"node","status":"ok","version":"v22.0.0","detail":"v22"}\'\n',
+    )
+    expect(prompt).toBeTruthy()
+    expect(prompt).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(prompt).toContain('- node：可用（v22.0.0）')
+    const probePath = join(fixtureRoot, 'project-l24a', '03_ARCHITECTURE', 'env_probe.json')
+    expect(existsSync(probePath)).toBe(true)
+    expect((JSON.parse(readFileSync(probePath, 'utf-8')) as { components: unknown[] }).components).toHaveLength(1)
+  })
+
+  test('Given 项目内 check_env.sh 缺失（旧项目/前移钩子失败）When 生成 prompt Then 诚实退化注入失败说明，不阻断生成', () => {
+    const prompt = buildArchPrompt('l24b', 's-l24b', undefined)
+    expect(prompt).toBeTruthy()
+    expect(prompt).toContain('## 已知环境事实（探测产出，先于你的决策）')
+    expect(prompt).toContain('探测失败')
+    expect(prompt).toContain('自行逐组件探测')
+    expect(prompt).not.toContain('- node：') // 无探测事实混入
+  })
+
+  test('Given 非 architecture 阶段 When 生成 prompt Then 无已知环境事实段（探测仅 architecture 触发）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-l24-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-l24c')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'l24c', name: 'L2-4 非架构项目', mode: 'quick', status: 'active',
+      currentStage: 'requirements', createdAt: '', updatedAt: '', sessionId: 's-l24c',
+    }]))
+    const prompt = getNanjuRouterPrompt('test-ws', 's-l24c')
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('已知环境事实')
+  })
+})
+
+describe('Task 10 接线：architecture 阶段 env 探测使用项目品类（2026-09-23）', () => {
+  test('Given PRD 标注 desktop-app 品类 When 生成 architecture prompt Then 探测按 desktop-app 品类集执行（非 universal 兜底）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-cat-'))
+    fixtureRoot = root
+    const projectDir = join(root, 'project-cat10')
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    mkdirSync(join(projectDir, '00_ENGINEERING_TEMPLATE'), { recursive: true })
+    // PRD 带品类标记（resolveProjectCategoryForCoding 的 prd 分支来源）
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\nprojectCategory: desktop-app\n## US-01 演示\n')
+    // 探测脚本按品类参数回显，证明收到的是 desktop-app
+    writeFileSync(join(projectDir, '00_ENGINEERING_TEMPLATE', 'check_env.sh'),
+      '#!/usr/bin/env bash\ncat="universal"\nfor a in "$@"; do [ "$a" != "universal" ] && cat="$a"; done\n'
+      + 'echo "{\\"component\\":\\"$cat\\",\\"status\\":\\"ok\\",\\"version\\":\\"v1\\",\\"detail\\":\\"cat=$cat\\"}"\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId: 'cat10', name: 'Task10 品类项目', mode: 'quick', status: 'active',
+      currentStage: 'architecture', createdAt: '', updatedAt: '', sessionId: 's-cat10',
+    }]))
+    const prompt = getNanjuRouterPrompt('test-ws', 's-cat10')
+    expect(prompt).toBeTruthy()
+    // 品类专用探测生效：探测行组件名为 desktop-app（旧实现恒为 universal）
+    expect(prompt).toContain('desktop-app：可用')
+    // 只读：architecture 阶段不得写元信息（getProjectCategory 未被补写）
+    const { getProjectCategory } = require('./nanju-project') as typeof import('./nanju-project')
+    expect(getProjectCategory('test-ws', 'cat10')).toBeNull()
+  })
+})
+
+describe('Task 5 收口：待纠正拒因重启后仍进入下一轮 L1 上下文（2026-09-23）', () => {
+  function buildPendingPrompt(projectId: string, sessionId: string, pending: Record<string, unknown>): string | undefined {
+    const root = mkdtempSync(join(tmpdir(), 'nanju-prompt-pend-'))
+    fixtureRoot = root
+    const projectDir = join(root, `project-${projectId}`)
+    mkdirSync(join(projectDir, '01_PRD'), { recursive: true })
+    writeFileSync(join(projectDir, '01_PRD', 'prd.md'), '# PRD\n## US-01 演示\n')
+    writeFileSync(join(root, '_nanju-projects.json'), JSON.stringify([{
+      projectId, name: 'Task5 拒因项目', mode: 'quick', status: 'active',
+      currentStage: 'coding', createdAt: '', updatedAt: '', sessionId,
+    }]))
+    // 待纠正拒因真实落位：<projectDir>/_project-info.json（与 setProjectPendingAdvanceCorrection 同源）
+    writeFileSync(join(projectDir, '_project-info.json'), JSON.stringify({
+      projectId, name: 'Task5 拒因项目', mode: 'quick', workspaceSlug: 'test-ws',
+      projectDir: `project-${projectId}`, docDirs: [], createdAt: '', updatedAt: '',
+      pendingAdvanceCorrection: pending,
+    }))
+    return getNanjuRouterPrompt('test-ws', sessionId)
+  }
+
+  test('Given 已持久化 blocked 拒因 When 重启后重建 prompt Then 注入拒因段且明确「非推进授权」', () => {
+    const prompt = buildPendingPrompt('pend1', 's-pend1', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 1,
+      fromStage: 'coding', executionState: 'blocked', message: '缺少 06_TESTS 测试报告与 acceptance.json 覆盖',
+      eventKey: 'ek-1', fingerprint: 'fp-1',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).toContain('## 待纠正的阶段推进（已持久化，非推进授权）')
+    expect(prompt).toContain('缺少 06_TESTS 测试报告与 acceptance.json 覆盖')
+    expect(prompt).toContain('非推进授权')
+    // 注入拒因不等于授权推进：拒因段自身不得携带推进标记
+    //（coding 阶段的操作指引另有合法 PHASE_ADVANCE 标记，故只截取拒因段断言）
+    const section = prompt!.slice(prompt!.indexOf('## 待纠正的阶段推进'), prompt!.indexOf('项目名：'))
+    expect(section).not.toContain('PHASE_ADVANCE')
+  })
+
+  test('Given 用户已取消（executionState=cancelled）When 重建 prompt Then 不注入拒因段（不复活）', () => {
+    const prompt = buildPendingPrompt('pend2', 's-pend2', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 2,
+      fromStage: 'coding', executionState: 'cancelled', message: '用户已停止自动续接',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('待纠正的阶段推进')
+    expect(prompt).not.toContain('用户已停止自动续接')
+  })
+
+  test('Given 拒因来自其它阶段（fromStage 不匹配当前阶段）When 重建 prompt Then 不注入（防陈旧归因）', () => {
+    const prompt = buildPendingPrompt('pend3', 's-pend3', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 1,
+      fromStage: 'prototype', executionState: 'blocked', message: '陈旧拒因不应出现',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('陈旧拒因不应出现')
+  })
+
+  test('Given 拒因 message 含私钥形态 When 重建 prompt Then 脱敏后再注入', () => {
+    const prompt = buildPendingPrompt('pend4', 's-pend4', {
+      kind: 'gate-deny', target: 'testing', expected: 'testing', at: '2026-09-23T10:00:00Z', count: 1,
+      fromStage: 'coding', executionState: 'blocked',
+      message: 'token=sk-abcdefghijklmnopqrstuvwxyz012345 请求失败',
+    })
+    expect(prompt).toBeTruthy()
+    expect(prompt).not.toContain('sk-abcdefghijklmnopqrstuvwxyz012345')
   })
 })

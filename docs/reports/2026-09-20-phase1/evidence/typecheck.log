@@ -1,0 +1,6 @@
+$ bun run --filter='*' typecheck
+@proma/shared typecheck: Exited with code 0
+@proma/session-core typecheck: Exited with code 0
+@proma/core typecheck: Exited with code 0
+@proma/cli typecheck: Exited with code 0
+@proma/ui typecheck: Exited with code 0

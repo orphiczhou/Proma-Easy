@@ -8,16 +8,18 @@
  */
 
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { ArrowLeftRight, Eye, RotateCcw, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { GuideRoutePhase } from '@proma/shared'
+import type { GuideRoutePhase, ProjectRecoveryResult } from '@proma/shared'
 import { currentAgentWorkspaceIdAtom, agentWorkspacesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
+import { useOpenSession } from '@/hooks/useOpenSession'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { GuideFlow } from './GuideFlow'
 import { StageNodeDetail, type GuideSnapshot } from './StageNodeDetail'
 import { buildGuideDsl, resolveExpandedPhases, type GuideNodeTarget, type GuidePhaseId } from './guide-dsl'
 import { useNanjuGuideData } from './useNanjuGuideData'
+import { DeliveryCard } from '../delivery/DeliveryCard'
 
 interface GuidePanelProps {
   sessionId: string
@@ -151,6 +153,8 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
 
   const data = useNanjuGuideData({ sessionId, workspaceSlug })
   const openPreview = useOpenPreview()
+  const openSession = useOpenSession()
+  const setSessions = useSetAtom(agentSessionsAtom)
 
   const [selectedPhaseId, setSelectedPhaseId] = React.useState<GuidePhaseId | null>(null)
   /** 对照模式（AC-11）：渲染另一 mode 的静态 DSL（无进度叠加） */
@@ -309,21 +313,29 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
     openPreview(sessionId, { filePath, previewOnly: true })
   }, [workspaceFilesPath, data.project, openPreview, sessionId])
 
-  // 回滚：二次确认由 StageNodeDetail 内联；此处执行并返回是否成功（AC-06/AC-13）
-  const handleRollback = React.useCallback(async (snapshotId: number): Promise<boolean> => {
-    if (!workspaceSlug || !data.project) return false
+  // 透传实际恢复结果；成功/部分恢复均使用真正绑定的会话上下文。
+  const handleRollback = React.useCallback(async (snapshotId: number): Promise<ProjectRecoveryResult> => {
+    const failure = (message: string): ProjectRecoveryResult => ({
+      ok: false, status: 'failed', message, activeSessionId: null, restoredSnapshotId: null,
+      preRestoreSnapshotId: null, fileRestore: null,
+    })
+    if (!workspaceSlug || !data.project) return failure('未找到当前工程。')
     try {
       const result = await window.electronAPI.nanjuRollbackSnapshot({
         workspaceSlug, projectId: data.project.projectId, snapshotId,
       })
-      if (!result) return false
+      if (result.activeSessionId && result.status !== 'failed') {
+        const sessions = await window.electronAPI.listAgentSessions()
+        setSessions(sessions)
+        const restored = sessions.find(s => s.id === result.activeSessionId)
+        openSession('agent', result.activeSessionId, restored?.title ?? '恢复后的工程')
+      }
       void data.refresh()
-      return true
+      return result
     } catch (e) {
-      console.error('[向导图] 快照回滚失败:', e)
-      return false
+      return failure(`恢复未完成：${e instanceof Error ? e.message : String(e)}`)
     }
-  }, [workspaceSlug, data.project, data.refresh])
+  }, [workspaceSlug, data.project, data.refresh, setSessions, openSession])
 
   const statusSummary = describeStageStatus(data.stageStates, data.phases)
   const progressPercent = statusSummary.total > 0 ? Math.round((statusSummary.doneCount / statusSummary.total) * 100) : 0
@@ -438,6 +450,22 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
     body = (
       <>
         {data.notice && <NoticeBar text={data.notice} tone="info" />}
+        {data.project?.recoveryMessage && <NoticeBar text={data.project.recoveryMessage} tone="info" />}
+        {data.project?.advanceCorrection && data.project.advanceCorrection.state !== 'cancelled' && (
+          <div className="mx-3 my-2 rounded border border-amber-500/30 bg-amber-500/5 p-3 text-xs" role="status">
+            <p className="font-medium">阶段推进待处理 → {data.project.advanceCorrection.target}</p>
+            <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{data.project.advanceCorrection.message}</p>
+            {data.project.advanceCorrection.checks.filter(check => !check.pass).map((check, index) => (
+              <p key={`${check.id}-${index}`} className="mt-2 break-words">{check.path ?? check.id}：{check.actual}；{check.nextAction ?? `请满足：${check.expected}`}</p>
+            ))}
+            <p className="mt-2 text-muted-foreground">业务阶段保持不变。修正后在会话中继续，系统会重新校验。</p>
+            <button type="button" className="mt-2 underline" onClick={async () => {
+              if (!workspaceSlug || !data.project) return
+              const result = await window.electronAPI.nanjuCancelAdvanceCorrection({ workspaceSlug, projectId: data.project.projectId, sessionId })
+              if (result.ok) data.refresh()
+            }}>停止自动续接</button>
+          </div>
+        )}
         {/* Y1（W1）：项目进行中的角色状态栏（与 data.notice 互斥——abandoned/未知阶段等
             异常态优先；文案随 stageStates 派生，spec 交互4 最小版） */}
         {!data.notice && viewMode === 'project' && stageRoleNotice && (
@@ -608,6 +636,10 @@ export function GuidePanel({ sessionId }: GuidePanelProps): React.ReactElement {
             </div>
           )}
         </div>
+      )}
+
+      {data.project && viewMode === 'project' && workspaceSlug && (
+        <DeliveryCard workspaceSlug={workspaceSlug} projectId={data.project.projectId} sessionId={sessionId} />
       )}
 
       {/* 阶段详情浮层：面板底部上滑 sheet */}
