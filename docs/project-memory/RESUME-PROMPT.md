@@ -1,8 +1,10 @@
 # 恢复工作状态提示词 · PromaEasy Phase 1 硬化 + E2E 真流程
 
-> **⚡ 2026-11-03 ~03:40 追加（Phase2 收口，读完全文后以本节覆盖冲突项）**
-> Phase 2 五模块（NEXT-01~05）已全部交付并推送：HEAD `8f9fe418`，v0.17.135，分四 commit（波1 `108a082a` / NEXT-02 `dc901ce0` / NEXT-05 `1d39644e` / 反馈报告 `8f9fe418`）。权威详情读 `docs/architecture-v0.17.135-feedback.md`（完成矩阵+互审记录+偏差遗留）。
-> 关键变化：① 测试门禁改为 `bun run test` = `bun test --isolate apps packages`（2832 pass / 0 fail；裸 `bun test` 会有 ~79 mock 串扰假红，勿误判）；② Bridge 鉴权已收口（token 0600 + Origin 403，loopback 直连兼容保持）；③ 交付见证改双阶段时钟（15min 机器窗 + 24h 人类租约，指纹未变即有效，不跨进程重启）；④ 向导 coding 自动建树已上线（三层结构过 V10 audit_gate）；⑤ 多渠道模型协作开发策略已入 AGENTS.md（SOTA 主导+异构互审，flash 做普通工作）。遗留：NEXT-02 F-3/F-5、NEXT-01 A-5/A-8/G1/G2/G4、前端树 Tab 联动、dev 实例未部署本轮代码（仍 v0.17.132）、HTTP Bridge 实例冒烟待部署后做。
+> **⚡ 2026-11-04 00:10 追加（Phase2 部署+E2E 状态更新，读完全文后以本节覆盖冲突项；专项交接见 docs/reports/2026-11-03-phase2-deploy-e2e/HANDOFF-E2E-20261104.md）**
+> HEAD `61c76b50`（v0.17.135 已部署 dev 实例 PID 963331 并推送）。**E2E 冒烟通过（NEXT-04 鉴权五路/健康矩阵/UI）但核心真流程验证未完成**：NEXT-02 自动建树与 NEXT-01 冻结实证被既有 AC 同族护栏拦截（F-1：个人记账工具 light 预设 defender=glm 系同族被拒，属护栏正确行为非回归）。新会话的任务：按 HANDOFF 文档先解决 F-1 再跑真流程验证，当前 E2E 判定为未成功。其他已验证：部署 SOP 坑 D-1 已解决（asar pack 必须 --unpack-dir 保留原生模块）、忙碌保护/路由门禁运行时正常、NEXT-03 组件在 bundle。
+>
+> **⚡ 2026-11-03 ~03:40 追加（Phase2 收口）**
+> Phase 2 五模块（NEXT-01~05）已全部交付并推送：v0.17.135，分四 commit（波1 `108a082a` / NEXT-02 `dc901ce0` / NEXT-05 `1d39644e` / 反馈报告 `8f9fe418`）。权威详情读 `docs/architecture-v0.17.135-feedback.md`（完成矩阵+互审记录+偏差遗留）。关键变化：① 测试门禁改为 `bun run test` = `bun test --isolate apps packages`（裸 `bun test` 会有 ~79 mock 串扰假红）；② Bridge 鉴权已收口；③ 交付见证改双阶段时钟；④ 向导 coding 自动建树已上线；⑤ 多渠道模型协作开发策略已入 AGENTS.md。遗留：NEXT-02 F-3/F-5、NEXT-01 A-5/A-8/G1/G2/G4、前端树 Tab 联动。
 
 > 生成：2026-11-03 00:39 GMT+8｜上一版：2026-11-02 13:15（本版全量更新）
 > 用途：新会话直接整段读取（或作为 prompt 输入）即可恢复工作状态，无需重读全部历史。
