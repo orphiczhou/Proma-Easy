@@ -55,17 +55,18 @@ const ONE_MILLION_CONTEXT_RULES = {
     'claude-opus-4-8',
     'claude-fable-5',
   ],
-  // DeepSeek
-  deepseek: ['deepseek-v4'],
+  // DeepSeek：deepseek-flash 是 DeepSeek V4.1 Flash 的渠道 model id
+  // （官方 GET /models 返回 context_window=1048576），与 deepseek-v4 同族。
+  deepseek: ['deepseek-v4', 'deepseek-flash'],
   // 智谱 GLM：5.2 与 5.3 均为官方 1M 上下文（最大输出 128K）；
   // 5.1 / 5-turbo 仍为 200K，不加入。OpenAI 协议端点无需 [1m] 后缀（那是 Anthropic 协议的开关）。
   glm: ['glm-5.2', 'glm-5.3'],
-  // 小米 MiMo
-  mimo: ['mimo-v2.5'],
+  // 小米 MiMo（v2.5 / v2.6 均 1M）
+  mimo: ['mimo-v2.5', 'mimo-v2.6'],
   // MiniMax
   minimax: ['minimax-m3'],
   // Kimi
-  kimi: ['k3'],
+  kimi: ['k3', 'kimi-k3.1'],
   // 通义千问
   qwen: [
     'qwen3.8',
@@ -76,6 +77,17 @@ const ONE_MILLION_CONTEXT_RULES = {
     'qwen3.5-flash',
     'qwen3-coder-plus',
   ],
+  // 美团 LongCat 2.0 / 2.5（1M）
+  longcat: ['longcat-2.0', 'longcat-2.5'],
+  // Meta Muse Spark 1.2 / 1.3（1,048,576）
+  muse: ['muse-spark'],
+  // 腾讯混元 Hy4 preview（1,024,000）
+  hunyuan: ['hy4-preview'],
+  // OpenCode 免费档 Space Bunny（1,048,576）
+  opencode: ['space-bunny'],
+  // OpenAI GPT-6 Luna（1,050,000）；仅列精确型号，其余 GPT-6 变体仍走默认 200K，
+  // 沿用「禁止任意 gpt 子串匹配」的既有设计（见 GPT 别名表用例）。
+  openai: ['gpt-6-luna'],
 } as const
 
 const ONE_MILLION_CONTEXT_DISPLAY_RULES = Object.values(ONE_MILLION_CONTEXT_RULES).flat()

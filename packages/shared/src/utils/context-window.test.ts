@@ -79,3 +79,37 @@ describe('其他家族回归（确认本次改动未误伤）', () => {
     expect(inferContextWindow(undefined)).toBeUndefined()
   })
 })
+
+describe('2026-11-02 新增新模型 1M 名单', () => {
+  test.each([
+    'deepseek-flash',
+    'deepseek-v4.1-flash',
+    'mimo-v2.6-flash',
+    'mimo-v2.6-pro',
+    'longcat-2.0',
+    'longcat-2.5-preview-free',
+    'muse-spark-1.3-contributor',
+    'hy4-preview',
+    'space-bunny-free',
+    'gpt-6-luna',
+    'kimi-k3.1-pro',
+  ])('%s 命中 1M（依据 models.dev / 供应商 /models）', (modelId) => {
+    expect(supports1MContext(modelId)).toBe(true)
+    expect(inferContextWindow(modelId)).toBe(ONE_MILLION_CONTEXT_WINDOW)
+  })
+
+  test('同渠道非 1M 模型不被子串误伤', () => {
+    // Grok 4.6/4.7 为 500K、MiniMax M2.7 为 204.8K、Kimi K2.7 为 262K、Hy3 为 256K
+    for (const id of ['grok-4.6', 'grok-4.7', 'minimax-m2.7', 'kimi-k2.7-code', 'hy3', 'doubao-seed-2.0-pro']) {
+      expect(supports1MContext(id)).toBe(false)
+    }
+  })
+
+  test('gpt-6-luna 命中不影响其他 GPT-6 变体的默认 200K', () => {
+    expect(supports1MContext('gpt-6-luna')).toBe(true)
+    expect(supports1MContext('gpt-6-astra')).toBe(false)
+    expect(supports1MContext('gpt-6-astra-2')).toBe(false)
+    expect(inferContextWindow('gpt-6-astra')).toBe(DEFAULT_CONTEXT_WINDOW)
+    expect(inferContextWindow('gpt-6-astra-1')).toBe(ONE_MILLION_CONTEXT_WINDOW)
+  })
+})
